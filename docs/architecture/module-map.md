@@ -39,18 +39,29 @@ Each module owns its endpoints in `Http/routes.php`. `routes/api.php` loads ever
 | --- | --- | --- |
 | `Health` | `GET /api/v1/health`: infrastructure verification | Operational, not a business module. Exists to prove the environment and to give the conventions something real to test against |
 
+## Designed, not yet created
+
+The Identity and Access design gate defines three modules and their dependency direction ([identity-and-access.md](identity-and-access.md)). **No folders exist yet**; they are created by the first Identity epic.
+
+| Module | Owns | Depends on |
+| --- | --- | --- |
+| `Identity` | The authoritative registry of humans (`people`) and their means of authenticating (`accounts`, `account_invitations`) | `Audit`, `Shared` |
+| `Access` | Authorization: capabilities, roles and `role_assignments` | `Identity`, `Audit`, `Shared` |
+| `Audit` | Append-only `security_events` | `Shared` |
+
+The direction is **Access → Identity → Audit → Shared** and must stay acyclic. `App\Shared\Domain` gains its first inhabitant, `Actor`, for a specific reason: Identity records events through Audit, so placing `Actor` in `Identity\Application` would make Audit import Identity and close a cycle.
+
+Note for module authors: a module's `Domain` may not import its own `Application`, so anything other modules must name — `Capability`, for instance — belongs in `Application`, and so does everything that consumes it. This is enforced by `tests/Architecture/ModuleBoundariesTest.php`.
+
 ## Candidate modules (provisional, none created)
 
 Working titles to frame discussion. **They are not commitments and no folders exist for them.** Each is created when its epic starts, and its boundaries are decided then.
 
 | Candidate | Likely concern |
 | --- | --- |
-| Identity | Platform identities and their links to external identities (WordPress users, etc.) |
-| Access | Authorization: roles, permissions, policies ([ADR 0008](../adr/0008-platform-owned-authorization.md)) |
 | Membership, Volunteering | Member and volunteer records and lifecycles |
 | Events, Publishing | Later product domains |
 | Workflow | Approval/workflow, separate from authorization ([ADR 0009](../adr/0009-authorization-separate-from-approval.md)) |
-| Audit | Durable audit trail |
 
 ## Adding a module
 

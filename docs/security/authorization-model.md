@@ -1,6 +1,6 @@
 # Authorization model
 
-**Status: direction only.** No identity, authentication or authorization exists yet, on purpose. The design belongs to the Identity/Access epic ([ADR 0008](../adr/0008-platform-owned-authorization.md)). This page records the constraints that design must satisfy, so nothing built earlier has to be undone.
+**Status: designed, not implemented.** The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [architecture/identity-and-access.md](../architecture/identity-and-access.md). No identity, authentication or authorization code exists yet. This page keeps the principles that design must continue to satisfy.
 
 ## Principles
 
@@ -16,13 +16,23 @@
 
 Sensitive actions and privileged access will require **durable auditing**: who did what, to what, when, from where, under which authority, and with what outcome. Audit records must be append-only from the audited modules' point of view, survive deployments, and be reviewable by Guardians. Likely a dedicated module fed by the events/outbox direction ([integration model](../architecture/integration-model.md)). Designed in the Identity/Access epic; no auditing exists yet.
 
-## Open design questions
+## Decided in the design gate
 
-- Authentication for people (password, magic link, SSO, MFA/step-up for Guardians) and for client applications (WordPress companion, service accounts).
-- Session vs bearer-token strategy, and how it interacts with CORS and the hardened console.
-- Role and permission model, and how organizational roles map to policies.
-- Linking external identities (WordPress users) to platform identities.
-- Which actions are "sensitive" and what each must record.
-- Rate limiting and abuse controls.
+| Question | Answer | Where |
+| --- | --- | --- |
+| Human identity model | Person (canonical human) is separate from Account (sign-in); email is mutable, `email_canonical` is the lookup key | [ADR 0015](../adr/0015-identity-owns-person.md) |
+| Console authentication | Same-origin, host-only `__Host-` session cookie with CSRF; database sessions; no bearer token in the browser | [ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md) |
+| Role and permission model | Capabilities and roles defined in code; only assignments persist; administration is a system role | [ADR 0017](../adr/0017-capabilities-and-roles-in-code.md) |
+| Client and delegated access | Clients authenticate as themselves with narrow, non-person-scoped capabilities; person identity must come from a platform-issued credential | [ADR 0018](../adr/0018-client-and-delegated-authentication.md) |
+| Which actions are auditable | A defined minimum event set, recorded synchronously from the first epic | [ADR 0019](../adr/0019-security-event-auditing-seam.md) |
+| First administrator and lockout | Console command rooted in server access; last-administrator invariant enforced by a guard chain Identity owns | [ADR 0020](../adr/0020-administrator-bootstrap-and-last-administrator-invariant.md) |
+| Rate limiting | Laravel's limiter on login, reset and invitation acceptance, keyed by IP *and* identifier | [identity-and-access.md](../architecture/identity-and-access.md) |
 
-Until those are decided: **do not add users, roles, guards or permission checks ad hoc.**
+## Still open
+
+- **MFA / step-up for privileged accounts.** Deliberately outside the first epic, and intended as an early security follow-up before privileged access expands substantially.
+- **External identity providers** and the linking flows.
+- **Scoped access** (for example Guardian *of a particular programme*).
+- **Anonymisation and deletion** of identity data.
+
+Until the epic ships: **do not add accounts, roles, guards or permission checks ad hoc.** After it ships, add them the way the design says, or amend the design by ADR.

@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0017](0017-capabilities-and-roles-in-code.md)
 
 ## Context
 

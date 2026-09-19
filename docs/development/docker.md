@@ -42,6 +42,12 @@ Routing uses **`*.flowlife.localhost`** names, which resolve to loopback in brow
 
 The API allows cross-origin calls from the Guardian origin via `CORS_ALLOWED_ORIGINS` in `apps/platform/.env` (an explicit allow-list, never `*`). If you change the gateway port, update that value and `APP_URL`.
 
+### Planned change: single origin
+
+Production will serve the Guardian Console and the API from **one origin** so the session cookie can be host-only ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)). The two-origin split above (`guardian.` and `api.`) therefore exercises an authentication model we are not building.
+
+The Identity epic changes development to match: one host, `commons.flowlife.localhost`, with the gateway routing `/api/*` to the platform and everything else to the Vite dev server. HMR is unaffected (same origin, websocket through the gateway), and `VITE_API_BASE_URL` becomes a relative path. Local HTTPS is **not** needed: browsers treat `*.localhost` as a secure context, so `Secure` and `__Host-` cookies work over plain HTTP there. **Not changed yet** — the existing CORS and e2e assertions depend on the current two-origin setup and move with it.
+
 ## File ownership
 
 Containers run as your UID/GID, written to `.env` by `./flow setup` (`FLOW_UID`, `FLOW_GID`), so files created by Composer, npm, Artisan and Vite are yours, not root's. There is no user baked into any image. Never run `./flow` or Docker with `sudo`.

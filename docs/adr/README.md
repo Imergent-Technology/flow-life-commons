@@ -28,5 +28,16 @@ Copy [template.md](template.md). Number sequentially (`NNNN-short-title.md`). St
 | [0012](0012-tailwind-4-via-vite.md) | Tailwind CSS 4 via the Vite plugin | Accepted |
 | [0013](0013-monorepo.md) | Monorepo | Accepted |
 | [0014](0014-testing-and-database-compatibility-strategy.md) | Testing and database compatibility strategy | Accepted |
+| [0015](0015-identity-owns-person.md) | Identity owns Person; Person is not Account | Accepted |
+| [0016](0016-guardian-console-same-origin-session-authentication.md) | Guardian Console authenticates via a same-origin, host-only session cookie | Accepted |
+| [0017](0017-capabilities-and-roles-in-code.md) | Capabilities and roles are defined in code; only assignments persist | Accepted |
+| [0018](0018-client-and-delegated-authentication.md) | Client and delegated authentication keep WordPress non-authoritative | Accepted (direction) |
+| [0019](0019-security-event-auditing-seam.md) | Security event auditing seam | Accepted |
+| [0020](0020-administrator-bootstrap-and-last-administrator-invariant.md) | Administrator bootstrap and the last-administrator invariant | Accepted |
+| [0021](0021-cross-module-referential-integrity.md) | Cross-module referential integrity | Accepted |
 
 Domain events and the transactional outbox are a documented *direction* ([integration model](../architecture/integration-model.md)), not yet a decision: they get an ADR when the first real consumer shapes the design.
+
+ADRs 0015–0021 record the Identity and Access design gate. The consolidated design they refer to — vocabulary, module layout, schema, lifecycles and the scope of the first implementation epic — is in [architecture/identity-and-access.md](../architecture/identity-and-access.md). **Nothing in that design is implemented yet.**
+
+Some ADRs carry a **Refined by** or **Amended by** line. Those decisions remain Accepted and unchanged; the pointer records that a later ADR adds detail within the same direction, as distinct from superseding it.

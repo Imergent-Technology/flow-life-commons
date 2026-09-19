@@ -13,7 +13,9 @@ Platform aggregates will be referenced from WordPress, the Guardian Console, int
 
 Platform **aggregate identifiers are application-generated ULIDs** (26-character, lexicographically time-sortable, stored as fixed-width strings), unless a future ADR establishes a reason otherwise. Identifiers are created in application code before persistence. Laravel's `HasUlids` support is the expected mechanism.
 
-This is direction for future aggregates. **No aggregates exist yet**, so nothing demonstrates it in code. Framework-owned infrastructure tables (cache, jobs, migrations) keep Laravel's defaults because they are not platform aggregates.
+This is direction for future aggregates. Framework-owned infrastructure tables (cache, jobs, migrations, and later `sessions`, `password_reset_tokens` and any token table introduced by a first-party package) keep Laravel's defaults because they are not platform aggregates.
+
+Where a framework table *references* one of our aggregates, the referencing column must still hold a ULID: Laravel's stock session migration declares `user_id` as `foreignId()` (a bigint), which must be a 26-character string column instead. The first aggregates to apply this policy are Identity's `people`, `accounts` and `account_invitations`, Access's `role_assignments` and Audit's `security_events` ([ADR 0015](0015-identity-owns-person.md), [ADR 0017](0017-capabilities-and-roles-in-code.md), [ADR 0019](0019-security-event-auditing-seam.md)).
 
 ## Consequences
 

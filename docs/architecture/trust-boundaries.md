@@ -15,6 +15,13 @@ Where trust changes, and what must be true on each side. **Authorization is alwa
 
 Only `GET /api/v1/health` (coarse pass/fail, no versions or hostnames) and Laravel's `GET /up`. Everything added later must be authenticated and authorized by default; public endpoints are the exception and need a stated reason.
 
-## Not designed yet
+## Now designed (not yet built)
 
-Client and user authentication, session/token strategy, rate limiting, Guardian Console hardening (network restrictions, step-up authentication) and audit logging all belong to the Identity/Access epic. Nothing here should be read as a design for them.
+The Identity and Access design gate resolved most of what this page previously deferred; see [identity-and-access.md](identity-and-access.md).
+
+- **Console sessions.** The Console and API share one origin, and the session cookie is `__Host-` prefixed and host-only, so it is never transmitted to WordPress or any other Flow Life host, and cannot be shadowed from a parent domain. Measured in a browser, not assumed ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)).
+- **Client vs person.** A request may prove *which application* is calling and *which person* it acts for; these are separate proofs. A client-asserted `person_id` is never accepted as identity ([ADR 0018](../adr/0018-client-and-delegated-authentication.md)).
+- **Rate limiting** applies to login, password reset and invitation acceptance, keyed by IP and identifier.
+- **Auditing** of authentication and authorization changes exists from the first epic ([ADR 0019](../adr/0019-security-event-auditing-seam.md)).
+
+Still undesigned: MFA and step-up authentication, external identity providers, and network-level Console hardening. Nothing here should be read as a design for those.

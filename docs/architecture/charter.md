@@ -22,6 +22,10 @@ Flow Life Global is building a long-lived organizational platform for **members,
 | Queues | Database-backed; Redis-ready, never required | [0010](../adr/0010-database-queue-redis-ready.md) |
 | Dev environment | Docker Compose, `./flow` CLI | [0011](../adr/0011-docker-compose-development-environment.md) |
 | Repository | Monorepo | [0013](../adr/0013-monorepo.md) |
+| Identity | Person (the human) separate from Account (sign-in); Identity is the authoritative human registry | [0015](../adr/0015-identity-owns-person.md) |
+| Console authentication | Same-origin, host-only `__Host-` session cookie; database sessions | [0016](../adr/0016-guardian-console-same-origin-session-authentication.md) |
+| Authorization | Capabilities and roles defined in code; only assignments persist | [0017](../adr/0017-capabilities-and-roles-in-code.md) |
+| Referential integrity | Cross-module foreign keys permitted for fundamental invariants, `RESTRICT` never `CASCADE` | [0021](../adr/0021-cross-module-referential-integrity.md) |
 
 ## Production constraint
 
@@ -61,9 +65,13 @@ Platform aggregate identifiers are **application-generated ULIDs** unless a futu
 
 Meaningful domain/application events and a **transactional outbox** are expected architectural primitives: state changes and the events describing them commit atomically, and a separate relay delivers them to consumers (jobs, integrations, WordPress notifications) with retry safety. **Nothing is built yet**; the first real cross-module or external consumer will drive the design. See the [integration model](integration-model.md).
 
-## Auditing (direction)
+## Auditing
 
-Sensitive actions and privileged access will require **durable, tamper-evident audit records** (who, what, when, from where, on whose authority). The design belongs to the Identity/Access epic; see the [authorization model](../security/authorization-model.md).
+Sensitive actions and privileged access require **durable audit records** (who, what, when, from where, on whose authority). The seam is designed: a small `Audit` module with an append-only `security_events` table, written synchronously inside the same transaction as the change ([ADR 0019](../adr/0019-security-event-auditing-seam.md)). Identity and access events are auditable from the first Identity epic. Tamper-evidence, retention and review tooling remain undesigned.
+
+## Identity and Access
+
+The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [identity-and-access.md](identity-and-access.md). **Nothing is implemented yet.** Rules 2, 6 and 16 above gain their design there; their status stays *Documented* until the first Identity epic encodes them.
 
 ## Out of scope for the foundation
 

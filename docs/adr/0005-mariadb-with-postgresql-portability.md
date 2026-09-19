@@ -25,6 +25,8 @@ Production initially runs on shared cPanel hosting, where MariaDB is what is ava
 - The PostgreSQL run adds about a minute to `./flow check --pgsql`.
 - Collation and case-sensitivity differences (MariaDB `utf8mb4_unicode_ci` is case-insensitive, PostgreSQL is not by default) are a known portability risk: never rely on implicit case-insensitive matching; normalise in application code.
 
+  This risk has since been **measured, not merely anticipated**. Inserting `person@example.org` and then `Person@Example.org` into a table with `unique(email)` is *rejected* by MariaDB 10.11 and *accepted* by PostgreSQL 16, which creates two rows differing only in case. For identity data that is a security-relevant divergence, and a MariaDB-to-PostgreSQL migration would change authentication semantics silently. The remedy adopted in [ADR 0015](0015-identity-owns-person.md) is a separate canonical (lowercased) column carrying the unique constraint and serving as the sole lookup key; both engines then behave identically.
+
 ## Alternatives considered
 
 - **MariaDB only:** simplest, but locks in and makes a later migration a redesign.

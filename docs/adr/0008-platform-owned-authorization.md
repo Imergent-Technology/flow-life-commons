@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0015](0015-identity-owns-person.md), [ADR 0016](0016-guardian-console-same-origin-session-authentication.md), [ADR 0017](0017-capabilities-and-roles-in-code.md), [ADR 0018](0018-client-and-delegated-authentication.md)
 
 ## Context
 

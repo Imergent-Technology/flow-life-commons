@@ -17,9 +17,13 @@ Data mirrored to other systems (for example a WordPress user display name) is a 
 
 The only tables are framework infrastructure created by Laravel's stock migrations: `migrations`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`. They keep Laravel's default keys because they are not platform aggregates. There is deliberately no `users` table: identity is designed in its own epic ([authorization model](../security/authorization-model.md)).
 
-## Open questions (decide with the first real module)
+## Answered by the Identity and Access design gate
 
-- Table naming: per-module prefix, or unprefixed names with module ownership recorded in docs?
-- Whether cross-module foreign keys are allowed at the database level or references are by ULID only.
-- Soft deletes and retention policy for personal data.
-- Where the audit trail lives and how it is protected from the modules it audits.
+- **Table naming:** unprefixed. Module ownership is recorded in the [module map](module-map.md) and the module's own documentation, not encoded in table names.
+- **Cross-module foreign keys:** permitted, deliberately, where the reference is a fundamental invariant — with `RESTRICT`, never `CASCADE`, and never for provenance or audit references. Write ownership, code dependency and referential integrity are three independent concerns ([ADR 0021](../adr/0021-cross-module-referential-integrity.md)).
+- **Where the audit trail lives:** a small `Audit` module owning an append-only `security_events` table with no foreign keys, so it outlives its subjects and never blocks an operation ([ADR 0019](../adr/0019-security-event-auditing-seam.md)).
+
+## Still open
+
+- Soft deletes, retention and anonymisation policy for personal data. Anonymisation is designed as acting on the Person while preserving referential history, but the policy itself is undecided.
+- How the audit trail is protected from tampering by the modules it audits; append-only is currently a code convention, since triggers are barred by the portability rule.

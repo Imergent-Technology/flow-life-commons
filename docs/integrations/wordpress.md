@@ -21,9 +21,19 @@ WordPress page ─► Companion plugin ─► Platform REST API (/api/v1) ─►
 6. **Untrusted client.** Treat WordPress and its plugins as outside our security perimeter ([trust boundaries](../architecture/trust-boundaries.md)).
 7. **External identity is a link.** A WordPress user is *linked to* a platform identity; the mapping is platform data (Identity epic).
 
-## Not designed yet
+## How authentication will work (designed, not built)
 
-How the plugin authenticates to the API, how a WordPress-authenticated person is bound to a platform identity, what is cached in WordPress (if anything), and webhook/event notification back to WordPress. These are decided in the Identity/Access epic and the first real integration feature, informed by the [integration model](../architecture/integration-model.md).
+[ADR 0018](../adr/0018-client-and-delegated-authentication.md) settles the invariants, which exist to keep rule 2 above true in practice:
+
+- WordPress authenticates **as an application**, with its own credential and a narrow capability list that **excludes person-scoped capabilities**. A machine acting alone can never reach an individual's data.
+- Acting **on behalf of a person** requires a second, independent proof: a subject credential **the platform itself issued**. The platform is the identity provider; WordPress is not.
+- **The platform never accepts a client-asserted identity.** A `person_id` or `user_id` in a request, or a WordPress-signed claim, is not proof — ever. This is the single rule that keeps WordPress non-authoritative.
+- A WordPress user is *linked to* a platform identity; the mapping is platform data.
+- Browser CORS policy is irrelevant to this: service-to-service calls are not browser requests.
+
+A consequence worth stating plainly: member-facing WordPress functionality cannot be delivered by trusting WordPress sessions, and therefore cannot ship before the delegated flow is built. That cost is accepted deliberately.
+
+Still undesigned: what (if anything) WordPress caches, webhook and event notification back to WordPress, and the account-claim flow for a person who has no platform Account yet. These follow the first real integration feature, informed by the [integration model](../architecture/integration-model.md).
 
 ## Local development
 

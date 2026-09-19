@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Amended by:** [ADR 0016](0016-guardian-console-same-origin-session-authentication.md) (development moves to a single origin during the Identity epic)
 
 ## Context
 
