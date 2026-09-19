@@ -1,0 +1,15 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+    - vendor/pestphp/pest/extension.neon
+
+parameters:
+    level: max
+    paths:
+        - app
+        - bootstrap
+        - config
+        - database
+        - routes
+        - tests
+    # A missing "exclude" is deliberate: new findings should be fixed, not hidden.
+    # Any baseline must be justified in the PR that introduces it.

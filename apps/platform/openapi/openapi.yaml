@@ -1,0 +1,59 @@
+# OpenAPI contract for the Flow Life platform API (v1).
+#
+# This file is the source of truth for the HTTP contract. Every route under
+# /api/v1 must be described here and vice versa; tests/Feature/OpenApiContractTest.php
+# fails when they drift. The Guardian Console will consume a TypeScript client
+# generated from this file (see packages/api-client/README.md and ADR 0007).
+openapi: 3.1.0
+info:
+  title: Flow Life Platform API
+  version: 1.0.0
+  description: >-
+    Authoritative API for Flow Life organizational data, identity, authorization
+    and workflows. Only infrastructure endpoints exist during the foundation epic.
+servers:
+  - url: http://api.flowlife.localhost:18080/api/v1
+    description: Local development
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Platform health
+      description: >-
+        Infrastructure verification endpoint. Public and unauthenticated; exposes
+        only coarse pass/fail status.
+      tags: [System]
+      responses:
+        '200':
+          description: All checks passed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: At least one check failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, service, api_version, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        service:
+          type: string
+          examples: [flowlife-platform]
+        api_version:
+          type: string
+          examples: [v1]
+        checks:
+          type: object
+          description: Named checks and their result.
+          additionalProperties:
+            type: string
+            enum: [ok, fail]

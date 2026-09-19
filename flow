@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# ./flow: developer CLI for the Flow Life platform monorepo.
+#
+# A thin orchestrator over Docker Compose and the tooling inside the containers;
+# it holds no application logic. Each command lives in scripts/commands/ so this
+# file stays a dispatcher. See docs/development/getting-started.md.
+set -Eeuo pipefail
+
+FLOW_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+export FLOW_ROOT
+cd "$FLOW_ROOT" # every command is relative to the repository root, wherever it is invoked from
+
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
+    echo "flow: bash 4.4 or newer is required (found $BASH_VERSION)." >&2
+    exit 1
+fi
+
+# shellcheck source=scripts/lib/common.sh
+source "$FLOW_ROOT/scripts/lib/common.sh"
+
+usage() {
+    cat <<'USAGE'
+Usage: ./flow <command> [args]
+
+Environment
+  setup [--skip-build]     First-time setup: env files, images, dependencies, database
+  up [--profile NAME]...   Start the dev stack (profiles: postgres, redis)
+  down [--volumes] [-y]    Stop the stack (--volumes also deletes database data)
+  restart [service...]     Restart services
+  status                   Show services and probe the local URLs
+  logs [service...]        Follow logs (--no-follow to print and exit)
+  doctor                   Diagnose the host environment
+
+Tooling (run inside containers)
+  shell [service]          Open a shell (default: platform)
+  artisan <args>           php artisan ...
+  composer <args>          composer ... (platform)
+  npm <args>               npm ... (Guardian Console)
+
+Quality
+  test [backend|frontend|e2e] [--pgsql] [-- args]
+                           Run tests (default: backend + frontend)
+  check [repo|backend|frontend] [--pgsql]
+                           Everything CI runs; exits non-zero on any failure
+  build                    Production build of the Guardian Console
+
+Database
+  db shell [--pgsql]       SQL shell (MariaDB, or PostgreSQL with --pgsql)
+  db fresh [-y]            DROP all tables and re-run migrations (local only)
+
+Docs: docs/development/getting-started.md
+USAGE
+}
+
+command_file() {
+    case "$1" in
+        setup) echo setup ;;
+        up | down | restart | status | logs) echo lifecycle ;;
+        shell | artisan | composer | npm) echo tools ;;
+        test) echo test ;;
+        check) echo check ;;
+        db) echo db ;;
+        build) echo build ;;
+        doctor) echo doctor ;;
+        *) return 1 ;;
+    esac
+}
+
+main() {
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        help | -h | --help)
+            usage
+            return 0
+            ;;
+    esac
+
+    local file
+    if ! file="$(command_file "$cmd")"; then
+        printf 'flow: unknown command "%s"\n\n' "$cmd" >&2
+        usage >&2
+        return 2
+    fi
+
+    # shellcheck source=/dev/null
+    source "$FLOW_ROOT/scripts/commands/$file.sh"
+    "cmd_$cmd" "$@"
+}
+
+main "$@"

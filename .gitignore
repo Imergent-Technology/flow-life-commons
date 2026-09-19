@@ -1,0 +1,27 @@
+# Local environment and secrets. Only *.example files are committed.
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Dependencies and build output
+node_modules/
+vendor/
+dist/
+
+# Test / tooling output
+coverage/
+test-results/
+playwright-report/
+.phpunit.result.cache
+.phpunit.cache/
+.php-cs-fixer.cache
+.eslintcache
+*.log

@@ -1,0 +1,59 @@
+# CI runs the same tooling developers run locally: ./flow check.
+# There is deliberately no CI-only test logic here. CI only, no deployment.
+name: CI
+
+# NOTE: paths-ignore skips docs-only changes to save minutes. A skipped workflow
+# reports no status, so revisit this BEFORE making the job below a required check
+# in branch protection (see docs/development/testing.md).
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+
+# A newer push to the same branch/PR cancels the superseded run; main always completes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ./flow check
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Only the PHP image is built from source; layer cache keeps this to seconds
+      # when the Dockerfile has not changed. Same image tag as `./flow setup` builds.
+      - name: Build PHP development image (layer-cached)
+        uses: docker/bake-action@v7
+        with:
+          files: compose.yaml
+          targets: platform
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=flow-dev-php
+            *.cache-to=type=gha,scope=flow-dev-php,mode=max
+
+      - name: Set up environment
+        run: ./flow setup --skip-build
+
+      # Repo hygiene, Pint, Larastan, Pest (MariaDB + architecture tests),
+      # PostgreSQL run of the suite, tsc, ESLint, Prettier, Vitest, production build.
+      - name: Run all checks
+        run: ./flow check --pgsql
+
+      - name: Service logs (on failure)
+        if: failure()
+        run: ./flow logs --no-follow

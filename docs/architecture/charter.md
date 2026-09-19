@@ -1,0 +1,70 @@
+# Architecture charter
+
+Flow Life Global is building a long-lived organizational platform for **members, volunteers, Guardians**, and eventually partners and other audiences. This charter states the direction and the rules that every later change is measured against. Decisions and their alternatives live in the [ADRs](../adr/README.md); this page is the summary.
+
+## Direction
+
+- The **platform** (`apps/platform`) is authoritative for organizational data, identity relationships, authorization, workflows and business rules.
+- Member and volunteer experiences are exposed substantially through **WordPress** via a thin companion plugin (`apps/wordpress-companion`). WordPress is an adapter and presentation surface, never a source of truth ([ADR 0004](../adr/0004-wordpress-adapter-not-authority.md)).
+- Guardian operations are exposed through a separately hardened **Guardian Console** (`apps/guardian-console`).
+- WordPress must be replaceable or supplementable later without redesigning the platform core.
+
+## Settled technology
+
+| Concern | Decision | ADR |
+| --- | --- | --- |
+| Backend | Laravel 13, PHP 8.3, modular monolith | [0001](../adr/0001-modular-monolith.md), [0002](../adr/0002-laravel-php-platform.md) |
+| API | REST/JSON, versioned from `/api/v1`, OpenAPI contract | [0007](../adr/0007-versioned-rest-api-openapi.md) |
+| Guardian Console | React 19, TypeScript, Vite | [0003](../adr/0003-react-guardian-console.md) |
+| Styling | Tailwind CSS 4 via `@tailwindcss/vite` | [0012](../adr/0012-tailwind-4-via-vite.md) |
+| Database | MariaDB 10.11 first; PostgreSQL portability is a hard requirement | [0005](../adr/0005-mariadb-with-postgresql-portability.md) |
+| Identifiers | Application-generated ULIDs | [0006](../adr/0006-ulid-identifiers.md) |
+| Queues | Database-backed; Redis-ready, never required | [0010](../adr/0010-database-queue-redis-ready.md) |
+| Dev environment | Docker Compose, `./flow` CLI | [0011](../adr/0011-docker-compose-development-environment.md) |
+| Repository | Monorepo | [0013](../adr/0013-monorepo.md) |
+
+## Production constraint
+
+Production initially runs on **shared cPanel hosting**. Production must not depend on permanent worker processes, Redis, Docker, Node.js or long-running daemons. Queues are therefore intended to be drained from the scheduler tick (cron) rather than by a resident worker, the Guardian Console ships as static files, and Docker exists for development only. Development may provide richer infrastructure than production, but nothing may be built that *only* works with it.
+
+## Foundational rules
+
+Status: **Encoded** = a test, config or tool fails when broken; **Partial** = enforced in part; **Documented** = a convention until there is code to enforce it.
+
+| # | Rule | Status | Where |
+| --- | --- | --- | --- |
+| 1 | WordPress is an adapter, not an authority. | Documented | ADR 0004; the plugin skeleton contains no logic |
+| 2 | Platform identity, authorization, organizational roles and business data belong to the platform. | Documented | ADR 0008 |
+| 3 | The application is a modular monolith. | Encoded | `tests/Architecture/ModuleBoundariesTest.php` |
+| 4 | Modules own their business rules and writes. | Partial | Modules cannot use each other's Domain/Infrastructure/Http (architecture test); "writes only via the owner" needs review discipline |
+| 5 | No cross-module direct model/table mutation. | Partial | As above |
+| 6 | Authorization happens server-side; UI visibility is never security. | Documented | No authorization exists yet. See [authorization model](../security/authorization-model.md) |
+| 7 | Authorization and approval/workflow are separate concepts. | Documented | ADR 0009 |
+| 8 | External integrations live behind explicit application/infrastructure boundaries. | Partial | HTTP clients (`Http` facade, `Illuminate\Http\Client`, Guzzle) are forbidden outside a module's `Infrastructure` (architecture test) |
+| 9 | No external network calls inside database transactions. | Documented | [Integration model](integration-model.md) |
+| 10 | Background jobs are eventually idempotent and retry-safe. | Documented | [Integration model](integration-model.md); no jobs exist yet |
+| 11 | Caches are never authoritative storage. | Documented | [Data ownership](data-ownership.md) |
+| 12 | Application code does not depend on Redis unless its semantics are genuinely required. | Encoded | The default stack has no Redis (an optional, unused profile only); a test fails if `.env.example` points queue/cache/session at Redis |
+| 13 | MariaDB/PostgreSQL portability is actively protected; no DB-specific enums, triggers, procedures, proprietary SQL or generated columns without an ADR. | Encoded | Portability scan (`DatabasePortabilityTest`), tests refuse non-MariaDB/PostgreSQL drivers, PostgreSQL run of the suite in `./flow check --pgsql` and CI |
+| 14 | Persisted timestamps are UTC. | Encoded | `config/app.php`, MariaDB and PostgreSQL connection time zones, dev MariaDB `--default-time-zone=+00:00`, config test |
+| 15 | Secrets are never committed. | Partial | `.gitignore` excludes `.env*` (except `*.example`); examples hold placeholders only. No secret scanner yet. See [secrets](../security/secrets.md) |
+| 16 | Sensitive actions eventually require durable auditing. | Documented | [Authorization model](../security/authorization-model.md) |
+| 17 | No speculative shared abstractions or frameworks before real consumers exist. | Documented | Review discipline; `Shared` is empty on purpose |
+
+Other rules that *are* encoded: no `env()` outside config, no debug or dangerous functions, `declare(strict_types=1)` throughout `app/`, and Larastan at level `max`.
+
+## Identifiers
+
+Platform aggregate identifiers are **application-generated ULIDs** unless a future ADR establishes a reason otherwise ([ADR 0006](../adr/0006-ulid-identifiers.md)). No aggregates exist yet, so nothing demonstrates this in code; framework-owned infrastructure tables (cache, jobs) keep Laravel's defaults.
+
+## Domain events and transactional outbox (direction)
+
+Meaningful domain/application events and a **transactional outbox** are expected architectural primitives: state changes and the events describing them commit atomically, and a separate relay delivers them to consumers (jobs, integrations, WordPress notifications) with retry safety. **Nothing is built yet**; the first real cross-module or external consumer will drive the design. See the [integration model](integration-model.md).
+
+## Auditing (direction)
+
+Sensitive actions and privileged access will require **durable, tamper-evident audit records** (who, what, when, from where, on whose authority). The design belongs to the Identity/Access epic; see the [authorization model](../security/authorization-model.md).
+
+## Out of scope for the foundation
+
+CRM, membership, volunteer management, Guardian roles/permissions, events, publishing, workflows and AI features. The foundation exists so those can be built on solid ground, not so they can be started early.

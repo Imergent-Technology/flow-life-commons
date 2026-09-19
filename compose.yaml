@@ -1,0 +1,162 @@
+# Flow Life Platform: local development environment.
+#
+# Driven by ./flow (see docs/development/docker.md). Development only:
+# production is cPanel shared hosting and uses none of this.
+#
+# Default services : gateway, platform, queue, scheduler, mariadb, guardian, mailpit
+# Optional profiles: postgres (portability), redis (not consumed yet), e2e (Playwright)
+#
+# Host variables (FLOW_*) come from the gitignored root .env written by `./flow setup`.
+# Every host-published port deliberately uses an uncommon number (standard port
+# with a "1" prefix) so this stack can run beside other dev environments.
+
+name: flowlife-platform
+
+x-php-service: &php-service
+  image: flowlife-dev/php:8.3
+  user: "${FLOW_UID:-1000}:${FLOW_GID:-1000}"
+  working_dir: /var/www/platform
+  volumes:
+    - ./apps/platform:/var/www/platform
+
+services:
+  gateway:
+    image: caddy:2-alpine
+    environment:
+      FLOW_GATEWAY_PORT: ${FLOW_GATEWAY_PORT:-18080}
+    ports:
+      # Same port inside and outside the container so URLs, CORS origins and
+      # Vite HMR all agree. Bound to loopback unless FLOW_BIND_ADDRESS says otherwise.
+      - "${FLOW_BIND_ADDRESS:-127.0.0.1}:${FLOW_GATEWAY_PORT:-18080}:${FLOW_GATEWAY_PORT:-18080}"
+    volumes:
+      - ./infrastructure/docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./apps/platform/public:/var/www/platform/public:ro
+    depends_on:
+      - platform
+      - guardian
+      - mailpit
+
+  platform:
+    <<: *php-service
+    build:
+      context: infrastructure/docker/php
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  queue:
+    <<: *php-service
+    # queue:listen reloads code for every job, which suits development.
+    command: php artisan queue:listen --tries=1 --timeout=90
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  scheduler:
+    <<: *php-service
+    command: php artisan schedule:work
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  mariadb:
+    image: mariadb:10.11
+    # UTC session/default time zone: persisted timestamps are UTC.
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+    environment:
+      # Development-only credentials. Never reuse anywhere real.
+      MARIADB_ROOT_PASSWORD: flowlife_root_dev_only
+      MARIADB_DATABASE: flowlife
+      MARIADB_USER: flowlife
+      MARIADB_PASSWORD: flowlife_dev_only
+    ports:
+      - "127.0.0.1:${FLOW_DB_PORT:-13306}:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  guardian:
+    image: node:24-bookworm-slim
+    user: "${FLOW_UID:-1000}:${FLOW_GID:-1000}"
+    working_dir: /app
+    command: npm run dev
+    environment:
+      HOME: /tmp
+      npm_config_cache: /tmp/.npm
+      npm_config_update_notifier: "false"
+      FLOW_GATEWAY_PORT: ${FLOW_GATEWAY_PORT:-18080}
+      FLOW_VITE_POLLING: ${FLOW_VITE_POLLING:-false}
+      VITE_API_BASE_URL: http://api.flowlife.localhost:${FLOW_GATEWAY_PORT:-18080}
+    volumes:
+      - ./apps/guardian-console:/app
+    healthcheck:
+      # So `up --wait` returns only once Vite is actually serving (the gateway
+      # would answer 502 before that). Node is the only tool in this image.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  mailpit:
+    image: axllent/mailpit:v1.31.2
+
+  # ---- Optional profiles -------------------------------------------------
+
+  postgres:
+    profiles: [postgres]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: flowlife
+      POSTGRES_USER: flowlife
+      POSTGRES_PASSWORD: flowlife_dev_only
+    ports:
+      - "127.0.0.1:${FLOW_PG_PORT:-15432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowlife -d flowlife"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    # Redis is optional and not consumed by the application yet.
+    profiles: [redis]
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${FLOW_REDIS_PORT:-16379}:6379"
+
+  e2e:
+    # Playwright shares the gateway's network namespace so that
+    # *.flowlife.localhost (which browsers resolve to loopback) reaches the gateway.
+    # Keep the image tag in step with @playwright/test in apps/guardian-console.
+    profiles: [e2e]
+    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    network_mode: "service:gateway"
+    user: "${FLOW_UID:-1000}:${FLOW_GID:-1000}"
+    working_dir: /app
+    init: true
+    ipc: host
+    environment:
+      HOME: /tmp
+      npm_config_update_notifier: "false"
+      E2E_BASE_URL: http://guardian.flowlife.localhost:${FLOW_GATEWAY_PORT:-18080}
+    volumes:
+      - ./apps/guardian-console:/app
+    depends_on:
+      - gateway
+
+volumes:
+  mariadb-data:
+  postgres-data:

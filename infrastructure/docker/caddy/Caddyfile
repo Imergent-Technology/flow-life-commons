@@ -1,0 +1,27 @@
+# Development gateway. Plain HTTP only; TLS is a production-hosting concern.
+# The listen port is identical inside and outside the container
+# (FLOW_GATEWAY_PORT) so URLs, CORS origins and Vite HMR agree everywhere.
+{
+	auto_https off
+	admin off
+}
+
+http://api.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
+	root * /var/www/platform/public
+	php_fastcgi platform:9000
+	file_server
+}
+
+http://guardian.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
+	# Vite dev server; websocket upgrades (HMR) are proxied automatically.
+	reverse_proxy guardian:5173
+}
+
+http://mail.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
+	reverse_proxy mailpit:8025
+}
+
+# Anything else (unknown Host header, raw IP) is refused rather than silently answered.
+:{$FLOW_GATEWAY_PORT} {
+	respond "Unknown host. Use *.flowlife.localhost (see docs/development/docker.md)." 404
+}

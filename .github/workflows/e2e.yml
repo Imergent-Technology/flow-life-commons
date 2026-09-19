@@ -1,0 +1,55 @@
+# Browser smoke test (Playwright) against the full dev stack.
+# Manual only: too expensive to run on every push at this stage.
+name: E2E smoke
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: ./flow test e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build PHP development image (layer-cached)
+        uses: docker/bake-action@v7
+        with:
+          files: compose.yaml
+          targets: platform
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=flow-dev-php
+            *.cache-to=type=gha,scope=flow-dev-php,mode=max
+
+      - name: Set up environment
+        run: ./flow setup --skip-build
+
+      - name: Start the stack
+        run: ./flow up
+
+      - name: Playwright smoke test
+        run: ./flow test e2e
+
+      - name: Upload Playwright output (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-output
+          path: apps/guardian-console/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Service logs (on failure)
+        if: failure()
+        run: ./flow logs --no-follow
