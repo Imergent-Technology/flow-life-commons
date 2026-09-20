@@ -1,25 +1,23 @@
 import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import App from './App.tsx'
-import { fetchHealth } from './api/health.ts'
+import { fetchHealth } from '../api/health.ts'
+import { HealthPanel } from './HealthPanel.tsx'
 
-vi.mock('./api/health.ts')
+vi.mock('../api/health.ts')
 
 const fetchHealthMock = vi.mocked(fetchHealth)
 
-describe('App', () => {
+describe('HealthPanel', () => {
   beforeEach(() => {
     fetchHealthMock.mockReset()
   })
 
-  it('renders the development shell', () => {
+  it('shows that it is checking', () => {
     fetchHealthMock.mockReturnValue(new Promise(() => undefined))
-    render(<App />)
+    render(<HealthPanel />)
 
-    expect(
-      screen.getByRole('heading', { level: 1, name: 'Flow Life Guardian Console' }),
-    ).toBeVisible()
+    expect(screen.getByRole('heading', { level: 2, name: 'Platform API' })).toBeVisible()
     expect(screen.getByText('Checking…')).toBeVisible()
   })
 
@@ -30,7 +28,7 @@ describe('App', () => {
       api_version: 'v1',
       checks: { database: 'ok' },
     })
-    render(<App />)
+    render(<HealthPanel />)
 
     expect(await screen.findByText('API ok')).toBeVisible()
     expect(screen.getByText('database: ok')).toBeVisible()
@@ -43,7 +41,7 @@ describe('App', () => {
       api_version: 'v1',
       checks: { database: 'fail' },
     })
-    render(<App />)
+    render(<HealthPanel />)
 
     expect(await screen.findByText('API degraded')).toBeVisible()
     expect(screen.getByText('database: fail')).toBeVisible()
@@ -51,7 +49,7 @@ describe('App', () => {
 
   it('shows when the API cannot be reached', async () => {
     fetchHealthMock.mockRejectedValue(new TypeError('Failed to fetch'))
-    render(<App />)
+    render(<HealthPanel />)
 
     expect(await screen.findByText('API unreachable')).toBeVisible()
   })

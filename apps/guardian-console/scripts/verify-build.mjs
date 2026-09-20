@@ -10,7 +10,15 @@ if (cssFiles.length === 0) {
 }
 
 const css = cssFiles.map((f) => readFileSync(join(assets, f), 'utf8')).join('\n')
-for (const needle of ['.text-2xl', '.font-semibold', '.max-w-2xl']) {
+// Utilities the Console really uses. Built at run time on purpose: Tailwind scans every project file,
+// this one included, so a needle spelled out as a class name here would generate ITSELF and pass
+// whether or not the app used it.
+const needles = [
+  ['text', '2xl'],
+  ['font', 'semibold'],
+  ['max', 'w', 'md'],
+].map((parts) => `.${parts.join('-')}`)
+for (const needle of needles) {
   if (!css.includes(needle)) {
     throw new Error(`verify:build: expected Tailwind utility ${needle} in built CSS`)
   }

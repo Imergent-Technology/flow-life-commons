@@ -26,6 +26,12 @@ export default defineConfig([
     },
   },
   {
+    // The Console handles passwords and one-time tokens. Nothing in it logs, so nothing can log a
+    // secret by accident (a behavioural test also checks the credential flows stay silent).
+    files: ['src/**/*.{ts,tsx}'],
+    rules: { 'no-console': 'error' },
+  },
+  {
     // Node-side files: build/test config and the Playwright suite.
     files: ['vite.config.ts', 'playwright.config.ts', 'e2e/**/*.ts'],
     languageOptions: { globals: globals.node },
