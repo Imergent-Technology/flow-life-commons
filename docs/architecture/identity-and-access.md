@@ -2,7 +2,7 @@
 
 The consolidated design the first Identity implementation epic works from. Decisions and their alternatives live in [ADRs 0015–0021](../adr/README.md); this page is the operative reference.
 
-> **Status: architecture frozen; implementation in progress** on the phased Identity and Access epic (see [Implementation status](#implementation-status)). Nothing here may be built ahead of the epic scope in the last section.
+> **Status: architecture frozen; implementation in progress (Phases 1–7 done)** on the phased Identity and Access epic (see [Implementation status](#implementation-status)). Nothing here may be built ahead of the epic scope in the last section.
 
 ## Vocabulary
 
@@ -120,7 +120,7 @@ Cookie: `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, **no `
 
 **The 30 minutes measure session request inactivity, not human idleness.** Any authenticated request refreshes `last_activity`, so a future background poll from the Console could keep a session alive with nobody at the keyboard. This is accepted because the 12-hour cap bounds the session independently of activity. Do **not** build browser activity tracking or other idle detection unless implementation shows a concrete need, and do not describe the 30-minute value as guaranteed human-idle detection.
 
-Sessions are also invalidated on password reset (all) and password change (all but the current one). `expire_on_close` stays off. Step-up re-authentication for sensitive actions belongs with MFA, not here.
+Sessions are also invalidated on password reset (all) and password change (all but the current one). `expire_on_close` stays off. Step-up re-authentication for sensitive actions came with MFA (Phase 7): a session records when password and a second factor were last proved, and a route can demand it within 15 minutes ([ADR 0023](../adr/0023-multi-factor-authentication.md)).
 
 ## Authorization
 
@@ -159,6 +159,8 @@ ULIDs are `CHAR(26)`, application-generated. Timestamps UTC. No database `ENUM`,
 | `people` | ULID, `display_name`, timestamps | — |
 | `accounts` | ULID, `person_id`, `email`, `email_canonical`, `email_verified_at`, `password_hash` (nullable), `password_updated_at`, `status`, `disabled_at`, `last_login_at` | FK `person_id → people.id` RESTRICT; `unique(email_canonical)`; `unique(person_id)` |
 | `account_invitations` | ULID, `account_id`, `token_hash`, `expires_at`, `accepted_at`, `invited_by_account_id` | FK `account_id → accounts.id` RESTRICT; `unique(token_hash)`; no FK on `invited_by_account_id` (provenance) |
+| `account_totp_factors` | ULID, `account_id`, `secret_ciphertext` (active), `pending_secret_ciphertext`, `pending_started_at`, `enrolled_at`, `last_used_step`, timestamps | FK `account_id → accounts.id` RESTRICT; `unique(account_id)`. Secrets are encrypted by the application (opaque text); *(Phase 7, [ADR 0023](../adr/0023-multi-factor-authentication.md))* |
+| `account_recovery_codes` | ULID, `account_id`, `code_hash` (SHA-256 hex), `used_at`, `created_at` | FK `account_id → accounts.id` RESTRICT; `unique(account_id, code_hash)`. One row per code so consumption is one conditional `UPDATE` *(Phase 7)* |
 | `sessions` | framework; **`user_id` as `string(26)`, not `foreignId`** | index on `user_id`; no FK |
 | `password_reset_tokens` | framework, transient | — |
 
@@ -237,7 +239,7 @@ Spans two modules, enforced with a one-way dependency — **Access → Identity,
 
 ### Design now, build later
 
-External identities; `api_clients` and service authentication; delegated WordPress access; scoped assignments; runtime-editable roles; **MFA (early security follow-up, before privileged access expands substantially)**; standalone email verification; anonymisation and deletion; session listing and "sign out everywhere".
+External identities; `api_clients` and service authentication; delegated WordPress access; scoped assignments; runtime-editable roles; **MFA (done in Phase 7, [ADR 0023](../adr/0023-multi-factor-authentication.md); administrative recovery of a lost second factor is still later)**; standalone email verification; anonymisation and deletion; session listing and "sign out everywhere".
 
 ### Deferred completely
 
@@ -368,3 +370,20 @@ Refinements made in Phase 5 (the policy, invitation acceptance, password recover
 - **Development fixtures:** `E2eAccountSeeder` gained accounts for the browser journeys (an active Account with no Console access, two invitations, two Console users with known passwords). None names a role: a Console user is asked of Access, and the no-access account is simply never given one.
 - **Not built, on purpose:** role-management endpoints or UI, invitation issuance over HTTP, invitation delivery, a verification flow, Account re-enable, MFA, and a "sign out everywhere" or session list.
 - **Known limits:** the e2e suite signs in about 25 times from one address and the platform allows 30 per 15 minutes (the counters are cleared at the start of a run), so a new journey must count its sign-ins. The Console does not re-check `/me` on focus or navigation: that would be background traffic of exactly the kind the inactivity rule exists to make meaningful.
+
+**Phase 7 — done: multi-factor authentication for the Guardian Console** ([ADR 0023](../adr/0023-multi-factor-authentication.md)). Backend, Console screens, and browser journeys; the decisions and their alternatives are in the ADR, and this records what exists.
+
+- **Console access now requires a second factor.** TOTP (RFC 6238, through `spomky-labs/otphp` behind an Identity port) plus ten single-use recovery codes. *Who* must have one is Access's answer to Identity's `MultiFactorPolicy` port: "does this person currently hold `console.access`?" No role name appears in Identity; there is no `mfa` role or capability; the default policy, if none is registered, **fails closed**. An Account that has an authenticator is always challenged.
+- **Sign-in is two steps when one is due.** A correct password answers `202` and starts a *pending sign-in* in the browser session (5 minutes to challenge, 10 to enrol, from the password, never extended; ends after 5 wrong codes). It is **not authentication**: `/me` is `401`, no gate is satisfied. `POST /mfa/challenge`, or `POST /mfa/enrollment` then `/mfa/enrollment/confirm`, finish it and only then does the session exist (new id and CSRF token, same 30-minute and 12-hour limits, a second-factor mark, and Actor provenance `SessionWithSecondFactor`). These routes are on the session surface (cookie and CSRF apply) but not behind `auth:web`.
+- **Everything that finishes a sign-in re-reads the Account under a lock** and checks that the password it proved is still the stored one, by a **keyed digest of the credential** (not the hash, and not `password_updated_at`, whose one-second resolution a same-second reset defeats). So a disable, a reset or a change after the password was accepted ends the pending sign-in. Proved on both engines with the race harness, including the same-second and same-text-set-again cases.
+- **Enrolment is proof.** A generated secret is stored encrypted and *pending*; only a valid current code from it enrols it (with the recovery codes, in one transaction). A wrong code changes nothing; asking again replaces the pending secret.
+- **Secrets at rest.** The TOTP secret is encrypted with the framework's authenticated encryption under `APP_KEY` (Infrastructure, behind a port; nothing in the database is cryptographic) and is never logged, audited, returned after enrolment or stored in the browser. `APP_KEY` is now an operational dependency ([secrets](../security/secrets.md)). Recovery codes are stored **only as a SHA-256 digest bound to the Account** (80 bits of entropy), shown once, and consumed by one atomic conditional update: two simultaneous uses of one code cannot both succeed, even without the Account lock.
+- **Replay and skew.** The current step and one either side are accepted, each step once (the last accepted step is stored).
+- **Management needs fresh proof, and there is no self-service disable.** Regenerating recovery codes and replacing the authenticator take the current password and a second factor (a recovery code is accepted, so a lost phone is recoverable) in the body. Replacement is *proof-before-switch*: the old authenticator works until a code from the new one is proved, then the Account's other sessions end. Both are rate limited per Account and address.
+- **Recent verification (step-up).** `security_verified_at` on the session, set by password-and-second-factor proof (at sign-in, `POST /security/verify`, or a management operation); the `security.verified` middleware alias demands it within 15 minutes and answers `403` with `verification_required: true`. Fail-safe on a missing or future-dated instant. **Nothing in production uses it yet**; Phase 8's sensitive routes will. A test-only route proves the edge.
+- **A password-only session cannot become privileged.** If an Account is granted Console access (or enrols an authenticator elsewhere) while it holds a session that never proved a second factor, that session ends on its next request. A session that did prove one is untouched.
+- **`/me`** gains `mfa`: `enrolled`, `recovery_codes_remaining`, `security_verified_until`. Never a secret, code, digest or factor detail. The OpenAPI contract documents every endpoint and the `202` login answer.
+- **Audit.** `mfa.enabled`, `mfa.challenge_failed`, `mfa.recovery_code_used`, `mfa.recovery_codes_regenerated`, `mfa.replaced`, `security.reverified`, `session.second_factor_required`, and a `second_factor` field on `authentication.succeeded`. The audit classes cannot name a secret, code, digest or proof type.
+- **The Console** shows the second step at the login page (in memory only: reloading restarts the sign-in), an enrolment flow (explanation, browser-drawn QR code, manual key, proof, recovery codes shown once with copy and download only on a click and an acknowledgement before "Continue"), and an MFA section on Account security (status, remaining codes, regenerate, replace). Nothing about the factor is ever stored in the browser or logged.
+- **Not built, on purpose:** administrative recovery of someone else's second factor, any self-service way to switch MFA off, other factor types (SMS, email, push, WebAuthn), a generic factor framework, a "remember this device" bypass, any exemption, a session list or device management, and any route that requires step-up.
+- **Known limits and follow-ups:** losing the authenticator *and* every recovery code locks a person out until administrative recovery exists; session volume and cleanup (anonymous and pending sessions are rows) are a production-readiness item; a visually stale Console page is possible until its next request (no heartbeat); `APP_KEY` rotation must keep the old key. A fixed 1.5-second grace in the race tests could in principle mask a broken lock on a very slow machine (the deterministic tests and the direct-consumption race are the backstops).

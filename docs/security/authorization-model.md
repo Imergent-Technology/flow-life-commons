@@ -28,11 +28,12 @@ Sensitive actions and privileged access will require **durable auditing**: who d
 | First administrator and lockout | Console command rooted in server access; last-administrator invariant enforced by a guard chain Identity owns | [ADR 0020](../adr/0020-administrator-bootstrap-and-last-administrator-invariant.md) |
 | Rate limiting | Laravel's limiter on login, reset and invitation acceptance, keyed by IP *and* identifier | [identity-and-access.md](../architecture/identity-and-access.md) |
 | Session lifetime | 30 minutes of request inactivity, plus a 12-hour absolute cap from authentication | [ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md) |
+| Second factor | Required to use the Console: TOTP plus single-use recovery codes, tied to holding `console.access` and not to a role; step-up (`security.verified`) is a reusable middleware | [ADR 0023](../adr/0023-multi-factor-authentication.md) |
 | Console access | Invite-only for Guardians, operators and administrators; no self-service registration | [ADR 0015](../adr/0015-identity-owns-person.md) |
 
 ## Still open
 
-- **MFA / step-up for privileged accounts.** Deliberately outside the first epic, and intended as an early security follow-up before privileged access expands substantially.
+- **Administrative recovery of a lost second factor.** MFA and the step-up seam exist ([ADR 0023](../adr/0023-multi-factor-authentication.md)); a person who loses both their authenticator and their recovery codes has no self-service way back, and the explicit administrative operation that resets it is later work.
 - **External identity providers** and the linking flows.
 - **Scoped access** (for example Guardian *of a particular programme*).
 - **Anonymisation and deletion** of identity data.

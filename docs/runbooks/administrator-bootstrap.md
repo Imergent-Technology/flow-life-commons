@@ -54,6 +54,7 @@ curl -sS -X POST https://<host>/api/v1/invitations/accept \
 ```
 
 - `204` means it worked: the account is now active with that password. **They are not signed in**; they sign in through the ordinary login.
+- **The first sign-in enrols a second factor.** An administrator holds Console access, and Console access requires two-step verification ([ADR 0023](../adr/0023-multi-factor-authentication.md)), so their first correct password leads to **Set up two-step verification**, not to the Console. They need an authenticator app (any that supports the standard). They scan the QR code (or type the setup key), enter the 6-digit code it shows, and are then shown **ten recovery codes, once**. Tell them to save the codes somewhere safe *before* continuing: they cannot be shown again, and if the authenticator and every code are lost there is, for now, no self-service way back (administrative recovery of a second factor is later work). Nothing about this needs a server operator.
 - The password needs at least 15 characters and at most 72 bytes, with no other composition rules, and must not appear in public data breaches (a `422` says which rule failed). If the breach service is unreachable the answer is `503` with `Retry-After`: nothing changed, retry shortly.
 - Any problem with the token itself (wrong, expired, already used) is the same `422` on `token`, deliberately.
 - An invitation works **once** and expires after 7 days. If it expires or is lost, re-run the bootstrap command as described under *Rollback*.
@@ -87,6 +88,7 @@ It fails, changes nothing, and tells you. An existing account is never taken ove
 - `security_events` has `account.invited`, `role.granted` and `administrator.bootstrapped` for the new person, none with a token in them.
 - `accounts` shows the new account with `status = invited` and `password_hash` empty, until the invitation is accepted; afterwards `status = active` with a password hash and `email_verified_at` **still empty** (see above), and `invitation.accepted` is in `security_events`.
 - `account_invitations` has one row with a 64-character `token_hash` and no `accepted_at`.
+- After the administrator's first sign-in: `account_totp_factors` has one row for them with an encrypted (opaque) `secret_ciphertext` and an `enrolled_at`, `account_recovery_codes` has ten rows of 64-character digests, and `security_events` has `mfa.enabled` and an `authentication.succeeded` with `second_factor: enrollment`. None contains a secret or a code.
 - `role_assignments` has one `platform_administrator` row for that person.
 
 ## Rollback

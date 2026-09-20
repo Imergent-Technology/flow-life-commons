@@ -45,7 +45,7 @@ Idempotent and safe to re-run. It creates `.env` (with your UID/GID) and `apps/p
 
 ## Creating an administrator
 
-A fresh development database has no accounts. `identity:create-administrator` creates the first administrator and prints a one-time invitation token (see the [runbook](../runbooks/administrator-bootstrap.md)). Accepting an invitation, which is how the administrator would set a password and sign in, is not built yet, so this does not give you a login. `./flow test e2e` seeds a separate development-only fixture account instead.
+A fresh development database has no accounts. `identity:create-administrator` creates the first administrator and prints a one-time invitation token (see the [runbook](../runbooks/administrator-bootstrap.md)). To use it: open the Console's `/accept-invitation` page, paste the token and choose a password, then sign in. An administrator can use the Console only with a second factor ([ADR 0023](../adr/0023-multi-factor-authentication.md)), so your first sign-in walks you through setting up an authenticator app and saving ten recovery codes (shown once). Mailpit shows the password-recovery email if you need it. `./flow test e2e` seeds separate development-only fixture accounts (some already enrolled with a known authenticator secret) instead.
 
 ## Local URLs
 

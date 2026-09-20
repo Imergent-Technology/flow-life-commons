@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0023](0023-multi-factor-authentication.md), which adds the second factor and the step-up this ADR deferred to MFA
 - **Clarified:** 2026-09-20. Two bullets under Decision named Laravel mechanics more specifically than the intent required; they are reworded below in light of the implementation. The decision itself is unchanged.
 
 ## Context

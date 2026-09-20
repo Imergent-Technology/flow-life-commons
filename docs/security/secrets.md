@@ -12,6 +12,8 @@
 
 `APP_KEY` is generated per environment by `./flow setup`. It is empty in the example file.
 
+**`APP_KEY` protects every enrolled authenticator.** TOTP secrets are stored encrypted under it ([ADR 0023](../adr/0023-multi-factor-authentication.md)), so **rotating it without keeping the old value in `APP_PREVIOUS_KEYS` makes every stored secret unreadable and locks out everyone who has one** (they then fail with a decryption error, deliberately not "wrong code"). Treat it as a long-lived, backed-up secret; rotate it only with the previous value retained. Recovery-code digests do not depend on it. The other holders of the key are session and cookie encryption, and the digest that binds a half-finished sign-in to the password proved (lasting minutes).
+
 ## Development credentials
 
 The MariaDB and PostgreSQL passwords in `compose.yaml` and the `.example` files (`flowlife_dev_only`, `flowlife_root_dev_only`) are **throwaway values for a local, loopback-only database**. Do not reuse them anywhere real. They are the only credentials in the repository; there are no production credentials and none should be invented.
