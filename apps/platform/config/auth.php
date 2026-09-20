@@ -96,7 +96,9 @@ return [
     */
 
     'passwords' => [
-        // Not used yet: password reset is a later phase. Renamed with the provider only.
+        // Identity's password reset (Infrastructure\Auth\AccountResetTokenRepository, over Laravel's
+        // database token repository) reads its table, expiry (minutes) and per-Account throttle
+        // (seconds) from here. The table's `email` column holds the Account's CANONICAL email.
         'accounts' => [
             'provider' => 'accounts',
             'table' => env('AUTH_PASSWORD_RESET_TOKEN_TABLE', 'password_reset_tokens'),

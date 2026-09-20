@@ -38,6 +38,51 @@ final readonly class CredentialAudit
         );
     }
 
+    /**
+     * A reset was requested and a token issued. The Account is the subject; nobody is authenticated, so
+     * there is no actor.
+     */
+    public function passwordResetRequested(Account $account, ClientContext $client): void
+    {
+        ($this->record)(
+            IdentityEvent::PasswordResetRequested->value, SecurityEventOutcome::Success,
+            null, $account->personId, $account->id, $client->ip, $client->userAgent,
+        );
+    }
+
+    /**
+     * A reset was requested and NO token was issued. Recorded with a reason class and the identifier
+     * the caller claimed, exactly like a failed sign-in; for an address with no Account there is no
+     * subject, and none is invented.
+     */
+    public function passwordResetNotIssued(ResetFailure $reason, EmailAddress $attempted, ?Account $account, ClientContext $client): void
+    {
+        ($this->record)(
+            IdentityEvent::PasswordResetRequested->value, SecurityEventOutcome::Failure,
+            null, $account?->personId, $account?->id, $client->ip, $client->userAgent,
+            ['reason' => $reason->value, 'attempted_identifier' => $attempted->canonical],
+        );
+    }
+
+    /** @param  int  $signedOut  how many of the Account's sessions were ended */
+    public function passwordResetCompleted(Account $account, int $signedOut, ClientContext $client): void
+    {
+        ($this->record)(
+            IdentityEvent::PasswordResetCompleted->value, SecurityEventOutcome::Success,
+            null, $account->personId, $account->id, $client->ip, $client->userAgent,
+            ['signed_out' => $signedOut],
+        );
+    }
+
+    public function passwordResetFailed(ResetFailure $reason, EmailAddress $attempted, ?Account $account, ClientContext $client): void
+    {
+        ($this->record)(
+            IdentityEvent::PasswordResetFailed->value, SecurityEventOutcome::Failure,
+            null, $account?->personId, $account?->id, $client->ip, $client->userAgent,
+            ['reason' => $reason->value, 'attempted_identifier' => $attempted->canonical],
+        );
+    }
+
     /** A credential endpoint's limit is engaged. `attempted` is the identifier the caller claimed, if any. */
     public function rateLimited(ThrottledAction $action, ThrottleBlock $block, ?EmailAddress $attempted, ClientContext $client): void
     {

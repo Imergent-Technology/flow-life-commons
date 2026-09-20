@@ -15,8 +15,8 @@ info:
 
     **Implemented so far:** infrastructure health, Guardian Console session
     authentication (`login`, `logout`, `me`), capability-based authorization
-    (see below), and the first credential-lifecycle endpoint (invitation acceptance).
-    No endpoint changes role assignments yet.
+    (see below), and the credential lifecycle (invitation acceptance and password
+    recovery). No endpoint changes role assignments yet.
 
 
     ## Authorization
@@ -68,8 +68,8 @@ info:
     ## Passwords
 
 
-    One password policy applies wherever a password is set (`/invitations/accept`, and the
-    recovery and change endpoints as they arrive):
+    One password policy applies wherever a password is set (`/invitations/accept`,
+    `/password/reset`, and the change endpoint as it arrives):
 
     - at least **15 Unicode code points**, and at most **72 UTF-8 bytes** (the limit of the
       bcrypt hashing the platform runs on; a longer password is refused, never truncated);
@@ -313,6 +313,136 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+  /password/forgot:
+    post:
+      operationId: requestPasswordReset
+      summary: Ask for a password-reset email
+      description: >-
+        "I forgot my password." If an account exists for the address **and can sign in today**
+        (active, with a password), a single-use reset link is emailed to it. Nothing about the
+        account is disclosed.
+
+
+        **The answer never depends on the address.** An active account, an unknown address, an
+        invited account and a disabled account all receive the same `202` and body, and the
+        request is held to a minimum duration so the time it takes does not tell them apart
+        either. Only an eligible account is sent anything, and at most one message a minute.
+        A malformed address is refused with `422` (that reveals the address's shape, not
+        whether it has an account). The rate limit answers `429` identically whether or not
+        the address exists.
+
+
+        The emailed link points at the Console's reset page (`/reset-password`, arriving with
+        the Console) and carries the token and the address in the URL **fragment**
+        (`#token=...&email=...`), which a browser never sends to a server, so neither reaches
+        access logs or `Referer` headers. The page reads them and calls `POST /password/reset`.
+        The token lasts 60 minutes, works once, and is stored only as a hash.
+
+
+        Public and stateless: no session, cookie or CSRF token. Limited by source address and
+        by address.
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+      responses:
+        '202':
+          description: The request was accepted. This is the answer whether or not an email was sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: The request is malformed (missing, or an email that is not a valid address).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many requests from this address, or for this identifier. Identical whether or not the identifier exists.
+          headers:
+            Retry-After:
+              description: Seconds until another request is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /password/reset:
+    post:
+      operationId: resetPassword
+      summary: Choose a new password with a reset token
+      description: >-
+        Completes a password reset with the emailed token. It **does not sign the caller in**,
+        and it **ends every session the account has** (a reset is what someone does when a
+        credential may be compromised). It cannot activate an invited account or re-enable a
+        disabled one: only an account that can sign in today qualifies, and a concurrent
+        disable wins.
+
+
+        The token is sent in the **body**, never a URL. It is single-use: it is deleted with the
+        password change, and of two simultaneous requests with the same token at most one
+        succeeds. The password change, the token's deletion, the ending of the sessions and
+        the audit record commit together or not at all.
+
+
+        **One answer for every failure:** an unknown address, an account that cannot be reset,
+        and a missing, wrong, used or expired token are indistinguishable (`422` with an error
+        on `token`), and each does the same hashing work. The password is judged first and does
+        not consume the token, so a weak password can be corrected and resubmitted.
+
+
+        Public and stateless: no session, cookie or CSRF token. Limited by source address and
+        by address.
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      responses:
+        '204':
+          description: The password was changed and every session of the account ended. No session was created.
+        '422':
+          description: >-
+            Nothing was changed. `errors.token` for any unusable reset (one answer for every
+            reason), `errors.password` for a password that does not meet the policy (with a
+            reason for each), or a confirmation that does not match.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts from this address, or for this identifier.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '503':
+          description: >-
+            The breached-password check is unavailable, so the password could not be judged.
+            Nothing was changed and the token is still valid; retry after the interval given.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
 components:
   securitySchemes:
     sessionCookie:
@@ -392,6 +522,39 @@ components:
           maxLength: 256
           writeOnly: true
           description: The one-time invitation token (43 URL-safe characters). Secret.
+        password:
+          type: string
+          maxLength: 1024
+          format: password
+          writeOnly: true
+          description: See "Passwords" above. Secret; used exactly as typed.
+        password_confirmation:
+          type: string
+          maxLength: 1024
+          format: password
+          writeOnly: true
+          description: Must equal `password` once both are normalised. Secret.
+    ForgotPasswordRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+          description: Printable ASCII; internationalised domains as punycode. Matched case-insensitively.
+    ResetPasswordRequest:
+      type: object
+      required: [email, token, password, password_confirmation]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+          description: The address the reset was requested for (carried in the emailed link).
+        token:
+          type: string
+          maxLength: 256
+          writeOnly: true
+          description: The single-use reset token from the emailed link. Secret.
         password:
           type: string
           maxLength: 1024

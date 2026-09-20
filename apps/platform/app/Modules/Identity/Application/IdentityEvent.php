@@ -19,4 +19,7 @@ enum IdentityEvent: string
     case AccountInvited = 'account.invited';
     case AccountDisabled = 'account.disabled';
     case InvitationAccepted = 'invitation.accepted';
+    case PasswordResetRequested = 'password.reset_requested';
+    case PasswordResetCompleted = 'password.reset_completed';
+    case PasswordResetFailed = 'password.reset_failed';
 }

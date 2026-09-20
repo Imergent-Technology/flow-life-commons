@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use App\Modules\Identity\Http\AcceptInvitationController;
+use App\Modules\Identity\Http\ForgotPasswordController;
 use App\Modules\Identity\Http\LoginController;
 use App\Modules\Identity\Http\LogoutController;
 use App\Modules\Identity\Http\MeController;
+use App\Modules\Identity\Http\ResetPasswordController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -29,3 +31,5 @@ Route::middleware('stateful')->group(function (): void {
  * logs do not capture it).
  */
 Route::post('invitations/accept', AcceptInvitationController::class)->name('api.v1.invitations.accept');
+Route::post('password/forgot', ForgotPasswordController::class)->name('api.v1.password.forgot');
+Route::post('password/reset', ResetPasswordController::class)->name('api.v1.password.reset');

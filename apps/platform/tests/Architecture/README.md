@@ -13,8 +13,9 @@ rest of the suite (`./flow test backend`) and in CI.
   Eloquent in Domain elsewhere. Also the credential lifecycle's rules: Domain and Application never use
   Laravel's validation, mail or password broker; the breached-password check is a port with its network
   implementation in Infrastructure, the HTTP client's only user inside Identity; the audit classes cannot
-  see a password or an invitation token; and only `PasswordHasher` hashes or verifies a password (a
-  source scan with a positive control).
+  see a password, an invitation token or a reset token; the password broker and mail are Infrastructure
+  adapters behind Identity's own ports, each used from one place; and only `PasswordHasher` hashes or
+  verifies a password (a source scan with a positive control).
 - `AuditBoundariesTest.php`: Audit sits below Identity, so it never depends back on it, its
   Domain is framework-free, and it has no Eloquent model (so nothing can `save()` or
   `delete()` an event).

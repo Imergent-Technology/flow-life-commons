@@ -12,12 +12,17 @@ use App\Modules\Identity\Application\CompromisedPasswords;
 use App\Modules\Identity\Application\DisableAccount;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 use App\Modules\Identity\Application\LoginThrottle;
+use App\Modules\Identity\Application\PasswordResetNotifier;
+use App\Modules\Identity\Application\PasswordResetTokens;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\PersonRepository;
+use App\Modules\Identity\Infrastructure\Auth\AccountResetTokenRepository;
 use App\Modules\Identity\Infrastructure\Auth\AccountUserProvider;
 use App\Modules\Identity\Infrastructure\Auth\CacheAttemptThrottle;
 use App\Modules\Identity\Infrastructure\Auth\CacheLoginThrottle;
+use App\Modules\Identity\Infrastructure\Auth\LaravelPasswordResetTokens;
+use App\Modules\Identity\Infrastructure\Mail\MailPasswordResetNotifier;
 use App\Modules\Identity\Infrastructure\Password\NoCompromisedPasswordCheck;
 use App\Modules\Identity\Infrastructure\Password\PwnedPasswordsRange;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountSessions;
@@ -26,6 +31,8 @@ use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountInvitationRep
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountRepository;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentPersonRepository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Hashing\Hasher;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\ServiceProvider;
 use LogicException;
@@ -43,6 +50,7 @@ final class IdentityServiceProvider extends ServiceProvider
         AccountInvitationRepository::class => EloquentAccountInvitationRepository::class,
         LoginThrottle::class => CacheLoginThrottle::class,
         AttemptThrottle::class => CacheAttemptThrottle::class,
+        PasswordResetNotifier::class => MailPasswordResetNotifier::class,
         ActiveAccountQuery::class => DatabaseActiveAccountQuery::class,
         AccountSessions::class => DatabaseAccountSessions::class,
         // A default that grants nothing. The Access module registers its own over this.
@@ -54,6 +62,26 @@ final class IdentityServiceProvider extends ServiceProvider
         // The guard chain: whatever other modules have tagged as an AccountDeactivationGuard.
         // Identity names none of them; with none registered the chain is simply empty.
         $this->app->when(DisableAccount::class)->needs('$guards')->giveTagged(AccountDeactivationGuard::TAG);
+
+        // Laravel's database token repository over `password_reset_tokens`, configured from
+        // config/auth.php exactly as its own broker would be: the same table, expiry and throttle.
+        $this->app->bind(PasswordResetTokens::class, function (Application $app): PasswordResetTokens {
+            $config = $app->make('config');
+            $key = $config->string('app.key');
+            if (str_starts_with($key, 'base64:')) {
+                $key = (string) base64_decode(substr($key, 7), true);
+            }
+            $expiresInSeconds = $config->integer('auth.passwords.accounts.expire') * 60;
+
+            return new LaravelPasswordResetTokens(
+                new AccountResetTokenRepository(
+                    $app->make(ConnectionInterface::class), $app->make(Hasher::class),
+                    $config->string('auth.passwords.accounts.table'), $key,
+                    $expiresInSeconds, $config->integer('auth.passwords.accounts.throttle'),
+                ),
+                $expiresInSeconds,
+            );
+        });
 
         $this->app->bind(CompromisedPasswords::class, function (Application $app): CompromisedPasswords {
             $driver = $app->make('config')->get('identity.password.compromised_check.driver');
@@ -71,6 +99,9 @@ final class IdentityServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Identity's own message templates (the password-recovery email), namespaced `identity::`.
+        $this->loadViewsFrom(__DIR__.'/Mail/views', 'identity');
+
         // The "identity" driver named by config/auth.php.
         Auth::provider('identity', fn (Application $app): AccountUserProvider => $app->make(AccountUserProvider::class));
     }

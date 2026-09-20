@@ -124,6 +124,24 @@ final readonly class Account
         );
     }
 
+    /**
+     * Replaces the credential of an Account that can sign in (a reset or an authenticated change).
+     * Only an ACTIVE Account with a credential qualifies: a reset must never activate an invited
+     * Account or re-enable a disabled one, so both refuse here whatever the caller intended.
+     * `$passwordHash` is an already computed hash; the domain never sees a plain password.
+     */
+    public function changePassword(string $passwordHash, DateTimeImmutable $now): self
+    {
+        if (! $this->canAuthenticate()) {
+            throw new InvalidAccountState('Only an active account with a credential can change its password.');
+        }
+
+        return new self(
+            $this->id, $this->personId, $this->email, AccountStatus::Active,
+            $passwordHash, $now, $this->emailVerifiedAt, null, $this->lastLoginAt, $this->createdAt, $now,
+        );
+    }
+
     /** Blocks authentication. The Person, their assignments and history are untouched. */
     public function disable(DateTimeImmutable $now): self
     {

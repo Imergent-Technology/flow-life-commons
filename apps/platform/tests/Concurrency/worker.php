@@ -13,6 +13,8 @@ declare(strict_types=1);
  *   php worker.php login   '{"email":"...","password":"..."}'
  *   php worker.php accept  '{"token":"...","password":"..."}'
  *   php worker.php lock_invitation '{"token":"..."}'
+ *   php worker.php reset   '{"email":"...","token":"...","password":"..."}'
+ *   php worker.php request_reset '{"email":"..."}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
  * the operation succeeded, 2 when it was refused or failed. It refuses to run against any
@@ -26,6 +28,8 @@ use App\Modules\Identity\Application\AuthenticateAccount;
 use App\Modules\Identity\Application\AuthenticationStatus;
 use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\DisableAccount;
+use App\Modules\Identity\Application\RequestPasswordReset;
+use App\Modules\Identity\Application\ResetPassword;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\InvitationToken;
@@ -78,6 +82,10 @@ try {
         }
     } elseif ($operation === 'accept') {
         $app->make(AcceptInvitation::class)($arg('token'), $arg('password'), new ClientContext('127.0.0.1', 'worker'));
+    } elseif ($operation === 'reset') {
+        $app->make(ResetPassword::class)(EmailAddress::fromString($arg('email')), $arg('token'), $arg('password'), new ClientContext('127.0.0.1', 'worker'));
+    } elseif ($operation === 'request_reset') {
+        $app->make(RequestPasswordReset::class)(EmailAddress::fromString($arg('email')), new ClientContext('127.0.0.1', 'worker'));
     } elseif ($operation === 'lock_invitation') {
         // Just takes and releases the invitation row lock: it finishes only once it has been granted.
         DB::transaction(fn () => $app->make(AccountInvitationRepository::class)->findByTokenForUpdate(InvitationToken::fromPresented($arg('token'))));

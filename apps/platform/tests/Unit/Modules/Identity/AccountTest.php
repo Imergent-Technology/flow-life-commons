@@ -31,7 +31,7 @@ it('has exactly the frozen statuses', function () {
         ->toBe(['invited', 'active', 'disabled']);
 });
 
-it('becomes active on acceptance, which sets the password and proves the address', function () {
+it('becomes active on acceptance, which sets the password and records the address as accepted', function () {
     $later = Identity::now()->modify('+1 hour');
     $active = invited()->activate('$2y$hash', $later);
 
@@ -125,3 +125,28 @@ it('records a login without treating it as a profile change', function () {
 it('cannot record a login unless it may authenticate', function () {
     invited()->recordLogin(Identity::now());
 })->throws(InvalidAccountState::class);
+
+it('replaces its credential only when it can sign in, and changes nothing else', function () {
+    $active = invited()->activate('$2y$old', Identity::now())->recordLogin(Identity::now()->modify('+1 hour'));
+    $later = Identity::now()->modify('+2 hours');
+
+    $changed = $active->changePassword('$2y$new', $later);
+
+    expect($changed->passwordHash)->toBe('$2y$new')
+        ->and($changed->passwordUpdatedAt)->toEqual($later)
+        ->and($changed->updatedAt)->toEqual($later)
+        ->and($changed->status)->toBe(AccountStatus::Active)
+        // Everything else is as it was: not a sign-in, not a re-verification, not a re-enabling.
+        ->and($changed->lastLoginAt)->toEqual($active->lastLoginAt)
+        ->and($changed->emailVerifiedAt)->toEqual($active->emailVerifiedAt)
+        ->and($changed->disabledAt)->toBeNull()
+        ->and($active->passwordHash)->toBe('$2y$old');
+});
+
+it('never activates an invited account or re-enables a disabled one by changing a password', function () {
+    $active = invited()->activate('$2y$old', Identity::now());
+
+    expect(fn () => invited()->changePassword('$2y$new', Identity::now()))->toThrow(InvalidAccountState::class)
+        ->and(fn () => $active->disable(Identity::now()->modify('+1 hour'))->changePassword('$2y$new', Identity::now()->modify('+2 hours')))
+        ->toThrow(InvalidAccountState::class);
+});

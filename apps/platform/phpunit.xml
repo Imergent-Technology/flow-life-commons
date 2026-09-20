@@ -32,6 +32,7 @@
         <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
         <env name="IDENTITY_COMPROMISED_PASSWORD_CHECK" value="none"/>
+        <env name="IDENTITY_PASSWORD_RESET_RESPONSE_FLOOR_MS" value="0"/>
         <!--
             Real database, never SQLite: MariaDB is the canonical integration
             environment. Host/credentials come from .env; only the database name is

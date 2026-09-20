@@ -155,7 +155,7 @@ final class Faults
     public static function everythingStored(): string
     {
         $all = '';
-        foreach (['people', 'accounts', 'account_invitations', 'role_assignments', 'security_events', 'sessions'] as $table) {
+        foreach (['people', 'accounts', 'account_invitations', 'role_assignments', 'security_events', 'sessions', 'password_reset_tokens'] as $table) {
             $all .= json_encode(DB::table($table)->get()->all(), JSON_THROW_ON_ERROR);
         }
 

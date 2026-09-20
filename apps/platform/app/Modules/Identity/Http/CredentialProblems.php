@@ -46,6 +46,16 @@ final class CredentialProblems
         ], 422);
     }
 
+    public static function resetRejected(): JsonResponse
+    {
+        // One answer for an unknown address, an Account that cannot be reset, and a missing, wrong,
+        // used or expired token alike.
+        return response()->json([
+            'message' => 'The password reset link is invalid or has expired.',
+            'errors' => ['token' => ['The password reset link is invalid or has expired.']],
+        ], 422);
+    }
+
     public static function tooManyAttempts(TooManyAttempts $e): JsonResponse
     {
         return response()->json(['message' => 'Too many attempts. Try again later.'], 429)

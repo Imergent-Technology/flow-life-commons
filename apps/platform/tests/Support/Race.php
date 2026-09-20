@@ -29,7 +29,7 @@ final class Race
 {
     /** Tables these tests commit into, children first. */
     private const array TABLES = [
-        'security_events', 'sessions', 'role_assignments',
+        'security_events', 'sessions', 'password_reset_tokens', 'role_assignments',
         'account_invitations', 'accounts', 'people',
     ];
 
@@ -65,6 +65,7 @@ final class Race
             'MAIL_MAILER' => 'array',
             'BCRYPT_ROUNDS' => '4',
             'IDENTITY_COMPROMISED_PASSWORD_CHECK' => 'none',
+            'IDENTITY_PASSWORD_RESET_RESPONSE_FLOOR_MS' => '0',
         ];
 
         $process = new Process([PHP_BINARY, base_path('tests/Concurrency/worker.php'), $operation, json_encode($arguments, JSON_THROW_ON_ERROR)], base_path(), $environment, null, 180);

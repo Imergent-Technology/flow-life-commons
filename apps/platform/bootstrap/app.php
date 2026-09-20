@@ -6,6 +6,7 @@ use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Identity\Application\CompromisedPasswordCheckUnavailable;
 use App\Modules\Identity\Application\InvitationRejected;
 use App\Modules\Identity\Application\PasswordRejected;
+use App\Modules\Identity\Application\ResetRejected;
 use App\Modules\Identity\Application\TooManyAttempts;
 use App\Modules\Identity\Http\CredentialProblems;
 use App\Modules\Identity\Http\EnforceAbsoluteSessionLifetime;
@@ -70,6 +71,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (PasswordRejected $e) => CredentialProblems::passwordRejected($e));
         $exceptions->render(fn (CompromisedPasswordCheckUnavailable $e) => CredentialProblems::checkUnavailable());
         $exceptions->render(fn (InvitationRejected $e) => CredentialProblems::invitationRejected());
+        $exceptions->render(fn (ResetRejected $e) => CredentialProblems::resetRejected());
         $exceptions->render(fn (TooManyAttempts $e) => CredentialProblems::tooManyAttempts($e));
 
         $exceptions->shouldRenderJsonWhen(

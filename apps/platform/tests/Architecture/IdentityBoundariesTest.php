@@ -128,14 +128,37 @@ arch('Identity: the HTTP client is used by the breach check and nothing else in 
 });
 
 foreach (['AuthenticationAudit', 'CredentialAudit'] as $audit) {
-    foreach (['PlainPassword', 'InvitationToken'] as $secret) {
+    foreach (['Domain\\PlainPassword', 'Domain\\InvitationToken', 'Application\\IssuedPasswordReset', 'Application\\IssuedInvitation'] as $secret) {
         arch("Identity: {$audit} cannot even see a {$secret}", function () use ($identity, $audit, $secret) {
             // The events describe what happened, never the secret involved. The class that writes
             // them has no way to be handed one.
-            expect("{$identity}\\Application\\{$audit}")->not->toUse("{$identity}\\Domain\\{$secret}");
+            expect("{$identity}\\Application\\{$audit}")->not->toUse("{$identity}\\{$secret}");
         });
     }
 }
+
+arch('Identity: the password broker is an Infrastructure adapter, not the model', function () use ($identity) {
+    // Laravel's token repository is reached only through Identity's own port, from one place.
+    expect("{$identity}\\Infrastructure\\Auth\\LaravelPasswordResetTokens")->toImplement("{$identity}\\Application\\PasswordResetTokens");
+    expect("{$identity}\\Infrastructure\\Auth\\AccountResetTokenRepository")->toExtend('Illuminate\\Auth\\Passwords\\DatabaseTokenRepository');
+});
+
+foreach (['Illuminate\\Auth\\Passwords', 'Illuminate\\Contracts\\Auth\\CanResetPassword'] as $framework) {
+    arch("Identity: {$framework} is confined to Identity's Infrastructure Auth adapters", function () use ($identity, $framework) {
+        expect($framework)->toOnlyBeUsedIn("{$identity}\\Infrastructure\\Auth");
+    });
+}
+
+foreach (['Illuminate\\Mail', 'Illuminate\\Support\\Facades\\Mail', 'Illuminate\\Contracts\\Mail'] as $mail) {
+    arch("Identity: {$mail} is confined to the recovery-message adapter", function () use ($identity, $mail) {
+        // Identity sends one message, its own. There is no notifications module and no other user.
+        expect($mail)->toOnlyBeUsedIn("{$identity}\\Infrastructure\\Mail");
+    });
+}
+
+arch('Identity: the recovery notifier is a port whose mail implementation is Infrastructure', function () use ($identity) {
+    expect("{$identity}\\Infrastructure\\Mail\\MailPasswordResetNotifier")->toImplement("{$identity}\\Application\\PasswordResetNotifier");
+});
 
 arch('Identity: a password is a PlainPassword value, sealed and immutable', function () use ($identity) {
     expect("{$identity}\\Domain\\PlainPassword")->toBeFinal()->toBeReadonly();

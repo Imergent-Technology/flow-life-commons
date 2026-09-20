@@ -89,5 +89,37 @@ return [
         'invitation_acceptance' => [
             'per_ip' => (int) env('IDENTITY_ACCEPT_MAX_ATTEMPTS_PER_IP', 20),
         ],
+        // "I forgot my password" requests. A low per-identifier limit stops anyone flooding one
+        // person's inbox; it is a separate counter from completion, so an attacker requesting resets
+        // for someone cannot stop them finishing one they already have.
+        'password_reset_request' => [
+            'per_ip' => (int) env('IDENTITY_RESET_REQUEST_MAX_PER_IP', 10),
+            'per_identifier' => (int) env('IDENTITY_RESET_REQUEST_MAX_PER_IDENTIFIER', 3),
+        ],
+        // Completing a reset. The token has 256 bits, so this bounds volume (hashing work and audit
+        // growth), not guessing. As with login, a caller can exhaust an identifier's allowance for one
+        // window: the accepted trade for a small invite-only user base.
+        'password_reset_completion' => [
+            'per_ip' => (int) env('IDENTITY_RESET_COMPLETION_MAX_PER_IP', 20),
+            'per_identifier' => (int) env('IDENTITY_RESET_COMPLETION_MAX_PER_IDENTIFIER', 10),
+        ],
+    ],
+
+    /*
+     * Password recovery.
+     *
+     * - console_path: where on the Console's origin (app.url, the same origin as the API, ADR 0016) the
+     *   reset page will live. The emailed link is `<app.url><console_path>#token=...&email=...`: the
+     *   secrets are in the URL FRAGMENT, which browsers never send to a server, so they stay out of
+     *   access logs and Referer headers. The page itself arrives with the Console; the contract is
+     *   documented in docs/architecture/identity-and-access.md.
+     * - response_floor_ms: the least time "I forgot my password" takes to answer. An address with an
+     *   account does more work (a lock, a hash, a mail) than one without, and answering as fast as the
+     *   work allows would let the difference say which is which; every request is padded to this floor.
+     *   Set it above the slowest realistic mail send. Tests set it to zero.
+     */
+    'password_reset' => [
+        'console_path' => '/reset-password',
+        'response_floor_ms' => (int) env('IDENTITY_PASSWORD_RESET_RESPONSE_FLOOR_MS', 1500),
     ],
 ];
