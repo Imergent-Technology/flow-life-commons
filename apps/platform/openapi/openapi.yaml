@@ -334,8 +334,7 @@ paths:
         the address exists.
 
 
-        The emailed link points at the Console's reset page (`/reset-password`, arriving with
-        the Console) and carries the token and the address in the URL **fragment**
+        The emailed link points at the Guardian Console's reset page (`/reset-password`) and carries the token and the address in the URL **fragment**
         (`#token=...&email=...`), which a browser never sends to a server, so neither reaches
         access logs or `Referer` headers. The page reads them and calls `POST /password/reset`.
         The token lasts 60 minutes, works once, and is stored only as a hash.

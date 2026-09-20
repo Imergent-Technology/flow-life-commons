@@ -43,7 +43,9 @@ There is no default administrator, no superuser flag and no environment variable
 
 ## Accepting the invitation
 
-The administrator presents the token and chooses a password. The token goes in the request **body** (never a URL, so it stays out of access logs):
+The administrator presents the token and chooses a password. The usual way is the Guardian Console: they open `https://<host>/accept-invitation`, paste the token into **Invitation token**, and choose a password. (A link of the form `/accept-invitation#token=<token>` also works and is scrubbed from the address bar on arrival, but nothing mails one yet, so hand over the bare token.) Accepting does **not** sign them in: the page then points them to **Sign in**.
+
+The same step over the API, which is what the Console does: the token goes in the request **body** (never a URL, so it stays out of access logs):
 
 ```bash
 curl -sS -X POST https://<host>/api/v1/invitations/accept \

@@ -118,8 +118,9 @@ return [
      * - console_path: where on the Console's origin (app.url, the same origin as the API, ADR 0016) the
      *   reset page will live. The emailed link is `<app.url><console_path>#token=...&email=...`: the
      *   secrets are in the URL FRAGMENT, which browsers never send to a server, so they stay out of
-     *   access logs and Referer headers. The page itself arrives with the Console; the contract is
-     *   documented in docs/architecture/identity-and-access.md.
+     *   access logs and Referer headers. The page is the Guardian Console's (it reads the fragment into
+     *   memory and scrubs it from the address bar); the contract is documented in
+     *   docs/architecture/identity-and-access.md.
      * - response_floor_ms: the least time "I forgot my password" takes to answer. An address with an
      *   account does more work (a lock, a hash, a mail) than one without, and answering as fast as the
      *   work allows would let the difference say which is which; every request is padded to this floor.
