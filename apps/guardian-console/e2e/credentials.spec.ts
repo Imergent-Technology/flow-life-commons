@@ -1,28 +1,22 @@
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Browser,
-  type BrowserContext,
-  type Page,
-} from '@playwright/test'
+import { expect, test, type Browser, type Page } from '@playwright/test'
+
+import { mailpit, messageIdsTo, replayedStatus, sessionCookie, unique } from './support.ts'
 
 // The credential lifecycle in real Chromium, through the real gateway, with real Mailpit mail:
 // invitation acceptance, sign-in, authenticated password change, and forgotten-password recovery by
 // email. It is self-contained: the platform runs with the no-op breached-password checker, so nothing
 // here reaches a public service (`./flow test e2e` refuses to run otherwise). What the platform does
 // when a password is breached, or the service is down, is proved deterministically in the backend
-// tests (BreachCheckEndpointsTest); the real service has a separate manual smoke test (tests/Live). No Console UI exists for these yet, so the pages make the
-// same-origin API calls the Console will. The accounts are development fixtures, reset on every run
-// by apps/platform/database/seeders/E2eAccountSeeder.php; the token and their names are public.
+// tests (BreachCheckEndpointsTest); the real service has a separate manual smoke test (tests/Live).
+// This one talks to the API directly (same-origin fetches from the page), because what it measures is the
+// platform's behaviour: session rotation, replayed cookies, one-time tokens. The Console's own screens for
+// the same lifecycle are exercised, through the UI, in console.spec.ts, against separate accounts. The
+// accounts are development fixtures, reset on every run by
+// apps/platform/database/seeders/E2eAccountSeeder.php; the token and their names are public.
 const INVITEE = 'e2e.invitee@example.org'
 const INVITATION_TOKEN = 'e2e-invitation-token-not-a-secret-000000000'
 const RECOVERY = 'e2e.recovery@example.org'
 const RECOVERY_PASSWORD = 'e2e-recovery-password-not-a-secret'
-const SESSION_COOKIE = '__Host-flowlife-session'
-
-// A fresh, unique passphrase for each step.
-const unique = (label: string): string => `e2e ${label} passphrase ${crypto.randomUUID()}`
 
 interface Api {
   status: number
@@ -72,69 +66,19 @@ async function api(page: Page, method: string, path: string, body?: unknown): Pr
 
 const errorsOf = (response: Api): Errors => response.body as Errors
 
+// These journeys measure the PLATFORM, so their pages start on Laravel's stateless liveness page, not on the
+// Console: the Console asks who is signed in as it loads, which would issue an (anonymous) session cookie
+// and blur what "acceptance and reset create no session" is measured against.
 async function freshPage(browser: Browser, baseURL: string): Promise<Page> {
   const context = await browser.newContext({ baseURL })
   const page = await context.newPage()
-  await page.goto('/')
+  await page.goto('/up')
   return page
 }
 
 async function signIn(page: Page, email: string, password: string): Promise<Api> {
   await api(page, 'GET', '/api/v1/me') // obtains the session and CSRF cookies, as the Console does
   return api(page, 'POST', '/api/v1/login', { email, password })
-}
-
-const sessionCookie = async (context: BrowserContext) =>
-  (await context.cookies()).find((c) => c.name === SESSION_COOKIE)
-
-/**
- * What `GET /me` answers to someone who presents ONLY this session cookie value, as a thief with a
- * copy would. The cookie's text is re-encrypted with a fresh random IV on every response, so comparing
- * cookie strings cannot tell whether the session id underneath changed; replaying an old value can: it
- * authenticates exactly as long as that id is alive. (Chromium refuses to have a Secure __Host- cookie
- * injected over plain HTTP, and a page may not set a Cookie header, so this goes through the Node HTTP
- * client, addressing the gateway and naming the host as the CSRF test does.)
- */
-async function replayedStatus(
-  request: APIRequestContext,
-  baseURL: string,
-  value: string,
-): Promise<number> {
-  const port = new URL(baseURL).port
-  const response = await request.get(`http://127.0.0.1:${port}/api/v1/me`, {
-    headers: {
-      Host: `commons.flowlife.localhost:${port}`,
-      Accept: 'application/json',
-      Cookie: `${SESSION_COOKIE}=${value}`,
-    },
-  })
-  return response.status()
-}
-
-/** Mailpit is on its own host; Node cannot resolve *.localhost, so address the gateway and name the host. */
-async function mailpit(request: APIRequestContext, baseURL: string, path: string) {
-  const port = new URL(baseURL).port
-  return request.get(`http://127.0.0.1:${port}${path}`, {
-    headers: { Host: `mail.flowlife.localhost:${port}` },
-  })
-}
-
-interface MailList {
-  messages: { ID: string }[]
-}
-
-async function messageIdsTo(
-  request: APIRequestContext,
-  baseURL: string,
-  email: string,
-): Promise<string[]> {
-  const response = await mailpit(
-    request,
-    baseURL,
-    `/api/v1/search?query=${encodeURIComponent(`to:${email}`)}`,
-  )
-  expect(response.ok()).toBe(true)
-  return ((await response.json()) as MailList).messages.map((m) => m.ID)
 }
 
 test.describe('the credential lifecycle, end to end', () => {
@@ -149,7 +93,7 @@ test.describe('the credential lifecycle, end to end', () => {
     page,
     baseURL,
   }) => {
-    await page.goto('/')
+    await page.goto('/up') // Laravel, not the Console: see freshPage
     const url = baseURL ?? ''
     expect(url).not.toBe('')
 

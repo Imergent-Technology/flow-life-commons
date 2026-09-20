@@ -56,13 +56,23 @@ test.describe('same-origin gateway', () => {
   }
 
   test('keeps client-side routing working', async ({ page }) => {
-    // A deep link the Console has no server-side file for still boots the Console.
+    // A deep link the Console has no server-side file for still boots the Console. Nobody is signed in,
+    // so the Console's own router sends it to the login page: proof that it, not the gateway, answered.
     await page.goto('/some/client/route')
 
-    await expect(
-      page.getByRole('heading', { level: 1, name: 'Flow Life Guardian Console' }),
-    ).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/login')
   })
+
+  for (const path of ['/login', '/forgot-password', '/reset-password', '/accept-invitation']) {
+    test(`serves the Console's public page ${path} by deep link`, async ({ page }) => {
+      const response = await page.goto(path)
+
+      expect(response?.status()).toBe(200)
+      expect((await response?.text()) ?? '').toContain('id="root"')
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+    })
+  }
 
   test('connects Vite HMR through the gateway', async ({ page }) => {
     const socket = page.waitForEvent('websocket', (ws) => ws.url().includes('token='))

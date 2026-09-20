@@ -51,6 +51,31 @@ final class E2eAccountSeeder extends Seeder
 
     public const string RECOVERY_PASSWORD = 'e2e-recovery-password-not-a-secret';
 
+    /**
+     * The Console's browser journeys (e2e/console.spec.ts) start from these, so they do not compete with the
+     * API-level journey above for the same one-time steps. All are reset on every run except the
+     * no-access account, which no journey changes. Public, worthless, and not secrets.
+     */
+    public const string NO_ACCESS_EMAIL = 'e2e.noaccess@example.org';
+
+    public const string NO_ACCESS_PASSWORD = 'e2e-noaccess-password-not-a-secret';
+
+    public const string UI_INVITEE_EMAIL = 'e2e.ui.invitee@example.org';
+
+    public const string UI_INVITATION_TOKEN = 'e2e-ui-invitation-token-not-a-secret-000000';
+
+    public const string UI_LINK_INVITEE_EMAIL = 'e2e.ui.linkinvitee@example.org';
+
+    public const string UI_LINK_INVITATION_TOKEN = 'e2e-ui-link-invitation-token-not-a-secret-0';
+
+    public const string UI_RECOVERY_EMAIL = 'e2e.ui.recovery@example.org';
+
+    public const string UI_RECOVERY_PASSWORD = 'e2e-ui-recovery-password-not-a-secret';
+
+    public const string UI_CHANGE_EMAIL = 'e2e.ui.change@example.org';
+
+    public const string UI_CHANGE_PASSWORD = 'e2e-ui-change-password-not-a-secret';
+
     public function run(
         AccountRepository $accounts,
         PersonRepository $people,
@@ -79,6 +104,70 @@ final class E2eAccountSeeder extends Seeder
         $consoleUser($account->personId);
 
         $this->resetCredentialFixtures($accounts, $people, $invitations, $hasher, $consoleUser, $now);
+        $this->resetConsoleFixtures($accounts, $people, $invitations, $hasher, $consoleUser, $now);
+    }
+
+    /**
+     * The accounts the Console's browser journeys use. What each proves is in e2e/console.spec.ts; what
+     * matters here is that none names a role: a Console user is asked of Access, and an account that is
+     * NOT one is simply never given anything.
+     */
+    private function resetConsoleFixtures(
+        AccountRepository $accounts,
+        PersonRepository $people,
+        AccountInvitationRepository $invitations,
+        Hasher $hasher,
+        ConsoleUserFixture $consoleUser,
+        DateTimeImmutable $now,
+    ): void {
+        // Signed in, but with nothing that grants Console access: the "forbidden" experience.
+        $this->activeAccount($accounts, $people, $hasher, $now, self::NO_ACCESS_EMAIL, 'E2E No Access', self::NO_ACCESS_PASSWORD);
+
+        // Two pending invitations for the two ways a person reaches the acceptance page: typing the token,
+        // and following a link that carries it in the fragment. Console users once they accept.
+        foreach ([
+            [self::UI_INVITEE_EMAIL, 'E2E UI Invitee', self::UI_INVITATION_TOKEN],
+            [self::UI_LINK_INVITEE_EMAIL, 'E2E UI Link Invitee', self::UI_LINK_INVITATION_TOKEN],
+        ] as [$email, $name, $token]) {
+            $this->forget($email);
+            $person = Person::create(PersonId::generate(), $name, $now);
+            $people->save($person);
+            $invited = Account::invite(AccountId::generate(), $person->id, EmailAddress::fromString($email), $now);
+            $accounts->save($invited);
+            $invitations->save(AccountInvitation::issue(
+                AccountInvitationId::generate(), $invited->id, InvitationToken::fromPresented($token), $now->modify('+7 days'), $now,
+            ));
+            $consoleUser($person->id);
+        }
+
+        // Console users with a known password, for the reset and the change.
+        foreach ([
+            [self::UI_RECOVERY_EMAIL, 'E2E UI Recovery', self::UI_RECOVERY_PASSWORD],
+            [self::UI_CHANGE_EMAIL, 'E2E UI Change', self::UI_CHANGE_PASSWORD],
+        ] as [$email, $name, $password]) {
+            $account = $this->activeAccount($accounts, $people, $hasher, $now, $email, $name, $password);
+            $consoleUser($account->personId);
+        }
+    }
+
+    /** An active Account with a known password, created afresh (a previous run's copy is removed first). */
+    private function activeAccount(
+        AccountRepository $accounts,
+        PersonRepository $people,
+        Hasher $hasher,
+        DateTimeImmutable $now,
+        string $email,
+        string $displayName,
+        string $password,
+    ): Account {
+        $this->forget($email);
+        $person = Person::create(PersonId::generate(), $displayName, $now);
+        $people->save($person);
+        $account = Account::invite(AccountId::generate(), $person->id, EmailAddress::fromString($email), $now)
+            ->activate($hasher->make($password), $now);
+        $accounts->save($account);
+
+        return $account;
     }
 
     private function resetCredentialFixtures(
