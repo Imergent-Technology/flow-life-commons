@@ -21,6 +21,7 @@ The Identity and Access design gate resolved most of what this page previously d
 
 - **Console sessions.** The Console and API share one origin, and the session cookie is `__Host-` prefixed and host-only, so it is never transmitted to WordPress or any other Flow Life host, and cannot be shadowed from a parent domain. Measured in a browser, not assumed ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)).
 - **Client vs person.** A request may prove *which application* is calling and *which person* it acts for; these are separate proofs. A client-asserted `person_id` is never accepted as identity ([ADR 0018](../adr/0018-client-and-delegated-authentication.md)).
+- **Session bounds.** A session expires after 30 minutes of request inactivity and is capped at 12 hours from authentication regardless of activity, so a stolen cookie cannot be kept alive indefinitely ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)).
 - **Rate limiting** applies to login, password reset and invitation acceptance, keyed by IP and identifier.
 - **Auditing** of authentication and authorization changes exists from the first epic ([ADR 0019](../adr/0019-security-event-auditing-seam.md)).
 

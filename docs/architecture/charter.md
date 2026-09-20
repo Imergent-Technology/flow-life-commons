@@ -23,13 +23,13 @@ Flow Life Global is building a long-lived organizational platform for **members,
 | Dev environment | Docker Compose, `./flow` CLI | [0011](../adr/0011-docker-compose-development-environment.md) |
 | Repository | Monorepo | [0013](../adr/0013-monorepo.md) |
 | Identity | Person (the human) separate from Account (sign-in); Identity is the authoritative human registry | [0015](../adr/0015-identity-owns-person.md) |
-| Console authentication | Same-origin, host-only `__Host-` session cookie; database sessions | [0016](../adr/0016-guardian-console-same-origin-session-authentication.md) |
+| Console authentication | Same-origin, host-only `__Host-` session cookie; database sessions; 30-minute inactivity and 12-hour absolute bounds | [0016](../adr/0016-guardian-console-same-origin-session-authentication.md) |
 | Authorization | Capabilities and roles defined in code; only assignments persist | [0017](../adr/0017-capabilities-and-roles-in-code.md) |
 | Referential integrity | Cross-module foreign keys permitted for fundamental invariants, `RESTRICT` never `CASCADE` | [0021](../adr/0021-cross-module-referential-integrity.md) |
 
 ## Production constraint
 
-Production initially runs on **shared cPanel hosting**. Production must not depend on permanent worker processes, Redis, Docker, Node.js or long-running daemons. Queues are therefore intended to be drained from the scheduler tick (cron) rather than by a resident worker, the Guardian Console ships as static files, and Docker exists for development only. Development may provide richer infrastructure than production, but nothing may be built that *only* works with it.
+Production initially runs on **shared cPanel hosting** ([deployment topology](deployment-topology.md)). Production must not depend on permanent worker processes, Redis, Docker, Node.js or long-running daemons. Queues are therefore intended to be drained from the scheduler tick (cron) rather than by a resident worker, the Guardian Console ships as static files, and Docker exists for development only. Development may provide richer infrastructure than production, but nothing may be built that *only* works with it.
 
 ## Foundational rules
 

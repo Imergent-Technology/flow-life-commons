@@ -89,6 +89,8 @@ Checking a role rather than a capability is the main way this design rots. Busin
 
 **Every credential lookup canonicalises input and queries `email_canonical`, never `email`** ([ADR 0015](../adr/0015-identity-owns-person.md)).
 
+**Accounts are created only by invitation.** There is no self-service registration: the Console is for Guardians, operators and administrators, invited by someone holding the capability. Members and volunteers are not Console users; their eventual access arrives through WordPress as a delegated flow ([ADR 0018](../adr/0018-client-and-delegated-authentication.md)). Because accepting an invitation proves control of the address, no separate email-verification flow is needed initially.
+
 ## Authentication
 
 | Surface | What authenticates | How | What the platform trusts |
@@ -107,7 +109,18 @@ https://commons.flowlifeglobal.org/          → Console (static build)
 https://commons.flowlifeglobal.org/api/v1/   → Platform API
 ```
 
-Cookie: `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, **no `Domain`**. Sessions in the database. CSRF validated via `X-XSRF-TOKEN`. Session middleware added explicitly to the API group, which is stateless by default. **No CORS for the Console** and **no Sanctum**; see [ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md) for the measured evidence that a compromised WordPress can neither receive nor shadow this cookie.
+Cookie: `__Host-` prefix, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, **no `Domain` attribute** (host-only). Sessions in the database. CSRF validated via `X-XSRF-TOKEN`. Session middleware added explicitly to the API group, which is stateless by default. **No CORS for the Console** and **no Sanctum**; see [ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md) for the measured evidence that a compromised WordPress can neither receive nor shadow this cookie, and [deployment topology](deployment-topology.md) for the hosting requirements this implies.
+
+### Session lifetime
+
+| Bound | Value | Mechanism |
+| --- | --- | --- |
+| Sliding inactivity | 30 minutes | `SESSION_LIFETIME=30`; Laravel's `last_activity` handling is already a sliding timeout |
+| Absolute | 12 hours | `authenticated_at` recorded at login; middleware invalidates past that age regardless of activity. Re-authentication starts a new absolute lifetime |
+
+**The 30 minutes measure session request inactivity, not human idleness.** Any authenticated request refreshes `last_activity`, so a future background poll from the Console could keep a session alive with nobody at the keyboard. This is accepted because the 12-hour cap bounds the session independently of activity. Do **not** build browser activity tracking or other idle detection unless implementation shows a concrete need, and do not describe the 30-minute value as guaranteed human-idle detection.
+
+Sessions are also invalidated on password reset (all) and password change (all but the current one). `expire_on_close` stays off. Step-up re-authentication for sensitive actions belongs with MFA, not here.
 
 ## Authorization
 
@@ -214,7 +227,7 @@ Spans two modules, enforced with a one-way dependency — **Access → Identity,
 1. **Development topology first** — single-origin gateway routing, so authentication is developed against the production model from the first commit.
 2. **Identity** — `people`, `accounts`, `account_invitations`; `Account` as `Authenticatable`; canonical-email lookup.
 3. **Audit** — `security_events`, `RecordSecurityEvent` (before anything auditable exists).
-4. **Session authentication** — session middleware on the API group, database sessions, `__Host-` cookie, CSRF; `login`, `logout`, `me`; rate limiting.
+4. **Session authentication** — session middleware on the API group, database sessions, `__Host-` cookie, CSRF; `login`, `logout`, `me`; rate limiting; the 30-minute inactivity and 12-hour absolute bounds.
 5. **Access** — `Capability` and `Role` enums, `role_assignments`, `Authorizer`, Gate wiring, `can:` middleware.
 6. **Bootstrap** — administrator command, invitation acceptance, guard chain and last-administrator invariant.
 7. **Password reset and change.**

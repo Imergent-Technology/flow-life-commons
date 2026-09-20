@@ -24,7 +24,17 @@ https://commons.flowlifeglobal.org/          → Guardian Console (static build)
 https://commons.flowlifeglobal.org/api/v1/   → Platform API
 ```
 
-- **Session cookie:** `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, **no `Domain` attribute** — host-only to `commons.flowlifeglobal.org`.
+**Session cookie attributes**, exactly:
+
+| Attribute | Value | Why |
+| --- | --- | --- |
+| Name prefix | `__Host-` | The browser then *refuses* the cookie if it carries `Domain`, or is set without `Secure` or with a `Path` other than `/`. This is what stops a sibling host shadowing it |
+| `Secure` | yes | Required by the prefix; HTTPS-only in production |
+| `HttpOnly` | yes | Unreadable by JavaScript, so XSS cannot exfiltrate it |
+| `Path` | `/` | Required by the prefix |
+| `Domain` | **absent** | Host-only. This is the attribute that keeps it off `flowlifeglobal.org` |
+| `SameSite` | `Lax` | Correct for a same-origin SPA: it still arrives on the initial top-level navigation, so an operator following a link to the Console is not shown a spurious login screen, while cross-site POSTs carry nothing. CSRF tokens cover the remainder. `Strict` is a later tightening option, not a requirement |
+
 - **Sessions are database-backed**, so they are revocable and enumerable. Session state is authoritative and must never live in a cache ([ADR 0010](0010-database-queue-redis-ready.md)).
 - **CSRF is validated** on stateful requests; the `XSRF-TOKEN` cookie is JS-readable by design and echoed in `X-XSRF-TOKEN`.
 - **Session middleware is added explicitly** to the API group (`EncryptCookies`, `AddQueuedCookiesToResponse`, `StartSession`, `ValidateCsrfToken`).
@@ -32,7 +42,22 @@ https://commons.flowlifeglobal.org/api/v1/   → Platform API
 - **Sanctum is not used** for this. Its SPA feature exists to make stateful authentication work across origins, a problem we no longer have.
 - Local development must be changed to the same single-origin shape so it exercises this model rather than a different one.
 
-The property was measured in Chromium against sibling hosts rather than assumed:
+### Session lifetime
+
+Two independent bounds, because they defend against different things:
+
+| Bound | Value | Mechanism |
+| --- | --- | --- |
+| **Sliding inactivity** | 30 minutes | `SESSION_LIFETIME=30`. Laravel's session handler writes `last_activity` on each request and expires the session that long after the last one, so the framework's lifetime *is* a sliding timeout — no custom code |
+| **Absolute** | 12 hours | Ours: record `authenticated_at` when authentication succeeds, and reject/invalidate the session once that age is exceeded, **regardless of subsequent activity**. Re-authentication establishes a new absolute lifetime |
+
+**Why both.** A sliding timeout protects the operator who walks away; it gives an attacker nothing, because whoever holds a stolen cookie can keep it alive indefinitely by making one request every 29 minutes. The absolute cap converts "indefinite" into "bounded", which is the residual risk of cookie authentication once the cookie itself is host-only. Laravel has no absolute-lifetime concept, so this is roughly fifteen lines of middleware plus a test — small enough to build now and awkward to retrofit later, since existing sessions would have no `authenticated_at`.
+
+**A distinction to state plainly:** `SESSION_LIFETIME=30` measures 30 minutes of **session request inactivity, not 30 minutes without human interaction**. Any authenticated request refreshes `last_activity`, so a future background poll from the Console could keep a session alive while nobody is at the keyboard. That is accepted for the initial architecture because the 12-hour absolute cap bounds the session independently of activity. Do **not** add browser activity tracking or other idle-detection machinery unless implementation reveals a concrete need; the 30-minute value must simply not be described as guaranteed human-idle detection.
+
+`expire_on_close` stays off: browser session restore makes it unreliable, and the inactivity timeout already covers the case. Step-up re-authentication for sensitive actions is deliberately out of scope here and belongs with MFA.
+
+The cookie property was measured in Chromium against sibling hosts rather than assumed:
 
 | Check | Result |
 |---|---|
@@ -46,7 +71,8 @@ The property was measured in Chromium against sibling hosts rather than assumed:
 - WordPress cannot receive the cookie (host-only) and cannot shadow it (`__Host-` prefix), which is the stated property, achieved by browser enforcement rather than convention.
 - No credential is ever readable by JavaScript, so XSS cannot exfiltrate a portable token.
 - Logout and forced revocation are a database delete.
-- **Deployment coupling:** one document root serves both, with rewrites ordering `/api/*` to Laravel, existing files as static assets, and everything else to `index.html`. The apps stay separately built but become one web-server deployment unit. This must be confirmed against the production host.
+- **Deployment coupling:** one document root serves both, with rewrites ordering `/api/*` to Laravel, existing files as static assets, and everything else to `index.html`. The apps stay separately built but become one web-server deployment unit. The mechanism has been exercised on Apache with PHP 8.3 in a representative container — Console at `/`, JSON from Laravel at `/api/v1/*`, SPA fallback for client-side routes, static assets served directly — but **that is not a verified fact about the production host.** The required hosting capabilities are recorded as assumptions in [deployment topology](../architecture/deployment-topology.md) and remain owner-verification items.
+- **A session is bounded twice:** 30 minutes of request inactivity and 12 hours absolute. Operators re-authenticate at least daily, and a stolen cookie cannot be kept alive indefinitely.
 - The Console's API base URL becomes a relative path; cross-origin configuration disappears.
 - Development must move to one origin (`commons.flowlife.localhost`), which changes the gateway routing and invalidates the cross-origin premise of existing CORS and e2e assertions.
 - `__Host-` requires `Secure`, which browsers permit over plain HTTP on `*.localhost` (verified), so local HTTPS is **not** required for parity.

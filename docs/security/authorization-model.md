@@ -27,6 +27,8 @@ Sensitive actions and privileged access will require **durable auditing**: who d
 | Which actions are auditable | A defined minimum event set, recorded synchronously from the first epic | [ADR 0019](../adr/0019-security-event-auditing-seam.md) |
 | First administrator and lockout | Console command rooted in server access; last-administrator invariant enforced by a guard chain Identity owns | [ADR 0020](../adr/0020-administrator-bootstrap-and-last-administrator-invariant.md) |
 | Rate limiting | Laravel's limiter on login, reset and invitation acceptance, keyed by IP *and* identifier | [identity-and-access.md](../architecture/identity-and-access.md) |
+| Session lifetime | 30 minutes of request inactivity, plus a 12-hour absolute cap from authentication | [ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md) |
+| Console access | Invite-only for Guardians, operators and administrators; no self-service registration | [ADR 0015](../adr/0015-identity-owns-person.md) |
 
 ## Still open
 

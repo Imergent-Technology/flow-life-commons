@@ -2,7 +2,7 @@
 
 | Area | What is in it |
 | --- | --- |
-| [architecture/](architecture/) | Charter and guardrails, system context, module map, data ownership, trust boundaries, integration model, the Identity and Access design |
+| [architecture/](architecture/) | Charter and guardrails, system context, module map, data ownership, trust boundaries, integration model, the Identity and Access design, deployment topology |
 | [adr/](adr/) | Architecture Decision Records: the *why* behind decisions, with alternatives considered |
 | [development/](development/) | Getting started, Docker environment, testing, coding standards, Git workflow |
 | [security/](security/) | Authorization model (direction) and secrets handling |

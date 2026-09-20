@@ -28,6 +28,7 @@ A single table that is both the credential store and the person-of-record cannot
 - **Person stays thin.** Contact attributes must **not** accumulate on it; CRM will own rich contact data keyed by `person_id`. Person is an identity anchor, not a profile.
 - **Email is a mutable login identifier, never the identity key.** The ULID is the key. A separate lowercased `email_canonical` column carries the unique constraint and is the **sole** lookup key for every credential path.
 - Business relationships (membership, volunteering, Guardian responsibility) attach to the **Person**, so disabling an Account never destroys them.
+- **Accounts are created only by invitation.** There is no self-service registration: the Guardian Console is for Guardians, operators and administrators, who are invited by someone who already holds the capability. One Account per canonical email is accepted for the initial system; no second login identifier is introduced for shared-address cases.
 
 `email_canonical` exists for a measured reason. On this project's two engines, a unique index on `email` alone does not behave the same way: inserting `person@example.org` then `Person@Example.org` is **rejected by MariaDB** (`utf8mb4_unicode_ci` is case-insensitive) and **accepted by PostgreSQL**, producing two accounts with the same address. Verified on MariaDB 10.11 and PostgreSQL 16; with the canonical column both engines reject the duplicate identically. Relying on the database's collation would make authentication semantics change silently during a future migration ([ADR 0005](0005-mariadb-with-postgresql-portability.md)).
 
@@ -38,6 +39,8 @@ A single table that is both the credential store and the person-of-record cannot
 - CRM extends the model by owning its own tables keyed by `person_id`, touching nothing in Identity.
 - Every credential lookup must canonicalise input and query `email_canonical`; querying `email` reintroduces the divergence above. This constrains the Laravel user provider.
 - Merging duplicate People is a later administrative operation. Identity's obligation now is only to keep it possible: references are by `person_id`, so a merge is a data operation rather than a redesign.
+- Invitation being the only creation path means email verification needs no separate flow initially: accepting an invitation proves control of the address.
+- Members and volunteers are **not** Console users. When they eventually need platform access it arrives through WordPress as a delegated flow ([ADR 0018](0018-client-and-delegated-authentication.md)), not by opening registration here.
 - **Main risk: Person becoming a god table.** Every future module will be tempted to add "just one column". The thinness rule is the mitigation and must be enforced in review.
 - **Extraction trigger:** if a second module ever needs to create People independently of Identity (a CRM import, say), revisit ownership. Moving the table's owning module is a code move, not a data migration — cheap and reversible, which is why a People module is not created now.
 
