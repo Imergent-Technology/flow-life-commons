@@ -63,6 +63,13 @@ final readonly class EloquentAccountRepository implements AccountRepository
         return $record === null ? null : $this->mapper->toDomain($record);
     }
 
+    public function findForUpdate(AccountId $id): ?Account
+    {
+        $record = AccountRecord::query()->whereKey($id->value)->lockForUpdate()->first();
+
+        return $record === null ? null : $this->mapper->toDomain($record);
+    }
+
     public function findByPersonId(PersonId $personId): ?Account
     {
         $record = AccountRecord::query()->where('person_id', $personId->value)->first();

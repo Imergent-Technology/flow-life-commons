@@ -10,7 +10,6 @@ use Illuminate\Auth\AuthManager;
 use Illuminate\Auth\SessionGuard;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
-use LogicException;
 
 /**
  * The Guardian Console session as the transport sees it: the one place that touches
@@ -32,15 +31,18 @@ final readonly class ConsoleSession
      * The session id and CSRF token are both regenerated, so nothing an attacker planted
      * before login (session fixation) survives it.
      */
-    public function establish(Request $request, AccountId $accountId): void
+    public function establish(Request $request, AccountId $accountId): bool
     {
         // loginUsingId regenerates the session: a new id, the old one destroyed, and a new
         // CSRF token (Store::regenerate does all three). Nothing planted before login survives.
         if ($this->guard()->loginUsingId($accountId->value) === false) {
-            throw new LogicException('An account that just authenticated could not be resolved.');
+            // Disabled between authenticating and here: no session is established for it.
+            return false;
         }
 
         $request->session()->put(self::AUTHENTICATED_AT, now()->getTimestamp());
+
+        return true;
     }
 
     /** The Account this session was authenticated as, read from the session itself. */

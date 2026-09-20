@@ -4,7 +4,11 @@ declare(strict_types=1);
 
 use App\Modules\Audit\Domain\SecurityEvent;
 use App\Modules\Audit\Domain\SecurityEventWriter;
+use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\AccountRepository;
+use App\Modules\Identity\Domain\EmailAddress;
+use App\Shared\Domain\AccountId;
+use App\Shared\Domain\PersonId;
 use Illuminate\Contracts\Hashing\Hasher;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -198,4 +202,58 @@ it('fails the whole sign-in, and establishes no session, when the audit write fa
 
     expect(DB::table('accounts')->where('id', $account->id->value)->value('last_login_at'))->toBeNull()
         ->and(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(0);
+});
+
+it('does not let a sign-in undo a disable that committed after the account was read', function () {
+    // The interleaving, made deterministic: login reads the Account (active) and verifies the
+    // password; then a disable commits; then login writes. Saving the stale copy back would
+    // silently re-enable the account.
+    $account = Identity::savedActiveAccount();
+    $real = app(AccountRepository::class);
+    app()->instance(AccountRepository::class, new class($real) implements AccountRepository
+    {
+        public function __construct(private AccountRepository $inner) {}
+
+        public function findByEmail(EmailAddress $email): ?Account
+        {
+            $account = $this->inner->findByEmail($email);
+            if ($account !== null) {
+                // A disable commits right after login read the account.
+                $this->inner->save($account->disable(new DateTimeImmutable('2026-09-20 00:00:00', new DateTimeZone('UTC'))));
+            }
+
+            return $account; // ...and login carries on with its stale, still-active copy
+        }
+
+        public function save(Account $account): void
+        {
+            $this->inner->save($account);
+        }
+
+        public function find(AccountId $id): ?Account
+        {
+            return $this->inner->find($id);
+        }
+
+        public function findForUpdate(AccountId $id): ?Account
+        {
+            return $this->inner->findForUpdate($id);
+        }
+
+        public function findByPersonId(PersonId $personId): ?Account
+        {
+            return $this->inner->findByPersonId($personId);
+        }
+    });
+
+    $console = new Console;
+    $console->login('ada@example.org', Identity::PASSWORD)->assertUnauthorized();
+
+    expect(DB::table('accounts')->where('id', $account->id->value)->value('status'))->toBe('disabled')
+        ->and(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(0)
+        ->and(DB::table('accounts')->where('id', $account->id->value)->value('last_login_at'))->toBeNull()
+        ->and(Identity::events('authentication.succeeded'))->toBe([])
+        ->and(Identity::context(Identity::events('authentication.failed')[0])['reason'])->toBe('account_not_active');
+    app()->instance(AccountRepository::class, $real);
+    $console->me()->assertUnauthorized();
 });
