@@ -2,7 +2,7 @@
 
 - **Purpose:** create a platform administrator when none exists, or when every administrator is locked out ([ADR 0020](../adr/0020-administrator-bootstrap-and-last-administrator-invariant.md)).
 - **Owner:** whoever holds server access to the platform.
-- **Last tested:** 2026-09-20, against the development stack (MariaDB), by hand and by the automated tests.
+- **Last tested:** 2026-09-20, against the development stack (MariaDB): the command, then acceptance over the API with `curl` exactly as below, then sign-in (the new administrator held `access.roles.assign` and `console.access`); and by the automated tests.
 - **Status:** the command issues the invitation, and the administrator accepts it over the API (see *Accepting the invitation*) to set their password and become able to sign in. There is no Console UI for this yet.
 
 ## Why this is a command

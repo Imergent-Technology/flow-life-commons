@@ -111,7 +111,8 @@ final class CreateAdministratorCommand extends Command
         $this->newLine();
         $this->line('  '.$invitation->revealToken());
         $this->newLine();
-        $this->comment('Accepting an invitation (and so setting a password) is not available yet; the invitation is issued and will be usable when that arrives.');
+        $this->comment('Hand the token to the administrator over a channel you trust. They accept it, and choose their password, with');
+        $this->comment('POST /api/v1/invitations/accept (token, password, password_confirmation in the body). See docs/runbooks/administrator-bootstrap.md.');
 
         return self::SUCCESS;
     }
