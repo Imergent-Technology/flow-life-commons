@@ -136,7 +136,8 @@ test.describe('the credential lifecycle, end to end', () => {
     const login = await signIn(page, INVITEE, firstPassword)
     expect(login.status).toBe(200)
     expect((login.body as Session).account.email).toBe(INVITEE)
-    expect((login.body as Session).capabilities).toEqual(['console.access'])
+    // Not a Console user (that sign-in is two steps, and is measured in mfa.spec.ts), so no capabilities.
+    expect((login.body as Session).capabilities).toEqual([])
     await api(page, 'POST', '/api/v1/logout')
   })
 

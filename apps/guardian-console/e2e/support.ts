@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto'
+
 import { expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
 
 // Helpers shared by the browser journeys. Nothing here is a test.
@@ -101,4 +103,80 @@ export async function messageIdsTo(
   )
   expect(response.ok()).toBe(true)
   return ((await response.json()) as MailList).messages.map((m) => m.ID)
+}
+
+// --- a second factor, as an authenticator app would compute it (RFC 6238) --------------------------------
+
+const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+
+function decodeBase32(secret: string): Buffer {
+  let bits = ''
+  for (const char of secret.replace(/[\s=]/g, '').toUpperCase()) {
+    bits += BASE32.indexOf(char).toString(2).padStart(5, '0')
+  }
+  const bytes: number[] = []
+  for (let i = 0; i + 8 <= bits.length; i += 8) bytes.push(parseInt(bits.slice(i, i + 8), 2))
+  return Buffer.from(bytes)
+}
+
+/** The 6-digit code for one 30-second step: HMAC-SHA1 with dynamic truncation, as RFC 4226 and 6238 say. */
+export function totpForStep(secret: string, step: number): string {
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(step))
+  const hash = createHmac('sha1', decodeBase32(secret)).update(counter).digest()
+  const offset = (hash[19] ?? 0) & 0x0f
+  const binary =
+    (((hash[offset] ?? 0) & 0x7f) << 24) |
+    ((hash[offset + 1] ?? 0) << 16) |
+    ((hash[offset + 2] ?? 0) << 8) |
+    (hash[offset + 3] ?? 0)
+  return String(binary % 1_000_000).padStart(6, '0')
+}
+
+const lastStep = new Map<string, number>()
+
+/**
+ * A valid code for `secret` that has not been used before by this process. The platform accepts each time step
+ * once and only the current step and one either side, so a second sign-in within the same 30 seconds uses the
+ * NEXT step, and a third waits until that is in range. Give each journey its own secret and this is quick.
+ */
+export async function nextCode(secret: string): Promise<string> {
+  const current = Math.floor(Date.now() / 30_000)
+  const step = Math.max(current, (lastStep.get(secret) ?? -1) + 1)
+  if (step > current + 1) {
+    await new Promise((resolve) => setTimeout(resolve, (step - 1) * 30_000 - Date.now() + 500))
+  }
+  lastStep.set(secret, step)
+  return totpForStep(secret, step)
+}
+
+/** The recovery codes the development seeder gives a fixture (E2eAccountSeeder::recoveryCodes). */
+export function recoveryCodesFor(tag: string): string[] {
+  return Array.from({ length: 10 }, (_, n) => `E2E${tag}-RC00-0000-000${String(n)}`)
+}
+
+/** A same-origin fetch from the page, exactly as the Console makes one (the XSRF-TOKEN cookie echoed in a header). */
+export async function apiFrom(
+  page: Page,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  const xsrf = (await page.context().cookies()).find((c) => c.name === 'XSRF-TOKEN')
+  const token = xsrf === undefined ? undefined : decodeURIComponent(xsrf.value)
+  return page.evaluate(
+    async ({ method, path, body, token }) => {
+      const headers: Record<string, string> = { Accept: 'application/json' }
+      if (body !== undefined) headers['Content-Type'] = 'application/json'
+      if (token !== undefined) headers['X-XSRF-TOKEN'] = token
+      const response = await fetch(path, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      })
+      const text = await response.text()
+      return { status: response.status, body: text === '' ? null : (JSON.parse(text) as unknown) }
+    },
+    { method, path, body, token },
+  )
 }

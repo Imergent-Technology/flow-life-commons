@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Database\Seeders;
 
 use App\Modules\Access\Application\ConsoleUserFixture;
+use App\Modules\Identity\Application\EnrollTotpFixture;
 use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\AccountInvitation;
 use App\Modules\Identity\Domain\AccountInvitationId;
@@ -76,12 +77,68 @@ final class E2eAccountSeeder extends Seeder
 
     public const string UI_CHANGE_PASSWORD = 'e2e-ui-change-password-not-a-secret';
 
+    /**
+     * Multi-factor authentication (ADR 0023). Every Console user needs a second factor, so the fixtures a journey
+     * signs in as are ENROLLED with a KNOWN secret and known recovery codes (the browser cannot see an
+     * authenticator app; the journeys compute codes from the secret). Public and worthless, like the passwords.
+     * The recovery codes are `E2E<tag>-RC00-0000-000<n>`, n = 0..9, one tag per fixture (see e2e/support.ts).
+     */
+    public const string GUARDIAN_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+
+    public const string UI_RECOVERY_SECRET = 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U';
+
+    public const string UI_CHANGE_SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+
+    /** A Console user with a known second factor, for the journeys that sign in with one. */
+    public const string MFA_LATER_EMAIL = 'e2e.mfa.later@example.org';
+
+    public const string MFA_LATER_PASSWORD = 'e2e-mfa-later-password-not-a-secret';
+
+    public const string MFA_LATER_SECRET = 'KRSXG5CTMVRXEZLUKN2XGZLSMVZG65DI';
+
+    public const string MFA_RECOVERY_EMAIL = 'e2e.mfa.recovery@example.org';
+
+    public const string MFA_RECOVERY_PASSWORD = 'e2e-mfa-recovery-password-not-a-secret';
+
+    public const string MFA_RECOVERY_SECRET = 'ONSWG4TFOQZDCNRTGEZTQMZQGYYDCMZQ';
+
+    public const string MFA_MANAGE_EMAIL = 'e2e.mfa.manage@example.org';
+
+    public const string MFA_MANAGE_PASSWORD = 'e2e-mfa-manage-password-not-a-secret';
+
+    public const string MFA_MANAGE_SECRET = 'MZXW6YTBOI4TQOJQGEZDGNBVGY3TQOJQ';
+
+    public const string MFA_PENDING_EMAIL = 'e2e.mfa.pending@example.org';
+
+    public const string MFA_PENDING_PASSWORD = 'e2e-mfa-pending-password-not-a-secret';
+
+    public const string MFA_PENDING_SECRET = 'NBSWY3DPFQQHO33SNRSCCIBAEBAGCAQA';
+
+    /** Console users for the two Console-spec journeys that sign in with a second factor (one secret per test). */
+    public const string CONSOLE_A_EMAIL = 'e2e.console.a@example.org';
+
+    public const string CONSOLE_A_PASSWORD = 'e2e-console-a-password-not-a-secret';
+
+    public const string CONSOLE_A_SECRET = 'MJQXGZJTGIYTCMRSGA4DGNZUGEZDMOBQ';
+
+    public const string CONSOLE_B_EMAIL = 'e2e.console.b@example.org';
+
+    public const string CONSOLE_B_PASSWORD = 'e2e-console-b-password-not-a-secret';
+
+    public const string CONSOLE_B_SECRET = 'NRSWC43FONSXEZLSMFZGK43FNVSXG5DP';
+
+    /** A signed-in-by-password-alone account: no Console access, so no second factor. For session mechanics. */
+    public const string SESSION_EMAIL = 'e2e.session@example.org';
+
+    public const string SESSION_PASSWORD = 'e2e-session-password-not-a-secret';
+
     public function run(
         AccountRepository $accounts,
         PersonRepository $people,
         AccountInvitationRepository $invitations,
         Hasher $hasher,
         ConsoleUserFixture $consoleUser,
+        EnrollTotpFixture $totp,
     ): void {
         if (! $this->container->environment('local', 'testing')) {
             throw new RuntimeException('The e2e fixture account may only be seeded in a local or testing environment.');
@@ -102,9 +159,11 @@ final class E2eAccountSeeder extends Seeder
         // decides what that means; this seeder does not know, and must not name, any role.
         // Idempotent: an account seeded earlier gains it on the next run.
         $consoleUser($account->personId);
+        // A Console user needs a second factor: enrolled with a known secret (idempotent: reset every run).
+        $totp($account->id, self::GUARDIAN_SECRET, self::recoveryCodes('G'));
 
         $this->resetCredentialFixtures($accounts, $people, $invitations, $hasher, $consoleUser, $now);
-        $this->resetConsoleFixtures($accounts, $people, $invitations, $hasher, $consoleUser, $now);
+        $this->resetConsoleFixtures($accounts, $people, $invitations, $hasher, $consoleUser, $totp, $now);
     }
 
     /**
@@ -118,10 +177,12 @@ final class E2eAccountSeeder extends Seeder
         AccountInvitationRepository $invitations,
         Hasher $hasher,
         ConsoleUserFixture $consoleUser,
+        EnrollTotpFixture $totp,
         DateTimeImmutable $now,
     ): void {
         // Signed in, but with nothing that grants Console access: the "forbidden" experience.
         $this->activeAccount($accounts, $people, $hasher, $now, self::NO_ACCESS_EMAIL, 'E2E No Access', self::NO_ACCESS_PASSWORD);
+        $this->activeAccount($accounts, $people, $hasher, $now, self::SESSION_EMAIL, 'E2E Session', self::SESSION_PASSWORD);
 
         // Two pending invitations for the two ways a person reaches the acceptance page: typing the token,
         // and following a link that carries it in the fragment. Console users once they accept.
@@ -140,13 +201,22 @@ final class E2eAccountSeeder extends Seeder
             $consoleUser($person->id);
         }
 
-        // Console users with a known password, for the reset and the change.
+        // Console users with a known password AND a known second factor, for the reset, the change, and the
+        // multi-factor journeys (e2e/mfa.spec.ts). Each secret is used by one journey only: the platform accepts
+        // each authenticator time step once, so sharing a secret between parallel journeys would make them race.
         foreach ([
-            [self::UI_RECOVERY_EMAIL, 'E2E UI Recovery', self::UI_RECOVERY_PASSWORD],
-            [self::UI_CHANGE_EMAIL, 'E2E UI Change', self::UI_CHANGE_PASSWORD],
-        ] as [$email, $name, $password]) {
+            [self::UI_RECOVERY_EMAIL, 'E2E UI Recovery', self::UI_RECOVERY_PASSWORD, self::UI_RECOVERY_SECRET, 'R'],
+            [self::UI_CHANGE_EMAIL, 'E2E UI Change', self::UI_CHANGE_PASSWORD, self::UI_CHANGE_SECRET, 'C'],
+            [self::MFA_LATER_EMAIL, 'E2E MFA Later', self::MFA_LATER_PASSWORD, self::MFA_LATER_SECRET, 'D'],
+            [self::MFA_RECOVERY_EMAIL, 'E2E MFA Recovery', self::MFA_RECOVERY_PASSWORD, self::MFA_RECOVERY_SECRET, 'K'],
+            [self::MFA_MANAGE_EMAIL, 'E2E MFA Manage', self::MFA_MANAGE_PASSWORD, self::MFA_MANAGE_SECRET, 'M'],
+            [self::MFA_PENDING_EMAIL, 'E2E MFA Pending', self::MFA_PENDING_PASSWORD, self::MFA_PENDING_SECRET, 'P'],
+            [self::CONSOLE_A_EMAIL, 'E2E Console A', self::CONSOLE_A_PASSWORD, self::CONSOLE_A_SECRET, 'A'],
+            [self::CONSOLE_B_EMAIL, 'E2E Console B', self::CONSOLE_B_PASSWORD, self::CONSOLE_B_SECRET, 'B'],
+        ] as [$email, $name, $password, $secret, $tag]) {
             $account = $this->activeAccount($accounts, $people, $hasher, $now, $email, $name, $password);
             $consoleUser($account->personId);
+            $totp($account->id, $secret, self::recoveryCodes($tag));
         }
     }
 
@@ -187,8 +257,8 @@ final class E2eAccountSeeder extends Seeder
         $invitations->save(AccountInvitation::issue(
             AccountInvitationId::generate(), $invited->id, InvitationToken::fromPresented(self::INVITATION_TOKEN), $now->modify('+7 days'), $now,
         ));
-        // A Console user once it has accepted, so the journey can see capabilities come back at login.
-        $consoleUser($invitee->id);
+        // Deliberately NOT a Console user: this API-level journey measures the credential lifecycle, and a
+        // Console user's sign-in is two steps. (The Console's own invitation journey uses the UI invitees.)
 
         // An active Account with a known password, for the reset and the change.
         $this->forget(self::RECOVERY_EMAIL);
@@ -201,6 +271,17 @@ final class E2eAccountSeeder extends Seeder
     }
 
     /**
+     * The ten recovery codes of a fixture, `E2E<tag>-RC00-0000-000<n>`. Every character is in the recovery-code
+     * alphabet (no I, L, O or U), so they are valid codes. e2e/support.ts builds the same list.
+     *
+     * @return list<string>
+     */
+    public static function recoveryCodes(string $tag): array
+    {
+        return array_map(static fn (int $n): string => sprintf('E2E%s-RC00-0000-000%d', $tag, $n), range(0, 9));
+    }
+
+    /**
      * Removes a previous run's fixture (rows only this seeder created, children first) so a one-time
      * step can be taken again. Development only, like the whole seeder.
      */
@@ -209,6 +290,8 @@ final class E2eAccountSeeder extends Seeder
         $account = DB::table('accounts')->where('email_canonical', $email)->first();
         if ($account !== null) {
             DB::table('sessions')->where('user_id', $account->id)->delete();
+            DB::table('account_recovery_codes')->where('account_id', $account->id)->delete();
+            DB::table('account_totp_factors')->where('account_id', $account->id)->delete();
             DB::table('account_invitations')->where('account_id', $account->id)->delete();
             DB::table('role_assignments')->where('person_id', $account->person_id)->delete();
             DB::table('accounts')->where('id', $account->id)->delete();

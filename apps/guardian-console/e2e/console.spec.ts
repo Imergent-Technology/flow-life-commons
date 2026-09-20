@@ -4,6 +4,7 @@ import {
   captureConsole,
   locationOf,
   messageIdsTo,
+  nextCode,
   mailpit,
   meStatus,
   replayedStatus,
@@ -23,14 +24,24 @@ import {
 // service (`./flow test e2e` refuses to run otherwise). The accounts are development fixtures seeded by
 // apps/platform/database/seeders/E2eAccountSeeder.php; their names, passwords and tokens are public.
 //
-// One address makes every sign-in, and the platform allows 30 attempts per address per 15 minutes
-// (identity.login_throttle), successful or not. `./flow test e2e` clears the counters first. This file
-// makes 13 attempts and the other specs about 12, so keep an eye on the total if you add journeys.
+// One address makes every sign-in, and the platform counts each attempt, refused or not, against a per-address
+// limit (identity.login_throttle; 30 per 15 minutes by default). The development stack raises it (.env.example:
+// IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP) and `./flow test e2e` refuses to run without that, and clears the counters
+// first. A whole run makes about 40 sign-in attempts. A Console user's second step (a code) is a separate limit.
 
+// Console users are ENROLLED fixtures with a known authenticator secret (ADR 0023), so signing in is two steps.
+// One secret per test that signs in with it: the platform accepts each time step once, and parallel workers
+// sharing a secret would race for it.
 const GUARDIAN = {
-  email: 'e2e.guardian@example.org',
-  password: 'e2e-fixture-password-not-a-secret',
-  name: 'E2E Guardian',
+  email: 'e2e.console.a@example.org',
+  password: 'e2e-console-a-password-not-a-secret',
+  secret: 'MJQXGZJTGIYTCMRSGA4DGNZUGEZDMOBQ',
+  name: 'E2E Console A',
+}
+const SECOND = {
+  email: 'e2e.console.b@example.org',
+  password: 'e2e-console-b-password-not-a-secret',
+  secret: 'NRSWC43FONSXEZLSMFZGK43FNVSXG5DP',
 }
 const NO_ACCESS = {
   email: 'e2e.noaccess@example.org',
@@ -47,10 +58,12 @@ const LINK_INVITEE = {
 const RECOVERY = {
   email: 'e2e.ui.recovery@example.org',
   password: 'e2e-ui-recovery-password-not-a-secret',
+  secret: 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U',
 }
 const CHANGER = {
   email: 'e2e.ui.change@example.org',
   password: 'e2e-ui-change-password-not-a-secret',
+  secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
 }
 
 const consoleHeading = (page: Page) =>
@@ -63,11 +76,22 @@ async function fillLogin(page: Page, email: string, password: string) {
   await passwordField(page).fill(password)
 }
 
-/** Opens the login page and signs in the way a person does, with the mouse. */
-async function signInThroughUi(page: Page, email: string, password: string) {
+/** The second step: the password was right, and a code from the authenticator finishes the sign-in. */
+async function enterCode(page: Page, secret: string) {
+  await expect(page.getByRole('heading', { level: 1, name: 'Enter your code' })).toBeVisible()
+  await page.getByLabel('Authentication code').fill(await nextCode(secret))
+  await page.getByRole('button', { name: 'Sign in' }).click()
+}
+
+/**
+ * Opens the login page and signs in the way a person does, with the mouse. A Console user (`secret` given) also
+ * enters a code from their authenticator; an account whose access needs no second factor is in after the password.
+ */
+async function signInThroughUi(page: Page, email: string, password: string, secret?: string) {
   await page.goto('/login')
   await fillLogin(page, email, password)
   await page.getByRole('button', { name: 'Sign in' }).click()
+  if (secret !== undefined) await enterCode(page, secret)
 }
 
 async function freshPage(browser: Browser, baseURL: string): Promise<Page> {
@@ -108,6 +132,17 @@ test.describe('signing in and out of the Console', () => {
     await page.keyboard.press('Tab')
     await expect(passwordField(page)).toBeFocused()
     await page.keyboard.type(GUARDIAN.password)
+    await page.keyboard.press('Enter')
+
+    // The password alone is NOT a sign-in for a Console user: the second step, and still nobody signed in.
+    await expect(page.getByRole('heading', { level: 1, name: 'Enter your code' })).toBeVisible()
+    expect(await meStatus(page)).toBe(401)
+    await expect(page.getByRole('navigation', { name: 'Console' })).toHaveCount(0)
+    await expect(page.locator('body')).not.toContainText(GUARDIAN.password)
+    await expect(page.getByRole('heading', { level: 1, name: 'Enter your code' })).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(page.getByLabel('Authentication code')).toBeFocused()
+    await page.keyboard.type(await nextCode(GUARDIAN.secret))
     await page.keyboard.press('Enter')
 
     // In, and back at the page they were headed for.
@@ -176,7 +211,7 @@ test.describe('signing in and out of the Console', () => {
     page,
     context,
   }) => {
-    await signInThroughUi(page, GUARDIAN.email, GUARDIAN.password)
+    await signInThroughUi(page, SECOND.email, SECOND.password, SECOND.secret)
     await page.getByRole('link', { name: 'Account security' }).click()
     await expect(page.getByRole('heading', { level: 1, name: 'Account security' })).toBeVisible()
 
@@ -190,7 +225,7 @@ test.describe('signing in and out of the Console', () => {
 
     await expect(loginHeading(page)).toBeVisible()
     await expect(page.getByText('Your session has ended. Sign in again to continue.')).toBeVisible()
-    await expect(page.getByText(GUARDIAN.name, { exact: true })).toHaveCount(0)
+    await expect(page.getByText('E2E Console B', { exact: true })).toHaveCount(0)
   })
 
   test('someone signed in WITHOUT Console access is told so, not shown the login page again', async ({
@@ -218,10 +253,12 @@ test.describe('signing in and out of the Console', () => {
 })
 
 test.describe('accepting an invitation', () => {
-  test('with the token typed in: no session is created, and the chosen password then signs in', async ({
+  test('with the token typed in: no session is created, and the first sign-in enrols an authenticator before the Console', async ({
     page,
+    context,
   }) => {
     const password = unique('invitee')
+    const logged = captureConsole(page)
     await page.goto('/accept-invitation')
 
     await page.getByLabel('Invitation token').fill(INVITEE.token)
@@ -247,8 +284,68 @@ test.describe('accepting an invitation', () => {
     await page.getByRole('link', { name: 'Continue to sign in' }).click()
     await fillLogin(page, INVITEE.email, password)
     await page.getByRole('button', { name: 'Sign in' }).click()
+
+    // A Console user's password is not enough: enrolment is required, and there is still no session.
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Set up two-step verification' }),
+    ).toBeVisible()
+    expect(await meStatus(page)).toBe(401)
+    await expect(consoleHeading(page)).toHaveCount(0)
+    await page.getByRole('button', { name: 'Set up authenticator' }).click()
+
+    // The QR code is drawn in the page, and the same secret is offered as a manual key.
+    await expect(
+      page.getByRole('img', { name: 'QR code for your authenticator app' }),
+    ).toBeVisible()
+    const secret = ((await page.locator('code').first().textContent()) ?? '').replace(/\s/g, '')
+    expect(secret).toMatch(/^[A-Z2-7]{32}$/)
+
+    // Generating a secret enrolled nothing: a wrong code does not, and leaves the setup to try again.
+    await page.getByLabel('Authentication code').fill('000000')
+    await page.getByRole('button', { name: 'Verify and continue' }).click()
+    await expect(page.getByLabel('Authentication code')).toHaveAccessibleDescription(
+      /The code is not valid/,
+    )
+    expect(await meStatus(page)).toBe(401)
+
+    // A valid code from the secret enrols it, and the recovery codes appear ONCE.
+    await page.getByLabel('Authentication code').fill(await nextCode(secret))
+    await page.getByRole('button', { name: 'Verify and continue' }).click()
+    const list = page.getByRole('list', { name: 'Recovery codes' })
+    await expect(list).toBeVisible()
+    const codes = await list.getByRole('listitem').allTextContents()
+    expect(codes).toHaveLength(10)
+    await expect(page.getByText('They will not be shown again')).toBeVisible()
+    // The secret and QR code are gone from the page; only the codes are on it.
+    await expect(page.getByRole('img', { name: 'QR code for your authenticator app' })).toHaveCount(
+      0,
+    )
+    await expect(page.locator('body')).not.toContainText(secret)
+
+    // The Console does not open until the person says the codes are saved.
+    const proceed = page.getByRole('button', { name: 'Continue to the Console' })
+    await expect(proceed).toBeDisabled()
+    await page.getByLabel('I have saved these recovery codes somewhere safe.').check()
+    await proceed.click()
     await expect(consoleHeading(page)).toBeVisible()
     await expect(page.getByText('E2E UI Invitee', { exact: true }).first()).toBeVisible()
+    expect(await meStatus(page)).toBe(200)
+
+    // Shown once: a reload brings back the Console, not the codes; and Account security only counts them.
+    await page.reload()
+    await expect(consoleHeading(page)).toBeVisible()
+    await expect(page.locator('body')).not.toContainText(codes[0] ?? 'x')
+    await page.getByRole('link', { name: 'Account security' }).click()
+    await expect(
+      page.getByText('Recovery codes left').locator('xpath=following-sibling::dd[1]'),
+    ).toHaveText('10')
+    await expect(page.locator('body')).not.toContainText(secret)
+
+    // The session is the HttpOnly cookie, and none of it (secret, codes, password) touched storage or the console.
+    expect((await sessionCookie(context))?.httpOnly).toBe(true)
+    expect(await storageSizes(page)).toEqual({ local: 0, session: 0 })
+    const output = logged.join('\n')
+    for (const forbidden of [secret, password, ...codes]) expect(output).not.toContain(forbidden)
   })
 
   test('with a link that carries the token: the fragment is scrubbed and the token never shown', async ({
@@ -275,7 +372,11 @@ test.describe('accepting an invitation', () => {
     await page.getByRole('link', { name: 'Continue to sign in' }).click()
     await fillLogin(page, LINK_INVITEE.email, password)
     await page.getByRole('button', { name: 'Sign in' }).click()
-    await expect(consoleHeading(page)).toBeVisible()
+    // The account holds Console access, so its first sign-in is an enrolment, not the Console.
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Set up two-step verification' }),
+    ).toBeVisible()
+    await expect(consoleHeading(page)).toHaveCount(0)
 
     expect(logged.join('\n')).not.toContain(LINK_INVITEE.token)
     expect(logged.join('\n')).not.toContain(password)
@@ -295,7 +396,7 @@ test.describe('a forgotten password', () => {
 
     // The owner is signed in somewhere else when they forget nothing, and are then reset.
     const owner = await freshPage(browser, url)
-    await signInThroughUi(owner, RECOVERY.email, RECOVERY.password)
+    await signInThroughUi(owner, RECOVERY.email, RECOVERY.password, RECOVERY.secret)
     await expect(consoleHeading(owner)).toBeVisible()
 
     const before = await messageIdsTo(request, url, RECOVERY.email)
@@ -390,6 +491,7 @@ test.describe('a forgotten password', () => {
     )
     await fillLogin(anonymous, RECOVERY.email, newPassword)
     await anonymous.getByRole('button', { name: 'Sign in' }).click()
+    await enterCode(anonymous, RECOVERY.secret) // a reset does not remove the second factor
     await expect(consoleHeading(anonymous)).toBeVisible()
 
     // Nothing secret was logged or stored by the Console.
@@ -413,7 +515,7 @@ test.describe('changing a password while signed in', () => {
     const newPassword = unique('changed')
     const page = await freshPage(browser, url)
 
-    await signInThroughUi(page, CHANGER.email, CHANGER.password)
+    await signInThroughUi(page, CHANGER.email, CHANGER.password, CHANGER.secret)
     await expect(consoleHeading(page)).toBeVisible()
     const before = await sessionCookie(page.context())
     const startedBefore = await authenticatedAt(page)
@@ -461,6 +563,7 @@ test.describe('changing a password while signed in', () => {
     await expect(page.getByRole('alert')).toHaveText('The email address or password is incorrect.')
     await fillLogin(page, CHANGER.email, newPassword)
     await page.getByRole('button', { name: 'Sign in' }).click()
+    await enterCode(page, CHANGER.secret)
     await expect(consoleHeading(page)).toBeVisible()
 
     await page.context().close()

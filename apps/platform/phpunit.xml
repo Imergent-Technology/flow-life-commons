@@ -32,6 +32,8 @@
         <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
         <env name="IDENTITY_COMPROMISED_PASSWORD_CHECK" value="none"/>
+        <!-- The dev stack raises this for the browser suite (.env.example); the tests assert the default. -->
+        <env name="IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP" value="30"/>
         <env name="IDENTITY_PASSWORD_RESET_RESPONSE_FLOOR_MS" value="0"/>
         <!--
             Real database, never SQLite: MariaDB is the canonical integration
