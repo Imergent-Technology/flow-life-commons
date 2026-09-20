@@ -16,7 +16,7 @@ Strategy and rationale: [ADR 0014](../adr/0014-testing-and-database-compatibilit
 
 | Scope | Checks |
 | --- | --- |
-| repo | Compose config validates, shellcheck on `flow`/`scripts`, actionlint on workflows, WordPress plugin PHP syntax |
+| repo | Compose config validates, shellcheck on `flow`/`scripts`, `./flow` CLI behaviour tests, actionlint on workflows, WordPress plugin PHP syntax |
 | backend | `composer validate --strict`, Pint (`--test`), Larastan level `max`, Pest on MariaDB incl. architecture tests, (with `--pgsql`) Pest on PostgreSQL |
 | frontend | `tsc -b` strict, ESLint, Prettier check, Vitest, production build, build verification |
 
@@ -41,8 +41,36 @@ Vitest with Testing Library and jsdom; component tests mock the API module. ESLi
 
 One Playwright test (`apps/guardian-console/e2e/smoke.spec.ts`) loads the console in Chromium, checks a Tailwind computed style, and checks the API health result appears, exercising gateway, Vite, CORS, Laravel and MariaDB together. It runs in the Playwright container on the `e2e` profile. In CI it is a **manually triggered** workflow to save minutes. Do not grow it into a large suite yet.
 
+## The CLI's own tests
+
+`scripts/tests/cli.sh` covers `./flow` dispatch and the `./flow ci` contract. It stubs `gh` on `PATH`, so it asserts which `gh` command each subcommand delegates to — plus the guards — without needing the GitHub CLI, credentials or network. It also asserts two architectural properties: that `require_gh` is referenced only by `scripts/commands/ci.sh`, and that `ci.sh` depends on neither Docker nor a set-up environment.
+
 ## CI
 
-`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests (docs-only changes are skipped), cancels superseded runs on the same ref, uses Linux runners, caches the PHP image layers, and runs `./flow setup --skip-build` then `./flow check --pgsql`. See also [Docker environment](docker.md#ci-parity). No deployment happens from CI.
+`.github/workflows/ci.yml` runs on pushes to `main`, on pull requests (docs-only changes are skipped), and on manual dispatch, cancels superseded runs on the same ref, uses Linux runners, caches the PHP image layers, and runs `./flow setup --skip-build` then `./flow check --pgsql`. See also [Docker environment](docker.md#ci-parity). No deployment happens from CI.
 
-**Before making the `./flow check` job a required status check (branch protection): revisit `paths-ignore`.** The workflow currently skips docs-only changes (`docs/**`, `**/*.md`) to save minutes. A workflow skipped by path filters never reports a status, so a *required* check would stay "pending" forever and block docs-only pull requests. Either remove `paths-ignore` (and accept the minutes), or add an always-running lightweight job/ruleset that satisfies the requirement.
+## Triggering and reviewing CI
+
+`./flow ci` is a deliberately thin wrapper over the [GitHub CLI](https://cli.github.com) for this project's two workflows. It is **not** a general GitHub client: authentication, remotes, secrets, artifacts and dispatching arbitrary workflows stay plain `git`/`gh` commands.
+
+**`gh` is required only by `./flow ci`.** Every other `./flow` command works without it, and `./flow check --pgsql` remains the provider-independent local equivalent of the CI checks.
+
+```bash
+sudo apt install gh            # Debian/Ubuntu; or pacman -S github-cli on Arch
+gh auth login -s workflow      # the 'workflow' scope lets you push .github/workflows changes
+```
+
+| Command | Does |
+| --- | --- |
+| `./flow ci run [--ref REF]` | Triggers the CI workflow (default ref: current branch) |
+| `./flow ci e2e [--ref REF]` | Triggers the E2E smoke workflow |
+| `./flow ci status [--limit N]` | Recent runs of both workflows |
+| `./flow ci watch [RUN_ID]` | Follows a run to completion; exits non-zero if it fails |
+| `./flow ci logs [RUN_ID] [--full]` | Failed steps when the run failed, otherwise the whole log |
+| `./flow ci rerun [RUN_ID] [--failed]` | Re-runs a run, or only its failed jobs |
+
+Run ids are optional and default to the most recent run, so `./flow ci run` then `./flow ci watch` is the normal loop.
+
+A manual run needs `workflow_dispatch` on the **default branch**, so a newly added or edited workflow must be pushed before `./flow ci run` will accept it.
+
+**Before making the `./flow check` job a required status check (branch protection): revisit `paths-ignore`.** The workflow currently skips docs-only changes (`docs/**`, `**/*.md`) to save minutes. A workflow skipped by path filters never reports a status, so a *required* check would stay "pending" forever and block docs-only pull requests. Either remove `paths-ignore` (and accept the minutes), or add an always-running lightweight job/ruleset that satisfies the requirement. `workflow_dispatch` lets you run CI by hand on a docs-only commit, but a dispatched run does not satisfy a required check on a pull request.

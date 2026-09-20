@@ -48,6 +48,14 @@ Database
   db shell [--pgsql]       SQL shell (MariaDB, or PostgreSQL with --pgsql)
   db fresh [-y]            DROP all tables and re-run migrations (local only)
 
+Continuous integration (GitHub Actions; the only commands needing the gh CLI)
+  ci run [--ref REF]       Trigger the CI workflow
+  ci e2e [--ref REF]       Trigger the E2E smoke workflow
+  ci status [--limit N]    Recent runs of both workflows
+  ci watch [RUN_ID]        Follow a run to completion (default: latest)
+  ci logs [RUN_ID]         Logs for a run (--full for the whole log)
+  ci rerun [RUN_ID]        Re-run a run (--failed: only the failed jobs)
+
 Docs: docs/development/getting-started.md
 USAGE
 }
@@ -62,6 +70,7 @@ command_file() {
         db) echo db ;;
         build) echo build ;;
         doctor) echo doctor ;;
+        ci) echo ci ;;
         *) return 1 ;;
     esac
 }

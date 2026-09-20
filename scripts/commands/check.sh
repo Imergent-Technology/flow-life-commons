@@ -59,6 +59,7 @@ cmd_check() {
 check_repo() {
     run_check "Compose configuration is valid" dc --profile '*' config --quiet
     run_check "Shell scripts (shellcheck)" shellcheck_scripts
+    run_check "./flow CLI behaviour" bash "$FLOW_ROOT/scripts/tests/cli.sh"
     run_check "GitHub workflows (actionlint)" actionlint_workflows
     run_check "WordPress companion PHP syntax" lint_wordpress_companion
 }
@@ -89,7 +90,7 @@ shellcheck_scripts() {
     (
         cd "$FLOW_ROOT" &&
             docker run --rm --user "$(id -u):$(id -g)" -v "$FLOW_ROOT:/mnt:ro" -w /mnt \
-                koalaman/shellcheck:v0.11.0 -x flow scripts/lib/*.sh scripts/commands/*.sh
+                koalaman/shellcheck:v0.11.0 -x flow scripts/lib/*.sh scripts/commands/*.sh scripts/tests/*.sh
     )
 }
 

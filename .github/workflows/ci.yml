@@ -4,8 +4,12 @@ name: CI
 
 # NOTE: paths-ignore skips docs-only changes to save minutes. A skipped workflow
 # reports no status, so revisit this BEFORE making the job below a required check
-# in branch protection (see docs/development/testing.md).
+# in branch protection (see docs/development/testing.md). workflow_dispatch is the
+# escape hatch: it runs the same job on demand, including for docs-only commits.
 on:
+  # Manual trigger: ./flow ci run, or the Actions tab. GitHub only offers this
+  # once the workflow file carrying it is on the default branch.
+  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore:

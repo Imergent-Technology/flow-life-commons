@@ -65,7 +65,10 @@ Idempotent and safe to re-run. It creates `.env` (with your UID/GID) and `apps/p
 ./flow db shell             # SQL shell
 ./flow db fresh             # drop everything and re-migrate (local only, asks first)
 ./flow build                # production build of the Guardian Console
+./flow ci run               # trigger CI on GitHub; then ./flow ci watch
 ```
+
+`./flow ci ...` is the only group needing the [GitHub CLI](https://cli.github.com) (`sudo apt install gh` then `gh auth login -s workflow`); everything else works without it. See [testing](testing.md#triggering-and-reviewing-ci).
 
 `./flow` works from any directory inside the repo. See [Docker environment](docker.md), [testing](testing.md), [coding standards](coding-standards.md) and [Git workflow](git-workflow.md).
 
