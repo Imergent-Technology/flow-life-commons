@@ -40,4 +40,4 @@ Domain events and the transactional outbox are a documented *direction* ([integr
 
 ADRs 0015–0021 record the Identity and Access design gate. The consolidated design they refer to — vocabulary, module layout, schema, lifecycles and the scope of the first implementation epic — is in [architecture/identity-and-access.md](../architecture/identity-and-access.md). **Nothing in that design is implemented yet.**
 
-Some ADRs carry a **Refined by** or **Amended by** line. Those decisions remain Accepted and unchanged; the pointer records that a later ADR adds detail within the same direction, as distinct from superseding it.
+Some ADRs carry a **Refined by** or **Amended by** line. Those decisions remain Accepted and unchanged; the pointer records that a later ADR adds detail within the same direction, as distinct from superseding it. A **Clarified** line records that the *wording* of a decision was corrected in light of implementation, with the decision itself unchanged.

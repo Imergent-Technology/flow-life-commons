@@ -16,7 +16,7 @@ The full application audit architecture (tamper-evidence, retention, review tool
 - A small **`Audit` module** owns an append-only `security_events` table and exposes `Audit\Application\RecordSecurityEvent`.
 - **Identity and Access call it directly and synchronously**, inside the same database transaction as the state change, so an event exists if and only if the change committed.
 - **Minimum events from the first epic:** authentication succeeded and failed, logout, rate limit triggered; password set, changed, reset requested and completed; account invited, invitation accepted, account disabled and re-enabled, email changed; role granted and revoked; administrator bootstrap executed.
-- **Each record carries** UTC timestamp, event type, the Actor (account and/or client), the subject, IP, user agent, outcome, and a small JSON context.
+- **Each record carries** UTC timestamp, event type (a dotted lowercase name such as `authentication.failed`, defined by the calling module and stored as a plain string), the Actor (account and/or client), the subject, IP, user agent, outcome, and a small JSON context.
 - **Records never contain credentials, tokens or password hashes**, and a failed-authentication record stores a reason *class*, never the submitted secret.
 - **`security_events` has no foreign keys at all.** Audit must outlive its subjects and must never block an operation.
 - **`context` is stored as JSON but never queried into.** JSON query functions differ between MariaDB and PostgreSQL and are barred by the portability guardrail ([ADR 0005](0005-mariadb-with-postgresql-portability.md)).

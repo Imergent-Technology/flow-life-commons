@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Clarified:** 2026-09-20. Two bullets under Decision named Laravel mechanics more specifically than the intent required; they are reworded below in light of the implementation. The decision itself is unchanged.
 
 ## Context
 
@@ -36,10 +37,18 @@ https://commons.flowlifeglobal.org/api/v1/   → Platform API
 | `SameSite` | `Lax` | Correct for a same-origin SPA: it still arrives on the initial top-level navigation, so an operator following a link to the Console is not shown a spurious login screen, while cross-site POSTs carry nothing. CSRF tokens cover the remainder. `Strict` is a later tightening option, not a requirement |
 
 - **Sessions are database-backed**, so they are revocable and enumerable. Session state is authoritative and must never live in a cache ([ADR 0010](0010-database-queue-redis-ready.md)).
-- **CSRF is validated** on stateful requests; the `XSRF-TOKEN` cookie is JS-readable by design and echoed in `X-XSRF-TOKEN`.
-- **Session middleware is added explicitly** to the API group (`EncryptCookies`, `AddQueuedCookiesToResponse`, `StartSession`, `ValidateCsrfToken`).
+- **Request forgery is prevented on stateful requests** by Laravel 13's `PreventRequestForgery` middleware (`ValidateCsrfToken` is a deprecated alias of it). Its semantics are origin-aware, and precisely these:
+  - A browser request the browser itself marks `Sec-Fetch-Site: same-origin` may satisfy it **without a token**. Page scripts cannot set or forge that header.
+  - When same-origin proof is absent, normal token verification applies: the `XSRF-TOKEN` cookie is JS-readable by design and echoed in `X-XSRF-TOKEN`.
+  - **`same-site` is not accepted** (`allowSameSite` stays `false`). WordPress is a sibling, lower-trust site: its requests arrive as `same-site` at best, are never treated as equivalent to `same-origin`, and must carry a valid token.
+  - The host-only `__Host-` cookie is an independent protection: it is not sent to or from sibling hosts, whatever the middleware decides.
+  - No custom request-forgery middleware forces a token onto same-origin requests; it would need a concrete threat in this application to justify it.
+- **Session middleware is applied explicitly to the browser/session-authenticated route surface**, meaning the Guardian Console's endpoints, as one named `stateful` stack (`EncryptCookies`, `AddQueuedCookiesToResponse`, `StartSession`, request-forgery protection, and the absolute-lifetime check). It is **not** applied indiscriminately to the whole API middleware group, and the API is not "stateful":
+  - public endpoints stay stateless unless they genuinely need session state;
+  - future service and client endpoints ([ADR 0018](0018-client-and-delegated-authentication.md)) authenticate by their own mechanism and acquire no browser session, cookie or request-forgery requirement;
+  - applying the stack selectively weakens nothing: Guardian Console authentication itself remains session based.
 - **No CORS for the Console** — same-origin requests are not subject to it. `supports_credentials` stays `false` and the production allow-list stays empty: no cross-origin credentialed access exists at all.
-- **Sanctum is not used** for this. Its SPA feature exists to make stateful authentication work across origins, a problem we no longer have.
+- **Sanctum is not used** for this first-party session flow, and is not installed. Its SPA feature exists to make stateful authentication work across origins, a problem we no longer have.
 - Local development must be changed to the same single-origin shape so it exercises this model rather than a different one.
 
 ### Session lifetime
