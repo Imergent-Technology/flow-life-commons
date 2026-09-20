@@ -2,7 +2,7 @@
 
 The consolidated design the first Identity implementation epic works from. Decisions and their alternatives live in [ADRs 0015–0021](../adr/README.md); this page is the operative reference.
 
-> **Status: designed, not implemented.** No identity, authentication or authorization code exists. Nothing here may be built ahead of the epic scope in the last section.
+> **Status: architecture frozen; implementation in progress** on the phased Identity and Access epic (see [Implementation status](#implementation-status)). Nothing here may be built ahead of the epic scope in the last section.
 
 ## Vocabulary
 
@@ -242,3 +242,21 @@ External identities; `api_clients` and service authentication; delegated WordPre
 ### Deferred completely
 
 OIDC/OAuth provider role; external identity providers; WordPress member-facing authentication; passkeys; organization and partner identities; a generic policy engine; person-merge tooling; tamper-evident audit chaining.
+
+## Implementation status
+
+The epic is delivered in reviewable phases. This records what exists, and the small decisions taken while implementing that refine, but do not change, the design above.
+
+**Phase 1 — done:** development topology (build step 1) and the Identity persistence foundation (part of step 2): `people`, `accounts`, `account_invitations`, `Account` as an `Authenticatable` model seam, canonical-email lookup. **Not built:** everything else in the epic, including any login, session, guard, authorization, bootstrap or password-reset behaviour.
+
+Refinements made in Phase 1:
+
+- **Layers.** `Domain` holds `Person`, `Account`, `AccountInvitation`, `EmailAddress`, `AccountStatus`, `InvitationToken`, the ports (`PersonRepository`, `AccountRepository`, `AccountInvitationRepository`) and their domain errors. `Infrastructure` holds the Eloquent records (`AccountRecord` is the `Authenticatable`), the repositories and `IdentityServiceProvider`. There is no `Application` or `Http` layer yet: the module map creates layers only when they have something to hold. `PersonId` and `AccountId` live in `Shared\Domain` as this design places them.
+- **Statuses** are exactly `invited`, `active`, `disabled`. `Account` models their state and invariants (an invited account has no credential; an active one has one; a disabled one records when). The use cases that drive the transitions are later phases.
+- **Email is ASCII-only.** `EmailAddress` accepts printable ASCII (internationalised domains as punycode) and canonicalises by trimming and lowercasing. This is what makes MariaDB and PostgreSQL identical: MariaDB's `utf8mb4_unicode_ci` also folds accents, so a non-ASCII address could collide there and not on PostgreSQL. No provider-specific rewriting (dots, `+tags`) is applied.
+- **Instants are `DATETIME`, not `TIMESTAMP`.** Application code writes UTC; `DATETIME` has no implicit defaults or `ON UPDATE`, no dependence on the connection time zone, and no 2038 ceiling on MariaDB.
+- **`created_at`/`updated_at`** exist on `people` and `accounts`, written from the domain rather than by Eloquent. `account_invitations` has none, matching the schema above; issue time is the `account.invited` security event's `occurred_at`.
+- **`invited_by_account_id` is nullable**, because the bootstrap command (ADR 0020) issues an invitation with no inviting account. It has no foreign key (ADR 0021).
+- **`account_invitations.account_id` is indexed explicitly** so both engines have the same index (PostgreSQL does not create one for a foreign key).
+- **Invitation acceptance is not atomic in the repository.** Claiming an invitation under concurrent acceptance (lock, check, set) belongs to the acceptance use case, which owns the transaction.
+- **A violated constraint aborts the surrounding transaction on PostgreSQL** (not on MariaDB). Repositories translate a unique violation into a domain error, and callers treat it as terminal for the transaction.

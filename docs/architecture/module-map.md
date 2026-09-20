@@ -12,7 +12,7 @@ apps/platform/app/
       Application/      use cases; the module's public entry points for other code
       Infrastructure/   integrations, persistence details, external APIs
       Http/             controllers, requests/resources, routes.php
-  Shared/               intentionally tiny cross-module kernel (does not exist yet)
+  Shared/               intentionally tiny cross-module kernel (today: the ULID identifiers PersonId and AccountId)
   Providers/            Laravel service providers
 ```
 
@@ -38,10 +38,11 @@ Each module owns its endpoints in `Http/routes.php`. `routes/api.php` loads ever
 | Module | Purpose | Notes |
 | --- | --- | --- |
 | `Health` | `GET /api/v1/health`: infrastructure verification | Operational, not a business module. Exists to prove the environment and to give the conventions something real to test against |
+| `Identity` | `people`, `accounts`, `account_invitations`: the registry of humans and their means of authenticating | Phase 1 of the Identity epic: `Domain` (entities, value objects, repository ports) and `Infrastructure` (Eloquent records, repositories, provider) only. No `Application` or `Http` yet, per the rule above; they arrive with the first use case and endpoint |
 
 ## Designed, not yet created
 
-The Identity and Access design gate defines three modules and their dependency direction ([identity-and-access.md](identity-and-access.md)). **No folders exist yet**; they are created by the first Identity epic.
+The Identity and Access design ([identity-and-access.md](identity-and-access.md)) defines three modules and their dependency direction. `Identity` now exists (above); **`Access` and `Audit` have no folders yet** and are created by later phases of the epic.
 
 | Module | Owns | Depends on |
 | --- | --- | --- |
