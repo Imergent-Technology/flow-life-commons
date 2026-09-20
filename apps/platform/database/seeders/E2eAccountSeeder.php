@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
-use App\Modules\Access\Application\Role;
-use App\Modules\Access\Domain\RoleAssignment;
-use App\Modules\Access\Domain\RoleAssignmentRepository;
+use App\Modules\Access\Application\ConsoleUserFixture;
 use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\EmailAddress;
@@ -25,8 +23,8 @@ use RuntimeException;
  * DEVELOPMENT ONLY. It refuses to run outside the local and testing environments, and
  * it is not part of DatabaseSeeder. The credentials are public, in this file, and are
  * worth nothing anywhere real. This is a test fixture, not the administrator bootstrap:
- * that is a separate, later, server-access-rooted command (ADR 0020). Nor is granting the
- * role: no grant use case exists yet, so this writes the assignment through the port.
+ * that is the `identity:create-administrator` command (ADR 0020). It grants nothing itself:
+ * it asks Access for a Console user.
  */
 final class E2eAccountSeeder extends Seeder
 {
@@ -34,7 +32,7 @@ final class E2eAccountSeeder extends Seeder
 
     public const string PASSWORD = 'e2e-fixture-password-not-a-secret';
 
-    public function run(AccountRepository $accounts, PersonRepository $people, Hasher $hasher, RoleAssignmentRepository $roles): void
+    public function run(AccountRepository $accounts, PersonRepository $people, Hasher $hasher, ConsoleUserFixture $consoleUser): void
     {
         if (! $this->container->environment('local', 'testing')) {
             throw new RuntimeException('The e2e fixture account may only be seeded in a local or testing environment.');
@@ -51,11 +49,9 @@ final class E2eAccountSeeder extends Seeder
             $accounts->save($account);
         }
 
-        // The Console's ordinary role, so the e2e can see capabilities come back through the
-        // real gateway. Idempotent: an account seeded before roles existed gains it on the next run.
-        $held = array_map(fn (RoleAssignment $a): string => $a->roleKey, $roles->forPerson($account->personId));
-        if (! in_array(Role::Guardian->value, $held, true)) {
-            $roles->add(RoleAssignment::grant($account->personId, Role::Guardian->value, null, $now));
-        }
+        // A Console user, so the e2e can see capabilities come back through the real gateway. Access
+        // decides what that means; this seeder does not know, and must not name, any role.
+        // Idempotent: an account seeded earlier gains it on the next run.
+        $consoleUser($account->personId);
     }
 }

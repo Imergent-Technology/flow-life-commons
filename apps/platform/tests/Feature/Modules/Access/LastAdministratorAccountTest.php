@@ -164,7 +164,9 @@ it('locks the administrator assignments before it touches any account, when disa
 });
 
 it('has exactly one implementation of the invariant, reached by both removal paths', function () {
-    // Both paths ask AdministratorContinuity, and only it takes the administrator lock.
+    // Both REMOVAL paths ask AdministratorContinuity, and only it decides whether authority may be
+    // removed. BootstrapAdministrator also reads the administrator set under the same lock, to make
+    // its "does one already exist" check consistent with concurrent removals; it never removes authority.
     $callers = [];
     foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator(base_path('app'), FilesystemIterator::SKIP_DOTS)) as $file) {
         assert($file instanceof SplFileInfo);
@@ -178,7 +180,12 @@ it('has exactly one implementation of the invariant, reached by both removal pat
     }
     sort($callers);
 
-    expect($callers)->toBe(['AdministratorContinuity.php', 'LastAdministratorDeactivationGuard.php (guard)', 'RevokeRole.php (guard)']);
+    expect($callers)->toBe([
+        'AdministratorContinuity.php',
+        'BootstrapAdministrator.php',
+        'LastAdministratorDeactivationGuard.php (guard)',
+        'RevokeRole.php (guard)',
+    ]);
 });
 
 it('is the guard Identity consults, so a disable cannot bypass it', function () {

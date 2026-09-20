@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Modules\Access\Application\BootstrapAdministrator;
+use App\Modules\Access\Application\ConsoleUserFixture;
 use App\Modules\Access\Application\Role;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 
@@ -94,12 +96,22 @@ arch('Audit does not depend on Access', function () {
 arch('Role is internal to Access: nothing outside it may name the type', function () {
     // A role is how capabilities are bundled and assigned, never how anything is authorized.
     // Business code that could import Role could write `if ($role === Role::Guardian)`.
-    //
-    // ONE narrow, deliberate exception: the development-only e2e fixture seeder, which grants
-    // the Console's ordinary role because no grant use case exists yet (the administration
-    // workflow is a later phase). It refuses to run outside local/testing, it authorizes
-    // nothing, and it should call that use case, and this exception should go, when it exists.
-    expect(Role::class)->toOnlyBeUsedIn(['App\\Modules\\Access', 'Database\\Seeders\\E2eAccountSeeder']);
+    // No exceptions: not for seeders, not for fixtures. Code that needs a role's effect asks
+    // Access for it (ConsoleUserFixture, BootstrapAdministrator) and never names the role.
+    expect(Role::class)->toOnlyBeUsedIn('App\\Modules\\Access');
+});
+
+arch('The administrator bootstrap has one caller: the operator\'s console command', function () {
+    // Its authority is server access, not an Actor. Nothing else may run it, and in particular no
+    // HTTP layer: that would turn "the operator can run a command" into "a request can".
+    expect(BootstrapAdministrator::class)
+        ->toOnlyBeUsedIn('App\\Modules\\Access\\Infrastructure\\Console\\CreateAdministratorCommand');
+});
+
+arch('The Console user fixture is for the development seeder only', function () {
+    // It bypasses authorization and audit, and refuses to run outside local and testing.
+    expect(ConsoleUserFixture::class)
+        ->toOnlyBeUsedIn(['App\\Modules\\Access', 'Database\\Seeders\\E2eAccountSeeder']);
 });
 
 // --- Source scans (each has a positive control, so it cannot pass by matching nothing) ---------
@@ -111,7 +123,7 @@ function appPhpFilesOutside(string $module): array
 {
     $files = [];
     $root = dirname(__DIR__, 2);
-    foreach (['app', 'bootstrap', 'config', 'routes'] as $dir) {
+    foreach (['app', 'bootstrap', 'config', 'routes', 'database/seeders'] as $dir) {
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("{$root}/{$dir}", FilesystemIterator::SKIP_DOTS));
         foreach ($iterator as $file) {
             assert($file instanceof SplFileInfo);

@@ -8,6 +8,7 @@ use App\Modules\Access\Application\AuthorizerEffectiveCapabilities;
 use App\Modules\Access\Application\Capability;
 use App\Modules\Access\Application\LastAdministratorDeactivationGuard;
 use App\Modules\Access\Domain\RoleAssignmentRepository;
+use App\Modules\Access\Infrastructure\Console\CreateAdministratorCommand;
 use App\Modules\Identity\Application\AccountDeactivationGuard;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -38,6 +39,10 @@ final class AccessServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if ($this->app->runningInConsole()) {
+            $this->commands([CreateAdministratorCommand::class]);
+        }
+
         // One Gate ability per capability, derived from the enum: the Gate is not a second
         // catalog. Each delegates to Access. A guest never reaches the callback (its user
         // parameter is not nullable), so guests are denied.

@@ -43,6 +43,10 @@ Ubuntu/Debian users install Docker from Docker's own apt repository (the distro 
 
 Idempotent and safe to re-run. It creates `.env` (with your UID/GID) and `apps/platform/.env` from their `.example` files, builds the PHP image, pulls the other images, runs `composer install` and `npm ci` in containers, starts MariaDB and creates the test databases, generates `APP_KEY`, and runs migrations.
 
+## Creating an administrator
+
+A fresh development database has no accounts. `identity:create-administrator` creates the first administrator and prints a one-time invitation token (see the [runbook](../runbooks/administrator-bootstrap.md)). Accepting an invitation, which is how the administrator would set a password and sign in, is not built yet, so this does not give you a login. `./flow test e2e` seeds a separate development-only fixture account instead.
+
 ## Local URLs
 
 | URL | What |
