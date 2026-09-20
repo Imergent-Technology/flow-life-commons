@@ -13,6 +13,8 @@ interface TextFieldProps {
   hint?: ReactNode
   required?: boolean
   disabled?: boolean
+  inputMode?: 'numeric' | 'text'
+  maxLength?: number
   ref?: Ref<HTMLInputElement> | undefined
 }
 
@@ -27,6 +29,8 @@ export function TextField({
   hint,
   required = true,
   disabled = false,
+  inputMode,
+  maxLength,
   ref,
 }: TextFieldProps) {
   const id = useId()
@@ -57,6 +61,8 @@ export function TextField({
         }}
         required={required}
         disabled={disabled}
+        inputMode={inputMode}
+        maxLength={maxLength}
         aria-invalid={invalid}
         aria-describedby={describedBy === '' ? undefined : describedBy}
         // Text a person types into a credential field is theirs: never corrected, capitalised or trimmed.

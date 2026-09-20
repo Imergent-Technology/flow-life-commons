@@ -33,6 +33,11 @@ export function RequireAuthentication() {
           }
         />
       )
+    case 'second-factor':
+      // The password was proved but the sign-in is not finished: not authenticated. The login page holds the next step.
+      return (
+        <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />
+      )
     case 'authenticated':
       return <Outlet />
   }

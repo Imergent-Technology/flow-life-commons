@@ -8,6 +8,7 @@ import { PageHeading } from '../ui/PageHeading.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { SessionSummary } from '../ui/SessionSummary.tsx'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
+import { MfaSection } from './MfaSection.tsx'
 import { TextField } from '../ui/TextField.tsx'
 
 /**
@@ -71,6 +72,8 @@ export function AccountSecurityPage() {
         </h2>
         <SessionSummary />
       </section>
+
+      <MfaSection />
 
       <section aria-labelledby="password-heading" className="flex max-w-md flex-col gap-4">
         <h2 id="password-heading" className="text-lg font-medium">

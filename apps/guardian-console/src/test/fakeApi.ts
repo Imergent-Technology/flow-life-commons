@@ -28,6 +28,11 @@ export function accountFor(overrides: Partial<CurrentAccount> = {}): CurrentAcco
       authenticated_at: '2026-09-20T09:00:00Z',
       absolute_expires_at: '2026-09-20T21:00:00Z',
     },
+    mfa: {
+      enrolled: true,
+      recovery_codes_remaining: 10,
+      security_verified_until: '2026-09-20T09:15:00Z',
+    },
     ...overrides,
   }
 }

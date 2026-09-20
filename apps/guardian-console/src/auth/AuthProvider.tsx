@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 
-import { fetchCurrentAccount, login, logout, type CurrentAccount } from '../api/auth.ts'
+import {
+  completeChallenge,
+  fetchCurrentAccount,
+  login,
+  logout,
+  type LoginOutcome,
+  type SecondFactorProof,
+} from '../api/auth.ts'
 import { onSessionRejected, type Result } from '../api/http.ts'
 import { AuthContext, type AuthContextValue, type AuthState } from './auth-context.ts'
 
@@ -58,16 +65,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [adopt])
 
   const signIn = useCallback(
-    async (email: string, password: string): Promise<Result<CurrentAccount>> => {
+    async (email: string, password: string): Promise<Result<LoginOutcome>> => {
       const attempt = await login({ email, password })
       if (!attempt.ok) return attempt
+
+      if (attempt.value.kind === 'second-factor') {
+        // Not signed in: only a pending sign-in exists on the server. Nothing is asked of /me (it would say 401).
+        setState({
+          status: 'second-factor',
+          step: attempt.value.next,
+          expiresAt: attempt.value.expiresAt,
+        })
+        return attempt
+      }
 
       // The login reply is not the durable state: /me is.
       const next = await resolve()
       setState(next)
-      if (next.status === 'authenticated') return { ok: true, value: next.current }
+      if (next.status === 'authenticated') return { ok: true, value: { kind: 'signed-in' } }
       return next.status === 'unavailable'
         ? { ok: false, failure: { kind: 'unavailable', retryAfterSeconds: null } }
+        : { ok: false, failure: { kind: 'unexpected', status: 200 } }
+    },
+    [],
+  )
+
+  const endPendingSignIn = useCallback((reason: 'sign-in-expired' | null) => {
+    setState({ status: 'unauthenticated', notice: reason })
+  }, [])
+
+  const completeSecondFactor = useCallback(
+    async (proof: SecondFactorProof): Promise<Result<null>> => {
+      const result = await completeChallenge(proof)
+      if (!result.ok) {
+        // A 401 is "this sign-in has ended" (not a wrong code, which is a 422): say so and start again.
+        if (result.failure.kind === 'unauthenticated')
+          setState({ status: 'unauthenticated', notice: 'sign-in-expired' })
+        return result
+      }
+      const next = await resolve()
+      setState(next)
+      return next.status === 'authenticated'
+        ? result
         : { ok: false, failure: { kind: 'unexpected', status: 200 } }
     },
     [],
@@ -94,8 +133,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<AuthContextValue>(
-    () => ({ state, signIn, signOut, refresh }),
-    [state, signIn, signOut, refresh],
+    () => ({ state, signIn, completeSecondFactor, endPendingSignIn, signOut, refresh }),
+    [state, signIn, completeSecondFactor, endPendingSignIn, signOut, refresh],
   )
 
   return <AuthContext value={value}>{children}</AuthContext>

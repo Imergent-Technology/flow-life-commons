@@ -4,6 +4,8 @@ import { Link, Navigate, useLocation } from 'react-router'
 import { useAuth } from '../auth/auth-context.ts'
 import { returnPathFrom } from '../auth/returnPath.ts'
 import { Alert } from '../ui/Alert.tsx'
+import { MfaChallenge } from './MfaChallenge.tsx'
+import { MfaEnrollment } from './MfaEnrollment.tsx'
 import { AuthLayout } from '../ui/AuthLayout.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { ServiceUnavailable } from '../ui/ServiceUnavailable.tsx'
@@ -18,6 +20,7 @@ const CREDENTIALS_REFUSED = 'The email address or password is incorrect.'
 const NOTICES = {
   'signed-out': 'You have been signed out.',
   'session-ended': 'Your session has ended. Sign in again to continue.',
+  'sign-in-expired': 'Your sign-in timed out. Enter your password again.',
 } as const
 
 export function LoginPage() {
@@ -31,6 +34,10 @@ export function LoginPage() {
 
   if (state.status === 'loading') return <StatusScreen>Checking your session…</StatusScreen>
   if (state.status === 'unavailable') return <ServiceUnavailable onRetry={refresh} />
+  // The password was proved; the second factor is the next step. Not signed in, so no Console yet.
+  if (state.status === 'second-factor') {
+    return state.step === 'challenge' ? <MfaChallenge /> : <MfaEnrollment />
+  }
   // Already signed in (or just now signed in): on to the Console, or back to where they were headed.
   if (state.status === 'authenticated') {
     return <Navigate to={returnPathFrom(location.state)} replace />
@@ -39,7 +46,13 @@ export function LoginPage() {
   async function submit() {
     setPending(true)
     const result = await signIn(email, password)
-    if (result.ok) return // the state change above navigates away
+    if (result.ok) {
+      // Signed in (the state change navigates away) or on to the second factor. Either way the password has
+      // done its job: this component stays mounted for the second step, so it must not keep it.
+      setPassword('')
+      setPending(false)
+      return
+    }
 
     setPending(false)
     setPassword('') // a refused password is not kept

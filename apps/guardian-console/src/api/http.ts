@@ -191,6 +191,20 @@ export async function requestVoid(options: RequestOptions): Promise<Result<null>
   return failure === null ? { ok: true, value: null } : { ok: false, failure }
 }
 
+/**
+ * A request whose success may be one of several documented statuses, each with its own body (login answers
+ * 200 when signed in and 202 when a second factor is due). Both are returned; the caller decides what each
+ * means, and must check the body before trusting it.
+ */
+export async function requestReply(
+  options: RequestOptions,
+): Promise<Result<{ status: number; body: unknown }>> {
+  const reply = await send(options)
+  const failure = settle(reply, options)
+  if (failure !== null) return { ok: false, failure }
+  return { ok: true, value: { status: reply?.status ?? 0, body: reply?.body } }
+}
+
 /** A request whose success carries a body the Console relies on, checked before it is trusted. */
 export async function requestJson<T>(
   options: RequestOptions,

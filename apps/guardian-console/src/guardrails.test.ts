@@ -86,6 +86,15 @@ const rules: Rule[] = [
     fine: 'const mode = process',
   },
   {
+    name: 'writing a file or the clipboard outside the recovery-code panel',
+    because:
+      'recovery codes are shown once and leave the page only by an intentional click in one place; nothing else may hand data to a file or the clipboard',
+    pattern: /createObjectURL|navigator\.clipboard|\.download\s*=/,
+    allowedIn: /(^|\/)ui\/RecoveryCodes\.tsx$/,
+    offends: 'const url = URL.createObjectURL(new Blob([secret]))',
+    fine: 'const text = codes.join(newline)',
+  },
+  {
     name: 'raw HTML injection',
     because: 'the Console is the most privileged surface; markup from data would be XSS',
     pattern: /dangerouslySetInnerHTML|\.innerHTML\s*=/,
