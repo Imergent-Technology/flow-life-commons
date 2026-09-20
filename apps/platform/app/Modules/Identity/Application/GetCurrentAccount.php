@@ -8,6 +8,7 @@ use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\PersonRepository;
 use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
+use App\Shared\Domain\AuthenticationMethod;
 
 final readonly class GetCurrentAccount
 {
@@ -15,9 +16,11 @@ final readonly class GetCurrentAccount
         private AccountRepository $accounts,
         private PersonRepository $people,
         private EffectiveCapabilities $capabilities,
+        private MfaStatuses $mfa,
     ) {}
 
-    public function __invoke(AccountId $accountId): ?CurrentAccount
+    /** @param  bool  $secondFactorVerified  the session was established with a second factor (the transport knows) */
+    public function __invoke(AccountId $accountId, bool $secondFactorVerified = false): ?CurrentAccount
     {
         $account = $this->accounts->find($accountId);
         if ($account === null || ! $account->canAuthenticate()) {
@@ -29,8 +32,8 @@ final readonly class GetCurrentAccount
             return null;
         }
 
-        $actor = Actor::user($account->id, $account->personId);
+        $actor = Actor::user($account->id, $account->personId, $secondFactorVerified ? AuthenticationMethod::SessionWithSecondFactor : AuthenticationMethod::Session);
 
-        return new CurrentAccount($actor, $account->email->value, $person->displayName, $this->capabilities->for($actor));
+        return new CurrentAccount($actor, $account->email->value, $person->displayName, $this->capabilities->for($actor), $this->mfa->for($account->id));
     }
 }

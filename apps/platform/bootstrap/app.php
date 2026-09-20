@@ -9,9 +9,13 @@ use App\Modules\Identity\Application\InvitationRejected;
 use App\Modules\Identity\Application\NoLongerAuthenticated;
 use App\Modules\Identity\Application\PasswordRejected;
 use App\Modules\Identity\Application\ResetRejected;
+use App\Modules\Identity\Application\SecondFactorRejected;
 use App\Modules\Identity\Application\TooManyAttempts;
 use App\Modules\Identity\Http\CredentialProblems;
 use App\Modules\Identity\Http\EnforceAbsoluteSessionLifetime;
+use App\Modules\Identity\Http\EnforceSecondFactorWhereDue;
+use App\Modules\Identity\Http\MfaProblems;
+use App\Modules\Identity\Http\RequireRecentSecurityVerification;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
@@ -46,7 +50,12 @@ return Application::configure(basePath: dirname(__DIR__))
             StartSession::class,
             PreventRequestForgery::class,
             EnforceAbsoluteSessionLifetime::class,
+            EnforceSecondFactorWhereDue::class,
         ]);
+
+        // The step-up seam (ADR 0023): `->middleware('security.verified')`, after `auth:web`. Modules use the
+        // alias, never the class, so a sensitive route in another module does not import Identity's Http.
+        $middleware->alias(['security.verified' => RequireRecentSecurityVerification::class]);
 
         // This is an API: an unauthenticated request gets a 401, never a redirect to a
         // login page. (Without this, `auth` looks up a `login` route that does not exist.)
@@ -57,13 +66,14 @@ return Application::configure(basePath: dirname(__DIR__))
         // things: an unauthenticated request would be refused before it is ever issued its
         // XSRF-TOKEN cookie (so the Console could never obtain a token before signing in),
         // and an expired session could authenticate. The order must be:
-        //   session -> CSRF -> absolute lifetime -> authentication
+        //   session -> CSRF -> absolute lifetime -> second factor due -> authentication
         // Each is inserted directly before authentication, CSRF first. The priority list
         // names the AuthenticatesRequests interface, not the Authenticate class, so that
         // is what to anchor on (anchoring on the class silently appends to the end).
         // A test pins the resulting order.
         $middleware->prependToPriorityList(before: AuthenticatesRequests::class, prepend: PreventRequestForgery::class);
         $middleware->prependToPriorityList(before: AuthenticatesRequests::class, prepend: EnforceAbsoluteSessionLifetime::class);
+        $middleware->prependToPriorityList(before: AuthenticatesRequests::class, prepend: EnforceSecondFactorWhereDue::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Access's Application layer may not use Laravel's HTTP or auth machinery, so it
@@ -75,6 +85,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (InvitationRejected $e) => CredentialProblems::invitationRejected());
         $exceptions->render(fn (ResetRejected $e) => CredentialProblems::resetRejected());
         $exceptions->render(fn (CurrentPasswordIncorrect $e) => CredentialProblems::currentPasswordIncorrect());
+        $exceptions->render(fn (SecondFactorRejected $e) => MfaProblems::rejected($e));
         $exceptions->render(fn (NoLongerAuthenticated $e) => response()->json(['message' => 'Unauthenticated.'], 401));
         $exceptions->render(fn (TooManyAttempts $e) => CredentialProblems::tooManyAttempts($e));
 

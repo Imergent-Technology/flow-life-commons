@@ -90,6 +90,36 @@ final class Console
         return $this->post(self::API.'/login', ['email' => $email, 'password' => $password], $headers);
     }
 
+    /**
+     * Finishes a sign-in whose password was proved: an authenticator code for `$secret` (a fresh one; the platform
+     * accepts each time step once), or a recovery code.
+     *
+     * @return TestResponse<Response>
+     */
+    public function challenge(string $secret): TestResponse
+    {
+        return $this->post(self::API.'/mfa/challenge', ['code' => Totp::next($secret)]);
+    }
+
+    /** @return TestResponse<Response> */
+    public function challengeWithRecoveryCode(string $code): TestResponse
+    {
+        return $this->post(self::API.'/mfa/challenge', ['recovery_code' => $code]);
+    }
+
+    /**
+     * Signs in as an Account that has an authenticator: password, then a code. Returns the challenge response
+     * (the one that establishes the session).
+     *
+     * @return TestResponse<Response>
+     */
+    public function loginWithMfa(string $email, string $password, string $secret = Totp::SECRET): TestResponse
+    {
+        $this->login($email, $password)->assertStatus(202)->assertJson(['next' => 'challenge']);
+
+        return $this->challenge($secret);
+    }
+
     /** @return TestResponse<Response> */
     public function logout(): TestResponse
     {

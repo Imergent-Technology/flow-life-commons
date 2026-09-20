@@ -30,6 +30,7 @@ final class Race
     /** Tables these tests commit into, children first. */
     private const array TABLES = [
         'security_events', 'sessions', 'password_reset_tokens', 'role_assignments',
+        'account_recovery_codes', 'account_totp_factors',
         'account_invitations', 'accounts', 'people',
     ];
 

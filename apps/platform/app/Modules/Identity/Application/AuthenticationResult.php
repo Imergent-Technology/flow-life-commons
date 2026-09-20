@@ -14,11 +14,18 @@ final readonly class AuthenticationResult
         public AuthenticationStatus $status,
         public ?CurrentAccount $account,
         public ?int $retryAfterSeconds,
+        public ?PendingLogin $pending = null,
     ) {}
 
     public static function authenticated(CurrentAccount $account): self
     {
         return new self(AuthenticationStatus::Authenticated, $account, null);
+    }
+
+    /** The password was proved; the sign-in is not complete, and nothing here is authentication. */
+    public static function secondFactorPending(PendingLogin $pending): self
+    {
+        return new self(AuthenticationStatus::SecondFactorPending, null, null, $pending);
     }
 
     public static function failed(): self

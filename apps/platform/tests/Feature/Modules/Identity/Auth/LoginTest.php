@@ -37,8 +37,10 @@ it('signs in an active account and returns identity and session information only
     // names are never exposed.
     $body = $response->json();
     assert(is_array($body));
-    expect(array_keys($body))->toBe(['account', 'person', 'capabilities', 'session'])
+    expect(array_keys($body))->toBe(['account', 'person', 'capabilities', 'session', 'mfa'])
         ->and($body['capabilities'])->toBe([])
+        // Nothing about the factor itself: only whether there is one (none, for this Account).
+        ->and($body['mfa'])->toBe(['enrolled' => false, 'recovery_codes_remaining' => 0, 'security_verified_until' => null])
         ->and($body)->not->toHaveKeys(['roles', 'permissions']);
 });
 

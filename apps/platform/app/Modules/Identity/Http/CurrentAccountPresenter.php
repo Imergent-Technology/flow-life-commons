@@ -16,9 +16,19 @@ use Carbon\CarbonImmutable;
  */
 final readonly class CurrentAccountPresenter
 {
-    /** @return array<string, array<string, string>|list<string>> */
-    public function present(CurrentAccount $current, CarbonImmutable $authenticatedAt, int $absoluteLifetimeMinutes): array
-    {
+    /**
+     * @param  CarbonImmutable|null  $securityVerifiedAt  when the session last proved password and a second factor
+     * @return array<string, array<string, mixed>|list<string>>
+     */
+    public function present(
+        CurrentAccount $current,
+        CarbonImmutable $authenticatedAt,
+        int $absoluteLifetimeMinutes,
+        ?CarbonImmutable $securityVerifiedAt = null,
+        int $verificationMinutes = 15,
+    ): array {
+        $verifiedUntil = $securityVerifiedAt?->addMinutes($verificationMinutes);
+
         return [
             'account' => [
                 'id' => $current->actor->accountId->value,
@@ -32,6 +42,12 @@ final readonly class CurrentAccountPresenter
             'session' => [
                 'authenticated_at' => $authenticatedAt->toIso8601ZuluString(),
                 'absolute_expires_at' => $authenticatedAt->addMinutes($absoluteLifetimeMinutes)->toIso8601ZuluString(),
+            ],
+            // Presentation only, and nothing about the factor itself: never a secret, a code or a digest.
+            'mfa' => [
+                'enrolled' => $current->mfa->enrolled,
+                'recovery_codes_remaining' => $current->mfa->recoveryCodesRemaining,
+                'security_verified_until' => $verifiedUntil !== null && $verifiedUntil->isFuture() ? $verifiedUntil->toIso8601ZuluString() : null,
             ],
         ];
     }

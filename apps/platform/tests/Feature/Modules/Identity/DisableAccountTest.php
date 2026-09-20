@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\Event;
 use Tests\Support\Access;
 use Tests\Support\Console;
 use Tests\Support\Identity;
+use Tests\Support\Mfa;
 
 function disableAccount(): DisableAccount
 {
@@ -58,7 +59,8 @@ it('keeps the person, the role assignments and the history: disabling is not del
     $account = Identity::savedActiveAccount('target@example.org', name: 'Target');
     Access::grant($account, Role::Guardian);
     Identity::savedInvitation($account);
-    (new Console)->login('target@example.org', Identity::PASSWORD)->assertOk();
+    Mfa::enroll($account);
+    (new Console)->loginWithMfa('target@example.org', Identity::PASSWORD)->assertOk();
 
     disableAccount()($account->id, Access::actorFor($admin));
 

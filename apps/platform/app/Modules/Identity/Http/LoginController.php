@@ -36,6 +36,18 @@ final readonly class LoginController
                 ->header('Retry-After', (string) $result->retryAfterSeconds);
         }
 
+        if ($result->status === AuthenticationStatus::SecondFactorPending && $result->pending !== null) {
+            // The password was right, but this Account needs a second factor: NOT signed in. The pending
+            // sign-in is all that is held (no guard login), and the answer says what comes next, which the
+            // caller has earned by proving the password. It is `202`, not `200`: nothing is established.
+            $session->holdPending($request, $result->pending);
+
+            return response()->json([
+                'next' => $result->pending->need->value,
+                'expires_at' => $session->pendingExpiresAt($request)?->toIso8601ZuluString(),
+            ], 202);
+        }
+
         if ($result->status === AuthenticationStatus::Failed || $result->account === null) {
             // One response for unknown address, wrong password, invited and disabled alike.
             return response()->json(['message' => 'The provided credentials are incorrect.'], 401);
@@ -50,6 +62,8 @@ final readonly class LoginController
             $result->account,
             $authenticatedAt,
             $config->integer('identity.session.absolute_lifetime_minutes'),
+            $session->securityVerifiedAt($request),
+            $config->integer('identity.mfa.security_verification_max_age_minutes'),
         ));
     }
 }

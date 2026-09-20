@@ -9,27 +9,39 @@ use App\Modules\Identity\Application\AccountSessions;
 use App\Modules\Identity\Application\ActiveAccountQuery;
 use App\Modules\Identity\Application\AttemptThrottle;
 use App\Modules\Identity\Application\CompromisedPasswords;
+use App\Modules\Identity\Application\CredentialMarker;
 use App\Modules\Identity\Application\DisableAccount;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 use App\Modules\Identity\Application\LoginThrottle;
+use App\Modules\Identity\Application\MultiFactorPolicy;
 use App\Modules\Identity\Application\PasswordResetNotifier;
 use App\Modules\Identity\Application\PasswordResetTokens;
+use App\Modules\Identity\Application\TotpAuthenticator;
+use App\Modules\Identity\Application\TotpSecretCipher;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\PersonRepository;
+use App\Modules\Identity\Domain\RecoveryCodeRepository;
+use App\Modules\Identity\Domain\TotpFactorRepository;
 use App\Modules\Identity\Infrastructure\Auth\AccountResetTokenRepository;
 use App\Modules\Identity\Infrastructure\Auth\AccountUserProvider;
 use App\Modules\Identity\Infrastructure\Auth\CacheAttemptThrottle;
 use App\Modules\Identity\Infrastructure\Auth\CacheLoginThrottle;
 use App\Modules\Identity\Infrastructure\Auth\LaravelPasswordResetTokens;
 use App\Modules\Identity\Infrastructure\Mail\MailPasswordResetNotifier;
+use App\Modules\Identity\Infrastructure\Mfa\AlwaysRequireMultiFactor;
+use App\Modules\Identity\Infrastructure\Mfa\HmacCredentialMarker;
+use App\Modules\Identity\Infrastructure\Mfa\LaravelTotpSecretCipher;
+use App\Modules\Identity\Infrastructure\Mfa\OtphpTotpAuthenticator;
 use App\Modules\Identity\Infrastructure\Password\NoCompromisedPasswordCheck;
 use App\Modules\Identity\Infrastructure\Password\PwnedPasswordsRange;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountSessions;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseActiveAccountQuery;
+use App\Modules\Identity\Infrastructure\Persistence\DatabaseRecoveryCodeRepository;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountInvitationRepository;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountRepository;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentPersonRepository;
+use App\Modules\Identity\Infrastructure\Persistence\EloquentTotpFactorRepository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Hashing\Hasher;
 use Illuminate\Database\ConnectionInterface;
@@ -55,6 +67,13 @@ final class IdentityServiceProvider extends ServiceProvider
         AccountSessions::class => DatabaseAccountSessions::class,
         // A default that grants nothing. The Access module registers its own over this.
         EffectiveCapabilities::class => NoEffectiveCapabilities::class,
+        // Multi-factor authentication (ADR 0023). The policy default FAILS CLOSED (everyone is asked for a
+        // second factor); Access registers the real one over it.
+        MultiFactorPolicy::class => AlwaysRequireMultiFactor::class,
+        TotpFactorRepository::class => EloquentTotpFactorRepository::class,
+        RecoveryCodeRepository::class => DatabaseRecoveryCodeRepository::class,
+        TotpSecretCipher::class => LaravelTotpSecretCipher::class,
+        CredentialMarker::class => HmacCredentialMarker::class,
     ];
 
     public function register(): void
@@ -82,6 +101,10 @@ final class IdentityServiceProvider extends ServiceProvider
                 $expiresInSeconds,
             );
         });
+
+        $this->app->bind(TotpAuthenticator::class, fn (Application $app): TotpAuthenticator => new OtphpTotpAuthenticator(
+            $app->make('config')->string('identity.mfa.issuer'),
+        ));
 
         $this->app->bind(CompromisedPasswords::class, function (Application $app): CompromisedPasswords {
             $driver = $app->make('config')->get('identity.password.compromised_check.driver');

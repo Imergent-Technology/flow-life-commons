@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Event;
 use Tests\Support\Access;
 use Tests\Support\Console;
 use Tests\Support\Identity;
+use Tests\Support\Mfa;
 
 /*
  * The last-administrator invariant on the ACCOUNT path (ADR 0020): the same authority as the role
@@ -38,7 +39,8 @@ function stillActive(Account $account): bool
 it('refuses to disable the Account of the last active administrator', function () {
     $only = Access::admin('only@example.org');
     $console = new Console;
-    $console->login('only@example.org', Identity::PASSWORD)->assertOk();
+    Mfa::enroll($only);
+    $console->loginWithMfa('only@example.org', Identity::PASSWORD)->assertOk();
 
     expect(fn () => disable($only))->toThrow(AccountDeactivationRefused::class, 'The platform must keep at least one active administrator.');
 

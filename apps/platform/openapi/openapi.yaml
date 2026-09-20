@@ -16,7 +16,9 @@ info:
     **Implemented so far:** infrastructure health, Guardian Console session
     authentication (`login`, `logout`, `me`), capability-based authorization
     (see below), and the credential lifecycle (invitation acceptance, password
-    recovery and password change). No endpoint changes role assignments yet.
+    recovery and password change), and multi-factor authentication (authenticator
+    enrolment, the sign-in challenge, recovery codes and recent-verification
+    step-up). No endpoint changes role assignments yet.
 
 
     ## Authorization
@@ -63,6 +65,55 @@ info:
 
 
     Stateless endpoints (such as `/health`) receive no cookie and need no token.
+
+
+    ## Multi-factor authentication
+
+
+    Access to the Guardian Console requires a **second factor** (ADR 0023). It is a property
+    of the *surface*, not of a role: an account whose current access reaches the Console must
+    sign in with a second factor, and an account that has an authenticator always uses it.
+    Authorization is unchanged; this is authentication strength.
+
+
+    - **Sign-in is two steps when a second factor is due.** `POST /login` with the right
+      password answers **`202`** instead of `200`, and **establishes no session**: it starts a
+      short-lived *pending sign-in* (5 minutes to challenge, 10 to enrol, measured from the
+      password and never extended) held in the browser session. A pending sign-in is not
+      authentication: `GET /me` answers `401`, and no authorization applies. It ends on success,
+      after 5 wrong codes, when the password is replaced or the account disabled, or on expiry.
+      A wrong password answers exactly as before, so nothing about whether an account has a
+      second factor is revealed to someone who does not know the password.
+
+    - **Finishing:** `POST /mfa/challenge` (an authenticator `code`, or one `recovery_code`), or,
+      for an account with no authenticator yet, `POST /mfa/enrollment` then
+      `POST /mfa/enrollment/confirm`. Only success establishes the authenticated session (a new
+      session id and CSRF token, the same 30-minute inactivity and 12-hour absolute limits). The
+      first three routes need the cookie and CSRF token like every stateful route, but not
+      `sessionCookie` authentication: what they need is the pending sign-in.
+
+    - **Authenticator.** Standard TOTP (RFC 6238: 6 digits, 30-second step, HMAC-SHA1), which every
+      authenticator app supports. Codes from the current step and one either side are accepted, and
+      each time step **once**. The secret is generated on the server, shown **once** (as a manual key
+      and as an `otpauth://` URI to be drawn as a QR code *in the browser*, never sent to a QR
+      service), and stored only encrypted. It cannot be read back. Nothing is enrolled by generating
+      a secret: only a valid code from it makes the authenticator real, and until then the account
+      is exactly as it was.
+
+    - **Recovery codes.** Ten single-use codes, returned **once** when an authenticator is enrolled
+      or when the codes are regenerated. They are stored only as one-way digests and cannot be
+      shown again. A code stands in for the authenticator code at sign-in and wherever a second
+      factor is asked for, and is spent exactly once.
+
+    - **Managing it needs fresh proof.** Regenerating recovery codes and replacing the authenticator
+      take the **current password and a second factor in the request body**; a session alone never
+      changes or exposes a credential. There is no self-service way to switch MFA off.
+
+    - **Recent verification (step-up).** A successful password-and-second-factor proof records
+      `security_verified_at` on the session (`GET /me` reports `mfa.security_verified_until`).
+      A route that demands it answers `403` with `verification_required: true` when the last
+      proof is older than 15 minutes, and the caller re-proves with `POST /security/verify`.
+      No route requires it yet; it is the seam for the administration that follows.
 
 
     ## Passwords
@@ -167,6 +218,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ValidationError'
+        '202':
+          description: >-
+            The password was right but a **second factor is required**, so the caller is **not**
+            signed in and no session was established. A pending sign-in was started (see
+            "Multi-factor authentication"); `next` says whether to challenge (`challenge`: the
+            account has an authenticator) or enrol one (`enrollment`). Only someone who proved the
+            password is told this.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingSignIn'
         '429':
           description: Too many attempts from this address or against this identifier. Identical whether or not the identifier exists.
           headers:
@@ -533,6 +595,389 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+  /mfa/challenge:
+    post:
+      operationId: completeMfaChallenge
+      summary: Finish a sign-in with a second factor
+      description: >-
+        Finishes a sign-in whose password was proved (`POST /login` answered `202` with
+        `next: challenge`). Present **either** an authenticator `code` **or** one `recovery_code`.
+        On success the authenticated session is established (a new session id and CSRF token), the
+        response is the same as a password-only sign-in, and `mfa.security_verified_until` shows the
+        session as freshly verified.
+
+
+        Everything is decided from **current** state, first and under a lock: the account must still
+        be able to sign in, and the password that was proved must still be the stored one, so an
+        account disabled, or a password replaced, after the password was accepted **cannot** finish.
+        A recovery code is spent exactly once: of two simultaneous uses at most one succeeds. An
+        authenticator code is accepted once per time step.
+
+
+        A wrong code is `422` and counts toward ending the pending sign-in (5 wrong codes). Every
+        other reason it cannot continue (nothing pending, expired, ended, account no longer able to
+        sign in, password replaced) is the **same** `401`, so the answer reveals nothing about the
+        account. Rate limited per account and per source address.
+      tags: [Authentication]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecondFactorRequest'
+      responses:
+        '200':
+          description: Signed in. Sets a new `__Host-flowlife-session` and `XSRF-TOKEN`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentAccount'
+        '401':
+          description: There is no usable pending sign-in. Sign in again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: The code is not valid (`errors.code` or `errors.recovery_code`), or the request is malformed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts for this account or from this address.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /mfa/enrollment:
+    post:
+      operationId: beginMfaEnrollment
+      summary: Get an authenticator secret to enrol (pending sign-in)
+      description: >-
+        For a pending sign-in with `next: enrollment` (a second factor is required and the account has
+        none). Generates a secret and returns it **once**, as a manual `secret` and an `otpauth_uri`
+        to be rendered as a QR code in the browser. It is stored only encrypted, as **pending**:
+        **nothing is enrolled** by asking, and it cannot be used to sign in. Asking again replaces
+        the earlier pending secret, so an abandoned attempt strands no one. Not cacheable.
+      tags: [Authentication]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The secret and provisioning URI. Shown once; never available again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticatorSetup'
+        '401':
+          description: There is no usable pending enrolment. Sign in again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /mfa/enrollment/confirm:
+    post:
+      operationId: confirmMfaEnrollment
+      summary: Prove the authenticator, enrol it, and finish signing in
+      description: >-
+        Proves possession of the secret from `POST /mfa/enrollment` with a valid **current** code from
+        it. Only this makes the authenticator real. On success, in one transaction: the authenticator
+        is enrolled, ten recovery codes are stored (as digests) and returned **once**, `mfa.enabled`
+        and the sign-in are recorded, and the authenticated session is established (a new session id
+        and CSRF token). A wrong code changes nothing and the pending secret stays for another try.
+        As with the challenge, the account and the password proved are re-checked from current state
+        first. Not cacheable; the recovery codes are shown once.
+      tags: [Authentication]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeRequest'
+      responses:
+        '200':
+          description: Enrolled and signed in. Sets a new `__Host-flowlife-session` and `XSRF-TOKEN`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodes'
+        '401':
+          description: There is no usable pending enrolment. Sign in again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: The code is not valid (`errors.code`), or the request is malformed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts for this account or from this address.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /mfa/recovery-codes:
+    post:
+      operationId: regenerateRecoveryCodes
+      summary: Replace the recovery codes
+      description: >-
+        Replaces the signed-in account's recovery codes with a new set, returned **once**. Fresh proof
+        is required in the body: the **current password and a second factor** (`code` or
+        `recovery_code`); a session alone is never enough. Every earlier code, used or not, stops
+        working in the same transaction. On success the session is rotated (new id and CSRF token)
+        and recorded as freshly verified. Rate limited per account and per source address, so a
+        stolen session cannot be used to guess the password or a code.
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecurityProofRequest'
+      responses:
+        '200':
+          description: The new recovery codes. Shown once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryCodes'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: Nothing was changed. `errors.current_password`, `errors.code` or `errors.recovery_code`, or a malformed request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts for this account or from this address.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /mfa/authenticator:
+    post:
+      operationId: beginAuthenticatorReplacement
+      summary: Start replacing the authenticator
+      description: >-
+        Starts replacing the signed-in account's authenticator (a new phone, say). Fresh proof in the
+        body: the **current password and a second factor**. Returns a **new** secret and provisioning
+        URI **once**, as *pending*: the authenticator in use **keeps working** until the new one is
+        proved with `POST /mfa/authenticator/confirm`, so an abandoned or failed replacement cannot
+        strand the account. Asking again replaces the pending secret. On success the session is
+        rotated and recorded as freshly verified. Not cacheable.
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecurityProofRequest'
+      responses:
+        '200':
+          description: The new secret and provisioning URI. Shown once; the old authenticator still works.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticatorSetup'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: Nothing was changed. `errors.current_password`, `errors.code` or `errors.recovery_code`, or a malformed request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts for this account or from this address.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /mfa/authenticator/confirm:
+    post:
+      operationId: confirmAuthenticatorReplacement
+      summary: Prove the new authenticator and switch to it
+      description: >-
+        Proves the **new** authenticator with a valid current code from the secret that
+        `POST /mfa/authenticator` generated. Only now does it replace the old one, which **stops
+        working from this instant**. In one transaction, the account's **other** sessions end (a
+        credential was replaced) and `mfa.replaced` is recorded; this session is rotated. Recovery
+        codes are untouched. No password is asked here: the fresh proof was given when the
+        replacement began. A wrong code, or no setup in progress, changes nothing.
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CodeRequest'
+      responses:
+        '204':
+          description: The new authenticator is active; every other session of the account ended. Sets a new `__Host-flowlife-session` and `XSRF-TOKEN`.
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: Nothing was changed. `errors.code` for a wrong code, or `errors.authenticator` when no replacement is in progress (or it went stale).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts for this account or from this address.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /security/verify:
+    post:
+      operationId: verifySecurityAccess
+      summary: Re-prove the password and a second factor (step-up)
+      description: >-
+        Step-up. The signed-in account re-proves the **current password and a second factor**, and the
+        session records `security_verified_at` (the session id and CSRF token are rotated). A route
+        behind the step-up requirement (`403` with `verification_required: true`) then accepts the
+        caller for the next 15 minutes. It changes nothing else: not the session's authentication
+        time, not the account. Rate limited per account and per source address.
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecurityProofRequest'
+      responses:
+        '204':
+          description: Verified. Sets a new `__Host-flowlife-session` and `XSRF-TOKEN`; `GET /me` shows `mfa.security_verified_until`.
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: Nothing was changed. `errors.current_password`, `errors.code` or `errors.recovery_code`, or a malformed request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts for this account or from this address.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
 components:
   securitySchemes:
     sessionCookie:
@@ -679,9 +1124,99 @@ components:
           format: password
           writeOnly: true
           description: Must equal `password` once both are normalised. Secret.
+    PendingSignIn:
+      type: object
+      description: A sign-in whose password was proved and which is waiting for a second factor. Not authentication.
+      required: [next, expires_at]
+      properties:
+        next:
+          type: string
+          enum: [challenge, enrollment]
+          description: >-
+            `challenge`: the account has an authenticator, so present a code (`POST /mfa/challenge`).
+            `enrollment`: a second factor is required and the account has none, so enrol one
+            (`POST /mfa/enrollment`).
+        expires_at:
+          type: string
+          format: date-time
+          description: When this pending sign-in ends, whatever happens. Measured from the password; never extended.
+    SecondFactorRequest:
+      type: object
+      description: Exactly one of `code` and `recovery_code`.
+      properties:
+        code:
+          type: string
+          maxLength: 32
+          writeOnly: true
+          description: A 6-digit code from the authenticator app (spaces are ignored). Secret.
+        recovery_code:
+          type: string
+          maxLength: 64
+          writeOnly: true
+          description: One of the account's single-use recovery codes (case, hyphens and spaces are ignored). Secret.
+    CodeRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          maxLength: 32
+          writeOnly: true
+          description: A 6-digit code from the authenticator app (spaces are ignored). Secret.
+    SecurityProofRequest:
+      type: object
+      description: Fresh proof. The current password and exactly one of `code` and `recovery_code`.
+      required: [current_password]
+      properties:
+        current_password:
+          type: string
+          maxLength: 1024
+          format: password
+          writeOnly: true
+          description: The account's current password, re-proved. Secret.
+        code:
+          type: string
+          maxLength: 32
+          writeOnly: true
+          description: A 6-digit code from the authenticator app (spaces are ignored). Secret.
+        recovery_code:
+          type: string
+          maxLength: 64
+          writeOnly: true
+          description: One of the account's single-use recovery codes. Secret.
+    AuthenticatorSetup:
+      type: object
+      description: >-
+        What is needed to add an authenticator. Shown **once**, and never retrievable again: the server
+        keeps only the encrypted secret. Secret.
+      required: [secret, otpauth_uri]
+      properties:
+        secret:
+          type: string
+          readOnly: true
+          description: The base32 secret, for typing into an authenticator app by hand.
+        otpauth_uri:
+          type: string
+          readOnly: true
+          description: The `otpauth://` provisioning URI. Render it as a QR code **in the browser**; never send it to a QR-code service. Contains the secret.
+        expires_at:
+          type: string
+          format: date-time
+          description: For a sign-in enrolment, when the pending sign-in ends.
+    RecoveryCodes:
+      type: object
+      description: New recovery codes, shown **once** and stored only as digests. Secret.
+      required: [recovery_codes]
+      properties:
+        recovery_codes:
+          type: array
+          readOnly: true
+          items:
+            type: string
+          description: Ten single-use codes, grouped for reading (`ABCD-EFGH-JKMN-PQRS`).
     CurrentAccount:
       type: object
-      required: [account, person, capabilities, session]
+      required: [account, person, capabilities, session, mfa]
       properties:
         account:
           type: object
@@ -714,6 +1249,26 @@ components:
           items:
             type: string
             examples: [console.access]
+        mfa:
+          type: object
+          description: >-
+            Presentation only, and nothing about the factor itself (never a secret, a code or a digest).
+          required: [enrolled, recovery_codes_remaining, security_verified_until]
+          properties:
+            enrolled:
+              type: boolean
+              description: Whether the account has a proved authenticator.
+            recovery_codes_remaining:
+              type: integer
+              description: How many recovery codes are unused (0 when not enrolled).
+            security_verified_until:
+              type:
+                - string
+                - 'null'
+              format: date-time
+              description: >-
+                When this session's recent security verification lapses, or null if it has none or it
+                has lapsed. (Whether a route needs it is decided by the server.)
         session:
           type: object
           required: [authenticated_at, absolute_expires_at]

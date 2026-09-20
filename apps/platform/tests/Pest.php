@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Support\Totp;
 use Tests\TestCase;
 
 // Feature tests boot the application and run against the real test database
@@ -19,3 +20,6 @@ pest()->extend(TestCase::class)->in('Concurrency');
 // Live tests reach a REAL external service, so they are in no test suite (phpunit.xml) and never run
 // as part of ./flow test, ./flow check, CI or e2e. See tests/Live.
 pest()->extend(TestCase::class)->in('Live');
+
+// The TOTP test double remembers which time steps it has handed out (the platform accepts each once).
+pest()->beforeEach(fn () => Totp::forget())->in('Feature', 'Concurrency');

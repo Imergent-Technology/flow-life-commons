@@ -25,6 +25,9 @@ use LogicException;
  * - A password check runs on EVERY path, against a throwaway hash when there is no
  *   eligible Account, so response time does not reveal whether the address exists. The password
  *   is normalised by the same PlainPassword boundary as when it was set.
+ * - When the Account needs a second factor (ADR 0023) a correct password is NOT a sign-in: no session, no
+ *   `last_login_at`, no success event. The result carries a PendingLogin, which CompleteSecondFactor (or the
+ *   enrolment use cases) finish from current state.
  * - The success event and the `last_login_at` update share one transaction (ADR 0019).
  *   Failures are not thrown from inside a transaction, so their events are kept.
  * - The plain password is used once and never stored, logged or recorded.
@@ -39,6 +42,9 @@ final class AuthenticateAccount
         private readonly PasswordHasher $passwords,
         private readonly ConnectionInterface $database,
         private readonly EffectiveCapabilities $capabilities,
+        private readonly SecondFactorRequirement $secondFactor,
+        private readonly CredentialMarker $marker,
+        private readonly MfaStatuses $mfa,
     ) {}
 
     public function __invoke(EmailAddress $email, string $password, ClientContext $client): AuthenticationResult
@@ -69,7 +75,7 @@ final class AuthenticateAccount
             return AuthenticationResult::failed();
         }
 
-        $current = $this->database->transaction(fn (): CurrentAccount|FailureReason => $this->signIn($eligible, $client));
+        $current = $this->database->transaction(fn (): CurrentAccount|PendingLogin|FailureReason => $this->signIn($eligible, $client));
         if ($current instanceof FailureReason) {
             // The Account changed between the read above and the lock below.
             $this->throttle->recordFailure($email);
@@ -79,9 +85,16 @@ final class AuthenticateAccount
         }
         $this->throttle->clearFailures($email);
 
+        if ($current instanceof PendingLogin) {
+            // The password is right, but this Account needs a second factor: NO sign-in is recorded and
+            // no session is established. What is returned is the minimum to finish the sign-in.
+            return AuthenticationResult::secondFactorPending($current);
+        }
+
         // Read after the sign-in commits, from current state; never stored in the session.
         return AuthenticationResult::authenticated(new CurrentAccount(
             $current->actor, $current->email, $current->displayName, $this->capabilities->for($current->actor),
+            $this->mfa->for($current->actor->accountId),
         ));
     }
 
@@ -97,7 +110,7 @@ final class AuthenticateAccount
      * proves nothing about the hash now stored: if a reset or change committed in between, the
      * caller proved a password that has since been replaced, and must not be signed in with it.
      */
-    private function signIn(Account $verified, ClientContext $client): CurrentAccount|FailureReason
+    private function signIn(Account $verified, ClientContext $client): CurrentAccount|PendingLogin|FailureReason
     {
         $account = $this->accounts->findForUpdate($verified->id);
         if ($account === null || ! $account->canAuthenticate()) {
@@ -105,6 +118,14 @@ final class AuthenticateAccount
         }
         if ($account->passwordHash !== $verified->passwordHash) {
             return FailureReason::WrongPassword;
+        }
+
+        // A second factor is due (the policy is Access's, through a port; an authenticator that exists is
+        // always used). Then this is not a sign-in yet: it becomes a pending one, bound to the credential
+        // that was just verified, and nothing is recorded until the second factor completes it.
+        $need = $this->secondFactor->for($account);
+        if ($need !== SecondFactorNeed::None) {
+            return new PendingLogin($account->id, $this->marker->for($account), $need);
         }
 
         $person = $this->people->find($account->personId)

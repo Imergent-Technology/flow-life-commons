@@ -16,6 +16,9 @@ declare(strict_types=1);
  *   php worker.php reset   '{"email":"...","token":"...","password":"..."}'
  *   php worker.php request_reset '{"email":"..."}'
  *   php worker.php change  '{"account":"...","person":"...","current":"...","password":"..."}'
+ *   php worker.php mfa_complete '{"account":"...","marker":"...","need":"challenge","code":"..."}'  (or "recovery_code")
+ *   php worker.php mfa_confirm_enrollment '{"account":"...","marker":"...","code":"..."}'
+ *   php worker.php consume_code '{"account":"...","digest":"..."}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
  * the operation succeeded, 2 when it was refused or failed. It refuses to run against any
@@ -29,12 +32,18 @@ use App\Modules\Identity\Application\AuthenticateAccount;
 use App\Modules\Identity\Application\AuthenticationStatus;
 use App\Modules\Identity\Application\ChangePassword;
 use App\Modules\Identity\Application\ClientContext;
+use App\Modules\Identity\Application\CompleteSecondFactor;
+use App\Modules\Identity\Application\ConfirmTotpEnrollment;
 use App\Modules\Identity\Application\DisableAccount;
+use App\Modules\Identity\Application\PendingLogin;
 use App\Modules\Identity\Application\RequestPasswordReset;
 use App\Modules\Identity\Application\ResetPassword;
+use App\Modules\Identity\Application\SecondFactorNeed;
+use App\Modules\Identity\Application\SecondFactorProof;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\InvitationToken;
+use App\Modules\Identity\Domain\RecoveryCodeRepository;
 use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
@@ -93,6 +102,31 @@ try {
         );
     } elseif ($operation === 'request_reset') {
         $app->make(RequestPasswordReset::class)(EmailAddress::fromString($arg('email')), new ClientContext('127.0.0.1', 'worker'));
+    } elseif ($operation === 'mfa_complete') {
+        $proof = isset($decoded['recovery_code']) ? SecondFactorProof::recoveryCode($arg('recovery_code')) : SecondFactorProof::totp($arg('code'));
+        $outcome = $app->make(CompleteSecondFactor::class)(
+            new PendingLogin(AccountId::fromString($arg('account')), $arg('marker'), SecondFactorNeed::from($arg('need'))),
+            $proof, new ClientContext('127.0.0.1', 'worker'),
+        );
+        if (! $outcome->succeeded()) {
+            throw new RuntimeException('the second factor was refused: '.($outcome->failure->value ?? '?'));
+        }
+    } elseif ($operation === 'mfa_confirm_enrollment') {
+        $outcome = $app->make(ConfirmTotpEnrollment::class)(
+            new PendingLogin(AccountId::fromString($arg('account')), $arg('marker'), SecondFactorNeed::Enrollment),
+            SecondFactorProof::totp($arg('code')), new ClientContext('127.0.0.1', 'worker'),
+        );
+        if (! $outcome->succeeded()) {
+            throw new RuntimeException('the enrolment was refused: '.($outcome->failure->value ?? '?'));
+        }
+    } elseif ($operation === 'consume_code') {
+        // Just the conditional update, with NO Account lock: it must be atomic on its own.
+        $consumed = DB::transaction(fn (): bool => $app->make(RecoveryCodeRepository::class)->consume(
+            AccountId::fromString($arg('account')), $arg('digest'), new DateTimeImmutable('now'),
+        ));
+        if (! $consumed) {
+            throw new RuntimeException('the code was already spent');
+        }
     } elseif ($operation === 'lock_invitation') {
         // Just takes and releases the invitation row lock: it finishes only once it has been granted.
         DB::transaction(fn () => $app->make(AccountInvitationRepository::class)->findByTokenForUpdate(InvitationToken::fromPresented($arg('token'))));

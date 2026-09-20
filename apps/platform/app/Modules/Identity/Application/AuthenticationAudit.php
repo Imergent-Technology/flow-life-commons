@@ -24,12 +24,18 @@ final readonly class AuthenticationAudit
 {
     public function __construct(private RecordSecurityEvent $record) {}
 
-    public function succeeded(Actor $actor, ClientContext $client): void
+    /** @param  SecondFactorMethod|null  $secondFactor  what followed the password, if anything did */
+    public function succeeded(Actor $actor, ClientContext $client, ?SecondFactorMethod $secondFactor = null): void
     {
+        $context = ['method' => 'password'];
+        if ($secondFactor !== null) {
+            $context['second_factor'] = $secondFactor->value;
+        }
+
         ($this->record)(
             IdentityEvent::AuthenticationSucceeded->value, SecurityEventOutcome::Success,
             $actor, $actor->personId, $actor->accountId, $client->ip, $client->userAgent,
-            ['method' => 'password'],
+            $context,
         );
     }
 

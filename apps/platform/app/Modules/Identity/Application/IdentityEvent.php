@@ -23,4 +23,11 @@ enum IdentityEvent: string
     case PasswordResetCompleted = 'password.reset_completed';
     case PasswordResetFailed = 'password.reset_failed';
     case PasswordChanged = 'password.changed';
+    case MfaEnabled = 'mfa.enabled';
+    case MfaChallengeFailed = 'mfa.challenge_failed';
+    case MfaRecoveryCodeUsed = 'mfa.recovery_code_used';
+    case MfaRecoveryCodesRegenerated = 'mfa.recovery_codes_regenerated';
+    case MfaReplaced = 'mfa.replaced';
+    case SecurityReverified = 'security.reverified';
+    case SessionSecondFactorRequired = 'session.second_factor_required';
 }

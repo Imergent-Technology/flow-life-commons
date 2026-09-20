@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\Route;
 use Tests\Support\Access;
 use Tests\Support\Console;
 use Tests\Support\Identity;
+use Tests\Support\Mfa;
 
 beforeEach(function () {
     Carbon::setTestNow('2026-09-19 12:00:00');
@@ -44,14 +45,21 @@ beforeEach(function () {
 /**
  * @return array{Console, Account}
  */
-function signedInAs(?Role $role = null): array
+function signedInAs(?Role $role = null, bool $enrolled = false): array
 {
     $account = Identity::savedActiveAccount();
     if ($role !== null) {
         Access::grant($account, $role);
     }
     $console = new Console;
-    $console->login('ada@example.org', Identity::PASSWORD)->assertOk();
+    // Access to the Console needs a second factor (ADR 0023), so an Account that holds a role is enrolled
+    // and signs in with it. `$enrolled` lets a test enrol an Account that holds no role YET.
+    if ($role !== null || $enrolled) {
+        Mfa::enroll($account);
+        $console->loginWithMfa('ada@example.org', Identity::PASSWORD)->assertOk();
+    } else {
+        $console->login('ada@example.org', Identity::PASSWORD)->assertOk();
+    }
 
     return [$console, $account];
 }
@@ -93,7 +101,8 @@ it('takes a revoked role away on the next request, without signing in again', fu
 });
 
 it('gives a newly granted role on the next request, without signing in again', function () {
-    [$console, $account] = signedInAs();
+    // Signed in WITH a second factor, so the session already satisfies what the role will require.
+    [$console, $account] = signedInAs(enrolled: true);
     $console->get('/api/v1/zz/console')->assertForbidden();
 
     Access::grant($account, Role::Guardian);

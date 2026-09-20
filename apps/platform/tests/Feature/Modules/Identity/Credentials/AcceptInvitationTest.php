@@ -148,9 +148,11 @@ it('activates an ADMINISTRATOR BOOTSTRAP invitation but leaves the email unverif
 
     // ...the person then signs in through the ordinary login, which is what establishes one. An
     // unverified email does not block that: no policy makes verification a condition of signing in.
+    // The bootstrap administrator holds Console access, so the password is not enough (ADR 0023): the
+    // correct password leads to enrolment, and NO session exists until an authenticator is proved.
     $console = new Console;
-    $console->login('root@example.org', Passwords::STRONG)->assertOk();
-    expect(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(1)
+    $console->login('root@example.org', Passwords::STRONG)->assertStatus(202)->assertJson(['next' => 'enrollment']);
+    expect(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(0)
         ->and(DB::table('accounts')->where('id', $accountId)->value('email_verified_at'))->toBeNull();
 });
 

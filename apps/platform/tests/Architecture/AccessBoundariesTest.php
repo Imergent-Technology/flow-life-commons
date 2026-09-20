@@ -78,6 +78,9 @@ arch('EffectiveCapabilities stays a presentation port: only /me and login read i
     expect(EffectiveCapabilities::class)->toOnlyBeUsedIn([
         'App\\Modules\\Identity\\Application\\GetCurrentAccount',
         'App\\Modules\\Identity\\Application\\AuthenticateAccount',
+        // Sign-in completes here once the second factor is proved (ADR 0023), and reports the same projection.
+        'App\\Modules\\Identity\\Application\\CompleteSecondFactor',
+        'App\\Modules\\Identity\\Application\\ConfirmTotpEnrollment',
         'App\\Modules\\Identity\\Infrastructure\\NoEffectiveCapabilities',
         'App\\Modules\\Identity\\Infrastructure\\IdentityServiceProvider',
         'App\\Modules\\Access\\Application\\AuthorizerEffectiveCapabilities',

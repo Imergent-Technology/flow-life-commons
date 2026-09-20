@@ -26,8 +26,8 @@ final readonly class Actor
     ) {}
 
     /** A signed-in human, via their Console session. */
-    public static function user(AccountId $accountId, PersonId $personId): self
+    public static function user(AccountId $accountId, PersonId $personId, AuthenticationMethod $via = AuthenticationMethod::Session): self
     {
-        return new self($accountId, $personId, AuthenticationMethod::Session);
+        return new self($accountId, $personId, $via);
     }
 }

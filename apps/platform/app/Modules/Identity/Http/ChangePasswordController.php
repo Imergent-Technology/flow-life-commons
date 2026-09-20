@@ -7,13 +7,7 @@ namespace App\Modules\Identity\Http;
 use App\Modules\Identity\Application\ChangePassword;
 use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\NoLongerAuthenticated;
-use App\Modules\Identity\Application\ResolveActor;
-use App\Shared\Domain\AccountId;
-use App\Shared\Domain\Actor;
-use Illuminate\Contracts\Auth\Authenticatable;
-use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use InvalidArgumentException;
 
 /**
  * Changes the signed-in account's password. On the session surface: cookie, CSRF, absolute lifetime
@@ -29,10 +23,10 @@ final readonly class ChangePasswordController
     public function __invoke(
         ChangePasswordRequest $request,
         ChangePassword $change,
-        ResolveActor $resolveActor,
+        ConsoleActor $actors,
         ConsoleSession $session,
     ): Response {
-        $actor = $this->actor($request, $resolveActor) ?? throw new NoLongerAuthenticated;
+        $actor = $actors->for($request) ?? throw new NoLongerAuthenticated;
 
         $change(
             $actor, $request->currentPassword(), $request->password(),
@@ -41,17 +35,5 @@ final readonly class ChangePasswordController
         $session->reauthenticate($request);
 
         return response()->noContent();
-    }
-
-    private function actor(Request $request, ResolveActor $resolveActor): ?Actor
-    {
-        $user = $request->user();
-        $identifier = $user instanceof Authenticatable ? $user->getAuthIdentifier() : null;
-
-        try {
-            return is_string($identifier) ? $resolveActor(AccountId::fromString($identifier)) : null;
-        } catch (InvalidArgumentException) {
-            return null;
-        }
     }
 }

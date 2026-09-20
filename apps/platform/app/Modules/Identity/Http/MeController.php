@@ -27,7 +27,7 @@ final readonly class MeController
 
         try {
             $current = is_string($accountId) && $authenticatedAt !== null
-                ? $currentAccount(AccountId::fromString($accountId))
+                ? $currentAccount(AccountId::fromString($accountId), $session->secondFactorVerified($request))
                 : null;
         } catch (InvalidArgumentException) {
             $current = null;
@@ -37,6 +37,9 @@ final readonly class MeController
             return response()->json(['message' => 'Unauthenticated.'], 401);
         }
 
-        return response()->json($presenter->present($current, $authenticatedAt, $config->integer('identity.session.absolute_lifetime_minutes')));
+        return response()->json($presenter->present(
+            $current, $authenticatedAt, $config->integer('identity.session.absolute_lifetime_minutes'),
+            $session->securityVerifiedAt($request), $config->integer('identity.mfa.security_verification_max_age_minutes'),
+        ));
     }
 }

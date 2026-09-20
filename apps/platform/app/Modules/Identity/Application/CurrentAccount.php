@@ -24,5 +24,6 @@ final readonly class CurrentAccount
         public string $email,
         public string $displayName,
         public array $capabilities = [],
+        public MfaStatus $mfa = new MfaStatus(false, 0),
     ) {}
 }

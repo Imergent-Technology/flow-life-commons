@@ -103,6 +103,20 @@ return [
             'per_ip' => (int) env('IDENTITY_CHANGE_MAX_PER_IP', 20),
             'per_identifier' => (int) env('IDENTITY_CHANGE_MAX_PER_ACCOUNT', 5),
         ],
+        // A code presented to finish a sign-in or to confirm an authenticator (ADR 0023). Per Account (the
+        // identifier is the Account the half-finished sign-in belongs to) and per source address. Every
+        // attempt counts, so it is set to leave room for ordinary typos and clock drift: ten in fifteen
+        // minutes, on top of the pending sign-in ending after `max_challenge_failures` wrong codes.
+        'mfa_challenge' => [
+            'per_ip' => (int) env('IDENTITY_MFA_MAX_PER_IP', 30),
+            'per_identifier' => (int) env('IDENTITY_MFA_MAX_PER_ACCOUNT', 10),
+        ],
+        // Password plus second factor presented while signed in, for recent verification and for MFA
+        // management. The password is being guessed at, so as strict as changing one.
+        'security_verification' => [
+            'per_ip' => (int) env('IDENTITY_SECURITY_VERIFICATION_MAX_PER_IP', 20),
+            'per_identifier' => (int) env('IDENTITY_SECURITY_VERIFICATION_MAX_PER_ACCOUNT', 5),
+        ],
         // Completing a reset. The token has 256 bits, so this bounds volume (hashing work and audit
         // growth), not guessing. As with login, a caller can exhaust an identifier's allowance for one
         // window: the accepted trade for a small invite-only user base.
@@ -110,6 +124,26 @@ return [
             'per_ip' => (int) env('IDENTITY_RESET_COMPLETION_MAX_PER_IP', 20),
             'per_identifier' => (int) env('IDENTITY_RESET_COMPLETION_MAX_PER_IDENTIFIER', 10),
         ],
+    ],
+
+    /*
+     * Multi-factor authentication (docs/adr/0023). Security policy, so the numbers are code-owned and not
+     * read from the environment, except the issuer name an authenticator app displays.
+     *
+     * - issuer: the name authenticator apps show next to the Account.
+     * - challenge_lifetime_seconds / enrollment_lifetime_seconds: how long a half-finished sign-in (the
+     *   password is proved, the second factor is not) stays usable, measured from the password and NOT
+     *   extended by activity. It is kept in the browser session, is not authentication, and dies with the
+     *   first success or after `max_challenge_failures` wrong codes.
+     * - security_verification_max_age_minutes: how recent password-and-second-factor proof must be for a
+     *   route that demands it (the `security.verified` middleware).
+     */
+    'mfa' => [
+        'issuer' => env('IDENTITY_MFA_ISSUER', 'Flow Life Guardian Console'),
+        'challenge_lifetime_seconds' => 300,
+        'enrollment_lifetime_seconds' => 600,
+        'max_challenge_failures' => 5,
+        'security_verification_max_age_minutes' => 15,
     ],
 
     /*

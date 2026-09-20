@@ -12,6 +12,7 @@ use Illuminate\Support\Carbon;
 use Tests\Support\Access;
 use Tests\Support\Console;
 use Tests\Support\Identity;
+use Tests\Support\Mfa;
 
 beforeEach(function () {
     Carbon::setTestNow('2026-09-19 12:00:00');
@@ -44,9 +45,10 @@ it('reports capability identifiers, never role names, in a stable order', functi
     $account = Identity::savedActiveAccount();
     Access::grant($account, Role::Guardian);
     Access::grant($account, Role::PlatformAdministrator);
+    Mfa::enroll($account);
     $console = new Console;
 
-    $login = $console->login('ada@example.org', Identity::PASSWORD)->assertOk();
+    $login = $console->loginWithMfa('ada@example.org', Identity::PASSWORD)->assertOk();
     $me = $console->me()->assertOk();
 
     foreach ([$login, $me] as $response) {
@@ -60,9 +62,11 @@ it('reports capability identifiers, never role names, in a stable order', functi
 });
 
 it('reports a guardian\'s Console access and nothing else', function () {
-    Access::grant(Identity::savedActiveAccount(), Role::Guardian);
+    $account = Identity::savedActiveAccount();
+    Access::grant($account, Role::Guardian);
+    Mfa::enroll($account);
     $console = new Console;
-    $console->login('ada@example.org', Identity::PASSWORD)->assertOk();
+    $console->loginWithMfa('ada@example.org', Identity::PASSWORD)->assertOk();
 
     expect(capabilitiesOfMe($console))->toBe(['console.access']);
 });
@@ -70,8 +74,9 @@ it('reports a guardian\'s Console access and nothing else', function () {
 it('derives capabilities fresh on every request, so a revoked role disappears without signing in again', function () {
     $account = Identity::savedActiveAccount();
     Access::grant($account, Role::PlatformAdministrator);
+    Mfa::enroll($account);
     $console = new Console;
-    $console->login('ada@example.org', Identity::PASSWORD)->assertOk();
+    $console->loginWithMfa('ada@example.org', Identity::PASSWORD)->assertOk();
     expect(capabilitiesOfMe($console))->toBe(Access::everyCapabilityId());
 
     Access::revoke($account, Role::PlatformAdministrator);
@@ -89,10 +94,12 @@ it('reports the same list whatever order the roles were assigned in', function (
     Access::grant($second, Role::PlatformAdministrator);
     Access::grant($second, Role::Guardian);
 
+    Mfa::enroll($first);
+    Mfa::enroll($second);
     $a = new Console;
-    $a->login('first@example.org', Identity::PASSWORD)->assertOk();
+    $a->loginWithMfa('first@example.org', Identity::PASSWORD)->assertOk();
     $b = new Console;
-    $b->login('second@example.org', Identity::PASSWORD)->assertOk();
+    $b->loginWithMfa('second@example.org', Identity::PASSWORD)->assertOk();
 
     expect(capabilitiesOfMe($a))->toBe(capabilitiesOfMe($b));
 });
@@ -100,8 +107,9 @@ it('reports the same list whatever order the roles were assigned in', function (
 it('stops reporting anything once the account can no longer authenticate', function () {
     $account = Identity::savedActiveAccount();
     Access::grant($account, Role::PlatformAdministrator);
+    Mfa::enroll($account);
     $console = new Console;
-    $console->login('ada@example.org', Identity::PASSWORD)->assertOk();
+    $console->loginWithMfa('ada@example.org', Identity::PASSWORD)->assertOk();
 
     app(AccountRepository::class)->save($account->disable(Identity::now()->modify('+1 day')));
 
