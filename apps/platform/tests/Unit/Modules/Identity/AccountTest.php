@@ -97,3 +97,31 @@ it('keeps the password hash and its update time together', function () {
         'hash', null, null, null, null, $now, $now,
     );
 })->throws(InvalidAccountState::class);
+
+it('may authenticate only when active with a credential', function () {
+    $invited = invited();
+    $active = invited()->activate('$2y$hash', Identity::now());
+    $disabled = $active->disable(Identity::now());
+
+    expect($invited->canAuthenticate())->toBeFalse()
+        ->and($active->canAuthenticate())->toBeTrue()
+        ->and($disabled->canAuthenticate())->toBeFalse()
+        // Disabling an account that never activated leaves it unable to authenticate too.
+        ->and(invited()->disable(Identity::now())->canAuthenticate())->toBeFalse();
+});
+
+it('records a login without treating it as a profile change', function () {
+    $active = invited()->activate('$2y$hash', Identity::now());
+    $later = Identity::now()->modify('+1 day');
+
+    $loggedIn = $active->recordLogin($later);
+
+    expect($loggedIn->lastLoginAt)->toEqual($later)
+        ->and($loggedIn->updatedAt)->toEqual($active->updatedAt)
+        ->and($loggedIn->status)->toBe($active->status)
+        ->and($active->lastLoginAt)->toBeNull();
+});
+
+it('cannot record a login unless it may authenticate', function () {
+    invited()->recordLogin(Identity::now());
+})->throws(InvalidAccountState::class);

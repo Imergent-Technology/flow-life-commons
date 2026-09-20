@@ -54,9 +54,21 @@ The Guardian Console and the API are served from **one origin**, as in productio
 - The Console calls the API at the relative path `/api/v1/...`. There is no API base URL to configure.
 - **No CORS is involved** in Console → API traffic. `CORS_ALLOWED_ORIGINS` in `apps/platform/.env` ships empty and `supports_credentials` stays `false`; add an origin only for a legitimate external browser consumer, never with credentials.
 - **Mailpit stays on its own host** on purpose: it renders arbitrary mail HTML, so it must not share an origin with the authenticated Console. It is also a dev-only tool with no production counterpart.
-- Local HTTPS is **not** needed: browsers treat `*.localhost` as a secure context, so `Secure` and `__Host-` cookies work over plain HTTP there.
+- Local HTTPS is **not** needed: browsers treat `*.localhost` as a secure context, so `Secure` and `__Host-` cookies work over plain HTTP there. This is **measured, not assumed** (see [Session cookies locally](#session-cookies-locally)).
 - The former `guardian.` and `api.` hosts are retired and answer 404. If you set up before this change, update `apps/platform/.env` (`APP_URL`, empty `CORS_ALLOWED_ORIGINS`); `./flow doctor` warns when they are stale. If you change the gateway port, update `APP_URL` too.
 - Container-to-container traffic is unaffected: services still reach each other by service name (`platform:9000`, `mariadb`, `mailpit`); only the browser-facing hostnames changed.
+
+### Session cookies locally
+
+Development uses the **exact production session cookie**: `__Host-flowlife-session`, `Secure`, `HttpOnly`, `Path=/`, no `Domain`, `SameSite=Lax`. Nothing is different locally, and no cookie setting can be overridden from the environment (see `config/session.php`).
+
+Whether a browser would accept that on plain HTTP was checked in the real Playwright Chromium (153) against `http://commons.flowlife.localhost:18080`: it stored the cookie (host-only, `Secure`, `HttpOnly`, `Lax`) and returned it on the next request. `./flow test e2e` re-proves this on every run (`e2e/auth.spec.ts`). **Only Chromium has been verified.** If a different browser refuses a `Secure` cookie on plain-HTTP `*.localhost`, sign-in will appear to succeed and then every request will look anonymous. Use Chromium/Chrome/Edge, or say so and a development-only arrangement will be designed then; the production cookie will not be weakened to suit a development browser.
+
+### Signing in locally
+
+There is no administrator bootstrap yet, so no account exists in a fresh development database. `./flow test e2e` seeds one **development-only** fixture Account (`e2e.guardian@example.org`, password in `apps/platform/database/seeders/E2eAccountSeeder.php`). The seeder refuses to run outside the `local` and `testing` environments and is not part of `DatabaseSeeder`. The Guardian Console has no login screen yet; the API is exercised by the e2e tests and the feature tests.
+
+Sessions are stored in the `sessions` table and expire after 30 minutes of request inactivity or 12 hours from sign-in, whichever comes first. Requests through the gateway all reach Laravel from the gateway's address, so the per-address login limit is shared in development; `./flow test e2e` clears the cache first so earlier runs cannot trip it.
 
 ## File ownership
 

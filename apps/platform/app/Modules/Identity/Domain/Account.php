@@ -77,6 +77,29 @@ final readonly class Account
     }
 
     /**
+     * Only an active Account with a credential may establish a session. Invited and
+     * disabled Accounts may not: the first has no credential yet, the second is blocked.
+     */
+    public function canAuthenticate(): bool
+    {
+        return $this->status === AccountStatus::Active && $this->passwordHash !== null;
+    }
+
+    /** Records a successful sign-in. Activity, not a profile change, so updatedAt is untouched. */
+    public function recordLogin(DateTimeImmutable $now): self
+    {
+        if (! $this->canAuthenticate()) {
+            throw new InvalidAccountState('Only an account that may authenticate can record a login.');
+        }
+
+        return new self(
+            $this->id, $this->personId, $this->email, $this->status, $this->passwordHash,
+            $this->passwordUpdatedAt, $this->emailVerifiedAt, $this->disabledAt, $now,
+            $this->createdAt, $this->updatedAt,
+        );
+    }
+
+    /**
      * Invitation acceptance: the holder set a password, which also proves they control
      * the address, so no separate verification is needed. `$passwordHash` is an already
      * computed hash; the domain never sees a plain password.

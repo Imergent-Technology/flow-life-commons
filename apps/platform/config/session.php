@@ -2,8 +2,22 @@
 
 declare(strict_types=1);
 
-use Illuminate\Support\Str;
-
+/*
+ * Guardian Console session (ADR 0016). The cookie attributes below are FIXED, not read
+ * from the environment, so no deployment setting can weaken them:
+ *
+ *   __Host- prefix, Secure, HttpOnly, Path=/, no Domain (host-only), SameSite=Lax.
+ *
+ * The browser itself then refuses the cookie if it ever carried a Domain, lacked
+ * Secure, or used another Path, which is what stops a sibling host such as a
+ * compromised WordPress from shadowing it. Local development uses these exact values:
+ * Chromium accepts a Secure __Host- cookie on plain-HTTP *.localhost (measured, see
+ * docs/development/docker.md), so development does not differ from production.
+ *
+ * The session lives in the database. It is authoritative and must never be a cache
+ * (ADR 0010). Lifetime here is 30 minutes of REQUEST inactivity; the 12-hour absolute
+ * cap is enforced separately (config/identity.php).
+ */
 return [
 
     /*
@@ -34,9 +48,9 @@ return [
     |
     */
 
-    'lifetime' => (int) env('SESSION_LIFETIME', 120),
+    'lifetime' => (int) env('SESSION_LIFETIME', 30),
 
-    'expire_on_close' => env('SESSION_EXPIRE_ON_CLOSE', false),
+    'expire_on_close' => false,
 
     /*
     |--------------------------------------------------------------------------
@@ -129,10 +143,7 @@ return [
     |
     */
 
-    'cookie' => env(
-        'SESSION_COOKIE',
-        Str::slug((string) env('APP_NAME', 'laravel')).'-session'
-    ),
+    'cookie' => '__Host-flowlife-session',
 
     /*
     |--------------------------------------------------------------------------
@@ -145,7 +156,7 @@ return [
     |
     */
 
-    'path' => env('SESSION_PATH', '/'),
+    'path' => '/',
 
     /*
     |--------------------------------------------------------------------------
@@ -158,7 +169,7 @@ return [
     |
     */
 
-    'domain' => env('SESSION_DOMAIN'),
+    'domain' => null,
 
     /*
     |--------------------------------------------------------------------------
@@ -171,7 +182,7 @@ return [
     |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    'secure' => true,
 
     /*
     |--------------------------------------------------------------------------
@@ -184,7 +195,7 @@ return [
     |
     */
 
-    'http_only' => env('SESSION_HTTP_ONLY', true),
+    'http_only' => true,
 
     /*
     |--------------------------------------------------------------------------
@@ -201,7 +212,7 @@ return [
     |
     */
 
-    'same_site' => env('SESSION_SAME_SITE', 'lax'),
+    'same_site' => 'lax',
 
     /*
     |--------------------------------------------------------------------------
@@ -214,7 +225,7 @@ return [
     |
     */
 
-    'partitioned' => env('SESSION_PARTITIONED_COOKIE', false),
+    'partitioned' => false,
 
     /*
     |--------------------------------------------------------------------------

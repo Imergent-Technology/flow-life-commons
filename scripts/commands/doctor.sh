@@ -148,6 +148,25 @@ doctor_project() {
         doctor_warn "PHP development image not built: run ./flow setup"
     fi
     doctor_topology
+    doctor_sessions
+}
+
+# Sessions must live in the database (ADR 0016, ADR 0010) with the frozen 30-minute inactivity
+# timeout. A platform .env written before authentication existed still says SESSION_DRIVER=file.
+doctor_sessions() {
+    [[ -f "$FLOW_ROOT/apps/platform/.env" ]] || return 0
+    local driver lifetime
+    driver="$(platform_env SESSION_DRIVER database)"
+    lifetime="$(platform_env SESSION_LIFETIME 30)"
+
+    if [[ "$driver" == database ]]; then
+        doctor_ok "SESSION_DRIVER is database"
+    else
+        doctor_warn "apps/platform/.env SESSION_DRIVER is '$driver'; sessions must be database-backed (set SESSION_DRIVER=database)"
+    fi
+    if [[ "$lifetime" != 30 ]]; then
+        doctor_warn "apps/platform/.env SESSION_LIFETIME is '$lifetime'; the frozen inactivity timeout is 30 (minutes)"
+    fi
 }
 
 # The Console and API share one origin (ADR 0016). A platform .env written before that

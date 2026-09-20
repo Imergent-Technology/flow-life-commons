@@ -50,3 +50,41 @@ arch('Identity: persistence records are internal to Identity Infrastructure', fu
     // Other modules reach Identity through its Application layer, never through its tables.
     expect("{$identity}\\Infrastructure\\Persistence")->toOnlyBeUsedIn("{$identity}\\Infrastructure");
 });
+
+arch('Identity: Domain is independent of Laravel altogether', function () use ($identity) {
+    // The narrower rules above name the parts that matter most; this is the whole claim.
+    expect("{$identity}\\Domain")->not->toUse('Illuminate');
+});
+
+foreach (['Domain', 'Application'] as $layer) {
+    arch("Identity: {$layer} does not depend on Laravel's authentication or session globals", function () use ($identity, $layer) {
+        // Only Http (ConsoleSession) and Infrastructure (the user provider) touch the guard
+        // and the session. Business code asks a use case instead of reaching for Auth::user().
+        expect("{$identity}\\{$layer}")->not->toUse([
+            'Illuminate\\Support\\Facades\\Auth',
+            'Illuminate\\Support\\Facades\\Session',
+            'Illuminate\\Support\\Facades\\Cookie',
+            'Illuminate\\Contracts\\Auth',
+            'Illuminate\\Contracts\\Session',
+            'Illuminate\\Auth',
+            'Illuminate\\Session',
+        ]);
+    });
+}
+
+arch('Identity: Http does not reach into Infrastructure', function () use ($identity) {
+    // Controllers validate, call an Application use case and shape the response. What
+    // implements a port is the container's business.
+    expect("{$identity}\\Http")->not->toUse("{$identity}\\Infrastructure");
+});
+
+arch('Identity: Domain does not depend on Audit', function () use ($identity) {
+    // Audit is consumed from Application only.
+    expect("{$identity}\\Domain")->not->toUse('App\\Modules\\Audit');
+});
+
+arch('Identity: uses Audit only through its Application layer', function () use ($identity) {
+    // The generic rule forbids other modules' Domain, Infrastructure and Http; this pins the
+    // positive statement for the one edge that exists: Identity -> Audit\Application.
+    expect($identity)->not->toUse(['App\\Modules\\Audit\\Domain', 'App\\Modules\\Audit\\Infrastructure', 'App\\Modules\\Audit\\Http']);
+});

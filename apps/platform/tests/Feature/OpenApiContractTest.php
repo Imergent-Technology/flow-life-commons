@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Route;
 use Symfony\Component\Yaml\Yaml;
+use Tests\Support\Console;
+use Tests\Support\Identity;
 
 use function Pest\Laravel\getJson;
 
@@ -93,4 +95,26 @@ it('serves a health response matching the documented schema', function () {
     assert(is_array($body));
 
     expect(array_keys($body))->toEqualCanonicalizing($schema['required']);
+});
+
+it('serves signed-in account responses matching the documented schema', function () {
+    $schemas = openApiSpec()['components'];
+    assert(is_array($schemas) && is_array($schemas['schemas']) && is_array($schemas['schemas']['CurrentAccount']));
+    $current = $schemas['schemas']['CurrentAccount'];
+    assert(is_array($current['required']) && is_array($current['properties']));
+
+    Identity::savedActiveAccount();
+    $console = new Console;
+    $login = $console->login('ada@example.org', Identity::PASSWORD)->assertOk()->json();
+    $me = $console->me()->assertOk()->json();
+
+    foreach ([$login, $me] as $body) {
+        assert(is_array($body));
+        expect(array_keys($body))->toEqualCanonicalizing($current['required']);
+
+        foreach ($current['properties'] as $name => $property) {
+            assert(is_array($property) && is_array($property['required']) && is_array($body[$name]));
+            expect(array_keys($body[$name]))->toEqualCanonicalizing($property['required']);
+        }
+    }
 });

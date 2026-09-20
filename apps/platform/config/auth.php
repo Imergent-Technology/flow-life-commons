@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 /*
- * Authentication is intentionally unconfigured. Identity and Access are
- * platform-owned and get their own design epic (docs/adr/0008); no default
- * User model or users table exists until then.
+ * Authentication is platform-owned (docs/adr/0008, ADR 0015, ADR 0016). The one guard is
+ * the Guardian Console's session guard, and the one provider is Identity's, over
+ * Accounts. No default User model or users table exists, and none is planned.
  */
 
 return [
@@ -23,7 +23,7 @@ return [
 
     'defaults' => [
         'guard' => env('AUTH_GUARD', 'web'),
-        'passwords' => env('AUTH_PASSWORD_BROKER', 'users'),
+        'passwords' => env('AUTH_PASSWORD_BROKER', 'accounts'),
     ],
 
     /*
@@ -46,7 +46,7 @@ return [
     'guards' => [
         'web' => [
             'driver' => 'session',
-            'provider' => 'users',
+            'provider' => 'accounts',
         ],
     ],
 
@@ -68,15 +68,12 @@ return [
     */
 
     'providers' => [
-        'users' => [
-            'driver' => 'eloquent',
-            'model' => env('AUTH_MODEL'),
+        // Identity's own provider (Infrastructure\Auth\AccountUserProvider): it looks up by
+        // email_canonical and resolves only Accounts that may authenticate. There is no
+        // "User" model and no Eloquent provider.
+        'accounts' => [
+            'driver' => 'identity',
         ],
-
-        // 'users' => [
-        //     'driver' => 'database',
-        //     'table' => 'users',
-        // ],
     ],
 
     /*
@@ -99,8 +96,9 @@ return [
     */
 
     'passwords' => [
-        'users' => [
-            'provider' => 'users',
+        // Not used yet: password reset is a later phase. Renamed with the provider only.
+        'accounts' => [
+            'provider' => 'accounts',
             'table' => env('AUTH_PASSWORD_RESET_TOKEN_TABLE', 'password_reset_tokens'),
             'expire' => 60,
             'throttle' => 60,

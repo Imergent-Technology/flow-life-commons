@@ -10,7 +10,46 @@ info:
   version: 1.0.0
   description: >-
     Authoritative API for Flow Life organizational data, identity, authorization
-    and workflows. Only infrastructure endpoints exist during the foundation epic.
+    and workflows.
+
+
+    **Implemented so far:** infrastructure health, and Guardian Console session
+    authentication (`login`, `logout`, `me`). Authorization, roles and capabilities
+    do not exist yet, so no endpoint returns them.
+
+
+    ## Session authentication (Guardian Console)
+
+
+    The Console signs in with a same-origin, host-only session cookie (ADR 0016).
+    There is no bearer token and no CORS: the Console and the API share one origin.
+
+
+    - **Cookie:** `__Host-flowlife-session`, `Secure`, `HttpOnly`, `Path=/`, no
+      `Domain`, `SameSite=Lax`. It is set by any of these endpoints and sent back by
+      the browser automatically. The same cookie is used locally: Chromium accepts a
+      `Secure` `__Host-` cookie on plain-HTTP `*.localhost`, so development does not
+      differ from production.
+
+    - **CSRF:** these endpoints are stateful, so state-changing requests (`POST`) must
+      pass Laravel's request-forgery check. A first request to any of them (for
+      example `GET /me`) issues a JS-readable `XSRF-TOKEN` cookie; echo its value in
+      an `X-XSRF-TOKEN` header. A browser request the browser itself marks
+      `Sec-Fetch-Site: same-origin` is also accepted. Otherwise the answer is `419`.
+
+    - **Inactivity:** 30 minutes of *request* inactivity ends the session. Any
+      authenticated request refreshes it; this is not human-idle detection.
+
+    - **Absolute lifetime:** 12 hours from authentication, regardless of activity.
+      Re-authenticating starts a new one. A session that lacks its authentication
+      time is treated as expired, never as unlimited.
+
+    - **Auditing:** logins, failures, logouts, rate limiting and absolute expiry are
+      recorded as security events (`Audit` module). Events are internal; there is no
+      endpoint to read them yet.
+
+
+    Stateless endpoints (such as `/health`) receive no cookie and need no token.
 servers:
   # The API shares an origin with the Guardian Console (ADR 0016), so the server
   # is a relative URL: it resolves against whichever host serves the Console.
@@ -38,7 +77,144 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+  /login:
+    post:
+      operationId: login
+      summary: Sign in
+      description: >-
+        Verifies an email address and password and, on success, establishes an
+        authenticated session: the session id and CSRF token are regenerated and the
+        response carries the new cookies.
+
+
+        The email is matched by its canonical (lower-cased, trimmed) form. Only an
+        `active` account may sign in. **Unknown address, wrong password, invited
+        account and disabled account are indistinguishable:** all answer `401` with
+        the same body, and the same amount of password-hashing work is done on each
+        path.
+
+
+        Attempts are rate limited by source address and by identifier (see `429`).
+      tags: [Authentication]
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in. Sets `__Host-flowlife-session` and `XSRF-TOKEN`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentAccount'
+        '401':
+          description: The credentials were not accepted. No further detail is given.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: The request is malformed (missing fields, or an email that is not a valid address).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts from this address or against this identifier. Identical whether or not the identifier exists.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /logout:
+    post:
+      operationId: logout
+      summary: Sign out
+      description: >-
+        Ends the session: it is invalidated and the session id and CSRF token are
+        regenerated. The account and person are unchanged. Idempotent: with no
+        authenticated session it does nothing and still answers `204`. (A request whose
+        CSRF token is stale, for example after the session already lapsed, is refused
+        with `419`; the client should fetch a fresh token with `GET /me` and treat itself
+        as signed out.)
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+        - {}
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '204':
+          description: Signed out (or there was no session to end).
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /me:
+    get:
+      operationId: getCurrentAccount
+      summary: The signed-in account
+      description: >-
+        Identity and session information for the current session, and nothing else.
+        **There are no roles or capabilities in this response:** authorization does
+        not exist yet, and an empty or invented value would be a misleading contract.
+        They will be added as new fields when it does.
+
+
+        Also the way a client that has no session yet obtains its `XSRF-TOKEN` cookie:
+        an anonymous call answers `401` and still sets the cookies needed to sign in.
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The signed-in account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentAccount'
+        '401':
+          description: Not signed in, or the session has expired (inactivity, absolute lifetime, or the account can no longer authenticate).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-flowlife-session
+      description: >-
+        Same-origin, host-only session cookie (ADR 0016). Not readable by scripts.
+        Bounded by 30 minutes of request inactivity and a 12-hour absolute lifetime.
+  parameters:
+    XsrfToken:
+      name: X-XSRF-TOKEN
+      in: header
+      required: false
+      description: >-
+        The value of the `XSRF-TOKEN` cookie. Required for state-changing requests
+        unless the browser marks the request `Sec-Fetch-Site: same-origin`.
+      schema:
+        type: string
   schemas:
     Health:
       type: object
@@ -59,3 +235,72 @@ components:
           additionalProperties:
             type: string
             enum: [ok, fail]
+
+    Message:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    ValidationError:
+      type: object
+      required: [message, errors]
+      properties:
+        message:
+          type: string
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+          description: Printable ASCII; internationalised domains as punycode. Matched case-insensitively.
+        password:
+          type: string
+          maxLength: 1024
+          writeOnly: true
+    CurrentAccount:
+      type: object
+      required: [account, person, session]
+      properties:
+        account:
+          type: object
+          required: [id, email]
+          properties:
+            id:
+              type: string
+              minLength: 26
+              maxLength: 26
+              description: Account ULID.
+            email:
+              type: string
+        person:
+          type: object
+          required: [id, display_name]
+          properties:
+            id:
+              type: string
+              minLength: 26
+              maxLength: 26
+              description: Person ULID. Business modules reference this.
+            display_name:
+              type: string
+        session:
+          type: object
+          required: [authenticated_at, absolute_expires_at]
+          properties:
+            authenticated_at:
+              type: string
+              format: date-time
+              description: When this session was authenticated (UTC). The 12-hour lifetime is measured from here.
+            absolute_expires_at:
+              type: string
+              format: date-time
+              description: The latest this session can live, whatever its activity. Inactivity can end it sooner.

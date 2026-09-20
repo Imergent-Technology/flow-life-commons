@@ -22,7 +22,7 @@ it('does not require Redis by default', function () {
     $example = file_get_contents(base_path('.env.example'));
     assert(is_string($example));
 
-    foreach (['QUEUE_CONNECTION' => 'database', 'CACHE_STORE' => 'database', 'SESSION_DRIVER' => 'file'] as $key => $expected) {
+    foreach (['QUEUE_CONNECTION' => 'database', 'CACHE_STORE' => 'database', 'SESSION_DRIVER' => 'database'] as $key => $expected) {
         expect($example)->toContain("{$key}={$expected}");
     }
 

@@ -19,12 +19,14 @@ use Illuminate\Database\UniqueConstraintViolationException;
  * error. Note for callers: on PostgreSQL a violation inside an open transaction aborts
  * that transaction, so treat the exception as terminal for it.
  */
-final class EloquentAccountRepository implements AccountRepository
+final readonly class EloquentAccountRepository implements AccountRepository
 {
     // Constraint names from the accounts migration. Both engines include the name in the error.
     private const string EMAIL_UNIQUE = 'accounts_email_canonical_unique';
 
     private const string PERSON_UNIQUE = 'accounts_person_id_unique';
+
+    public function __construct(private AccountMapper $mapper) {}
 
     public function save(Account $account): void
     {
@@ -58,14 +60,14 @@ final class EloquentAccountRepository implements AccountRepository
     {
         $record = AccountRecord::query()->find($id->value);
 
-        return $record === null ? null : $this->toDomain($record);
+        return $record === null ? null : $this->mapper->toDomain($record);
     }
 
     public function findByPersonId(PersonId $personId): ?Account
     {
         $record = AccountRecord::query()->where('person_id', $personId->value)->first();
 
-        return $record === null ? null : $this->toDomain($record);
+        return $record === null ? null : $this->mapper->toDomain($record);
     }
 
     public function findByEmail(EmailAddress $email): ?Account
@@ -73,23 +75,6 @@ final class EloquentAccountRepository implements AccountRepository
         // The canonical column is the only lookup key (ADR 0015); never query `email`.
         $record = AccountRecord::query()->where('email_canonical', $email->canonical)->first();
 
-        return $record === null ? null : $this->toDomain($record);
-    }
-
-    private function toDomain(AccountRecord $record): Account
-    {
-        return Account::reconstitute(
-            AccountId::fromString($record->id),
-            PersonId::fromString($record->person_id),
-            EmailAddress::fromString($record->email),
-            $record->status,
-            $record->password_hash,
-            Utc::fromColumnOrNull($record->password_updated_at),
-            Utc::fromColumnOrNull($record->email_verified_at),
-            Utc::fromColumnOrNull($record->disabled_at),
-            Utc::fromColumnOrNull($record->last_login_at),
-            Utc::fromColumn($record->created_at),
-            Utc::fromColumn($record->updated_at),
-        );
+        return $record === null ? null : $this->mapper->toDomain($record);
     }
 }

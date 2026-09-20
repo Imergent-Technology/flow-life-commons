@@ -20,12 +20,15 @@ use DateInterval;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use RuntimeException;
 use Throwable;
 
 /** Builders and helpers shared by the Identity tests. */
 final class Identity
 {
+    public const string PASSWORD = 'correct horse battery staple';
+
     /** A fixed, whole-second UTC instant so round trips through DATETIME(0) compare exactly. */
     public static function now(): DateTimeImmutable
     {
@@ -60,6 +63,28 @@ final class Identity
         return $account;
     }
 
+    /** Persists a Person and an ACTIVE Account that can sign in with the given password. */
+    public static function savedActiveAccount(
+        string $email = 'ada@example.org',
+        string $password = self::PASSWORD,
+        string $name = 'Ada Lovelace',
+    ): Account {
+        $person = self::savedPerson($name);
+        $account = self::invitedAccount($person, $email)->activate(Hash::make($password), self::now());
+        app(AccountRepository::class)->save($account);
+
+        return $account;
+    }
+
+    /** Persists a DISABLED Account (it once had a password). */
+    public static function savedDisabledAccount(string $email = 'ada@example.org', string $password = self::PASSWORD): Account
+    {
+        $account = self::savedActiveAccount($email, $password)->disable(self::now()->modify('+1 minute'));
+        app(AccountRepository::class)->save($account);
+
+        return $account;
+    }
+
     public static function invitation(
         Account $account,
         ?InvitationToken $token = null,
@@ -82,6 +107,58 @@ final class Identity
         app(AccountInvitationRepository::class)->save($invitation);
 
         return $invitation;
+    }
+
+    /**
+     * Recorded security events, oldest first, optionally of one type.
+     *
+     * @return list<object{type: string, outcome: string, actor_account_id: ?string, subject_account_id: ?string, subject_person_id: ?string, ip: ?string, user_agent: ?string, context: ?string}>
+     */
+    public static function events(?string $type = null): array
+    {
+        $query = DB::table('security_events')->orderBy('id');
+        if ($type !== null) {
+            $query->where('type', $type);
+        }
+
+        /** @var list<object{type: string, outcome: string, actor_account_id: ?string, subject_account_id: ?string, subject_person_id: ?string, ip: ?string, user_agent: ?string, context: ?string}> */
+        return $query->get()->all();
+    }
+
+    /**
+     * A recorded event's context, decoded.
+     *
+     * @param  object{context: ?string}  $event
+     * @return array<string, mixed>
+     */
+    public static function context(object $event): array
+    {
+        $decoded = json_decode($event->context ?? 'null', true);
+        /** @var array<string, mixed> $context */
+        $context = is_array($decoded) ? $decoded : [];
+
+        return $context;
+    }
+
+    /** One column of the first row of a table, as a string: for reading ids and hashes back out. */
+    public static function scalar(string $table, string $column): string
+    {
+        $value = DB::table($table)->value($column);
+        assert(is_string($value));
+
+        return $value;
+    }
+
+    /** @return list<string> */
+    public static function sessionIds(): array
+    {
+        $ids = [];
+        foreach (DB::table('sessions')->pluck('id')->all() as $id) {
+            assert(is_string($id));
+            $ids[] = $id;
+        }
+
+        return $ids;
     }
 
     /**

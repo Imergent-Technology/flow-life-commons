@@ -73,6 +73,11 @@ test_e2e() {
     for s in gateway platform guardian mariadb; do
         service_running "$s" || die "e2e needs the running stack ($s is not up). Run ./flow up first."
     done
-    step "E2E smoke test (Playwright, chromium)"
+    step "Seeding the e2e fixture account (development only)"
+    # A known active Account to sign in as, and a cleared cache so login throttle counters
+    # left by earlier runs cannot make this one flaky. Both are development data.
+    php_run php artisan db:seed --class=E2eAccountSeeder --force --no-interaction
+    php_run php artisan cache:clear --no-interaction
+    step "E2E tests (Playwright, chromium)"
     dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test "$@"
 }

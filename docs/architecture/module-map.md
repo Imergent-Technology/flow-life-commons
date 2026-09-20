@@ -39,7 +39,7 @@ Each module owns its endpoints in `Http/routes.php`. `routes/api.php` loads ever
 | --- | --- | --- |
 | `Health` | `GET /api/v1/health`: infrastructure verification | Operational, not a business module. Exists to prove the environment and to give the conventions something real to test against |
 | `Audit` | `security_events`: the append-only record of identity- and access-relevant occurrences | `RecordSecurityEvent` is its only public entry point. No update, delete, read or UI paths exist (ADR 0019) |
-| `Identity` | `people`, `accounts`, `account_invitations`: the registry of humans and their means of authenticating | Phase 1 of the Identity epic: `Domain` (entities, value objects, repository ports) and `Infrastructure` (Eloquent records, repositories, provider) only. No `Application` or `Http` yet, per the rule above; they arrive with the first use case and endpoint |
+| `Identity` | `people`, `accounts`, `account_invitations`, `sessions`: the registry of humans and their means of authenticating | All four layers exist. `Application`: `AuthenticateAccount`, `LogOut`, `ExpireSession`, `ResolveActor`, `GetCurrentAccount` and the `LoginThrottle` port. `Http`: `login`, `logout`, `me` and the absolute-lifetime middleware. `Infrastructure` also holds the Laravel auth user provider and the cache-backed throttle. Invitation acceptance, password reset and bootstrap are later phases |
 
 ## Designed, not yet created
 
