@@ -11,3 +11,7 @@ use Tests\TestCase;
 pest()->extend(TestCase::class)->use(RefreshDatabase::class)->in('Feature');
 
 pest()->extend(TestCase::class)->in('Unit');
+
+// Concurrency tests COMMIT real data and run a second PHP process against it, so they cannot sit
+// inside RefreshDatabase's wrapping transaction. They clean up after themselves.
+pest()->extend(TestCase::class)->in('Concurrency');

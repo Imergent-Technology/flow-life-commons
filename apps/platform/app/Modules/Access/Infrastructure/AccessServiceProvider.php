@@ -6,7 +6,9 @@ namespace App\Modules\Access\Infrastructure;
 
 use App\Modules\Access\Application\AuthorizerEffectiveCapabilities;
 use App\Modules\Access\Application\Capability;
+use App\Modules\Access\Application\LastAdministratorDeactivationGuard;
 use App\Modules\Access\Domain\RoleAssignmentRepository;
+use App\Modules\Identity\Application\AccountDeactivationGuard;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\Gate;
@@ -26,6 +28,13 @@ final class AccessServiceProvider extends ServiceProvider
         RoleAssignmentRepository::class => DatabaseRoleAssignmentRepository::class,
         EffectiveCapabilities::class => AuthorizerEffectiveCapabilities::class,
     ];
+
+    public function register(): void
+    {
+        // Join Identity's deactivation guard chain (ADR 0020). Identity owns the port and never
+        // names this class; the tag is how it finds whoever has registered.
+        $this->app->tag([LastAdministratorDeactivationGuard::class], AccountDeactivationGuard::TAG);
+    }
 
     public function boot(): void
     {
