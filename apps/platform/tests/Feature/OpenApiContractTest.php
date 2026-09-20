@@ -113,7 +113,13 @@ it('serves signed-in account responses matching the documented schema', function
         expect(array_keys($body))->toEqualCanonicalizing($current['required']);
 
         foreach ($current['properties'] as $name => $property) {
-            assert(is_array($property) && is_array($property['required']) && is_array($body[$name]));
+            assert(is_array($property) && is_array($body[$name]));
+            if ($property['type'] === 'array') {
+                expect(array_is_list($body[$name]))->toBeTrue();
+
+                continue;
+            }
+            assert(is_array($property['required']));
             expect(array_keys($body[$name]))->toEqualCanonicalizing($property['required']);
         }
     }

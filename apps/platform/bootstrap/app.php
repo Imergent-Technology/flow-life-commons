@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Identity\Http\EnforceAbsoluteSessionLifetime;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -57,6 +58,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->prependToPriorityList(before: AuthenticatesRequests::class, prepend: EnforceAbsoluteSessionLifetime::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        // Access's Application layer may not use Laravel's HTTP or auth machinery, so it
+        // throws its own AccessDenied; this is the edge that turns it into a 403.
+        $exceptions->render(fn (AccessDenied $e, Request $request) => response()->json(['message' => $e->getMessage()], 403));
+
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),
         );

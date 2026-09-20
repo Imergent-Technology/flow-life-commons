@@ -1,6 +1,6 @@
 # Authorization model
 
-**Status: designed; implementation in progress.** The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [architecture/identity-and-access.md](../architecture/identity-and-access.md). Identity persistence, the Audit seam and Guardian Console session authentication exist; **authorization (Access) does not**, and nothing decides what a signed-in person may do yet. This page keeps the principles that design must continue to satisfy.
+**Status: designed; implementation in progress.** The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [architecture/identity-and-access.md](../architecture/identity-and-access.md). Identity persistence, the Audit seam, Guardian Console session authentication and the **authorization mechanism** exist: a code-owned capability catalog, persisted role assignments, and an `Authorizer` that decides from current state. What is not built: administrator bootstrap, granting and revoking roles (use cases and endpoints), and any business capability, because no business module exists to check one. This page keeps the principles that design must continue to satisfy.
 
 ## Principles
 

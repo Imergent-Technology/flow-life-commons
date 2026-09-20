@@ -66,7 +66,7 @@ Whether a browser would accept that on plain HTTP was checked in the real Playwr
 
 ### Signing in locally
 
-There is no administrator bootstrap yet, so no account exists in a fresh development database. `./flow test e2e` seeds one **development-only** fixture Account (`e2e.guardian@example.org`, password in `apps/platform/database/seeders/E2eAccountSeeder.php`). The seeder refuses to run outside the `local` and `testing` environments and is not part of `DatabaseSeeder`. The Guardian Console has no login screen yet; the API is exercised by the e2e tests and the feature tests.
+There is no administrator bootstrap yet, so no account exists in a fresh development database. `./flow test e2e` seeds one **development-only** fixture Account (`e2e.guardian@example.org`, password in `apps/platform/database/seeders/E2eAccountSeeder.php`). The account holds the `guardian` role (so it has the `console.access` capability). The seeder refuses to run outside the `local` and `testing` environments and is not part of `DatabaseSeeder`. The Guardian Console has no login screen yet; the API is exercised by the e2e tests and the feature tests.
 
 Sessions are stored in the `sessions` table and expire after 30 minutes of request inactivity or 12 hours from sign-in, whichever comes first. Requests through the gateway all reach Laravel from the gateway's address, so the per-address login limit is shared in development; `./flow test e2e` clears the cache first so earlier runs cannot trip it.
 

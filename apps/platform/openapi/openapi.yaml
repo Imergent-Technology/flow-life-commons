@@ -13,9 +13,21 @@ info:
     and workflows.
 
 
-    **Implemented so far:** infrastructure health, and Guardian Console session
-    authentication (`login`, `logout`, `me`). Authorization, roles and capabilities
-    do not exist yet, so no endpoint returns them.
+    **Implemented so far:** infrastructure health, Guardian Console session
+    authentication (`login`, `logout`, `me`), and capability-based authorization
+    (see below). No endpoint changes role assignments yet.
+
+
+    ## Authorization
+
+
+    What a person may do is a set of **capabilities** (for example `console.access`),
+    bundled into roles that are assigned to people. Capabilities are named by
+    identifier; **role names are never exposed** and must never be used to decide what
+    to show or do. The platform evaluates capabilities against the person's *current*
+    assignments on every request: a revoked role takes effect on the next request with no
+    new sign-in, and nothing about them is stored in the session or accepted from the
+    client. A signed-in account without a capability receives `403`.
 
 
     ## Session authentication (Guardian Console)
@@ -173,9 +185,10 @@ paths:
       summary: The signed-in account
       description: >-
         Identity and session information for the current session, and nothing else.
-        **There are no roles or capabilities in this response:** authorization does
-        not exist yet, and an empty or invented value would be a misleading contract.
-        They will be added as new fields when it does.
+        `capabilities` lists what the account may do **right now**, as identifiers in
+        alphabetical order, derived fresh on each call (so a role revoked since sign-in
+        is already gone). It is for presenting the Console; the server enforces every
+        capability regardless. Role names are never returned.
 
 
         Also the way a client that has no session yet obtains its `XSRF-TOKEN` cookie:
@@ -268,7 +281,7 @@ components:
           writeOnly: true
     CurrentAccount:
       type: object
-      required: [account, person, session]
+      required: [account, person, capabilities, session]
       properties:
         account:
           type: object
@@ -292,6 +305,15 @@ components:
               description: Person ULID. Business modules reference this.
             display_name:
               type: string
+        capabilities:
+          type: array
+          description: >-
+            Capability identifiers the account currently holds, alphabetical, possibly
+            empty. Derived fresh on every request; never stored in the session. Presentation
+            aid only: authorization is always decided server-side.
+          items:
+            type: string
+            examples: [console.access]
         session:
           type: object
           required: [authenticated_at, absolute_expires_at]

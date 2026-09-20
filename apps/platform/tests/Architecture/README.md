@@ -14,6 +14,11 @@ rest of the suite (`./flow test backend`) and in CI.
 - `AuditBoundariesTest.php`: Audit sits below Identity, so it never depends back on it, its
   Domain is framework-free, and it has no Eloquent model (so nothing can `save()` or
   `delete()` an event).
+- `AccessBoundariesTest.php`: Access's Domain is framework-free and knows no other module, its
+  Application touches no HTTP, auth, session or gate machinery and no Identity internals, and it
+  has no Eloquent model. Nothing outside Access may name `Role` or a role key (a source scan with a
+  positive control), Access does not read Identity's tables, and the module graph, parsed from the
+  source, is acyclic and limited to the frozen edges.
 - `DatabasePortabilityTest.php`: bans MariaDB-only schema/SQL unless a line carries
   `// portability-exception: ADR-NNNN`. The definitive check is running the suite on
   PostgreSQL (`./flow test backend --pgsql`).

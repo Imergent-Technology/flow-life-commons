@@ -14,6 +14,7 @@ final readonly class GetCurrentAccount
     public function __construct(
         private AccountRepository $accounts,
         private PersonRepository $people,
+        private EffectiveCapabilities $capabilities,
     ) {}
 
     public function __invoke(AccountId $accountId): ?CurrentAccount
@@ -24,9 +25,12 @@ final readonly class GetCurrentAccount
         }
 
         $person = $this->people->find($account->personId);
+        if ($person === null) {
+            return null;
+        }
 
-        return $person === null
-            ? null
-            : new CurrentAccount(Actor::user($account->id, $account->personId), $account->email->value, $person->displayName);
+        $actor = Actor::user($account->id, $account->personId);
+
+        return new CurrentAccount($actor, $account->email->value, $person->displayName, $this->capabilities->for($actor));
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Infrastructure;
 
+use App\Modules\Identity\Application\EffectiveCapabilities;
 use App\Modules\Identity\Application\LoginThrottle;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\AccountRepository;
@@ -29,6 +30,8 @@ final class IdentityServiceProvider extends ServiceProvider
         AccountRepository::class => EloquentAccountRepository::class,
         AccountInvitationRepository::class => EloquentAccountInvitationRepository::class,
         LoginThrottle::class => CacheLoginThrottle::class,
+        // A default that grants nothing. The Access module registers its own over this.
+        EffectiveCapabilities::class => NoEffectiveCapabilities::class,
     ];
 
     public function boot(): void

@@ -29,11 +29,13 @@ it('signs in an active account and returns identity and session information only
         ->assertJsonPath('session.authenticated_at', '2026-09-19T12:00:00Z')
         ->assertJsonPath('session.absolute_expires_at', '2026-09-20T00:00:00Z');
 
-    // Access does not exist yet, so nothing is invented in its place.
+    // What the account may do is reported as capability identifiers (none held here); role
+    // names are never exposed.
     $body = $response->json();
     assert(is_array($body));
-    expect(array_keys($body))->toBe(['account', 'person', 'session'])
-        ->and($body)->not->toHaveKeys(['roles', 'capabilities', 'permissions']);
+    expect(array_keys($body))->toBe(['account', 'person', 'capabilities', 'session'])
+        ->and($body['capabilities'])->toBe([])
+        ->and($body)->not->toHaveKeys(['roles', 'permissions']);
 });
 
 it('resolves the account by canonical email, whatever case or padding is typed', function (string $typed) {

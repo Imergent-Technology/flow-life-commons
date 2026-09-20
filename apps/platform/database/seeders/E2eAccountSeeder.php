@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use App\Modules\Access\Application\Role;
+use App\Modules\Access\Domain\RoleAssignment;
+use App\Modules\Access\Domain\RoleAssignmentRepository;
 use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\EmailAddress;
@@ -22,7 +25,8 @@ use RuntimeException;
  * DEVELOPMENT ONLY. It refuses to run outside the local and testing environments, and
  * it is not part of DatabaseSeeder. The credentials are public, in this file, and are
  * worth nothing anywhere real. This is a test fixture, not the administrator bootstrap:
- * that is a separate, later, server-access-rooted command (ADR 0020).
+ * that is a separate, later, server-access-rooted command (ADR 0020). Nor is granting the
+ * role: no grant use case exists yet, so this writes the assignment through the port.
  */
 final class E2eAccountSeeder extends Seeder
 {
@@ -30,22 +34,28 @@ final class E2eAccountSeeder extends Seeder
 
     public const string PASSWORD = 'e2e-fixture-password-not-a-secret';
 
-    public function run(AccountRepository $accounts, PersonRepository $people, Hasher $hasher): void
+    public function run(AccountRepository $accounts, PersonRepository $people, Hasher $hasher, RoleAssignmentRepository $roles): void
     {
         if (! $this->container->environment('local', 'testing')) {
             throw new RuntimeException('The e2e fixture account may only be seeded in a local or testing environment.');
         }
 
         $email = EmailAddress::fromString(self::EMAIL);
-        if ($accounts->findByEmail($email) !== null) {
-            return;
+        $now = new DateTimeImmutable('now');
+
+        $account = $accounts->findByEmail($email);
+        if ($account === null) {
+            $person = Person::create(PersonId::generate(), 'E2E Guardian', $now);
+            $people->save($person);
+            $account = Account::invite(AccountId::generate(), $person->id, $email, $now)->activate($hasher->make(self::PASSWORD), $now);
+            $accounts->save($account);
         }
 
-        $now = new DateTimeImmutable('now');
-        $person = Person::create(PersonId::generate(), 'E2E Guardian', $now);
-        $people->save($person);
-        $accounts->save(
-            Account::invite(AccountId::generate(), $person->id, $email, $now)->activate($hasher->make(self::PASSWORD), $now),
-        );
+        // The Console's ordinary role, so the e2e can see capabilities come back through the
+        // real gateway. Idempotent: an account seeded before roles existed gains it on the next run.
+        $held = array_map(fn (RoleAssignment $a): string => $a->roleKey, $roles->forPerson($account->personId));
+        if (! in_array(Role::Guardian->value, $held, true)) {
+            $roles->add(RoleAssignment::grant($account->personId, Role::Guardian->value, null, $now));
+        }
     }
 }

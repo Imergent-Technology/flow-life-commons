@@ -41,6 +41,7 @@ final class AuthenticateAccount
         private readonly AuthenticationAudit $audit,
         private readonly Hasher $hasher,
         private readonly ConnectionInterface $database,
+        private readonly EffectiveCapabilities $capabilities,
     ) {}
 
     public function __invoke(EmailAddress $email, string $password, ClientContext $client): AuthenticationResult
@@ -70,7 +71,10 @@ final class AuthenticateAccount
         $current = $this->database->transaction(fn (): CurrentAccount => $this->signIn($eligible, $client));
         $this->throttle->clearFailures($email);
 
-        return AuthenticationResult::authenticated($current);
+        // Read after the sign-in commits, from current state; never stored in the session.
+        return AuthenticationResult::authenticated(new CurrentAccount(
+            $current->actor, $current->email, $current->displayName, $this->capabilities->for($current->actor),
+        ));
     }
 
     private function signIn(Account $account, ClientContext $client): CurrentAccount

@@ -1,0 +1,222 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Modules\Access\Application\Role;
+
+/*
+ * Access sits at the top of the frozen graph (Access -> Identity -> Audit -> Shared).
+ * docs/architecture/identity-and-access.md, "Layer placement" and "What other modules use".
+ *
+ * Other modules consume Access only through Access\Application, and what they ask for is a
+ * Capability, never a Role. The generic rules in ModuleBoundariesTest already forbid one
+ * module using another's Domain, Infrastructure or Http; the rules here add what is specific
+ * to authorization. Scoped to Access on purpose; one subject per expectation.
+ */
+
+$access = 'App\\Modules\\Access';
+
+arch('Access: Domain is framework-independent', function () use ($access) {
+    expect("{$access}\\Domain")->not->toUse('Illuminate');
+});
+
+arch('Access: Domain depends on no other module', function () use ($access) {
+    // Its only outside dependency is the Shared kernel (PersonId, AccountId). That is why a
+    // role key is a plain string there: the catalog is in Application, which Domain may not import.
+    expect("{$access}\\Domain")->not->toUse(['App\\Modules\\Identity', 'App\\Modules\\Audit']);
+});
+
+arch('Access: Application does not depend on Infrastructure', function () use ($access) {
+    expect("{$access}\\Application")->not->toUse("{$access}\\Infrastructure");
+});
+
+foreach (['Domain', 'Application'] as $layer) {
+    arch("Access: {$layer} does not touch Laravel's HTTP, auth, session or gate machinery", function () use ($access, $layer) {
+        // Only Infrastructure (the Gate registration) and Http meet the framework. The
+        // authorization decision itself is plain PHP over the catalog and the assignments.
+        expect("{$access}\\{$layer}")->not->toUse([
+            'Illuminate\\Http',
+            'Illuminate\\Routing',
+            'Illuminate\\Auth',
+            'Illuminate\\Contracts\\Auth',
+            'Illuminate\\Session',
+            'Illuminate\\Contracts\\Session',
+            'Illuminate\\Support\\Facades\\Auth',
+            'Illuminate\\Support\\Facades\\Gate',
+            'Illuminate\\Support\\Facades\\Session',
+            'Illuminate\\Support\\Facades\\Route',
+        ]);
+    });
+}
+
+arch('Access: no Eloquent, so an assignment cannot be changed outside the paths the module provides', function () use ($access) {
+    expect('Illuminate\\Database\\Eloquent')->not->toBeUsedIn($access);
+});
+
+arch('Access: uses Identity only through its Application layer', function () use ($access) {
+    // The one edge that exists (ResolveActor, EffectiveCapabilities). It never reaches Identity's
+    // Domain, Infrastructure or Http, and so never Identity's persistence.
+    expect($access)->not->toUse(['App\\Modules\\Identity\\Domain', 'App\\Modules\\Identity\\Infrastructure', 'App\\Modules\\Identity\\Http']);
+});
+
+arch('Identity does not depend on Access (the edge runs Access -> Identity, never back)', function () {
+    expect('App\\Modules\\Identity')->not->toUse('App\\Modules\\Access');
+});
+
+arch('Audit does not depend on Access', function () {
+    expect('App\\Modules\\Audit')->not->toUse('App\\Modules\\Access');
+});
+
+arch('Role is internal to Access: nothing outside it may name the type', function () {
+    // A role is how capabilities are bundled and assigned, never how anything is authorized.
+    // Business code that could import Role could write `if ($role === Role::Guardian)`.
+    //
+    // ONE narrow, deliberate exception: the development-only e2e fixture seeder, which grants
+    // the Console's ordinary role because no grant use case exists yet (the administration
+    // workflow is a later phase). It refuses to run outside local/testing, it authorizes
+    // nothing, and it should call that use case, and this exception should go, when it exists.
+    expect(Role::class)->toOnlyBeUsedIn(['App\\Modules\\Access', 'Database\\Seeders\\E2eAccountSeeder']);
+});
+
+// --- Source scans (each has a positive control, so it cannot pass by matching nothing) ---------
+
+/**
+ * @return list<string>
+ */
+function appPhpFilesOutside(string $module): array
+{
+    $files = [];
+    $root = dirname(__DIR__, 2);
+    foreach (['app', 'bootstrap', 'config', 'routes'] as $dir) {
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("{$root}/{$dir}", FilesystemIterator::SKIP_DOTS));
+        foreach ($iterator as $file) {
+            assert($file instanceof SplFileInfo);
+            if ($file->getExtension() === 'php' && ! str_contains($file->getPathname(), "/Modules/{$module}/")) {
+                $files[] = $file->getPathname();
+            }
+        }
+    }
+
+    return $files;
+}
+
+it('keeps every role key out of code outside Access, so nothing authorizes by role name', function () {
+    $keys = array_map(fn (Role $r): string => $r->value, Role::cases());
+    $offenders = [];
+
+    foreach (appPhpFilesOutside('Access') as $path) {
+        $source = (string) file_get_contents($path);
+        foreach ($keys as $key) {
+            if (preg_match('/[\'"]'.preg_quote($key, '/').'[\'"]/', $source) === 1) {
+                $offenders[] = str_replace(dirname(__DIR__, 2).'/', '', $path)." names role \"{$key}\"";
+            }
+        }
+    }
+
+    expect($offenders)->toBe([]);
+
+    // Positive control: the same scan does see the keys where they legitimately live.
+    $catalog = (string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Access/Application/Role.php');
+    foreach ($keys as $key) {
+        expect(preg_match('/[\'"]'.preg_quote($key, '/').'[\'"]/', $catalog))->toBe(1);
+    }
+});
+
+it('keeps Access out of Identity\'s tables', function () {
+    $tables = ['people', 'accounts', 'account_invitations', 'sessions'];
+    $pattern = '/[\'"](?:'.implode('|', $tables).')[\'"]/';
+    $offenders = [];
+
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator(dirname(__DIR__, 2).'/app/Modules/Access', FilesystemIterator::SKIP_DOTS)) as $file) {
+        assert($file instanceof SplFileInfo);
+        if ($file->getExtension() === 'php' && preg_match($pattern, (string) file_get_contents($file->getPathname())) === 1) {
+            $offenders[] = $file->getFilename();
+        }
+    }
+
+    expect($offenders)->toBe([]);
+
+    // Positive control: the pattern does match Identity's own persistence code.
+    $identity = (string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Identity/Infrastructure/Persistence/AccountRecord.php');
+    expect(preg_match($pattern, $identity))->toBe(1);
+});
+
+// --- The whole module graph ------------------------------------------------------------------------
+
+/**
+ * Module -> modules it references, read from the source.
+ *
+ * @return array<string, list<string>>
+ */
+function moduleGraph(): array
+{
+    $root = dirname(__DIR__, 2).'/app/Modules';
+    $graph = [];
+
+    foreach (glob("{$root}/*", GLOB_ONLYDIR) ?: [] as $moduleDir) {
+        $module = basename($moduleDir);
+        $edges = [];
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($moduleDir, FilesystemIterator::SKIP_DOTS)) as $file) {
+            assert($file instanceof SplFileInfo);
+            if ($file->getExtension() !== 'php') {
+                continue;
+            }
+            preg_match_all('/App\\\\Modules\\\\(\w+)\\\\/', (string) file_get_contents($file->getPathname()), $matches);
+            foreach ($matches[1] as $other) {
+                if ($other !== $module) {
+                    $edges[$other] = $other;
+                }
+            }
+        }
+        $graph[$module] = array_values($edges);
+        sort($graph[$module]);
+    }
+    ksort($graph);
+
+    return $graph;
+}
+
+it('has an acyclic module graph limited to the frozen edges', function () {
+    $graph = moduleGraph();
+    $problems = [];
+
+    // Access -> Identity -> Audit -> Shared. Health is operational and stands alone.
+    $allowed = ['Access' => ['Identity', 'Audit'], 'Identity' => ['Audit'], 'Audit' => [], 'Health' => []];
+    foreach ($graph as $module => $edges) {
+        if (! array_key_exists($module, $allowed)) {
+            $problems[] = "{$module} is a module the frozen graph does not know";
+
+            continue;
+        }
+        foreach (array_diff($edges, $allowed[$module]) as $forbidden) {
+            $problems[] = "{$module} -> {$forbidden} is not a frozen edge";
+        }
+    }
+
+    // No cycle, by depth-first search over the edges actually present.
+    $visit = function (string $module, array $path) use (&$visit, $graph, &$problems): void {
+        if (in_array($module, $path, true)) {
+            $chain = [];
+            foreach ([...$path, $module] as $step) {
+                assert(is_string($step));
+                $chain[] = $step;
+            }
+            $problems[] = 'cycle: '.implode(' -> ', $chain);
+
+            return;
+        }
+        foreach ($graph[$module] ?? [] as $next) {
+            $visit($next, [...$path, $module]);
+        }
+    };
+    foreach (array_keys($graph) as $module) {
+        $visit($module, []);
+    }
+
+    expect(array_values(array_unique($problems)))->toBe([]);
+
+    // Positive controls: the scan sees the edges that do exist, so an empty graph cannot pass.
+    expect($graph['Identity'])->toContain('Audit')
+        ->and($graph['Access'])->toContain('Identity')
+        ->and($graph['Access'])->not->toContain('Audit'); // not used yet: Access -> Audit arrives with the mutation use cases
+});

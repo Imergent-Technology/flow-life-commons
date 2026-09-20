@@ -38,17 +38,18 @@ Each module owns its endpoints in `Http/routes.php`. `routes/api.php` loads ever
 | Module | Purpose | Notes |
 | --- | --- | --- |
 | `Health` | `GET /api/v1/health`: infrastructure verification | Operational, not a business module. Exists to prove the environment and to give the conventions something real to test against |
+| `Access` | `role_assignments`: the platform-owned authorization mechanism | `Domain` (`RoleAssignment`, its port), `Application` (`Capability`, `Role`, `Authorizer`, `AuthorizeAction`), `Infrastructure` (repository, Gate registration). No `Http` yet. Other modules consume it only through `Application`, and ask for a `Capability`: `Role` is internal to Access |
 | `Audit` | `security_events`: the append-only record of identity- and access-relevant occurrences | `RecordSecurityEvent` is its only public entry point. No update, delete, read or UI paths exist (ADR 0019) |
 | `Identity` | `people`, `accounts`, `account_invitations`, `sessions`: the registry of humans and their means of authenticating | All four layers exist. `Application`: `AuthenticateAccount`, `LogOut`, `ExpireSession`, `ResolveActor`, `GetCurrentAccount` and the `LoginThrottle` port. `Http`: `login`, `logout`, `me` and the absolute-lifetime middleware. `Infrastructure` also holds the Laravel auth user provider and the cache-backed throttle. Invitation acceptance, password reset and bootstrap are later phases |
 
 ## Designed, not yet created
 
-The Identity and Access design ([identity-and-access.md](identity-and-access.md)) defines three modules and their dependency direction. `Identity` now exists (above); **`Access` has no folder yet** and is created by a later phase of the epic. `Audit` exists (above).
+The Identity and Access design ([identity-and-access.md](identity-and-access.md)) defines three modules and their dependency direction. `Identity`, `Audit` and `Access` now exist (above).
 
 | Module | Owns | Depends on |
 | --- | --- | --- |
 | `Identity` | The authoritative registry of humans (`people`) and their means of authenticating (`accounts`, `account_invitations`) | `Audit`, `Shared` |
-| `Access` | Authorization: capabilities, roles and `role_assignments` | `Identity`, `Audit`, `Shared` |
+| `Access` | Authorization: capabilities, roles and `role_assignments` | `Identity`, `Shared` (built); `Audit` arrives with the grant/revoke use cases |
 | `Audit` | Append-only `security_events` | `Shared` (built) |
 
 The direction is **Access → Identity → Audit → Shared** and must stay acyclic. `App\Shared\Domain` gains its first inhabitant, `Actor`, for a specific reason: Identity records events through Audit, so placing `Actor` in `Identity\Application` would make Audit import Identity and close a cycle.
