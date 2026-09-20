@@ -11,6 +11,9 @@ rest of the suite (`./flow test backend`) and in CI.
   Infrastructure, Application never depends on Infrastructure, and the persistence records
   are internal to Identity. Scoped to Identity on purpose; the module map still permits
   Eloquent in Domain elsewhere.
+- `AuditBoundariesTest.php`: Audit sits below Identity, so it never depends back on it, its
+  Domain is framework-free, and it has no Eloquent model (so nothing can `save()` or
+  `delete()` an event).
 - `DatabasePortabilityTest.php`: bans MariaDB-only schema/SQL unless a line carries
   `// portability-exception: ADR-NNNN`. The definitive check is running the suite on
   PostgreSQL (`./flow test backend --pgsql`).

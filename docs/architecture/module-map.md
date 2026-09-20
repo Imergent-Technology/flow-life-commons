@@ -12,7 +12,7 @@ apps/platform/app/
       Application/      use cases; the module's public entry points for other code
       Infrastructure/   integrations, persistence details, external APIs
       Http/             controllers, requests/resources, routes.php
-  Shared/               intentionally tiny cross-module kernel (today: the ULID identifiers PersonId and AccountId)
+  Shared/               intentionally tiny cross-module kernel (today: the ULID identifiers, and Actor)
   Providers/            Laravel service providers
 ```
 
@@ -38,17 +38,18 @@ Each module owns its endpoints in `Http/routes.php`. `routes/api.php` loads ever
 | Module | Purpose | Notes |
 | --- | --- | --- |
 | `Health` | `GET /api/v1/health`: infrastructure verification | Operational, not a business module. Exists to prove the environment and to give the conventions something real to test against |
+| `Audit` | `security_events`: the append-only record of identity- and access-relevant occurrences | `RecordSecurityEvent` is its only public entry point. No update, delete, read or UI paths exist (ADR 0019) |
 | `Identity` | `people`, `accounts`, `account_invitations`: the registry of humans and their means of authenticating | Phase 1 of the Identity epic: `Domain` (entities, value objects, repository ports) and `Infrastructure` (Eloquent records, repositories, provider) only. No `Application` or `Http` yet, per the rule above; they arrive with the first use case and endpoint |
 
 ## Designed, not yet created
 
-The Identity and Access design ([identity-and-access.md](identity-and-access.md)) defines three modules and their dependency direction. `Identity` now exists (above); **`Access` and `Audit` have no folders yet** and are created by later phases of the epic.
+The Identity and Access design ([identity-and-access.md](identity-and-access.md)) defines three modules and their dependency direction. `Identity` now exists (above); **`Access` has no folder yet** and is created by a later phase of the epic. `Audit` exists (above).
 
 | Module | Owns | Depends on |
 | --- | --- | --- |
 | `Identity` | The authoritative registry of humans (`people`) and their means of authenticating (`accounts`, `account_invitations`) | `Audit`, `Shared` |
 | `Access` | Authorization: capabilities, roles and `role_assignments` | `Identity`, `Audit`, `Shared` |
-| `Audit` | Append-only `security_events` | `Shared` |
+| `Audit` | Append-only `security_events` | `Shared` (built) |
 
 The direction is **Access → Identity → Audit → Shared** and must stay acyclic. `App\Shared\Domain` gains its first inhabitant, `Actor`, for a specific reason: Identity records events through Audit, so placing `Actor` in `Identity\Application` would make Audit import Identity and close a cycle.
 
