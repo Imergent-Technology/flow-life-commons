@@ -12,6 +12,7 @@ use App\Modules\Identity\Application\CompromisedPasswords;
 use App\Modules\Identity\Application\CredentialMarker;
 use App\Modules\Identity\Application\DisableAccount;
 use App\Modules\Identity\Application\EffectiveCapabilities;
+use App\Modules\Identity\Application\InvitationNotifier;
 use App\Modules\Identity\Application\LoginThrottle;
 use App\Modules\Identity\Application\MultiFactorPolicy;
 use App\Modules\Identity\Application\PasswordResetNotifier;
@@ -28,6 +29,7 @@ use App\Modules\Identity\Infrastructure\Auth\AccountUserProvider;
 use App\Modules\Identity\Infrastructure\Auth\CacheAttemptThrottle;
 use App\Modules\Identity\Infrastructure\Auth\CacheLoginThrottle;
 use App\Modules\Identity\Infrastructure\Auth\LaravelPasswordResetTokens;
+use App\Modules\Identity\Infrastructure\Mail\MailInvitationNotifier;
 use App\Modules\Identity\Infrastructure\Mail\MailPasswordResetNotifier;
 use App\Modules\Identity\Infrastructure\Mfa\AlwaysRequireMultiFactor;
 use App\Modules\Identity\Infrastructure\Mfa\HmacCredentialMarker;
@@ -63,6 +65,7 @@ final class IdentityServiceProvider extends ServiceProvider
         LoginThrottle::class => CacheLoginThrottle::class,
         AttemptThrottle::class => CacheAttemptThrottle::class,
         PasswordResetNotifier::class => MailPasswordResetNotifier::class,
+        InvitationNotifier::class => MailInvitationNotifier::class,
         ActiveAccountQuery::class => DatabaseActiveAccountQuery::class,
         AccountSessions::class => DatabaseAccountSessions::class,
         // A default that grants nothing. The Access module registers its own over this.
@@ -122,7 +125,7 @@ final class IdentityServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        // Identity's own message templates (the password-recovery email), namespaced `identity::`.
+        // Identity's own message templates (the password-recovery and invitation emails), namespaced `identity::`.
         $this->loadViewsFrom(__DIR__.'/Mail/views', 'identity');
 
         // The "identity" driver named by config/auth.php.

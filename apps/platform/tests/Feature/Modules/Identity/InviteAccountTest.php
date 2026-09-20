@@ -85,7 +85,7 @@ it('records account.invited with the subject and only the lifetime in context', 
         ->and($events[0]->actor_account_id)->toBeNull()
         ->and($events[0]->subject_account_id)->toBe($issued->accountId->value)
         ->and($events[0]->subject_person_id)->toBe($issued->personId->value)
-        ->and(Identity::context($events[0]))->toBe(['expires_in_days' => 7]);
+        ->and(Identity::context($events[0]))->toBe(['expires_in_days' => 7, 'channel' => 'operator']);
 });
 
 it('records who invited, when an account did', function () {

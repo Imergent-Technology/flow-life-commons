@@ -8,6 +8,7 @@ use App\Modules\Audit\Application\RecordSecurityEvent;
 use App\Modules\Audit\Application\SecurityEventOutcome;
 use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\EmailAddress;
+use App\Modules\Identity\Domain\InvitationChannel;
 use App\Shared\Domain\Actor;
 
 /**
@@ -28,15 +29,16 @@ final readonly class CredentialAudit
     /**
      * @param  bool  $issuedByPlatform  the invitation had no inviting Account: the platform itself issued
      *                                  it (the administrator bootstrap, whose token an operator hands
-     *                                  over). Recorded as who vouched for the invitation; it is not
-     *                                  evidence about the mailbox, and does not set email_verified_at.
+     *                                  over). Recorded as who vouched for the invitation.
+     * @param  InvitationChannel  $channel  how the token reached its holder: `email` is evidence about the mailbox
+     *                                      (and the Account's email is then verified), `operator` is not.
      */
-    public function invitationAccepted(Account $account, bool $issuedByPlatform, ClientContext $client): void
+    public function invitationAccepted(Account $account, bool $issuedByPlatform, InvitationChannel $channel, ClientContext $client): void
     {
         ($this->record)(
             IdentityEvent::InvitationAccepted->value, SecurityEventOutcome::Success,
             null, $account->personId, $account->id, $client->ip, $client->userAgent,
-            ['issued_by' => $issuedByPlatform ? 'platform' : 'account'],
+            ['issued_by' => $issuedByPlatform ? 'platform' : 'account', 'channel' => $channel->value],
         );
     }
 

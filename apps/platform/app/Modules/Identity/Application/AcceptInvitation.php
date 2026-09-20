@@ -29,11 +29,10 @@ use InvalidArgumentException;
  *   Account is then locked and must STILL be `invited`, so acceptance can never resurrect a disabled
  *   Account. Password, activation, `accepted_at` and the security event commit together or not at all.
  *
- * Acceptance does NOT set `email_verified_at`, which means the platform has evidence the holder
- * controls the mailbox (see Account::activate). No invitation is delivered to an address yet (the
- * bootstrap token is handed over by an operator), so there is no such evidence to record. Whatever
- * later delivers invitations to the address decides how to carry that evidence to here. The event
- * records who issued the invitation (`issued_by`), which is all the provenance this needs.
+ * **Whether it verifies the email is the invitation's, not the caller's.** `email_verified_at` means the platform has
+ * evidence the holder controls the mailbox. An invitation the platform MAILED to the address is that evidence, so
+ * accepting one sets it, in the same save as the activation. One handed over by an operator (the administrator
+ * bootstrap) is not, so accepting it leaves the email unverified (ADR 0024). The event records the channel.
  */
 final readonly class AcceptInvitation
 {
@@ -95,10 +94,10 @@ final readonly class AcceptInvitation
             return false;
         }
 
-        // Not verified: nothing delivered this invitation to the address, so nothing shows mailbox control.
-        $this->accounts->save($account->activate($hash, $now));
+        $activated = $account->activate($hash, $now);
+        $this->accounts->save($invitation->channel->provesMailbox() ? $activated->verifyEmail($now) : $activated);
         $this->invitations->save($invitation->accept($now));
-        $this->audit->invitationAccepted($account, $invitation->invitedByAccountId === null, $client);
+        $this->audit->invitationAccepted($account, $invitation->invitedByAccountId === null, $invitation->channel, $client);
 
         return true;
     }

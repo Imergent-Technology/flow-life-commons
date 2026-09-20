@@ -17,6 +17,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property CarbonInterface $expires_at
  * @property CarbonInterface|null $accepted_at
  * @property string|null $invited_by_account_id
+ * @property string $channel
  */
 final class AccountInvitationRecord extends Model
 {

@@ -19,6 +19,9 @@ declare(strict_types=1);
  *   php worker.php mfa_complete '{"account":"...","marker":"...","need":"challenge","code":"..."}'  (or "recovery_code")
  *   php worker.php mfa_confirm_enrollment '{"account":"...","marker":"...","code":"..."}'
  *   php worker.php consume_code '{"account":"...","digest":"..."}'
+ *   php worker.php enable '{"account":"..."}'
+ *   php worker.php reissue '{"account":"..."}'
+ *   php worker.php invite '{"email":"...","name":"..."}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
  * the operation succeeded, 2 when it was refused or failed. It refuses to run against any
@@ -35,13 +38,19 @@ use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\CompleteSecondFactor;
 use App\Modules\Identity\Application\ConfirmTotpEnrollment;
 use App\Modules\Identity\Application\DisableAccount;
+use App\Modules\Identity\Application\EnableAccount;
+use App\Modules\Identity\Application\InvitationDetails;
+use App\Modules\Identity\Application\InviteAccount;
 use App\Modules\Identity\Application\PendingLogin;
+use App\Modules\Identity\Application\ReactivationOutcome;
+use App\Modules\Identity\Application\ReissueInvitation;
 use App\Modules\Identity\Application\RequestPasswordReset;
 use App\Modules\Identity\Application\ResetPassword;
 use App\Modules\Identity\Application\SecondFactorNeed;
 use App\Modules\Identity\Application\SecondFactorProof;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\EmailAddress;
+use App\Modules\Identity\Domain\InvitationChannel;
 use App\Modules\Identity\Domain\InvitationToken;
 use App\Modules\Identity\Domain\RecoveryCodeRepository;
 use App\Shared\Domain\AccountId;
@@ -127,6 +136,14 @@ try {
         if (! $consumed) {
             throw new RuntimeException('the code was already spent');
         }
+    } elseif ($operation === 'enable') {
+        if ($app->make(EnableAccount::class)(AccountId::fromString($arg('account'))) !== ReactivationOutcome::Enabled) {
+            throw new RuntimeException('the account was not disabled');
+        }
+    } elseif ($operation === 'reissue') {
+        $app->make(ReissueInvitation::class)(AccountId::fromString($arg('account')));
+    } elseif ($operation === 'invite') {
+        $app->make(InviteAccount::class)(InvitationDetails::from($arg('email'), $arg('name')), null, InvitationChannel::Email);
     } elseif ($operation === 'lock_invitation') {
         // Just takes and releases the invitation row lock: it finishes only once it has been granted.
         DB::transaction(fn () => $app->make(AccountInvitationRepository::class)->findByTokenForUpdate(InvitationToken::fromPresented($arg('token'))));

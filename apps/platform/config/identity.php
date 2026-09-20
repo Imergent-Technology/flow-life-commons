@@ -24,9 +24,13 @@ return [
      * Account invitations (docs/architecture/identity-and-access.md, "Credential lifecycles").
      * ttl_days: how long an invitation stays usable (7 by default). The token is single-use and
      * only its hash is stored.
+     * console_path: where on the Console's origin (app.url) the acceptance page lives. The emailed link is
+     * `<app.url><console_path>#token=...`: the secret is in the URL FRAGMENT, which browsers never send to a
+     * server, so it stays out of access logs and Referer headers (ADR 0024).
      */
     'invitation' => [
         'ttl_days' => (int) env('IDENTITY_INVITATION_TTL_DAYS', 7),
+        'console_path' => '/accept-invitation',
     ],
 
     /*

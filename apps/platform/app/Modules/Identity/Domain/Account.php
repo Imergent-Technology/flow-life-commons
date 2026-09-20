@@ -106,9 +106,9 @@ final readonly class Account
      * Activation leaves `emailVerifiedAt` as it was (null for an invited Account). That field means
      * ONE thing: the platform has evidence the holder demonstrated control of the mailbox. Choosing a
      * password does not show that, and neither does holding an invitation token, which an operator may
-     * have handed over (the administrator bootstrap). Nothing delivers an invitation to an address yet,
-     * so nothing can establish that evidence; when something does, it introduces its own explicit
-     * operation for recording it rather than a flag on this one.
+     * have handed over (the administrator bootstrap). Only an invitation the platform MAILED to the
+     * address shows it, and the acceptance that knows so records it with its own explicit operation,
+     * verifyEmail(), rather than a flag on this one (ADR 0024).
      */
     public function activate(string $passwordHash, DateTimeImmutable $now): self
     {
@@ -120,6 +120,23 @@ final readonly class Account
             $this->id, $this->personId, $this->email, AccountStatus::Active,
             $passwordHash, $now, $this->emailVerifiedAt, null,
             $this->lastLoginAt, $this->createdAt, $now,
+        );
+    }
+
+    /**
+     * Records evidence that the holder controls the mailbox: what `emailVerifiedAt` means and the only thing it
+     * means. Nothing else calls this: the one operation that has such evidence is accepting an invitation the
+     * platform mailed to the address. The earliest evidence stands, so calling it again changes nothing.
+     */
+    public function verifyEmail(DateTimeImmutable $now): self
+    {
+        if ($this->emailVerifiedAt !== null) {
+            return $this;
+        }
+
+        return new self(
+            $this->id, $this->personId, $this->email, $this->status, $this->passwordHash, $this->passwordUpdatedAt,
+            $now, $this->disabledAt, $this->lastLoginAt, $this->createdAt, $now,
         );
     }
 
@@ -138,6 +155,26 @@ final readonly class Account
         return new self(
             $this->id, $this->personId, $this->email, AccountStatus::Active,
             $passwordHash, $now, $this->emailVerifiedAt, null, $this->lastLoginAt, $this->createdAt, $now,
+        );
+    }
+
+    /**
+     * Puts a disabled Account back where it was before it was disabled: ACTIVE if it ever chose a password, and
+     * INVITED if it never did (a disable can happen before the invitation is accepted). Nothing else changes:
+     * the credential, the Person, the assignments and the history are as they were, and no session is created.
+     * Whether the Account can then sign in is the ordinary question, answered the ordinary way.
+     */
+    public function enable(DateTimeImmutable $now): self
+    {
+        if ($this->status !== AccountStatus::Disabled) {
+            throw new InvalidAccountState(sprintf('Only a disabled account can be enabled, not a %s one.', $this->status->value));
+        }
+
+        return new self(
+            $this->id, $this->personId, $this->email,
+            $this->passwordHash === null ? AccountStatus::Invited : AccountStatus::Active,
+            $this->passwordHash, $this->passwordUpdatedAt, $this->emailVerifiedAt, null,
+            $this->lastLoginAt, $this->createdAt, $now,
         );
     }
 

@@ -18,6 +18,9 @@ use DateTimeImmutable;
  * - `invitedByAccountId` is provenance, not a relationship: it has no foreign key
  *   (ADR 0021) and is null when the platform itself issues the invitation, such as the
  *   administrator bootstrap command.
+ * - `channel` is how the token reaches its holder (ADR 0024). It is fixed when the invitation is issued:
+ *   an EMAIL invitation was mailed to the Account's own address, so accepting it shows mailbox control;
+ *   an OPERATOR one was handed over, so it does not.
  */
 final readonly class AccountInvitation
 {
@@ -28,6 +31,7 @@ final readonly class AccountInvitation
         public DateTimeImmutable $expiresAt,
         public ?DateTimeImmutable $acceptedAt,
         public ?AccountId $invitedByAccountId,
+        public InvitationChannel $channel = InvitationChannel::Operator,
     ) {}
 
     public static function issue(
@@ -37,12 +41,13 @@ final readonly class AccountInvitation
         DateTimeImmutable $expiresAt,
         DateTimeImmutable $now,
         ?AccountId $invitedByAccountId = null,
+        InvitationChannel $channel = InvitationChannel::Operator,
     ): self {
         if ($expiresAt <= $now) {
             throw new InvitationNotUsable('An invitation must expire after it is issued.');
         }
 
-        return new self($id, $accountId, $token->hash(), $expiresAt, null, $invitedByAccountId);
+        return new self($id, $accountId, $token->hash(), $expiresAt, null, $invitedByAccountId, $channel);
     }
 
     public static function reconstitute(
@@ -52,8 +57,9 @@ final readonly class AccountInvitation
         DateTimeImmutable $expiresAt,
         ?DateTimeImmutable $acceptedAt,
         ?AccountId $invitedByAccountId,
+        InvitationChannel $channel = InvitationChannel::Operator,
     ): self {
-        return new self($id, $accountId, $tokenHash, $expiresAt, $acceptedAt, $invitedByAccountId);
+        return new self($id, $accountId, $tokenHash, $expiresAt, $acceptedAt, $invitedByAccountId, $channel);
     }
 
     public function isAccepted(): bool
@@ -80,6 +86,6 @@ final readonly class AccountInvitation
             throw new InvitationNotUsable('The invitation has expired.');
         }
 
-        return new self($this->id, $this->accountId, $this->tokenHash, $this->expiresAt, $now, $this->invitedByAccountId);
+        return new self($this->id, $this->accountId, $this->tokenHash, $this->expiresAt, $now, $this->invitedByAccountId, $this->channel);
     }
 }

@@ -113,6 +113,16 @@ final class Faults
             {
                 return $this->inner->findByTokenForUpdate($token);
             }
+
+            public function lockAllFor(AccountId $account): void
+            {
+                $this->inner->lockAllFor($account);
+            }
+
+            public function deleteUnacceptedFor(AccountId $account): int
+            {
+                return $this->inner->deleteUnacceptedFor($account);
+            }
         });
     }
 

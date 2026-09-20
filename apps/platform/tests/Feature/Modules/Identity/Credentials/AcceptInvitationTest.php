@@ -123,8 +123,8 @@ it('records who vouched for the address: the platform for a bootstrap invitation
     acceptInvitation($accountToken, Passwords::OTHER)->assertNoContent();
 
     $events = Identity::events('invitation.accepted');
-    expect(Identity::context($events[0]))->toBe(['issued_by' => 'platform'])
-        ->and(Identity::context($events[1]))->toBe(['issued_by' => 'account']);
+    expect(Identity::context($events[0]))->toBe(['issued_by' => 'platform', 'channel' => 'operator'])
+        ->and(Identity::context($events[1]))->toBe(['issued_by' => 'account', 'channel' => 'operator']);
 });
 
 it('activates an ADMINISTRATOR BOOTSTRAP invitation but leaves the email unverified, and signs no one in', function () {
@@ -144,7 +144,7 @@ it('activates an ADMINISTRATOR BOOTSTRAP invitation but leaves the email unverif
         // Acceptance creates no authenticated session...
         ->and($response->baseResponse->headers->getCookies())->toBe([])
         ->and(DB::table('sessions')->count())->toBe(0)
-        ->and(Identity::context(Identity::events('invitation.accepted')[0]))->toBe(['issued_by' => 'platform']);
+        ->and(Identity::context(Identity::events('invitation.accepted')[0]))->toBe(['issued_by' => 'platform', 'channel' => 'operator']);
 
     // ...the person then signs in through the ordinary login, which is what establishes one. An
     // unverified email does not block that: no policy makes verification a condition of signing in.

@@ -150,8 +150,8 @@ foreach (['Illuminate\\Auth\\Passwords', 'Illuminate\\Contracts\\Auth\\CanResetP
 }
 
 foreach (['Illuminate\\Mail', 'Illuminate\\Support\\Facades\\Mail', 'Illuminate\\Contracts\\Mail'] as $mail) {
-    arch("Identity: {$mail} is confined to the recovery-message adapter", function () use ($identity, $mail) {
-        // Identity sends one message, its own. There is no notifications module and no other user.
+    arch("Identity: {$mail} is confined to Identity's message adapters", function () use ($identity, $mail) {
+        // Identity sends two messages, its own (recovery and invitation). There is no notifications module.
         expect($mail)->toOnlyBeUsedIn("{$identity}\\Infrastructure\\Mail");
     });
 }
@@ -185,4 +185,44 @@ it('Identity: only PasswordHasher hashes or checks a password outside Infrastruc
 
     expect($offenders)->toBe([])
         ->and(preg_match($hashing, (string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Identity/Application/PasswordHasher.php')))->toBe(1);
+});
+
+/*
+ * Delivered invitations (docs/adr/0024): the raw invitation secret leaves the process in exactly two places, and
+ * nothing but the delivery use case may ask for it to be sent.
+ */
+
+arch('Identity: the invitation notifier is a port whose mail implementation is Infrastructure', function () use ($identity) {
+    expect("{$identity}\\Infrastructure\\Mail\\MailInvitationNotifier")->toImplement("{$identity}\\Application\\InvitationNotifier");
+});
+
+arch('Identity: only DeliverInvitation asks the notifier to send, so nothing mails a token except after a commit it knows of', function () use ($identity) {
+    expect("{$identity}\\Application\\InvitationNotifier")->toOnlyBeUsedIn([
+        "{$identity}\\Application\\DeliverInvitation",
+        "{$identity}\\Infrastructure\\IdentityServiceProvider",
+        "{$identity}\\Infrastructure\\Mail\\MailInvitationNotifier",
+    ]);
+});
+
+it('Identity: a raw invitation or reset secret is revealed only by the two mail adapters and the operator\'s bootstrap command', function () {
+    // Source scan, with a positive control. The token is shown to whoever the invitation is FOR, once, and to no
+    // one else: not an HTTP response, not the audit trail, not a log. Only these three callers exist.
+    $pattern = '/->revealToken\s*\(/';
+    $root = dirname(__DIR__, 2).'/app';
+    $callers = [];
+
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)) as $file) {
+        assert($file instanceof SplFileInfo);
+        if ($file->getExtension() === 'php' && preg_match($pattern, (string) file_get_contents($file->getPathname())) === 1) {
+            $callers[] = basename($file->getPathname());
+        }
+    }
+    sort($callers);
+
+    expect($callers)->toBe(['CreateAdministratorCommand.php', 'MailInvitationNotifier.php', 'MailPasswordResetNotifier.php'])
+        ->and(preg_match($pattern, '$response = response()->json([\'token\' => $issued->revealToken()]);'))->toBe(1);
+});
+
+arch('Identity: an invitation channel is a sealed enum, and only EMAIL proves the mailbox', function () use ($identity) {
+    expect("{$identity}\\Domain\\InvitationChannel")->toBeEnum();
 });

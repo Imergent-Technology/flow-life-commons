@@ -18,6 +18,9 @@ enum IdentityEvent: string
     case SessionAbsoluteExpired = 'session.absolute_expired';
     case AccountInvited = 'account.invited';
     case AccountDisabled = 'account.disabled';
+    case AccountReenabled = 'account.reenabled';
+    case InvitationReissued = 'invitation.reissued';
+    case InvitationDeliveryFailed = 'invitation.delivery_failed';
     case InvitationAccepted = 'invitation.accepted';
     case PasswordResetRequested = 'password.reset_requested';
     case PasswordResetCompleted = 'password.reset_completed';
@@ -30,4 +33,6 @@ enum IdentityEvent: string
     case MfaReplaced = 'mfa.replaced';
     case SecurityReverified = 'security.reverified';
     case SessionSecondFactorRequired = 'session.second_factor_required';
+    case MfaAdministrativelyReset = 'mfa.administratively_reset';
+    case MfaResetFromServer = 'mfa.reset_from_server';
 }

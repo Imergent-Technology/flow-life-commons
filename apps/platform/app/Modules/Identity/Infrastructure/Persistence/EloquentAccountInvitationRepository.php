@@ -7,6 +7,7 @@ namespace App\Modules\Identity\Infrastructure\Persistence;
 use App\Modules\Identity\Domain\AccountInvitation;
 use App\Modules\Identity\Domain\AccountInvitationId;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
+use App\Modules\Identity\Domain\InvitationChannel;
 use App\Modules\Identity\Domain\InvitationToken;
 use App\Shared\Domain\AccountId;
 
@@ -27,6 +28,7 @@ final class EloquentAccountInvitationRepository implements AccountInvitationRepo
         $record->expires_at = Utc::toColumn($invitation->expiresAt);
         $record->accepted_at = Utc::toColumnOrNull($invitation->acceptedAt);
         $record->invited_by_account_id = $invitation->invitedByAccountId?->value;
+        $record->channel = $invitation->channel->value;
         $record->save();
     }
 
@@ -51,6 +53,16 @@ final class EloquentAccountInvitationRepository implements AccountInvitationRepo
         return $record === null ? null : $this->toDomain($record);
     }
 
+    public function lockAllFor(AccountId $account): void
+    {
+        AccountInvitationRecord::query()->where('account_id', $account->value)->orderBy('id')->lockForUpdate()->get(['id']);
+    }
+
+    public function deleteUnacceptedFor(AccountId $account): int
+    {
+        return AccountInvitationRecord::query()->where('account_id', $account->value)->whereNull('accepted_at')->toBase()->delete();
+    }
+
     private function toDomain(AccountInvitationRecord $record): AccountInvitation
     {
         return AccountInvitation::reconstitute(
@@ -60,6 +72,7 @@ final class EloquentAccountInvitationRepository implements AccountInvitationRepo
             Utc::fromColumn($record->expires_at),
             Utc::fromColumnOrNull($record->accepted_at),
             $record->invited_by_account_id === null ? null : AccountId::fromString($record->invited_by_account_id),
+            InvitationChannel::from($record->channel),
         );
     }
 }

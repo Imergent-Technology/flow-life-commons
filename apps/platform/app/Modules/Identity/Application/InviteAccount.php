@@ -12,6 +12,7 @@ use App\Modules\Identity\Domain\AccountInvitationId;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\EmailAddressAlreadyInUse;
+use App\Modules\Identity\Domain\InvitationChannel;
 use App\Modules\Identity\Domain\InvitationToken;
 use App\Modules\Identity\Domain\Person;
 use App\Modules\Identity\Domain\PersonRepository;
@@ -33,11 +34,14 @@ use Illuminate\Database\ConnectionInterface;
  *   inside a larger transaction (the administrator bootstrap), that is the caller's commit.
  * - An email address already in use fails cleanly and touches nothing: it never repurposes or
  *   merges an existing Account.
- * - Nothing is sent. Delivery is not part of this phase.
+ * - Nothing is sent from here: delivery is DeliverInvitation's, after the transaction that created this has
+ *   committed. `$channel` says how the token WILL reach its holder, and is what decides whether accepting it shows
+ *   mailbox control (ADR 0024): EMAIL only for a caller that then mails it to the address. The bootstrap hands
+ *   the token to a server operator and so keeps the default, OPERATOR.
  *
  * **This use case does not authorize its caller.** Identity cannot ask Access what a caller may
- * do. Whichever adapter exposes it must decide who may invite first; today the only one is the
- * administrator bootstrap command, whose authority is server access (ADR 0020).
+ * do. Whichever adapter exposes it must decide who may invite first: the administrator bootstrap command
+ * (authority: server access, ADR 0020) and Access's operator-invitation use case (authority: a capability).
  */
 final readonly class InviteAccount
 {
@@ -53,11 +57,11 @@ final readonly class InviteAccount
     /**
      * @throws EmailAlreadyInUse
      */
-    public function __invoke(InvitationDetails $details, ?Actor $invitedBy = null): IssuedInvitation
+    public function __invoke(InvitationDetails $details, ?Actor $invitedBy = null, InvitationChannel $channel = InvitationChannel::Operator): IssuedInvitation
     {
         $ttlDays = max(1, $this->config->integer('identity.invitation.ttl_days'));
 
-        return $this->database->transaction(function () use ($details, $invitedBy, $ttlDays): IssuedInvitation {
+        return $this->database->transaction(function () use ($details, $invitedBy, $ttlDays, $channel): IssuedInvitation {
             // A clean refusal, without an INSERT that would abort the transaction on PostgreSQL.
             if ($this->accounts->findByEmail($details->email()) !== null) {
                 throw new EmailAlreadyInUse;
@@ -70,7 +74,7 @@ final readonly class InviteAccount
             $account = Account::invite(AccountId::generate(), $person->id, $details->email(), $now);
             $token = InvitationToken::generate();
             $invitation = AccountInvitation::issue(
-                AccountInvitationId::generate(), $account->id, $token, $expiresAt, $now, $invitedBy?->accountId,
+                AccountInvitationId::generate(), $account->id, $token, $expiresAt, $now, $invitedBy?->accountId, $channel,
             );
 
             $this->people->save($person);
@@ -84,7 +88,7 @@ final readonly class InviteAccount
             ($this->record)(
                 IdentityEvent::AccountInvited->value, SecurityEventOutcome::Success,
                 $invitedBy, $person->id, $account->id, null, null,
-                ['expires_in_days' => $ttlDays],
+                ['expires_in_days' => $ttlDays, 'channel' => $channel->value],
             );
 
             return new IssuedInvitation($person->id, $account->id, $details->email()->value, $expiresAt, $token);
