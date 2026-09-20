@@ -68,11 +68,11 @@ final class AuthenticateAccount
             return AuthenticationResult::failed();
         }
 
-        $current = $this->database->transaction(fn (): ?CurrentAccount => $this->signIn($eligible, $client));
-        if ($current === null) {
-            // The Account stopped being eligible between the read above and the lock below.
+        $current = $this->database->transaction(fn (): CurrentAccount|FailureReason => $this->signIn($eligible, $client));
+        if ($current instanceof FailureReason) {
+            // The Account changed between the read above and the lock below.
             $this->throttle->recordFailure($email);
-            $this->audit->failed(FailureReason::AccountNotActive, $email, $this->accounts->find($eligible->id), $client);
+            $this->audit->failed($current, $email, $this->accounts->find($eligible->id), $client);
 
             return AuthenticationResult::failed();
         }
@@ -85,18 +85,25 @@ final class AuthenticateAccount
     }
 
     /**
-     * Records the sign-in, or returns null if the Account can no longer authenticate.
+     * Records the sign-in, or says why it must not be recorded.
      *
      * The Account was read, and its password verified, BEFORE this transaction opened. Saving that
      * copy back would write its whole state, and if a disable committed in between it would undo
      * it: a disabled Account silently re-enabled by someone signing in. So it is re-read here WITH a
      * lock, and re-checked, and the copy that is saved is the one just read.
+     *
+     * The same window applies to the credential. A password verified against the hash read earlier
+     * proves nothing about the hash now stored: if a reset or change committed in between, the
+     * caller proved a password that has since been replaced, and must not be signed in with it.
      */
-    private function signIn(Account $verified, ClientContext $client): ?CurrentAccount
+    private function signIn(Account $verified, ClientContext $client): CurrentAccount|FailureReason
     {
         $account = $this->accounts->findForUpdate($verified->id);
         if ($account === null || ! $account->canAuthenticate()) {
-            return null;
+            return FailureReason::AccountNotActive;
+        }
+        if ($account->passwordHash !== $verified->passwordHash) {
+            return FailureReason::WrongPassword;
         }
 
         $person = $this->people->find($account->personId)

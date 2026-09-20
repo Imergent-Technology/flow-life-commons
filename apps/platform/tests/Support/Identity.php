@@ -85,6 +85,16 @@ final class Identity
         return $account;
     }
 
+    /** The same Account with a different stored credential, as a committed reset or change would leave it. */
+    public static function withPasswordHash(Account $account, string $hash): Account
+    {
+        return Account::reconstitute(
+            $account->id, $account->personId, $account->email, $account->status, $hash,
+            self::now()->modify('+1 minute'), $account->emailVerifiedAt, $account->disabledAt,
+            $account->lastLoginAt, $account->createdAt, self::now()->modify('+1 minute'),
+        );
+    }
+
     public static function invitation(
         Account $account,
         ?InvitationToken $token = null,
