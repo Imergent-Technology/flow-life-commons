@@ -5,7 +5,7 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0015](0015-identity-owns-person.md), [ADR 0016](0016-guardian-console-same-origin-session-authentication.md)
-- **Clarified:** 2026-09-20, at the Phase 5 closeout. What `email_verified_at` means was tightened (acceptance no longer sets it), the no-session-on-acceptance lifecycle was recorded with its reasons, and the bcrypt tradeoff was made explicit. The password policy itself is unchanged.
+- **Clarified:** 2026-09-20, at the Phase 5 closeout. What `email_verified_at` means was tightened (acceptance no longer sets it), the no-session-on-acceptance lifecycle was recorded with its reasons, the bcrypt tradeoff was made explicit, and the test gate was made self-contained. The password policy itself is unchanged.
 
 ## Context
 
@@ -38,6 +38,7 @@ Four facts, each measured rather than assumed, shaped them:
 - **It fails closed.** A connection error, a non-2xx status, an empty answer or a malformed one is `CompromisedPasswordCheckUnavailable`: the password is neither accepted nor refused, nothing is changed, and the endpoint answers **`503` with `Retry-After`**. "Could not check" is never "safe".
 - **The check runs before the credential transaction opens**, and only for a password that already passed the offline rules, so a plainly unacceptable password is never sent anywhere, not even as a prefix.
 - The one way to switch it off (`IDENTITY_COMPROMISED_PASSWORD_CHECK=none`, for development and tests with no network) is refused by the container outside the `local` and `testing` environments, and the code default is the real check, so a production host that configures nothing is still screened.
+- **Automated validation is deterministic and self-contained.** Development and CI use the `none` driver, so `./flow test`, `./flow check`, CI and the browser e2e never need the public service (`./flow test e2e` refuses to run otherwise). The real adapter is tested against faked HTTP, both alone and behind each endpoint that sets a password: clean, breached, 4xx, 5xx, malformed, empty and connection failure (each failure a `503` that changes nothing), the call made outside the transaction, and only the five-character prefix sent. A separate **manual** smoke test (`tests/Live`, in no test suite) checks the real service, and skips rather than fails when offline.
 
 **Invitation acceptance** (`POST /api/v1/invitations/accept`):
 
@@ -53,7 +54,7 @@ Four facts, each measured rather than assumed, shaped them:
 - A passphrase of about 72 ordinary characters is the ceiling (fewer if it uses multi-byte characters), so 64 Unicode characters are not always permitted (see *The bcrypt tradeoff*). Long passphrases within it work naturally; longer ones are refused with a reason. Lifting the limit means moving off bcrypt (Argon2id, rehash on sign-in), which supersedes the byte limit in this ADR and nothing else.
 - An Account activated by a bootstrap invitation has an unverified email until something establishes mailbox control. Nothing currently depends on `email_verified_at`, so nothing is blocked; a later feature that needs a verified address (a standalone verification flow, email change) will have to obtain it rather than assume it.
 - A breach-service outage blocks setting a password until it recovers, rather than quietly weakening the policy. That is the intended trade; the response is retryable and changes nothing.
-- The check needs outbound HTTPS from the host. A deployment that cannot allow it needs the local-blocklist adapter first.
+- The check needs outbound HTTPS from a **production** host. A deployment that cannot allow it needs the local-blocklist adapter first. Development, CI and the test suite do not.
 - At sign-in, an over-long candidate can no longer match a stored password by its first 72 bytes, and a candidate carrying a NUL byte can no longer match by what precedes it.
 
 ## Alternatives considered

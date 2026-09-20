@@ -7,9 +7,12 @@ import {
   type Page,
 } from '@playwright/test'
 
-// The credential lifecycle in real Chromium, through the real gateway, with real Mailpit mail and
-// the real breached-password service: invitation acceptance, sign-in, authenticated password change,
-// and forgotten-password recovery by email. No Console UI exists for these yet, so the pages make the
+// The credential lifecycle in real Chromium, through the real gateway, with real Mailpit mail:
+// invitation acceptance, sign-in, authenticated password change, and forgotten-password recovery by
+// email. It is self-contained: the platform runs with the no-op breached-password checker, so nothing
+// here reaches a public service (`./flow test e2e` refuses to run otherwise). What the platform does
+// when a password is breached, or the service is down, is proved deterministically in the backend
+// tests (BreachCheckEndpointsTest); the real service has a separate manual smoke test (tests/Live). No Console UI exists for these yet, so the pages make the
 // same-origin API calls the Console will. The accounts are development fixtures, reset on every run
 // by apps/platform/database/seeders/E2eAccountSeeder.php; the token and their names are public.
 const INVITEE = 'e2e.invitee@example.org'
@@ -18,12 +21,8 @@ const RECOVERY = 'e2e.recovery@example.org'
 const RECOVERY_PASSWORD = 'e2e-recovery-password-not-a-secret'
 const SESSION_COOKIE = '__Host-flowlife-session'
 
-// Passwords no breach corpus has seen, fresh every run.
+// A fresh, unique passphrase for each step.
 const unique = (label: string): string => `e2e ${label} passphrase ${crypto.randomUUID()}`
-
-// Both are in the live Pwned Passwords corpus. The 15-character minimum lets the first through the
-// offline rules, so it reaches the real k-anonymity lookup.
-const BREACHED = 'password12345678'
 
 interface Api {
   status: number
@@ -154,7 +153,7 @@ test.describe('the credential lifecycle, end to end', () => {
     const url = baseURL ?? ''
     expect(url).not.toBe('')
 
-    // Refused before anything is spent, and each refusal says why.
+    // Refused before anything is spent, and the refusal says why.
     const weak = await api(page, 'POST', '/api/v1/invitations/accept', {
       token: INVITATION_TOKEN,
       password: 'too short',
@@ -162,16 +161,6 @@ test.describe('the credential lifecycle, end to end', () => {
     })
     expect(weak.status).toBe(422)
     expect(errorsOf(weak).errors?.password?.[0]).toContain('at least 15')
-
-    // The LIVE breached-password service: only a 5-character hash prefix leaves the platform, and
-    // the answer is a refusal that does not use the invitation up.
-    const breached = await api(page, 'POST', '/api/v1/invitations/accept', {
-      token: INVITATION_TOKEN,
-      password: BREACHED,
-      password_confirmation: BREACHED,
-    })
-    expect(breached.status).toBe(422)
-    expect(errorsOf(breached).errors?.password?.[0]).toContain('data breaches')
 
     const accepted = await api(page, 'POST', '/api/v1/invitations/accept', {
       token: INVITATION_TOKEN,

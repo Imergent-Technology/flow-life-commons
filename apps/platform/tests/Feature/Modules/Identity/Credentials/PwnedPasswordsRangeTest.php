@@ -12,6 +12,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rules\Password;
+use Tests\Support\BreachService;
 
 /*
  * The remote breach check (PwnedPasswordsRange), against a faked service. Nothing here reaches the
@@ -23,13 +24,7 @@ const PWNED_PASSWORD = 'correct horse battery staple';
 /** The service's answer for a password's prefix: its own suffix with a count, plus filler and padding. */
 function rangeAnswer(string $password, int $count = 12345): string
 {
-    $hash = strtoupper(sha1($password));
-
-    return implode("\r\n", [
-        '0018A45C4D1DEF81644B54AB7F969B88D65:1',
-        substr($hash, 5).':'.$count,
-        'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF:0',
-    ]);
+    return BreachService::answer($password, $count);
 }
 
 function checker(): PwnedPasswordsRange
@@ -90,7 +85,7 @@ it('fails closed when the service answers with an error status', function (int $
 
     expect(fn () => checker()->contains(PlainPassword::fromInput(PWNED_PASSWORD)))
         ->toThrow(CompromisedPasswordCheckUnavailable::class);
-})->with([429, 500, 502, 503]);
+})->with([400, 404, 429, 500, 502, 503]);
 
 it('fails closed on an error status even when the body looks like a perfectly good answer', function () {
     // The status check is its own guard. Without it, a well-formed body on a 5xx (a proxy's canned

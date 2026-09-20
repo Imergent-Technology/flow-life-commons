@@ -73,6 +73,12 @@ test_e2e() {
     for s in gateway platform guardian mariadb; do
         service_running "$s" || die "e2e needs the running stack ($s is not up). Run ./flow up first."
     done
+    # The journey must be deterministic and self-contained: it never reaches a public service. The
+    # breached-password check is the one outbound dependency, so the platform must be running the no-op
+    # checker (development and CI: .env.example sets it). Refuse rather than quietly call the live one.
+    local driver
+    driver="$(php_run php artisan tinker --execute='echo config("identity.password.compromised_check.driver");' 2>/dev/null | tail -n1 | tr -d '[:space:]')"
+    [[ "$driver" == none ]] || die "e2e must not depend on the public breached-password service, but IDENTITY_COMPROMISED_PASSWORD_CHECK resolves to '${driver:-unset}'. Set IDENTITY_COMPROMISED_PASSWORD_CHECK=none in apps/platform/.env (see .env.example) and retry."
     step "Seeding the e2e fixture account (development only)"
     # A known active Account to sign in as, and a cleared cache so login throttle counters
     # left by earlier runs cannot make this one flaky. Both are development data.

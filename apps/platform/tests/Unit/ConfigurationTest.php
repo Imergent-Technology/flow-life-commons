@@ -29,6 +29,22 @@ it('does not require Redis by default', function () {
     expect($example)->not->toMatch('/^(QUEUE_CONNECTION|CACHE_STORE|SESSION_DRIVER)=redis/m');
 });
 
+it('keeps the automated gate off the public network, and production on the real breach check', function () {
+    // Development and CI (which copy .env.example) and the test suite use the no-op checker, so nothing
+    // in ordinary validation needs the public breached-password service. The code default is the real
+    // one, so a production host that sets nothing is still screened, and `none` is refused there.
+    $example = file_get_contents(base_path('.env.example'));
+    $phpunit = file_get_contents(base_path('phpunit.xml'));
+    assert(is_string($example) && is_string($phpunit));
+
+    expect($example)->toMatch('/^IDENTITY_COMPROMISED_PASSWORD_CHECK=none$/m')
+        ->and($phpunit)->toContain('<env name="IDENTITY_COMPROMISED_PASSWORD_CHECK" value="none"/>');
+
+    $config = file_get_contents(base_path('config/identity.php'));
+    assert(is_string($config));
+    expect($config)->toContain("env('IDENTITY_COMPROMISED_PASSWORD_CHECK', 'pwned_passwords')");
+});
+
 it('ships the same-origin development topology with no CORS allow-list', function () {
     // ADR 0016: the Console and the API share one origin, so nothing needs CORS.
     // A non-empty default would silently grant cross-origin browser access.
