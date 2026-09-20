@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\Role;
+use App\Modules\Identity\Application\EffectiveCapabilities;
 
 /*
  * Access sits at the top of the frozen graph (Access -> Identity -> Audit -> Shared).
@@ -57,6 +58,29 @@ arch('Access: uses Identity only through its Application layer', function () use
     // The one edge that exists (ResolveActor, EffectiveCapabilities). It never reaches Identity's
     // Domain, Infrastructure or Http, and so never Identity's persistence.
     expect($access)->not->toUse(['App\\Modules\\Identity\\Domain', 'App\\Modules\\Identity\\Infrastructure', 'App\\Modules\\Identity\\Http']);
+});
+
+arch('Access: Application uses Audit only through its Application layer', function () use ($access) {
+    expect("{$access}\\Application")->not->toUse(['App\\Modules\\Audit\\Domain', 'App\\Modules\\Audit\\Infrastructure']);
+});
+
+arch('Access: Application is free of console concerns', function () use ($access) {
+    // Console commands are an Infrastructure adapter over an Application use case.
+    expect("{$access}\\Application")->not->toUse('Illuminate\\Console');
+});
+
+arch('EffectiveCapabilities stays a presentation port: only /me and login read it, and only Access supplies it', function () {
+    // It enriches the current-account projection with informational identifiers. Authorization
+    // never flows through it, and Identity's Domain never sees it. The Authorizer, AuthorizeAction,
+    // the Gate and both role use cases decide from persisted assignments and must not consult it.
+    expect(EffectiveCapabilities::class)->toOnlyBeUsedIn([
+        'App\\Modules\\Identity\\Application\\GetCurrentAccount',
+        'App\\Modules\\Identity\\Application\\AuthenticateAccount',
+        'App\\Modules\\Identity\\Infrastructure\\NoEffectiveCapabilities',
+        'App\\Modules\\Identity\\Infrastructure\\IdentityServiceProvider',
+        'App\\Modules\\Access\\Application\\AuthorizerEffectiveCapabilities',
+        'App\\Modules\\Access\\Infrastructure\\AccessServiceProvider',
+    ]);
 });
 
 arch('Identity does not depend on Access (the edge runs Access -> Identity, never back)', function () {
@@ -218,5 +242,5 @@ it('has an acyclic module graph limited to the frozen edges', function () {
     // Positive controls: the scan sees the edges that do exist, so an empty graph cannot pass.
     expect($graph['Identity'])->toContain('Audit')
         ->and($graph['Access'])->toContain('Identity')
-        ->and($graph['Access'])->not->toContain('Audit'); // not used yet: Access -> Audit arrives with the mutation use cases
+        ->and($graph['Access'])->toContain('Audit'); // role mutation is audited through Audit's Application layer
 });

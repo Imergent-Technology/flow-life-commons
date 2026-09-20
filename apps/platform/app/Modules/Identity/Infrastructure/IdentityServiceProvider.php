@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Infrastructure;
 
+use App\Modules\Identity\Application\ActiveAccountQuery;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 use App\Modules\Identity\Application\LoginThrottle;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
@@ -11,6 +12,7 @@ use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\PersonRepository;
 use App\Modules\Identity\Infrastructure\Auth\AccountUserProvider;
 use App\Modules\Identity\Infrastructure\Auth\CacheLoginThrottle;
+use App\Modules\Identity\Infrastructure\Persistence\DatabaseActiveAccountQuery;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountInvitationRepository;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountRepository;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentPersonRepository;
@@ -30,6 +32,7 @@ final class IdentityServiceProvider extends ServiceProvider
         AccountRepository::class => EloquentAccountRepository::class,
         AccountInvitationRepository::class => EloquentAccountInvitationRepository::class,
         LoginThrottle::class => CacheLoginThrottle::class,
+        ActiveAccountQuery::class => DatabaseActiveAccountQuery::class,
         // A default that grants nothing. The Access module registers its own over this.
         EffectiveCapabilities::class => NoEffectiveCapabilities::class,
     ];

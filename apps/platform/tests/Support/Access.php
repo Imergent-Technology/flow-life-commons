@@ -9,6 +9,7 @@ use App\Modules\Access\Application\Role;
 use App\Modules\Access\Domain\RoleAssignment;
 use App\Modules\Access\Domain\RoleAssignmentId;
 use App\Modules\Access\Domain\RoleAssignmentRepository;
+use App\Modules\Identity\Application\ActiveAccountQuery;
 use App\Modules\Identity\Domain\Account;
 use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
@@ -65,6 +66,23 @@ final class Access
         sort($ids, SORT_STRING);
 
         return $ids;
+    }
+
+    /** An ACTIVE Account whose Person holds platform_administrator. */
+    public static function admin(string $email, string $name = 'Administrator'): Account
+    {
+        $account = Identity::savedActiveAccount($email, name: $name);
+        self::grant($account, Role::PlatformAdministrator);
+
+        return $account;
+    }
+
+    /** How many administrators are ACTIVE right now (Identity's rule), not how many rows exist. */
+    public static function activeAdministrators(): int
+    {
+        $holders = app(RoleAssignmentRepository::class)->holdersOf(Role::PlatformAdministrator->value);
+
+        return count(app(ActiveAccountQuery::class)->activePersonIds($holders));
     }
 
     public static function actorFor(Account $account): Actor

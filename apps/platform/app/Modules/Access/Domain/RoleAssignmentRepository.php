@@ -9,10 +9,10 @@ use App\Shared\Domain\PersonId;
 /**
  * Persistence of active role assignments.
  *
- * Deliberately small. It can read a Person's assignments and add one. There is no removal
- * here yet: revoking a role must honour the last-active-administrator invariant and be
- * audited, and both arrive together with the administration workflow, so an executable
- * revoke belongs to that phase and not to this port.
+ * A row's existence is an active grant, so removal is a plain delete and history is the audit
+ * trail's job. Callers that remove administrator authority must hold the lock taken by
+ * lockHoldersOf() for the rest of their transaction (see Access\Application\AdministratorContinuity):
+ * this port is the persistence, not the safety rule.
  */
 interface RoleAssignmentRepository
 {
@@ -27,4 +27,28 @@ interface RoleAssignmentRepository
      * @throws RoleAlreadyAssigned the Person already holds this role
      */
     public function add(RoleAssignment $assignment): void;
+
+    /**
+     * Deletes the Person's assignment of the role. False when there was none.
+     */
+    public function remove(PersonId $personId, string $roleKey): bool;
+
+    /**
+     * The people who currently hold the role, in a stable order. The key is matched EXACTLY:
+     * MariaDB compares VARCHAR case-insensitively and PostgreSQL does not, and a wrongly-cased
+     * stored key grants nothing, so it must not count as a holder on either engine.
+     *
+     * @return list<PersonId>
+     */
+    public function holdersOf(string $roleKey): array;
+
+    /**
+     * As holdersOf, but takes row locks (SELECT ... FOR UPDATE, ordered by id) that are held
+     * until the caller's transaction ends, and reads the latest COMMITTED state rather than a
+     * transaction snapshot. Must be called inside a transaction; it is what serialises
+     * everything that can remove administrator authority.
+     *
+     * @return list<PersonId>
+     */
+    public function lockHoldersOf(string $roleKey): array;
 }

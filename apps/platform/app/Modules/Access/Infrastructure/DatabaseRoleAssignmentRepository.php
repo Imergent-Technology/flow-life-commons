@@ -56,6 +56,58 @@ final readonly class DatabaseRoleAssignmentRepository implements RoleAssignmentR
         return $assignments;
     }
 
+    public function remove(PersonId $personId, string $roleKey): bool
+    {
+        // Compared exactly, for the same reason holders are (see holdersOf): on MariaDB the
+        // database alone would also match a wrongly-cased row, and that is not this grant.
+        // A locking read, ordered by id like every other read of this table that decides something,
+        // so nothing inside a role-mutating transaction reads these rows from a stale snapshot.
+        $rows = $this->database->table('role_assignments')
+            ->where('person_id', $personId->value)->where('role_key', $roleKey)
+            ->orderBy('id')->lockForUpdate()->get(['id', 'role_key']);
+
+        $removed = false;
+        foreach ($rows as $row) {
+            if ($row->role_key === $roleKey) {
+                $removed = $this->database->table('role_assignments')->where('id', $row->id)->delete() > 0 || $removed;
+            }
+        }
+
+        return $removed;
+    }
+
+    public function holdersOf(string $roleKey): array
+    {
+        return $this->holders($roleKey, lock: false);
+    }
+
+    public function lockHoldersOf(string $roleKey): array
+    {
+        return $this->holders($roleKey, lock: true);
+    }
+
+    /**
+     * @return list<PersonId>
+     */
+    private function holders(string $roleKey, bool $lock): array
+    {
+        // Ordered by id so that every transaction takes these locks in the same order.
+        $query = $this->database->table('role_assignments')->where('role_key', $roleKey)->orderBy('id');
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        $holders = [];
+        foreach ($query->get(['person_id', 'role_key']) as $row) {
+            assert(is_string($row->person_id) && is_string($row->role_key));
+            if ($row->role_key === $roleKey) { // exact, whatever the engine's collation does
+                $holders[] = PersonId::fromString($row->person_id);
+            }
+        }
+
+        return $holders;
+    }
+
     public function add(RoleAssignment $assignment): void
     {
         try {

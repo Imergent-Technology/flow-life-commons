@@ -194,3 +194,53 @@ it('reads a corrupt or obsolete stored key back exactly as stored, without faili
 
     expect(assignments()->forPerson($account->personId)[0]->roleKey)->toBe($key);
 })->with(['retired_role', 'PLATFORM_ADMINISTRATOR', 'guardian ', '', 'is_admin']);
+
+// --- Removal and holders (Phase 4) ----------------------------------------------------------
+
+it('removes an assignment and says whether it did', function () {
+    $account = Identity::savedActiveAccount();
+    Access::grant($account, Role::Guardian);
+
+    expect(assignments()->remove($account->personId, 'guardian'))->toBeTrue()
+        ->and(DB::table('role_assignments')->count())->toBe(0)
+        ->and(assignments()->remove($account->personId, 'guardian'))->toBeFalse();
+});
+
+it('removes only the named assignment', function () {
+    $ada = Identity::savedActiveAccount('ada@example.org');
+    $bob = Identity::savedActiveAccount('bob@example.org', name: 'Bob');
+    Access::grant($ada, Role::Guardian);
+    Access::grant($ada, Role::PlatformAdministrator);
+    Access::grant($bob, Role::Guardian);
+
+    assignments()->remove($ada->personId, 'guardian');
+
+    expect(DB::table('role_assignments')->count())->toBe(2)
+        ->and(assignments()->remove($bob->personId, 'platform_administrator'))->toBeFalse();
+});
+
+it('does not treat a wrongly-cased stored key as the role it resembles, on either engine', function () {
+    $account = Identity::savedActiveAccount();
+    Access::plant($account->personId, 'GUARDIAN'); // corrupt: grants nothing
+
+    expect(assignments()->remove($account->personId, 'guardian'))->toBeFalse()
+        ->and(assignments()->holdersOf('guardian'))->toBe([])
+        ->and(assignments()->lockHoldersOf('guardian'))->toBe([])
+        ->and(DB::table('role_assignments')->count())->toBe(1); // untouched
+});
+
+it('lists the holders of a role in a stable order, locked or not', function () {
+    $people = [];
+    foreach (['a@example.org', 'b@example.org', 'c@example.org'] as $email) {
+        $account = Identity::savedActiveAccount($email, name: $email);
+        Access::grant($account, Role::PlatformAdministrator);
+        $people[] = $account->personId->value;
+    }
+    Access::grant(Identity::savedActiveAccount('g@example.org', name: 'G'), Role::Guardian);
+
+    $plain = array_map(fn (PersonId $p): string => $p->value, assignments()->holdersOf('platform_administrator'));
+    $locked = array_map(fn (PersonId $p): string => $p->value, assignments()->lockHoldersOf('platform_administrator'));
+
+    expect($plain)->toEqualCanonicalizing($people)->and($locked)->toBe($plain)
+        ->and(assignments()->holdersOf('nobody_has_this'))->toBe([]);
+});
