@@ -39,9 +39,9 @@ flowchart LR
 Everything runs in Docker Compose behind one gateway; see [Docker environment](../development/docker.md).
 
 ```
-browser ──► gateway (Caddy, :18080) ─┬─ api.flowlife.localhost      ─► platform (php-fpm) ─► MariaDB
-                                     ├─ guardian.flowlife.localhost ─► Vite dev server (HMR)
-                                     └─ mail.flowlife.localhost     ─► Mailpit
+browser ──► gateway (Caddy, :18080) ─┬─ commons.flowlife.localhost /api/*, /up ─► platform (php-fpm) ─► MariaDB
+                                     ├─ commons.flowlife.localhost  everything else ─► Vite dev server (HMR)
+                                     └─ mail.flowlife.localhost                    ─► Mailpit
           queue worker + scheduler (dev) ─► MariaDB
 ```
 

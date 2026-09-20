@@ -10,7 +10,7 @@ export default defineConfig({
   retries: 0,
   reporter: [['list']],
   use: {
-    baseURL: process.env.E2E_BASE_URL ?? 'http://guardian.flowlife.localhost:18080',
+    baseURL: process.env.E2E_BASE_URL ?? 'http://commons.flowlife.localhost:18080',
     trace: 'retain-on-failure',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

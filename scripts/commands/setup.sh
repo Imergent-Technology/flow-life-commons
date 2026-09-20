@@ -55,8 +55,8 @@ cmd_setup() {
 
     echo
     ok "Setup complete. Next: ./flow up"
-    info "  Guardian Console  http://guardian.flowlife.localhost:$(gateway_port)"
-    info "  API health        http://api.flowlife.localhost:$(gateway_port)/api/v1/health"
+    info "  Guardian Console  http://commons.flowlife.localhost:$(gateway_port)"
+    info "  API health        http://commons.flowlife.localhost:$(gateway_port)/api/v1/health  (same origin as the Console)"
     info "  Mailpit           http://mail.flowlife.localhost:$(gateway_port)"
 }
 

@@ -28,3 +28,15 @@ it('does not require Redis by default', function () {
 
     expect($example)->not->toMatch('/^(QUEUE_CONNECTION|CACHE_STORE|SESSION_DRIVER)=redis/m');
 });
+
+it('ships the same-origin development topology with no CORS allow-list', function () {
+    // ADR 0016: the Console and the API share one origin, so nothing needs CORS.
+    // A non-empty default would silently grant cross-origin browser access.
+    $example = file_get_contents(base_path('.env.example'));
+    assert(is_string($example));
+
+    expect($example)->toContain('APP_URL=http://commons.flowlife.localhost:');
+    expect($example)->toMatch('/^CORS_ALLOWED_ORIGINS=$/m');
+    expect($example)->not->toContain('guardian.flowlife.localhost');
+    expect($example)->not->toContain('api.flowlife.localhost');
+});

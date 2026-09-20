@@ -17,8 +17,8 @@ cd flow-life-commons
 
 | | |
 | --- | --- |
-| Guardian Console | http://guardian.flowlife.localhost:18080 |
-| API health | http://api.flowlife.localhost:18080/api/v1/health |
+| Guardian Console | http://commons.flowlife.localhost:18080 |
+| API health (same origin) | http://commons.flowlife.localhost:18080/api/v1/health |
 | Mailpit | http://mail.flowlife.localhost:18080 |
 
 `./flow doctor` diagnoses your machine; `./flow help` lists commands; `./flow check` runs everything CI runs.

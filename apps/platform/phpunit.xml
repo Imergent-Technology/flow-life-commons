@@ -40,6 +40,6 @@
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
-        <env name="CORS_ALLOWED_ORIGINS" value="http://guardian.test,http://second.test"/>
+        <env name="CORS_ALLOWED_ORIGINS" value="http://partner.test,http://second.test"/>
     </php>
 </phpunit>

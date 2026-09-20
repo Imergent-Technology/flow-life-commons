@@ -147,6 +147,26 @@ doctor_project() {
     else
         doctor_warn "PHP development image not built: run ./flow setup"
     fi
+    doctor_topology
+}
+
+# The Console and API share one origin (ADR 0016). A platform .env written before that
+# still names the retired hosts; URL generation and CORS would quietly disagree with the gateway.
+doctor_topology() {
+    [[ -f "$FLOW_ROOT/apps/platform/.env" ]] || return 0
+    local expected app_url cors
+    expected="http://commons.flowlife.localhost:$(gateway_port)"
+    app_url="$(platform_env APP_URL)"
+    cors="$(platform_env CORS_ALLOWED_ORIGINS)"
+
+    if [[ "$app_url" == "$expected" ]]; then
+        doctor_ok "APP_URL matches the single-origin gateway ($expected)"
+    else
+        doctor_warn "apps/platform/.env APP_URL is '${app_url:-unset}'; set it to $expected"
+    fi
+    if [[ -n "$cors" ]]; then
+        doctor_warn "apps/platform/.env CORS_ALLOWED_ORIGINS is '$cors'; the Console is same-origin and needs none (leave it empty unless an external browser client requires it)"
+    fi
 }
 
 port_in_use() {
@@ -173,7 +193,7 @@ doctor_ports() {
 }
 
 doctor_domains() {
-    if getent hosts api.flowlife.localhost >/dev/null 2>&1; then
+    if getent hosts commons.flowlife.localhost >/dev/null 2>&1; then
         doctor_ok "*.localhost resolves via the system resolver"
         return
     fi

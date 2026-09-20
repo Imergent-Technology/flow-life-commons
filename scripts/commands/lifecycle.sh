@@ -62,8 +62,8 @@ cmd_status() {
     echo
     local port
     port="$(gateway_port)"
-    probe "Guardian Console" "http://guardian.flowlife.localhost:$port/"
-    probe "API health      " "http://api.flowlife.localhost:$port/api/v1/health"
+    probe "Guardian Console" "http://commons.flowlife.localhost:$port/"
+    probe "API health      " "http://commons.flowlife.localhost:$port/api/v1/health"
     probe "Mailpit         " "http://mail.flowlife.localhost:$port/"
 }
 
@@ -82,8 +82,8 @@ cmd_logs() {
 print_urls() {
     local port
     port="$(gateway_port)"
-    info "  Guardian Console  http://guardian.flowlife.localhost:$port"
-    info "  API health        http://api.flowlife.localhost:$port/api/v1/health"
+    info "  Guardian Console  http://commons.flowlife.localhost:$port"
+    info "  API health        http://commons.flowlife.localhost:$port/api/v1/health  (same origin as the Console)"
     info "  Mailpit           http://mail.flowlife.localhost:$port"
     info "  MariaDB           127.0.0.1:$(root_env FLOW_DB_PORT 13306)  (database flowlife, user flowlife)"
     info "  (*.localhost resolves in browsers and curl; no /etc/hosts entry needed)"

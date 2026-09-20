@@ -68,4 +68,4 @@ Unchanged by this design ([charter](charter.md)): no Docker, Node.js, Redis or r
 
 ## Development parity
 
-Development currently serves the Console and API from two origins, which exercises an authentication model we are not building. The Identity epic moves it to a single origin, `commons.flowlife.localhost`, with the gateway routing `/api/*` to the platform and everything else to the Vite dev server ([docker](../development/docker.md)). Local HTTPS is not needed: browsers treat `*.localhost` as a secure context, so `Secure` and `__Host-` cookies work there over plain HTTP.
+Development serves the Console and API from a single origin, `commons.flowlife.localhost`, matching production: the gateway routes `/api/*` (and `/up`) to the platform and everything else to the Vite dev server ([docker](../development/docker.md)). Local HTTPS is not needed: browsers treat `*.localhost` as a secure context, so `Secure` and `__Host-` cookies work there over plain HTTP.

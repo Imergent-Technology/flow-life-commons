@@ -3,10 +3,14 @@
 declare(strict_types=1);
 
 /*
- * Cross-origin access for browser clients of the API (Guardian Console, later
- * others). Origins are an explicit allow-list from the environment; never '*'.
- * CORS is a browser convenience, not a security boundary: authorization is
- * always enforced server-side.
+ * Cross-origin access for browser clients of the API.
+ *
+ * The Guardian Console is served from the same origin as the API (ADR 0016), so
+ * it does not use CORS and this allow-list ships empty. It exists for a future,
+ * legitimate external browser consumer and is an explicit list from the
+ * environment: never '*', and never widened pre-emptively. CORS is a browser
+ * convenience, not a security boundary: authorization is always enforced
+ * server-side.
  */
 
 return [
@@ -28,7 +32,7 @@ return [
 
     'max_age' => 600,
 
-    // Revisit with the Identity/Access design (cookie vs bearer authentication).
+    // Stays false (ADR 0016): no cross-origin request may carry the session cookie.
     'supports_credentials' => false,
 
 ];

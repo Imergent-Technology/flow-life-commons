@@ -25,7 +25,7 @@ describe('fetchHealth', () => {
 
     await expect(fetchHealth()).resolves.toEqual(okBody)
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringMatching(/\/api\/v1\/health$/),
+      '/api/v1/health',
       expect.objectContaining({ headers: { Accept: 'application/json' } }),
     )
   })

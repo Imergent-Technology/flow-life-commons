@@ -25,8 +25,8 @@ services:
     environment:
       FLOW_GATEWAY_PORT: ${FLOW_GATEWAY_PORT:-18080}
     ports:
-      # Same port inside and outside the container so URLs, CORS origins and
-      # Vite HMR all agree. Bound to loopback unless FLOW_BIND_ADDRESS says otherwise.
+      # Same port inside and outside the container so URLs and Vite HMR agree.
+      # Bound to loopback unless FLOW_BIND_ADDRESS says otherwise.
       - "${FLOW_BIND_ADDRESS:-127.0.0.1}:${FLOW_GATEWAY_PORT:-18080}:${FLOW_GATEWAY_PORT:-18080}"
     volumes:
       - ./infrastructure/docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
@@ -96,7 +96,6 @@ services:
       npm_config_update_notifier: "false"
       FLOW_GATEWAY_PORT: ${FLOW_GATEWAY_PORT:-18080}
       FLOW_VITE_POLLING: ${FLOW_VITE_POLLING:-false}
-      VITE_API_BASE_URL: http://api.flowlife.localhost:${FLOW_GATEWAY_PORT:-18080}
     volumes:
       - ./apps/guardian-console:/app
     healthcheck:
@@ -139,7 +138,7 @@ services:
 
   e2e:
     # Playwright shares the gateway's network namespace so that
-    # *.flowlife.localhost (which browsers resolve to loopback) reaches the gateway.
+    # commons.flowlife.localhost (which browsers resolve to loopback) reaches the gateway.
     # Keep the image tag in step with @playwright/test in apps/guardian-console.
     profiles: [e2e]
     image: mcr.microsoft.com/playwright:v1.63.0-noble
@@ -151,7 +150,7 @@ services:
     environment:
       HOME: /tmp
       npm_config_update_notifier: "false"
-      E2E_BASE_URL: http://guardian.flowlife.localhost:${FLOW_GATEWAY_PORT:-18080}
+      E2E_BASE_URL: http://commons.flowlife.localhost:${FLOW_GATEWAY_PORT:-18080}
     volumes:
       - ./apps/guardian-console:/app
     depends_on:

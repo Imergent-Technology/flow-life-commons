@@ -12,8 +12,10 @@ info:
     Authoritative API for Flow Life organizational data, identity, authorization
     and workflows. Only infrastructure endpoints exist during the foundation epic.
 servers:
-  - url: http://api.flowlife.localhost:18080/api/v1
-    description: Local development
+  # The API shares an origin with the Guardian Console (ADR 0016), so the server
+  # is a relative URL: it resolves against whichever host serves the Console.
+  - url: /api/v1
+    description: Same origin as the Guardian Console (local development at http://commons.flowlife.localhost:18080)
 paths:
   /health:
     get:

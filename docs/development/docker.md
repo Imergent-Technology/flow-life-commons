@@ -38,15 +38,25 @@ Every published host port is deliberately uncommon (standard port with a leading
 | `FLOW_REDIS_PORT` | `16379` |
 | `FLOW_BIND_ADDRESS` | `127.0.0.1` |
 
-Routing uses **`*.flowlife.localhost`** names, which resolve to loopback in browsers and curl with no hosts-file edits: `api.`, `guardian.`, `mail.`. The gateway listens on the *same port inside and outside the container*, so URLs, CORS origins and Vite's HMR websocket agree everywhere, and the Playwright container can share the gateway's network namespace. Requests for any other host get a 404.
+Routing uses **`*.flowlife.localhost`** names, which resolve to loopback in browsers and curl with no hosts-file edits. The gateway listens on the *same port inside and outside the container*, so URLs and Vite's HMR websocket agree everywhere, and the Playwright container can share the gateway's network namespace. Requests for any other host get a 404.
 
-The API allows cross-origin calls from the Guardian origin via `CORS_ALLOWED_ORIGINS` in `apps/platform/.env` (an explicit allow-list, never `*`). If you change the gateway port, update that value and `APP_URL`.
+| Host | Routes to |
+| --- | --- |
+| `commons.flowlife.localhost` `/api`, `/api/*`, `/up` | Laravel (`platform`, php-fpm) |
+| `commons.flowlife.localhost` everything else | Guardian Console (Vite dev server, including HMR websockets) |
+| `mail.flowlife.localhost` | Mailpit UI |
 
-### Planned change: single origin
+### Single origin
 
-Production will serve the Guardian Console and the API from **one origin** so the session cookie can be host-only ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)). The two-origin split above (`guardian.` and `api.`) therefore exercises an authentication model we are not building.
+The Guardian Console and the API are served from **one origin**, as in production, so the session cookie can be host-only ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)). Authentication is therefore developed against the production model from the start. Consequences:
 
-The Identity epic changes development to match: one host, `commons.flowlife.localhost`, with the gateway routing `/api/*` to the platform and everything else to the Vite dev server. HMR is unaffected (same origin, websocket through the gateway), and `VITE_API_BASE_URL` becomes a relative path. Local HTTPS is **not** needed: browsers treat `*.localhost` as a secure context, so `Secure` and `__Host-` cookies work over plain HTTP there. **Not changed yet** — the existing CORS and e2e assertions depend on the current two-origin setup and move with it.
+- **Console routes must never start with `/api` or be `/up`**: those belong to Laravel. An unknown `/api/...` path answers with a JSON 404 from Laravel, never the Console's HTML.
+- The Console calls the API at the relative path `/api/v1/...`. There is no API base URL to configure.
+- **No CORS is involved** in Console → API traffic. `CORS_ALLOWED_ORIGINS` in `apps/platform/.env` ships empty and `supports_credentials` stays `false`; add an origin only for a legitimate external browser consumer, never with credentials.
+- **Mailpit stays on its own host** on purpose: it renders arbitrary mail HTML, so it must not share an origin with the authenticated Console. It is also a dev-only tool with no production counterpart.
+- Local HTTPS is **not** needed: browsers treat `*.localhost` as a secure context, so `Secure` and `__Host-` cookies work over plain HTTP there.
+- The former `guardian.` and `api.` hosts are retired and answer 404. If you set up before this change, update `apps/platform/.env` (`APP_URL`, empty `CORS_ALLOWED_ORIGINS`); `./flow doctor` warns when they are stale. If you change the gateway port, update `APP_URL` too.
+- Container-to-container traffic is unaffected: services still reach each other by service name (`platform:9000`, `mariadb`, `mailpit`); only the browser-facing hostnames changed.
 
 ## File ownership
 

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use Illuminate\Database\ConnectionInterface;
 
-use function Pest\Laravel\get;
 use function Pest\Laravel\getJson;
 use function Pest\Laravel\withHeaders;
 
@@ -38,16 +37,31 @@ it('does not require authentication', function () {
     getJson('/api/v1/health')->assertOk();
 });
 
-it('renders unknown API routes as JSON', function () {
-    get('/api/v1/nope')->assertNotFound()->assertHeader('Content-Type', 'application/json');
-});
+it('renders unknown API routes as JSON, even to a browser', function (string $path) {
+    // The gateway sends everything under /api to Laravel, so an unknown API path
+    // must never look like (or fall back to) the Console's HTML.
+    withHeaders(['Accept' => 'text/html'])
+        ->get($path)
+        ->assertNotFound()
+        ->assertHeader('Content-Type', 'application/json');
+})->with(['/api', '/api/nope', '/api/v1/nope']);
 
-it('allows configured browser origins and no others (CORS)', function () {
-    withHeaders(['Origin' => 'http://guardian.test'])
+it('allows only explicitly configured external origins (CORS)', function () {
+    // phpunit.xml configures partner.test to exercise the mechanism. The Guardian
+    // Console is same-origin (ADR 0016) and is deliberately not in any allow-list.
+    withHeaders(['Origin' => 'http://partner.test'])
         ->getJson('/api/v1/health')
-        ->assertHeader('Access-Control-Allow-Origin', 'http://guardian.test');
+        ->assertHeader('Access-Control-Allow-Origin', 'http://partner.test');
 
     withHeaders(['Origin' => 'http://evil.test'])
         ->getJson('/api/v1/health')
         ->assertHeaderMissing('Access-Control-Allow-Origin');
+});
+
+it('never enables credentialed cross-origin access', function () {
+    withHeaders(['Origin' => 'http://partner.test'])
+        ->getJson('/api/v1/health')
+        ->assertHeaderMissing('Access-Control-Allow-Credentials');
+
+    expect(config('cors.supports_credentials'))->toBeFalse();
 });

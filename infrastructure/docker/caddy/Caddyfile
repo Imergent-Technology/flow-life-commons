@@ -1,27 +1,41 @@
 # Development gateway. Plain HTTP only; TLS is a production-hosting concern.
 # The listen port is identical inside and outside the container
-# (FLOW_GATEWAY_PORT) so URLs, CORS origins and Vite HMR agree everywhere.
+# (FLOW_GATEWAY_PORT) so URLs and Vite HMR agree everywhere.
 {
 	auto_https off
 	admin off
 }
 
-http://api.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
-	root * /var/www/platform/public
-	php_fastcgi platform:9000
-	file_server
+# The Guardian Console and the API share ONE origin, exactly as in production
+# (ADR 0016): the session cookie is host-only, so browsers must see a single host.
+# Everything under /api and the framework liveness probe /up belong to Laravel;
+# every other path, including client-side routes, is the Console. Console routes
+# must therefore never start with /api or be /up.
+http://commons.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
+	@laravel path /api /api/* /up
+
+	handle @laravel {
+		root * /var/www/platform/public
+		# No file_server: nothing under /api or /up is a static file, and an
+		# unknown /api path must reach Laravel so it answers with a JSON 404
+		# rather than falling through to the Console's HTML.
+		php_fastcgi platform:9000
+	}
+
+	handle {
+		# Vite dev server; websocket upgrades (HMR) are proxied automatically.
+		reverse_proxy guardian:5173
+	}
 }
 
-http://guardian.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
-	# Vite dev server; websocket upgrades (HMR) are proxied automatically.
-	reverse_proxy guardian:5173
-}
-
+# Mailpit is a development tool with no production counterpart, so it stays on its
+# own host and never shares the Console's origin.
 http://mail.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
 	reverse_proxy mailpit:8025
 }
 
-# Anything else (unknown Host header, raw IP) is refused rather than silently answered.
+# Anything else (unknown Host header, raw IP, or the retired guardian./api. hosts)
+# is refused rather than silently answered.
 :{$FLOW_GATEWAY_PORT} {
-	respond "Unknown host. Use *.flowlife.localhost (see docs/development/docker.md)." 404
+	respond "Unknown host. Use commons.flowlife.localhost (Console and API) or mail.flowlife.localhost (see docs/development/docker.md)." 404
 }

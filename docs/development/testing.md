@@ -39,7 +39,7 @@ Vitest with Testing Library and jsdom; component tests mock the API module. ESLi
 
 ## E2E
 
-One Playwright test (`apps/guardian-console/e2e/smoke.spec.ts`) loads the console in Chromium, checks a Tailwind computed style, and checks the API health result appears, exercising gateway, Vite, CORS, Laravel and MariaDB together. It runs in the Playwright container on the `e2e` profile. In CI it is a **manually triggered** workflow to save minutes. Do not grow it into a large suite yet.
+A Playwright smoke test (`apps/guardian-console/e2e/smoke.spec.ts`) loads the console in Chromium, checks a Tailwind computed style, and checks the API health result appears from the page's own origin, exercising gateway, Vite, Laravel and MariaDB together. A small `gateway.spec.ts` pins the single-origin routing: `/api` and `/up` reach Laravel, unknown API paths are JSON rather than the Console, client-side routes still boot the Console, the HMR websocket connects through the gateway, and the retired hosts are refused. Both run in the Playwright container on the `e2e` profile. In CI it is a **manually triggered** workflow to save minutes. Do not grow it into a large suite yet.
 
 ## The CLI's own tests
 

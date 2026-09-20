@@ -11,5 +11,5 @@ cmd_build() {
     node_run npm run build
     node_run npm run verify:build
     ok "Output: apps/guardian-console/dist"
-    info "  VITE_API_BASE_URL was baked in as: $(printf 'http://api.flowlife.localhost:%s' "$(gateway_port)") (release builds will set their own)"
+    info "  The Console calls the API at the relative path /api/v1: deploy it on the same origin as the API."
 }

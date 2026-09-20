@@ -7,7 +7,7 @@ cd flow-life-commons
 ./flow up
 ```
 
-Then open **http://guardian.flowlife.localhost:18080**. It should show the Guardian Console shell with "API ok".
+Then open **http://commons.flowlife.localhost:18080**. It should show the Guardian Console shell with "API ok".
 
 ## Prerequisites
 
@@ -47,8 +47,8 @@ Idempotent and safe to re-run. It creates `.env` (with your UID/GID) and `apps/p
 
 | URL | What |
 | --- | --- |
-| http://guardian.flowlife.localhost:18080 | Guardian Console (Vite dev server with HMR) |
-| http://api.flowlife.localhost:18080/api/v1/health | Platform API health endpoint |
+| http://commons.flowlife.localhost:18080 | Guardian Console (Vite dev server with HMR) |
+| http://commons.flowlife.localhost:18080/api/v1/health | Platform API health endpoint: **same origin** as the Console |
 | http://mail.flowlife.localhost:18080 | Mailpit (captured dev mail) |
 | 127.0.0.1:13306 | MariaDB (database `flowlife`, user `flowlife`) for GUI clients |
 
