@@ -209,3 +209,41 @@ it('has no route that answers a credential or factor without the session surface
     $outside = substr($routes, (int) strrpos($routes, '});'));
     expect(str_contains($outside, 'mfa/') || str_contains($outside, 'security/'))->toBeFalse();
 });
+
+/* --- recovering someone else's second factor (docs/adr/0024) -------------------------------------------- */
+
+arch('Identity: the second-factor reset is used only by Access\'s authorized use case and the operator\'s command', function () use ($identity) {
+    // Identity's use case decides nothing about WHO may reset (it cannot ask Access). So the only code that may
+    // call it is Access's Application use case, which authorizes first, and the server command, whose authority is
+    // server access. In particular no HTTP controller may: that would let one skip the capability.
+    expect("{$identity}\\Application\\ResetMultiFactor")->toOnlyBeUsedIn([
+        'App\\Modules\\Access\\Application\\ResetManagedMfa',
+        "{$identity}\\Infrastructure\\Console\\ResetMfaCommand",
+    ]);
+});
+
+it('calls the server-level reset only from the operator\'s command, never from a request', function () use ($root) {
+    $pattern = '/->fromServer\s*\(/';
+    $callers = [];
+    foreach (mfaSources("{$root}/app") as $path => $source) {
+        if (preg_match($pattern, mfaCodeOnly($source)) === 1) {
+            $callers[] = basename($path);
+        }
+    }
+
+    expect($callers)->toBe(['ResetMfaCommand.php'])
+        ->and(preg_match($pattern, '$reset->fromServer($account->id);'))->toBe(1);
+});
+
+it('never lets the reset touch a password, a status or a role', function () use ($root) {
+    // The use case removes a factor and its codes and ends sessions, and nothing else. A source scan of it (code
+    // only, so a sentence about what it does not do is not a call) finds no credential, status or assignment write.
+    $source = mfaCodeOnly((string) file_get_contents("{$root}/app/Modules/Identity/Application/ResetMultiFactor.php"));
+
+    expect(preg_match('/passwordHash|changePassword|->disable\(|->enable\(|activate\(|roleKey|RoleAssignment|->save\(/', $source))->toBe(0)
+        ->and(preg_match('/->save\(/', '$this->accounts->save($account);'))->toBe(1);
+});
+
+arch('Identity: the reset command is Identity\'s own and never reaches Access', function () use ($identity) {
+    expect("{$identity}\\Infrastructure\\Console\\ResetMfaCommand")->not->toUse('App\\Modules\\Access');
+});

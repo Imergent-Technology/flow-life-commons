@@ -43,4 +43,9 @@ final class EloquentTotpFactorRepository implements TotpFactorRepository
             Utc::fromColumn($record->updated_at),
         );
     }
+
+    public function delete(AccountId $account): bool
+    {
+        return TotpFactorRecord::query()->where('account_id', $account->value)->toBase()->delete() > 0;
+    }
 }

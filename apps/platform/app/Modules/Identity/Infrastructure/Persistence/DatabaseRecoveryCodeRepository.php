@@ -58,4 +58,9 @@ final readonly class DatabaseRecoveryCodeRepository implements RecoveryCodeRepos
             ->whereNull('used_at')
             ->count();
     }
+
+    public function deleteAll(AccountId $account): int
+    {
+        return $this->database->table(self::TABLE)->where('account_id', $account->value)->delete();
+    }
 }

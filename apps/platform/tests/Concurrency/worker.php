@@ -19,6 +19,9 @@ declare(strict_types=1);
  *   php worker.php mfa_complete '{"account":"...","marker":"...","need":"challenge","code":"..."}'  (or "recovery_code")
  *   php worker.php mfa_confirm_enrollment '{"account":"...","marker":"...","code":"..."}'
  *   php worker.php consume_code '{"account":"...","digest":"..."}'
+ *   php worker.php mfa_reset '{"account":"..."}'
+ *   php worker.php security_verify '{"account":"...","person":"...","password":"...","code":"..."}'
+ *   php worker.php replace_begin '{"account":"...","person":"...","password":"...","code":"..."}'
  *   php worker.php enable '{"account":"..."}'
  *   php worker.php reissue '{"account":"..."}'
  *   php worker.php invite '{"email":"...","name":"..."}'
@@ -33,6 +36,7 @@ use App\Modules\Access\Application\Role;
 use App\Modules\Identity\Application\AcceptInvitation;
 use App\Modules\Identity\Application\AuthenticateAccount;
 use App\Modules\Identity\Application\AuthenticationStatus;
+use App\Modules\Identity\Application\BeginAuthenticatorReplacement;
 use App\Modules\Identity\Application\ChangePassword;
 use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\CompleteSecondFactor;
@@ -45,9 +49,11 @@ use App\Modules\Identity\Application\PendingLogin;
 use App\Modules\Identity\Application\ReactivationOutcome;
 use App\Modules\Identity\Application\ReissueInvitation;
 use App\Modules\Identity\Application\RequestPasswordReset;
+use App\Modules\Identity\Application\ResetMultiFactor;
 use App\Modules\Identity\Application\ResetPassword;
 use App\Modules\Identity\Application\SecondFactorNeed;
 use App\Modules\Identity\Application\SecondFactorProof;
+use App\Modules\Identity\Application\VerifySecurityAccess;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\InvitationChannel;
@@ -136,6 +142,18 @@ try {
         if (! $consumed) {
             throw new RuntimeException('the code was already spent');
         }
+    } elseif ($operation === 'mfa_reset') {
+        $app->make(ResetMultiFactor::class)->fromServer(AccountId::fromString($arg('account')));
+    } elseif ($operation === 'security_verify') {
+        $app->make(VerifySecurityAccess::class)(
+            Actor::user(AccountId::fromString($arg('account')), PersonId::fromString($arg('person'))),
+            $arg('password'), SecondFactorProof::totp($arg('code')), new ClientContext('127.0.0.1', 'worker'),
+        );
+    } elseif ($operation === 'replace_begin') {
+        $app->make(BeginAuthenticatorReplacement::class)(
+            Actor::user(AccountId::fromString($arg('account')), PersonId::fromString($arg('person'))),
+            $arg('password'), SecondFactorProof::totp($arg('code')), new ClientContext('127.0.0.1', 'worker'),
+        );
     } elseif ($operation === 'enable') {
         if ($app->make(EnableAccount::class)(AccountId::fromString($arg('account'))) !== ReactivationOutcome::Enabled) {
             throw new RuntimeException('the account was not disabled');

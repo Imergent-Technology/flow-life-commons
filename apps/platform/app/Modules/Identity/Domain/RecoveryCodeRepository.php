@@ -28,4 +28,7 @@ interface RecoveryCodeRepository
 
     /** How many are still unused. */
     public function remaining(AccountId $account): int;
+
+    /** Removes every one of the Account's recovery codes, used or not. Returns how many rows were removed. */
+    public function deleteAll(AccountId $account): int;
 }

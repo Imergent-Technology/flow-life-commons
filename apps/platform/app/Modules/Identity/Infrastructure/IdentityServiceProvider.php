@@ -29,6 +29,7 @@ use App\Modules\Identity\Infrastructure\Auth\AccountUserProvider;
 use App\Modules\Identity\Infrastructure\Auth\CacheAttemptThrottle;
 use App\Modules\Identity\Infrastructure\Auth\CacheLoginThrottle;
 use App\Modules\Identity\Infrastructure\Auth\LaravelPasswordResetTokens;
+use App\Modules\Identity\Infrastructure\Console\ResetMfaCommand;
 use App\Modules\Identity\Infrastructure\Mail\MailInvitationNotifier;
 use App\Modules\Identity\Infrastructure\Mail\MailPasswordResetNotifier;
 use App\Modules\Identity\Infrastructure\Mfa\AlwaysRequireMultiFactor;
@@ -125,6 +126,10 @@ final class IdentityServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if ($this->app->runningInConsole()) {
+            $this->commands([ResetMfaCommand::class]);
+        }
+
         // Identity's own message templates (the password-recovery and invitation emails), namespaced `identity::`.
         $this->loadViewsFrom(__DIR__.'/Mail/views', 'identity');
 
