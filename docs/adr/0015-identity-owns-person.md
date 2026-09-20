@@ -5,6 +5,7 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0008](0008-platform-owned-authorization.md)
+- **Clarified:** 2026-09-20. One consequence claimed that accepting an invitation proves control of the address. It does so only when the invitation was actually delivered to that address; see [ADR 0022](0022-password-policy-and-credential-handling.md). The decision itself is unchanged.
 
 ## Context
 
@@ -39,7 +40,7 @@ A single table that is both the credential store and the person-of-record cannot
 - CRM extends the model by owning its own tables keyed by `person_id`, touching nothing in Identity.
 - Every credential lookup must canonicalise input and query `email_canonical`; querying `email` reintroduces the divergence above. This constrains the Laravel user provider.
 - Merging duplicate People is a later administrative operation. Identity's obligation now is only to keep it possible: references are by `person_id`, so a merge is a data operation rather than a redesign.
-- Invitation being the only creation path means email verification needs no separate flow initially: accepting an invitation proves control of the address.
+- Invitation being the only creation path means a separate email-verification flow is not needed initially, **provided** invitations are delivered to the address they invite: presenting a delivered invitation is then evidence of control of the mailbox, and only that evidence justifies setting `email_verified_at`. An invitation handed over by another route (the administrator bootstrap prints its token to a server operator) proves nothing about the mailbox, so accepting it activates the Account but leaves the email unverified.
 - Members and volunteers are **not** Console users. When they eventually need platform access it arrives through WordPress as a delegated flow ([ADR 0018](0018-client-and-delegated-authentication.md)), not by opening registration here.
 - **Main risk: Person becoming a god table.** Every future module will be tempted to add "just one column". The thinness rule is the mitigation and must be enforced in review.
 - **Extraction trigger:** if a second module ever needs to create People independently of Identity (a CRM import, say), revisit ownership. Moving the table's owning module is a code move, not a data migration — cheap and reversible, which is why a People module is not created now.

@@ -261,10 +261,12 @@ paths:
         of the account wins; acceptance never re-enables it.
 
 
-        `email_verified_at` is set on acceptance. It records that the platform accepted the
-        address through an invitation issued for it. For an invitation the platform issued
-        itself (the administrator bootstrap, delivered by an operator) that is the operator's
-        vouching, not proof of mailbox control; the audit event records which.
+        Acceptance does **not** verify the email address. `email_verified_at` means the
+        platform has evidence the holder controls the mailbox, and choosing a password is not
+        that. An invitation whose token an operator handed over (the administrator bootstrap)
+        says nothing about the mailbox, so its account becomes active with the email still
+        unverified; it can sign in all the same, because nothing makes verification a
+        condition of signing in.
 
 
         Limited by source address (see `429`).

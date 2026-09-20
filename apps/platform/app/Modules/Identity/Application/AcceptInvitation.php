@@ -29,8 +29,11 @@ use InvalidArgumentException;
  *   Account is then locked and must STILL be `invited`, so acceptance can never resurrect a disabled
  *   Account. Password, activation, `accepted_at` and the security event commit together or not at all.
  *
- * `email_verified_at` is set on acceptance. What that vouches for depends on who issued the
- * invitation (see Account::activate); the event records which, without a provenance subsystem.
+ * Acceptance does NOT set `email_verified_at`, which means the platform has evidence the holder
+ * controls the mailbox (see Account::activate). No invitation is delivered to an address yet (the
+ * bootstrap token is handed over by an operator), so there is no such evidence to record. Whatever
+ * later delivers invitations to the address decides how to carry that evidence to here. The event
+ * records who issued the invitation (`issued_by`), which is all the provenance this needs.
  */
 final readonly class AcceptInvitation
 {
@@ -92,7 +95,8 @@ final readonly class AcceptInvitation
             return false;
         }
 
-        $this->accounts->save($account->activate($hash, $now));
+        // Not verified: nothing delivered this invitation to the address, so nothing shows mailbox control.
+        $this->accounts->save($account->activate($hash, $now, mailboxDemonstrated: false));
         $this->invitations->save($invitation->accept($now));
         $this->audit->invitationAccepted($account, $invitation->invitedByAccountId === null, $client);
 

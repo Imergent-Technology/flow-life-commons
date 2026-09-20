@@ -27,8 +27,9 @@ final readonly class CredentialAudit
 
     /**
      * @param  bool  $issuedByPlatform  the invitation had no inviting Account: the platform itself issued
-     *                                  it (the administrator bootstrap). Recorded because it says what
-     *                                  vouched for the address: the server operator, not a mailbox.
+     *                                  it (the administrator bootstrap, whose token an operator hands
+     *                                  over). Recorded as who vouched for the invitation; it is not
+     *                                  evidence about the mailbox, and does not set email_verified_at.
      */
     public function invitationAccepted(Account $account, bool $issuedByPlatform, ClientContext $client): void
     {

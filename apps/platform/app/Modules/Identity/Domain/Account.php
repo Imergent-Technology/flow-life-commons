@@ -103,16 +103,15 @@ final readonly class Account
      * Invitation acceptance: the holder chose a password and the Account becomes active.
      * `$passwordHash` is an already computed hash; the domain never sees a plain password.
      *
-     * `emailVerifiedAt` records that the platform accepted this address as the Account's login
-     * identifier through an invitation issued for it, and it is the ONLY thing that timestamp means.
-     * It is not, by itself, proof that the holder controls the mailbox. An invitation an Account
-     * issued is expected to have been delivered to the address, so accepting it does show control of
-     * it. An invitation the platform issued itself (the administrator bootstrap, whose token is handed
-     * over by an operator) shows only that a trusted server operator vouched for the address. The
-     * acceptance event records which (`issued_by`), so the difference is recoverable without a
-     * separate verification subsystem.
+     * `emailVerifiedAt` means ONE thing: the platform has evidence that the Account holder
+     * demonstrated control of the email mailbox. Choosing a password does not show that, and neither
+     * does holding an invitation token: a token an operator hands over (the administrator bootstrap)
+     * says nothing about the mailbox. So activation leaves the timestamp as it was (null for an invited
+     * Account) unless the caller says `$mailboxDemonstrated`, which is true only when the invitation was
+     * actually delivered to this address and so presenting it is evidence of control of it. Nothing
+     * delivers an invitation to an address yet, so nothing passes true yet.
      */
-    public function activate(string $passwordHash, DateTimeImmutable $now): self
+    public function activate(string $passwordHash, DateTimeImmutable $now, bool $mailboxDemonstrated = false): self
     {
         if ($this->status !== AccountStatus::Invited) {
             throw new InvalidAccountState(sprintf('Only an invited account can be activated, not a %s one.', $this->status->value));
@@ -120,7 +119,8 @@ final readonly class Account
 
         return new self(
             $this->id, $this->personId, $this->email, AccountStatus::Active,
-            $passwordHash, $now, $now, null, $this->lastLoginAt, $this->createdAt, $now,
+            $passwordHash, $now, $mailboxDemonstrated ? $now : $this->emailVerifiedAt, null,
+            $this->lastLoginAt, $this->createdAt, $now,
         );
     }
 

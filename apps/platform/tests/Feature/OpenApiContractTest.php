@@ -124,3 +124,20 @@ it('serves signed-in account responses matching the documented schema', function
         }
     }
 });
+
+it('documents invitation acceptance as creating no session, and no verification of the email', function () {
+    $paths = openApiSpec()['paths'];
+    assert(is_array($paths) && is_array($paths['/invitations/accept']) && is_array($paths['/invitations/accept']['post']));
+    $operation = $paths['/invitations/accept']['post'];
+    assert(is_array($operation['responses']) && is_array($operation['responses']['204']));
+    $success = $operation['responses']['204'];
+    $description = $operation['description'];
+    assert(is_string($description) && is_string($success['description']));
+
+    // The lifecycle is: accept (password set, account active, NO session), then the ordinary login.
+    expect($description)->toContain('does not sign the caller in')
+        ->and($description)->toContain('does **not** verify the email')
+        ->and($success)->not->toHaveKey('headers')
+        ->and($success['description'])->toContain('No session was created')
+        ->and($description)->not->toContain('new session');
+});

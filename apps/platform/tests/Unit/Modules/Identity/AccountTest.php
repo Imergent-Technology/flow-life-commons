@@ -31,16 +31,27 @@ it('has exactly the frozen statuses', function () {
         ->toBe(['invited', 'active', 'disabled']);
 });
 
-it('becomes active on acceptance, which sets the password and records the address as accepted', function () {
+it('becomes active on acceptance, which sets the password and does NOT verify the email', function () {
     $later = Identity::now()->modify('+1 hour');
     $active = invited()->activate('$2y$hash', $later);
 
     expect($active->status)->toBe(AccountStatus::Active)
         ->and($active->passwordHash)->toBe('$2y$hash')
         ->and($active->passwordUpdatedAt)->toEqual($later)
-        ->and($active->emailVerifiedAt)->toEqual($later)
+        // Choosing a password shows nothing about the mailbox.
+        ->and($active->emailVerifiedAt)->toBeNull()
         ->and($active->updatedAt)->toEqual($later)
         ->and($active->createdAt)->toEqual(Identity::now());
+});
+
+it('verifies the email only when the caller has evidence the holder controls the mailbox', function () {
+    $later = Identity::now()->modify('+1 hour');
+
+    $verified = invited()->activate('$2y$hash', $later, mailboxDemonstrated: true);
+
+    expect($verified->status)->toBe(AccountStatus::Active)
+        ->and($verified->emailVerifiedAt)->toEqual($later)
+        ->and(invited()->activate('$2y$hash', $later, mailboxDemonstrated: false)->emailVerifiedAt)->toBeNull();
 });
 
 it('cannot be activated unless it is invited', function () {
@@ -51,7 +62,7 @@ it('cannot be activated unless it is invited', function () {
 
 it('can be disabled from either live state, keeping its history', function () {
     $invited = invited();
-    $active = invited()->activate('$2y$hash', Identity::now());
+    $active = invited()->activate('$2y$hash', Identity::now(), mailboxDemonstrated: true);
     $later = Identity::now()->modify('+2 hours');
 
     expect($invited->disable($later)->status)->toBe(AccountStatus::Disabled)

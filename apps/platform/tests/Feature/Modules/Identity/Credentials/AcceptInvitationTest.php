@@ -2,9 +2,11 @@
 
 declare(strict_types=1);
 
+use App\Modules\Access\Application\BootstrapAdministrator;
 use App\Modules\Identity\Application\AcceptInvitation;
 use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\DisableAccount;
+use App\Modules\Identity\Application\InvitationDetails;
 use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\AccountRepository;
@@ -73,7 +75,8 @@ it('sets the password, activates the account and marks the invitation used, in o
     expect($hash)->not->toContain(Passwords::STRONG);
     expect($row->status)->toBe('active')
         ->and($row->password_updated_at)->toBe('2026-09-19 12:30:00')
-        ->and($row->email_verified_at)->toBe('2026-09-19 12:30:00')
+        // Choosing a password is not evidence of mailbox control, and nothing delivered this invitation.
+        ->and($row->email_verified_at)->toBeNull()
         ->and($row->disabled_at)->toBeNull()
         ->and($invitation->accepted_at)->toBe('2026-09-19 12:30:00')
         ->and(app(AccountRepository::class)->find($account->id)?->canAuthenticate())->toBeTrue();
@@ -122,6 +125,42 @@ it('records who vouched for the address: the platform for a bootstrap invitation
     $events = Identity::events('invitation.accepted');
     expect(Identity::context($events[0]))->toBe(['issued_by' => 'platform'])
         ->and(Identity::context($events[1]))->toBe(['issued_by' => 'account']);
+});
+
+it('activates an ADMINISTRATOR BOOTSTRAP invitation but leaves the email unverified, and signs no one in', function () {
+    // The real bootstrap use case issues the invitation, and its token is handed to an operator, not
+    // sent to the address: holding it says nothing about the mailbox.
+    $issued = app(BootstrapAdministrator::class)(
+        InvitationDetails::from('root@example.org', 'Root Administrator'),
+    )->invitation;
+    $accountId = $issued->accountId->value;
+
+    $response = acceptInvitation($issued->revealToken(), Passwords::STRONG)->assertNoContent();
+
+    $row = DB::table('accounts')->where('id', $accountId)->first();
+    expect($row?->status)->toBe('active')
+        ->and($row?->password_hash)->not->toBeNull()
+        ->and($row?->email_verified_at)->toBeNull()
+        // Acceptance creates no authenticated session...
+        ->and($response->baseResponse->headers->getCookies())->toBe([])
+        ->and(DB::table('sessions')->count())->toBe(0)
+        ->and(Identity::context(Identity::events('invitation.accepted')[0]))->toBe(['issued_by' => 'platform']);
+
+    // ...the person then signs in through the ordinary login, which is what establishes one. An
+    // unverified email does not block that: no policy makes verification a condition of signing in.
+    $console = new Console;
+    $console->login('root@example.org', Passwords::STRONG)->assertOk();
+    expect(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(1)
+        ->and(DB::table('accounts')->where('id', $accountId)->value('email_verified_at'))->toBeNull();
+});
+
+it('does not treat an invitation issued by an account as mailbox evidence either, since nothing delivers one', function () {
+    [$account, $token] = pendingInvitation('member@example.org', AccountId::generate());
+
+    acceptInvitation($token, Passwords::STRONG)->assertNoContent();
+
+    expect(DB::table('accounts')->where('id', $account->id->value)->value('email_verified_at'))->toBeNull()
+        ->and(DB::table('accounts')->where('id', $account->id->value)->value('status'))->toBe('active');
 });
 
 it('accepts an invitation strictly before it expires, and refuses it at the instant it does', function () {

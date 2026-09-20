@@ -56,7 +56,7 @@ curl -sS -X POST https://<host>/api/v1/invitations/accept \
 - Any problem with the token itself (wrong, expired, already used) is the same `422` on `token`, deliberately.
 - An invitation works **once** and expires after 7 days. If it expires or is lost, re-run the bootstrap command as described under *Rollback*.
 
-**What this verifies about the email address.** Because *you* deliver the token, accepting it shows that the person you handed it to chose the password, not that they control the mailbox. The account's `email_verified_at` is set on acceptance and means "the platform accepted this address through an invitation issued for it"; for a bootstrap invitation that is **your** vouching as the server operator. The audit event `invitation.accepted` records `issued_by: platform` so this stays visible later.
+**What this does *not* verify about the email address.** Because *you* deliver the token, accepting it shows that the person you handed it to chose the password, not that they control the mailbox. So the account becomes **active with its email still unverified**: `email_verified_at` stays empty, because it means the platform has evidence the holder controls the mailbox, and you handing over a token is not that. The administrator can sign in all the same (nothing makes a verified email a condition of signing in). The audit event `invitation.accepted` records `issued_by: platform`.
 
 ## What it does, and does not, do
 
@@ -83,7 +83,7 @@ It fails, changes nothing, and tells you. An existing account is never taken ove
 ## Verification
 
 - `security_events` has `account.invited`, `role.granted` and `administrator.bootstrapped` for the new person, none with a token in them.
-- `accounts` shows the new account with `status = invited` and `password_hash` empty, until the invitation is accepted; afterwards `status = active` with a password hash and `email_verified_at` set, and `invitation.accepted` is in `security_events`.
+- `accounts` shows the new account with `status = invited` and `password_hash` empty, until the invitation is accepted; afterwards `status = active` with a password hash and `email_verified_at` **still empty** (see above), and `invitation.accepted` is in `security_events`.
 - `account_invitations` has one row with a 64-character `token_hash` and no `accepted_at`.
 - `role_assignments` has one `platform_administrator` row for that person.
 
