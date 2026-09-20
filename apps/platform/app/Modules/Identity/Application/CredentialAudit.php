@@ -8,6 +8,7 @@ use App\Modules\Audit\Application\RecordSecurityEvent;
 use App\Modules\Audit\Application\SecurityEventOutcome;
 use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\EmailAddress;
+use App\Shared\Domain\Actor;
 
 /**
  * Identity's credential-lifecycle events (invitation, reset, change), in one place so their shape and
@@ -80,6 +81,20 @@ final readonly class CredentialAudit
             IdentityEvent::PasswordResetFailed->value, SecurityEventOutcome::Failure,
             null, $account?->personId, $account?->id, $client->ip, $client->userAgent,
             ['reason' => $reason->value, 'attempted_identifier' => $attempted->canonical],
+        );
+    }
+
+    /**
+     * An authenticated Account changed its own password, so the Actor is also the subject.
+     *
+     * @param  int  $signedOut  how many of the Account's OTHER sessions were ended
+     */
+    public function passwordChanged(Actor $actor, int $signedOut, ClientContext $client): void
+    {
+        ($this->record)(
+            IdentityEvent::PasswordChanged->value, SecurityEventOutcome::Success,
+            $actor, $actor->personId, $actor->accountId, $client->ip, $client->userAgent,
+            ['signed_out' => $signedOut],
         );
     }
 

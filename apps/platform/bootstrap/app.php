@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Identity\Application\CompromisedPasswordCheckUnavailable;
+use App\Modules\Identity\Application\CurrentPasswordIncorrect;
 use App\Modules\Identity\Application\InvitationRejected;
+use App\Modules\Identity\Application\NoLongerAuthenticated;
 use App\Modules\Identity\Application\PasswordRejected;
 use App\Modules\Identity\Application\ResetRejected;
 use App\Modules\Identity\Application\TooManyAttempts;
@@ -72,6 +74,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (CompromisedPasswordCheckUnavailable $e) => CredentialProblems::checkUnavailable());
         $exceptions->render(fn (InvitationRejected $e) => CredentialProblems::invitationRejected());
         $exceptions->render(fn (ResetRejected $e) => CredentialProblems::resetRejected());
+        $exceptions->render(fn (CurrentPasswordIncorrect $e) => CredentialProblems::currentPasswordIncorrect());
+        $exceptions->render(fn (NoLongerAuthenticated $e) => response()->json(['message' => 'Unauthenticated.'], 401));
         $exceptions->render(fn (TooManyAttempts $e) => CredentialProblems::tooManyAttempts($e));
 
         $exceptions->shouldRenderJsonWhen(

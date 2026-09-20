@@ -3,9 +3,12 @@
 declare(strict_types=1);
 
 use App\Modules\Identity\Application\AcceptInvitation;
+use App\Modules\Identity\Application\ChangePassword;
 use App\Modules\Identity\Application\ClientContext;
+use App\Modules\Identity\Application\CurrentPasswordIncorrect;
 use App\Modules\Identity\Application\DisableAccount;
 use App\Modules\Identity\Application\InvitationRejected;
+use App\Modules\Identity\Application\NoLongerAuthenticated;
 use App\Modules\Identity\Application\RequestPasswordReset;
 use App\Modules\Identity\Application\ResetPassword;
 use App\Modules\Identity\Application\ResetRejected;
@@ -14,6 +17,7 @@ use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\InvitationToken;
+use App\Shared\Domain\Actor;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -286,4 +290,80 @@ it('does not issue a token to an account that was disabled while the request wai
         ->and($race['exit'])->toBe(0)
         ->and(DB::table('password_reset_tokens')->count())->toBe(0)
         ->and(Identity::context(Identity::events('password.reset_requested')[0]))->toMatchArray(['reason' => 'account_not_eligible']);
+});
+
+/** Runs a password change in this process, as the first (paused) operation of a race. */
+function changeHere(Account $account, string $current, string $new): void
+{
+    app(ChangePassword::class)(
+        Actor::user($account->id, $account->personId), $current, $new, 'the-first-callers-session', new ClientContext('127.0.0.1', 'first'),
+    );
+}
+
+it('verifies the current password against the credential as a concurrent change left it', function () {
+    // Two changes from two sessions of the same account, both presenting the same current password.
+    // The second waits for the first, then finds its "current" password is no longer the current one.
+    $account = Identity::savedActiveAccount('ada@example.org');
+
+    $race = Race::against(
+        fn (Closure $pause) => changeHere($account, Identity::PASSWORD, Passwords::STRONG),
+        'password.changed', 'change', [
+            'account' => $account->id->value, 'person' => $account->personId->value,
+            'current' => Identity::PASSWORD, 'password' => Passwords::OTHER,
+        ],
+    );
+
+    $hash = Identity::scalar('accounts', 'password_hash');
+    expect($race['blocked'])->toBeTrue('the second change did not wait for the first to commit')
+        ->and($race['exit'])->toBe(2)
+        ->and($race['class'])->toBe(CurrentPasswordIncorrect::class)
+        ->and(DB::table('security_events')->where('type', 'password.changed')->count())->toBe(1)
+        ->and(Hash::check(Passwords::STRONG, $hash))->toBeTrue()
+        ->and(Hash::check(Passwords::OTHER, $hash))->toBeFalse();
+});
+
+it('cannot change the password of an account that was disabled while the change waited for it', function () {
+    $account = Identity::savedActiveAccount('ada@example.org');
+    $before = Identity::scalar('accounts', 'password_hash');
+
+    $race = Race::against(
+        fn (Closure $pause) => app(DisableAccount::class)($account->id),
+        'account.disabled', 'change', [
+            'account' => $account->id->value, 'person' => $account->personId->value,
+            'current' => Identity::PASSWORD, 'password' => Passwords::STRONG,
+        ],
+    );
+
+    expect($race['blocked'])->toBeTrue('the change did not wait for the disable to commit')
+        ->and($race['exit'])->toBe(2)
+        ->and($race['class'])->toBe(NoLongerAuthenticated::class)
+        ->and(DB::table('accounts')->where('id', $account->id->value)->value('status'))->toBe('disabled')
+        ->and(Identity::scalar('accounts', 'password_hash'))->toBe($before)
+        ->and(DB::table('security_events')->where('type', 'password.changed')->count())->toBe(0);
+});
+
+it('lets a disable that arrives while a change is in flight win, after it', function () {
+    $account = Identity::savedActiveAccount('ada@example.org');
+
+    $race = Race::against(
+        fn (Closure $pause) => changeHere($account, Identity::PASSWORD, Passwords::STRONG),
+        'password.changed', 'disable', ['account' => $account->id->value],
+    );
+
+    expect($race['blocked'])->toBeTrue('the disable did not wait for the change to commit')
+        ->and($race['exit'])->toBe(0)
+        ->and(DB::table('accounts')->where('id', $account->id->value)->value('status'))->toBe('disabled');
+});
+
+it('does not let a sign-in that verified the old password succeed once it has been changed', function () {
+    $account = Identity::savedActiveAccount('ada@example.org');
+
+    $race = Race::against(
+        fn (Closure $pause) => changeHere($account, Identity::PASSWORD, Passwords::STRONG),
+        'password.changed', 'login', ['email' => 'ada@example.org', 'password' => Identity::PASSWORD],
+    );
+
+    expect($race['blocked'])->toBeTrue('the sign-in did not wait for the change to commit')
+        ->and($race['exit'])->toBe(2)
+        ->and(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(0);
 });

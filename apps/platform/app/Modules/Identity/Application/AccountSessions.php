@@ -14,4 +14,10 @@ interface AccountSessions
      * Accounts, and anonymous ones, are left alone. Returns how many were removed.
      */
     public function revokeAllFor(AccountId $account): int;
+
+    /**
+     * As revokeAllFor, but leaves the one session whose id is given: the caller's own, which the
+     * transport then rotates. The id is opaque to Identity's Application layer and is never recorded.
+     */
+    public function revokeAllExcept(AccountId $account, #[\SensitiveParameter] string $keepSessionId): int;
 }

@@ -21,4 +21,9 @@ final readonly class DatabaseAccountSessions implements AccountSessions
     {
         return $this->database->table('sessions')->where('user_id', $account->value)->delete();
     }
+
+    public function revokeAllExcept(AccountId $account, string $keepSessionId): int
+    {
+        return $this->database->table('sessions')->where('user_id', $account->value)->where('id', '!=', $keepSessionId)->delete();
+    }
 }

@@ -15,8 +15,8 @@ info:
 
     **Implemented so far:** infrastructure health, Guardian Console session
     authentication (`login`, `logout`, `me`), capability-based authorization
-    (see below), and the credential lifecycle (invitation acceptance and password
-    recovery). No endpoint changes role assignments yet.
+    (see below), and the credential lifecycle (invitation acceptance, password
+    recovery and password change). No endpoint changes role assignments yet.
 
 
     ## Authorization
@@ -69,7 +69,7 @@ info:
 
 
     One password policy applies wherever a password is set (`/invitations/accept`,
-    `/password/reset`, and the change endpoint as it arrives):
+    `/password/reset` and `/password/change`):
 
     - at least **15 Unicode code points**, and at most **72 UTF-8 bytes** (the limit of the
       bcrypt hashing the platform runs on; a longer password is refused, never truncated);
@@ -443,6 +443,95 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+  /password/change:
+    post:
+      operationId: changePassword
+      summary: Change the signed-in account's password
+      description: >-
+        Changes the password of the signed-in account. **A session alone is not enough:** the
+        caller must re-prove the **current password**, which is the re-authentication control
+        until step-up authentication (MFA) exists. The current password is verified against the
+        credential as it is at the moment of the change, under a lock, so a reset or change that
+        committed a moment ago is honoured; a concurrent disable wins and the answer is `401`.
+
+
+        On success:
+
+        - every **other** session of the account is ended;
+
+        - **this** session is rotated: a new session id and CSRF token (the response carries the
+          new cookies, and the old session id stops working), and
+
+        - its **authentication instant is restarted**: the current password was just proved, so
+          the 12-hour absolute lifetime runs from now (`GET /me` shows the new
+          `session.authenticated_at`).
+
+
+        A wrong current password, or a new password that does not meet the policy, changes
+        nothing at all, including the session. Repeated wrong attempts are rate limited per
+        account and per source address, so a stolen session cannot be used to guess the current
+        password. Stateful: needs the session cookie and CSRF token like `POST /logout`.
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '204':
+          description: >-
+            The password was changed, every other session ended, and this one was rotated. Sets
+            a new `__Host-flowlife-session` and `XSRF-TOKEN`.
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: >-
+            Nothing was changed. `errors.current_password` if the current password is wrong,
+            `errors.password` for a new password that does not meet the policy (with a reason for
+            each), or a confirmation that does not match.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts for this account or from this address.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '503':
+          description: >-
+            The breached-password check is unavailable, so the new password could not be judged.
+            Nothing was changed; retry after the interval given.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
 components:
   securitySchemes:
     sessionCookie:
@@ -528,6 +617,28 @@ components:
           format: password
           writeOnly: true
           description: See "Passwords" above. Secret; used exactly as typed.
+        password_confirmation:
+          type: string
+          maxLength: 1024
+          format: password
+          writeOnly: true
+          description: Must equal `password` once both are normalised. Secret.
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, password, password_confirmation]
+      properties:
+        current_password:
+          type: string
+          maxLength: 1024
+          format: password
+          writeOnly: true
+          description: The account's current password, re-proved. Secret.
+        password:
+          type: string
+          maxLength: 1024
+          format: password
+          writeOnly: true
+          description: The new password. See "Passwords" above. Secret; used exactly as typed.
         password_confirmation:
           type: string
           maxLength: 1024

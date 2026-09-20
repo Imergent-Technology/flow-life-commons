@@ -46,6 +46,14 @@ final class CredentialProblems
         ], 422);
     }
 
+    public static function currentPasswordIncorrect(): JsonResponse
+    {
+        return response()->json([
+            'message' => 'The current password is incorrect.',
+            'errors' => ['current_password' => ['The current password is incorrect.']],
+        ], 422);
+    }
+
     public static function resetRejected(): JsonResponse
     {
         // One answer for an unknown address, an Account that cannot be reset, and a missing, wrong,

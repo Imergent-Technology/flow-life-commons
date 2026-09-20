@@ -96,6 +96,13 @@ return [
             'per_ip' => (int) env('IDENTITY_RESET_REQUEST_MAX_PER_IP', 10),
             'per_identifier' => (int) env('IDENTITY_RESET_REQUEST_MAX_PER_IDENTIFIER', 3),
         ],
+        // Changing a password while signed in. The current password is the re-authentication, so this is
+        // the guess limit for it: a stolen session must not be able to try passwords at will. The
+        // identifier is the Account, so it is per person, not per address they typed.
+        'password_change' => [
+            'per_ip' => (int) env('IDENTITY_CHANGE_MAX_PER_IP', 20),
+            'per_identifier' => (int) env('IDENTITY_CHANGE_MAX_PER_ACCOUNT', 5),
+        ],
         // Completing a reset. The token has 256 bits, so this bounds volume (hashing work and audit
         // growth), not guessing. As with login, a caller can exhaust an identifier's allowance for one
         // window: the accepted trade for a small invite-only user base.

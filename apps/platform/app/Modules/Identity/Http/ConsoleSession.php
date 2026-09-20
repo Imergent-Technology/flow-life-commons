@@ -45,6 +45,21 @@ final readonly class ConsoleSession
         return true;
     }
 
+    /**
+     * The Account has just re-proved its credential (it changed its password with the current one), so
+     * the same session gets a NEW identity and a NEW authentication instant.
+     *
+     * - `regenerate(true)`: a new session id and CSRF token, and the OLD row deleted. Without the
+     *   `true` the framework keeps the old row, so the id a thief may have copied would stay valid.
+     * - `authenticated_at` is restarted: re-proving the credential is a fresh authentication, so the
+     *   12-hour absolute lifetime (ADR 0016: "re-authentication starts a new one") runs from now.
+     */
+    public function reauthenticate(Request $request): void
+    {
+        $request->session()->regenerate(true);
+        $request->session()->put(self::AUTHENTICATED_AT, now()->getTimestamp());
+    }
+
     /** The Account this session was authenticated as, read from the session itself. */
     public function accountId(Request $request): ?AccountId
     {

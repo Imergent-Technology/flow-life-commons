@@ -15,6 +15,7 @@ declare(strict_types=1);
  *   php worker.php lock_invitation '{"token":"..."}'
  *   php worker.php reset   '{"email":"...","token":"...","password":"..."}'
  *   php worker.php request_reset '{"email":"..."}'
+ *   php worker.php change  '{"account":"...","person":"...","current":"...","password":"..."}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
  * the operation succeeded, 2 when it was refused or failed. It refuses to run against any
@@ -26,6 +27,7 @@ use App\Modules\Access\Application\Role;
 use App\Modules\Identity\Application\AcceptInvitation;
 use App\Modules\Identity\Application\AuthenticateAccount;
 use App\Modules\Identity\Application\AuthenticationStatus;
+use App\Modules\Identity\Application\ChangePassword;
 use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\DisableAccount;
 use App\Modules\Identity\Application\RequestPasswordReset;
@@ -84,6 +86,11 @@ try {
         $app->make(AcceptInvitation::class)($arg('token'), $arg('password'), new ClientContext('127.0.0.1', 'worker'));
     } elseif ($operation === 'reset') {
         $app->make(ResetPassword::class)(EmailAddress::fromString($arg('email')), $arg('token'), $arg('password'), new ClientContext('127.0.0.1', 'worker'));
+    } elseif ($operation === 'change') {
+        $app->make(ChangePassword::class)(
+            Actor::user(AccountId::fromString($arg('account')), PersonId::fromString($arg('person'))),
+            $arg('current'), $arg('password'), 'the-workers-own-session', new ClientContext('127.0.0.1', 'worker'),
+        );
     } elseif ($operation === 'request_reset') {
         $app->make(RequestPasswordReset::class)(EmailAddress::fromString($arg('email')), new ClientContext('127.0.0.1', 'worker'));
     } elseif ($operation === 'lock_invitation') {

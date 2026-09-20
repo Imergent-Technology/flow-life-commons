@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Modules\Identity\Http\AcceptInvitationController;
+use App\Modules\Identity\Http\ChangePasswordController;
 use App\Modules\Identity\Http\ForgotPasswordController;
 use App\Modules\Identity\Http\LoginController;
 use App\Modules\Identity\Http\LogoutController;
@@ -22,6 +23,9 @@ Route::middleware('stateful')->group(function (): void {
     Route::post('login', LoginController::class)->name('api.v1.login');
     Route::post('logout', LogoutController::class)->name('api.v1.logout');
     Route::get('me', MeController::class)->middleware('auth:web')->name('api.v1.me');
+    // Authenticated, so on the session surface with CSRF. Any signed-in Account may change its own
+    // password: authentication is the whole requirement, plus the current password in the body.
+    Route::post('password/change', ChangePasswordController::class)->middleware('auth:web')->name('api.v1.password.change');
 });
 
 /*
