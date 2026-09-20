@@ -31,6 +31,7 @@
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
+        <env name="IDENTITY_COMPROMISED_PASSWORD_CHECK" value="none"/>
         <!--
             Real database, never SQLite: MariaDB is the canonical integration
             environment. Host/credentials come from .env; only the database name is

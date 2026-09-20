@@ -108,6 +108,11 @@ final class Faults
             {
                 return $this->inner->findByToken($token);
             }
+
+            public function findByTokenForUpdate(InvitationToken $token): ?AccountInvitation
+            {
+                return $this->inner->findByTokenForUpdate($token);
+            }
         });
     }
 

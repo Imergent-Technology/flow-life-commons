@@ -4,14 +4,15 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Infrastructure\Auth;
 
+use App\Modules\Identity\Application\PasswordHasher;
 use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\InvalidEmailAddress;
+use App\Modules\Identity\Domain\PlainPassword;
 use App\Modules\Identity\Infrastructure\Persistence\AccountMapper;
 use App\Modules\Identity\Infrastructure\Persistence\AccountRecord;
 use App\Shared\Domain\AccountId;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Auth\UserProvider;
-use Illuminate\Contracts\Hashing\Hasher;
 use InvalidArgumentException;
 
 /**
@@ -28,7 +29,7 @@ use InvalidArgumentException;
 final readonly class AccountUserProvider implements UserProvider
 {
     public function __construct(
-        private Hasher $hasher,
+        private PasswordHasher $passwords,
         private AccountMapper $mapper,
     ) {}
 
@@ -79,7 +80,7 @@ final readonly class AccountUserProvider implements UserProvider
         return $user instanceof AccountRecord
             && is_string($password)
             && $this->mayAuthenticate($user)
-            && $this->hasher->check($password, (string) $user->getAuthPassword());
+            && $this->passwords->matches(PlainPassword::fromInput($password), (string) $user->getAuthPassword());
     }
 
     /** @param  array<string, mixed>  $credentials */

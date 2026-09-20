@@ -13,7 +13,7 @@ use App\Shared\Domain\AccountId;
 /**
  * Persists only the token hash. Marking an invitation accepted is a plain update here;
  * making that claim atomic under concurrent acceptance (lock, then check-and-set) belongs
- * to the acceptance use case, which owns the transaction.
+ * to the acceptance use case, which owns the transaction and reads through findByTokenForUpdate.
  */
 final class EloquentAccountInvitationRepository implements AccountInvitationRepository
 {
@@ -40,6 +40,13 @@ final class EloquentAccountInvitationRepository implements AccountInvitationRepo
     public function findByToken(InvitationToken $token): ?AccountInvitation
     {
         $record = AccountInvitationRecord::query()->where('token_hash', $token->hash())->first();
+
+        return $record === null ? null : $this->toDomain($record);
+    }
+
+    public function findByTokenForUpdate(InvitationToken $token): ?AccountInvitation
+    {
+        $record = AccountInvitationRecord::query()->where('token_hash', $token->hash())->lockForUpdate()->first();
 
         return $record === null ? null : $this->toDomain($record);
     }

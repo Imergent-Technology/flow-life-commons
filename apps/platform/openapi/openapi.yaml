@@ -14,8 +14,9 @@ info:
 
 
     **Implemented so far:** infrastructure health, Guardian Console session
-    authentication (`login`, `logout`, `me`), and capability-based authorization
-    (see below). No endpoint changes role assignments yet.
+    authentication (`login`, `logout`, `me`), capability-based authorization
+    (see below), and the first credential-lifecycle endpoint (invitation acceptance).
+    No endpoint changes role assignments yet.
 
 
     ## Authorization
@@ -62,6 +63,30 @@ info:
 
 
     Stateless endpoints (such as `/health`) receive no cookie and need no token.
+
+
+    ## Passwords
+
+
+    One password policy applies wherever a password is set (`/invitations/accept`, and the
+    recovery and change endpoints as they arrive):
+
+    - at least **15 Unicode code points**, and at most **72 UTF-8 bytes** (the limit of the
+      bcrypt hashing the platform runs on; a longer password is refused, never truncated);
+
+    - **no composition rules**: no required digits, cases or symbols, and spaces and Unicode
+      are welcome. Nothing is trimmed: a password is used exactly as typed;
+
+    - text is **normalised to Unicode NFC** before it is hashed or checked, so two spellings
+      of the same text are the same password;
+
+    - a password found in **public data breaches** is refused. The check sends only the
+      first five characters of the password's SHA-1 to a range service (k-anonymity), never
+      the password. If the service cannot be reached the answer is `503` with `Retry-After`:
+      the password is neither accepted nor refused, and nothing is changed.
+
+    Passwords, tokens and confirmations are secret-bearing request fields (`writeOnly`). They
+    are never stored in plain text, logged or recorded in the audit trail.
 servers:
   # The API shares an origin with the Guardian Console (ADR 0016), so the server
   # is a relative URL: it resolves against whichever host serves the Console.
@@ -209,6 +234,85 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+  /invitations/accept:
+    post:
+      operationId: acceptInvitation
+      summary: Accept an invitation and choose a password
+      description: >-
+        Completes an invited account. The caller presents the one-time invitation token they
+        were given and chooses a password; the account becomes `active`. **It does not sign
+        the caller in:** they then use `POST /login`.
+
+
+        Public and stateless: no session, cookie or CSRF token is involved. The token is sent
+        in the **body**, never in a URL, so routine access logs do not capture it. It is
+        hashed before it is looked up and is never stored, logged or audited.
+
+
+        **An unusable invitation has exactly one answer.** Unknown, malformed, expired,
+        already accepted, revoked, or belonging to an account that can no longer accept it
+        are indistinguishable (`422` with an error on `token`). The password is judged
+        first, so a weak password gets the same answer whatever the token is.
+
+
+        An invitation can be accepted **once**: of two simultaneous requests with the same
+        token at most one succeeds. Nothing is partly applied: the password, the activation
+        and the invitation's use are committed together or not at all. A concurrent disable
+        of the account wins; acceptance never re-enables it.
+
+
+        `email_verified_at` is set on acceptance. It records that the platform accepted the
+        address through an invitation issued for it. For an invitation the platform issued
+        itself (the administrator bootstrap, delivered by an operator) that is the operator's
+        vouching, not proof of mailbox control; the audit event records which.
+
+
+        Limited by source address (see `429`).
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptInvitationRequest'
+      responses:
+        '204':
+          description: The password is set and the account is active. No session was created.
+        '422':
+          description: >-
+            The request was not accepted and nothing was changed. `errors.token` for any
+            unusable invitation (one answer for every reason), `errors.password` for a
+            password that does not meet the policy (with a reason for each), or a
+            confirmation that does not match.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+        '429':
+          description: Too many attempts from this address.
+          headers:
+            Retry-After:
+              description: Seconds until another attempt is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '503':
+          description: >-
+            The breached-password check is unavailable, so the password could not be judged.
+            Nothing was changed; retry after the interval given.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
 components:
   securitySchemes:
     sessionCookie:
@@ -279,6 +383,27 @@ components:
           type: string
           maxLength: 1024
           writeOnly: true
+    AcceptInvitationRequest:
+      type: object
+      required: [token, password, password_confirmation]
+      properties:
+        token:
+          type: string
+          maxLength: 256
+          writeOnly: true
+          description: The one-time invitation token (43 URL-safe characters). Secret.
+        password:
+          type: string
+          maxLength: 1024
+          format: password
+          writeOnly: true
+          description: See "Passwords" above. Secret; used exactly as typed.
+        password_confirmation:
+          type: string
+          maxLength: 1024
+          format: password
+          writeOnly: true
+          description: Must equal `password` once both are normalised. Secret.
     CurrentAccount:
       type: object
       required: [account, person, capabilities, session]

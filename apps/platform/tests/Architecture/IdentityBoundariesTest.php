@@ -88,3 +88,78 @@ arch('Identity: uses Audit only through its Application layer', function () use 
     // positive statement for the one edge that exists: Identity -> Audit\Application.
     expect($identity)->not->toUse(['App\\Modules\\Audit\\Domain', 'App\\Modules\\Audit\\Infrastructure', 'App\\Modules\\Audit\\Http']);
 });
+
+/*
+ * The credential lifecycle (docs/adr/0022): the concrete rules Phase 5 makes real.
+ */
+
+foreach ([
+    'Illuminate\\Validation',
+    'Illuminate\\Support\\Facades\\Validator',
+    'Illuminate\\Mail',
+    'Illuminate\\Contracts\\Mail',
+    'Illuminate\\Support\\Facades\\Mail',
+    'Illuminate\\Notifications',
+    'Illuminate\\Auth\\Passwords',
+    'Illuminate\\Contracts\\Auth\\PasswordBroker',
+    'Illuminate\\Support\\Facades\\Password',
+] as $framework) {
+    foreach (['Domain', 'Application'] as $layer) {
+        arch("Identity: {$layer} does not use {$framework}", function () use ($identity, $layer, $framework) {
+            // Validation, mail and the password broker are edges. The domain and the use cases speak
+            // their own types (PlainPassword, PasswordPolicy, ports), and Infrastructure adapts the
+            // framework to them, so the framework is never the model.
+            expect("{$identity}\\{$layer}")->not->toUse($framework);
+        });
+    }
+}
+
+arch('Identity: the breached-password check is a port whose network implementation is Infrastructure', function () use ($identity) {
+    expect("{$identity}\\Infrastructure\\Password\\PwnedPasswordsRange")->toImplement("{$identity}\\Application\\CompromisedPasswords");
+});
+
+arch('Identity: the breach-check implementations are used only from Infrastructure', function () use ($identity) {
+    expect("{$identity}\\Infrastructure\\Password")->toOnlyBeUsedIn("{$identity}\\Infrastructure");
+});
+
+arch('Identity: the HTTP client is used by the breach check and nothing else in Identity', function () use ($identity) {
+    // ModuleBoundariesTest confines the client to Infrastructure; this pins who inside it.
+    expect('Illuminate\\Http\\Client')->toOnlyBeUsedIn("{$identity}\\Infrastructure\\Password");
+});
+
+foreach (['AuthenticationAudit', 'CredentialAudit'] as $audit) {
+    foreach (['PlainPassword', 'InvitationToken'] as $secret) {
+        arch("Identity: {$audit} cannot even see a {$secret}", function () use ($identity, $audit, $secret) {
+            // The events describe what happened, never the secret involved. The class that writes
+            // them has no way to be handed one.
+            expect("{$identity}\\Application\\{$audit}")->not->toUse("{$identity}\\Domain\\{$secret}");
+        });
+    }
+}
+
+arch('Identity: a password is a PlainPassword value, sealed and immutable', function () use ($identity) {
+    expect("{$identity}\\Domain\\PlainPassword")->toBeFinal()->toBeReadonly();
+});
+
+it('Identity: only PasswordHasher hashes or checks a password outside Infrastructure', function () {
+    // Source scan, with a positive control. One implementation, so login, acceptance, reset and change
+    // cannot drift into subtly different normalisation or limits.
+    $hashing = '/Hashing\\\\Hasher|Facades\\\\Hash\b|\bHash::|password_hash\s*\(|password_verify\s*\(|\bbcrypt\s*\(/';
+    $offenders = [];
+
+    foreach (['Domain', 'Application', 'Http'] as $layer) {
+        $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(dirname(__DIR__, 2)."/app/Modules/Identity/{$layer}", FilesystemIterator::SKIP_DOTS));
+        foreach ($files as $file) {
+            assert($file instanceof SplFileInfo);
+            if ($file->getExtension() !== 'php' || $file->getFilename() === 'PasswordHasher.php') {
+                continue;
+            }
+            if (preg_match($hashing, (string) file_get_contents($file->getPathname())) === 1) {
+                $offenders[] = $layer.'/'.$file->getFilename();
+            }
+        }
+    }
+
+    expect($offenders)->toBe([])
+        ->and(preg_match($hashing, (string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Identity/Application/PasswordHasher.php')))->toBe(1);
+});

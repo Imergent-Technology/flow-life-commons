@@ -3,6 +3,11 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\AccessDenied;
+use App\Modules\Identity\Application\CompromisedPasswordCheckUnavailable;
+use App\Modules\Identity\Application\InvitationRejected;
+use App\Modules\Identity\Application\PasswordRejected;
+use App\Modules\Identity\Application\TooManyAttempts;
+use App\Modules\Identity\Http\CredentialProblems;
 use App\Modules\Identity\Http\EnforceAbsoluteSessionLifetime;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -61,6 +66,11 @@ return Application::configure(basePath: dirname(__DIR__))
         // Access's Application layer may not use Laravel's HTTP or auth machinery, so it
         // throws its own AccessDenied; this is the edge that turns it into a 403.
         $exceptions->render(fn (AccessDenied $e, Request $request) => response()->json(['message' => $e->getMessage()], 403));
+        // The same for Identity's credential endpoints: Application throws, this is the wire format.
+        $exceptions->render(fn (PasswordRejected $e) => CredentialProblems::passwordRejected($e));
+        $exceptions->render(fn (CompromisedPasswordCheckUnavailable $e) => CredentialProblems::checkUnavailable());
+        $exceptions->render(fn (InvitationRejected $e) => CredentialProblems::invitationRejected());
+        $exceptions->render(fn (TooManyAttempts $e) => CredentialProblems::tooManyAttempts($e));
 
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),

@@ -3,7 +3,7 @@
 - **Purpose:** create a platform administrator when none exists, or when every administrator is locked out ([ADR 0020](../adr/0020-administrator-bootstrap-and-last-administrator-invariant.md)).
 - **Owner:** whoever holds server access to the platform.
 - **Last tested:** 2026-09-20, against the development stack (MariaDB), by hand and by the automated tests.
-- **Status:** the command works and issues the invitation. **Accepting the invitation, which is how the new administrator sets their password and becomes able to sign in, is not built yet.** Until that phase ships, the administrator exists and holds the role but cannot sign in.
+- **Status:** the command issues the invitation, and the administrator accepts it over the API (see *Accepting the invitation*) to set their password and become able to sign in. There is no Console UI for this yet.
 
 ## Why this is a command
 
@@ -41,11 +41,28 @@ There is no default administrator, no superuser flag and no environment variable
 
 3. **Deliver the token to the administrator yourself, over a channel you trust.** Nothing is emailed. It is shown once, only after everything has been written and committed; it is stored only as a hash, and it is not in the audit trail or the logs. If it is lost, you cannot recover it (see *Rollback* below).
 
+## Accepting the invitation
+
+The administrator presents the token and chooses a password. The token goes in the request **body** (never a URL, so it stays out of access logs):
+
+```bash
+curl -sS -X POST https://<host>/api/v1/invitations/accept \
+  -H 'Content-Type: application/json' -H 'Accept: application/json' \
+  -d '{"token":"<the token>","password":"<their passphrase>","password_confirmation":"<the same>"}'
+```
+
+- `204` means it worked: the account is now active with that password. **They are not signed in**; they sign in through the ordinary login.
+- The password needs at least 15 characters and at most 72 bytes, with no other composition rules, and must not appear in public data breaches (a `422` says which rule failed). If the breach service is unreachable the answer is `503` with `Retry-After`: nothing changed, retry shortly.
+- Any problem with the token itself (wrong, expired, already used) is the same `422` on `token`, deliberately.
+- An invitation works **once** and expires after 7 days. If it expires or is lost, re-run the bootstrap command as described under *Rollback*.
+
+**What this verifies about the email address.** Because *you* deliver the token, accepting it shows that the person you handed it to chose the password, not that they control the mailbox. The account's `email_verified_at` is set on acceptance and means "the platform accepted this address through an invitation issued for it"; for a bootstrap invitation that is **your** vouching as the server operator. The audit event `invitation.accepted` records `issued_by: platform` so this stays visible later.
+
 ## What it does, and does not, do
 
 It creates, in **one transaction**, a Person, an **invited** Account, a single-use expiring invitation, and a `platform_administrator` assignment, and records `account.invited`, `role.granted` and `administrator.bootstrapped`. If any write or any audit write fails, **none of it remains and no token is shown.**
 
-It never sets or accepts a password. It never repurposes or changes an existing account.
+It never sets or accepts a password (the administrator does, when they accept). It never repurposes or changes an existing account.
 
 ## When an administrator already exists
 
@@ -66,7 +83,7 @@ It fails, changes nothing, and tells you. An existing account is never taken ove
 ## Verification
 
 - `security_events` has `account.invited`, `role.granted` and `administrator.bootstrapped` for the new person, none with a token in them.
-- `accounts` shows the new account with `status = invited` and `password_hash` empty.
+- `accounts` shows the new account with `status = invited` and `password_hash` empty, until the invitation is accepted; afterwards `status = active` with a password hash and `email_verified_at` set, and `invitation.accepted` is in `security_events`.
 - `account_invitations` has one row with a 64-character `token_hash` and no `accepted_at`.
 - `role_assignments` has one `platform_administrator` row for that person.
 

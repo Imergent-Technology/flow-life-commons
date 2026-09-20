@@ -63,6 +63,8 @@ final class Race
             'CACHE_STORE' => 'array',
             'QUEUE_CONNECTION' => 'sync',
             'MAIL_MAILER' => 'array',
+            'BCRYPT_ROUNDS' => '4',
+            'IDENTITY_COMPROMISED_PASSWORD_CHECK' => 'none',
         ];
 
         $process = new Process([PHP_BINARY, base_path('tests/Concurrency/worker.php'), $operation, json_encode($arguments, JSON_THROW_ON_ERROR)], base_path(), $environment, null, 180);

@@ -7,6 +7,8 @@ namespace App\Modules\Identity\Infrastructure;
 use App\Modules\Identity\Application\AccountDeactivationGuard;
 use App\Modules\Identity\Application\AccountSessions;
 use App\Modules\Identity\Application\ActiveAccountQuery;
+use App\Modules\Identity\Application\AttemptThrottle;
+use App\Modules\Identity\Application\CompromisedPasswords;
 use App\Modules\Identity\Application\DisableAccount;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 use App\Modules\Identity\Application\LoginThrottle;
@@ -14,7 +16,10 @@ use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\PersonRepository;
 use App\Modules\Identity\Infrastructure\Auth\AccountUserProvider;
+use App\Modules\Identity\Infrastructure\Auth\CacheAttemptThrottle;
 use App\Modules\Identity\Infrastructure\Auth\CacheLoginThrottle;
+use App\Modules\Identity\Infrastructure\Password\NoCompromisedPasswordCheck;
+use App\Modules\Identity\Infrastructure\Password\PwnedPasswordsRange;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountSessions;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseActiveAccountQuery;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountInvitationRepository;
@@ -23,6 +28,7 @@ use App\Modules\Identity\Infrastructure\Persistence\EloquentPersonRepository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\ServiceProvider;
+use LogicException;
 
 /**
  * Binds Identity's ports to their implementations and registers its auth provider driver.
@@ -36,6 +42,7 @@ final class IdentityServiceProvider extends ServiceProvider
         AccountRepository::class => EloquentAccountRepository::class,
         AccountInvitationRepository::class => EloquentAccountInvitationRepository::class,
         LoginThrottle::class => CacheLoginThrottle::class,
+        AttemptThrottle::class => CacheAttemptThrottle::class,
         ActiveAccountQuery::class => DatabaseActiveAccountQuery::class,
         AccountSessions::class => DatabaseAccountSessions::class,
         // A default that grants nothing. The Access module registers its own over this.
@@ -47,6 +54,19 @@ final class IdentityServiceProvider extends ServiceProvider
         // The guard chain: whatever other modules have tagged as an AccountDeactivationGuard.
         // Identity names none of them; with none registered the chain is simply empty.
         $this->app->when(DisableAccount::class)->needs('$guards')->giveTagged(AccountDeactivationGuard::TAG);
+
+        $this->app->bind(CompromisedPasswords::class, function (Application $app): CompromisedPasswords {
+            $driver = $app->make('config')->get('identity.password.compromised_check.driver');
+
+            return match ($driver) {
+                'pwned_passwords' => $app->make(PwnedPasswordsRange::class),
+                // The one way to switch the breach check off, and and only where there are no real users to protect.
+                'none' => $app->environment('local', 'testing')
+                    ? new NoCompromisedPasswordCheck
+                    : throw new LogicException('The breached-password check may only be disabled in local and testing environments.'),
+                default => throw new LogicException('Unknown breached-password check driver.'),
+            };
+        });
     }
 
     public function boot(): void

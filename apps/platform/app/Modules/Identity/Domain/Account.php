@@ -100,9 +100,17 @@ final readonly class Account
     }
 
     /**
-     * Invitation acceptance: the holder set a password, which also proves they control
-     * the address, so no separate verification is needed. `$passwordHash` is an already
-     * computed hash; the domain never sees a plain password.
+     * Invitation acceptance: the holder chose a password and the Account becomes active.
+     * `$passwordHash` is an already computed hash; the domain never sees a plain password.
+     *
+     * `emailVerifiedAt` records that the platform accepted this address as the Account's login
+     * identifier through an invitation issued for it, and it is the ONLY thing that timestamp means.
+     * It is not, by itself, proof that the holder controls the mailbox. An invitation an Account
+     * issued is expected to have been delivered to the address, so accepting it does show control of
+     * it. An invitation the platform issued itself (the administrator bootstrap, whose token is handed
+     * over by an operator) shows only that a trusted server operator vouched for the address. The
+     * acceptance event records which (`issued_by`), so the difference is recoverable without a
+     * separate verification subsystem.
      */
     public function activate(string $passwordHash, DateTimeImmutable $now): self
     {

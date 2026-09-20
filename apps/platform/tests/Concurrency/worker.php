@@ -11,6 +11,8 @@ declare(strict_types=1);
  *   php worker.php revoke  '{"actor_account":"...","actor_person":"...","person":"..."}'
  *   php worker.php disable '{"account":"..."}'
  *   php worker.php login   '{"email":"...","password":"..."}'
+ *   php worker.php accept  '{"token":"...","password":"..."}'
+ *   php worker.php lock_invitation '{"token":"..."}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
  * the operation succeeded, 2 when it was refused or failed. It refuses to run against any
@@ -19,16 +21,20 @@ declare(strict_types=1);
 
 use App\Modules\Access\Application\RevokeRole;
 use App\Modules\Access\Application\Role;
+use App\Modules\Identity\Application\AcceptInvitation;
 use App\Modules\Identity\Application\AuthenticateAccount;
 use App\Modules\Identity\Application\AuthenticationStatus;
 use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\DisableAccount;
+use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\EmailAddress;
+use App\Modules\Identity\Domain\InvitationToken;
 use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\DB;
 
 require __DIR__.'/../../vendor/autoload.php';
 
@@ -70,6 +76,11 @@ try {
         if ($result->status !== AuthenticationStatus::Authenticated) {
             throw new RuntimeException('login was not accepted');
         }
+    } elseif ($operation === 'accept') {
+        $app->make(AcceptInvitation::class)($arg('token'), $arg('password'), new ClientContext('127.0.0.1', 'worker'));
+    } elseif ($operation === 'lock_invitation') {
+        // Just takes and releases the invitation row lock: it finishes only once it has been granted.
+        DB::transaction(fn () => $app->make(AccountInvitationRepository::class)->findByTokenForUpdate(InvitationToken::fromPresented($arg('token'))));
     } else {
         throw new InvalidArgumentException("unknown operation {$operation}");
     }

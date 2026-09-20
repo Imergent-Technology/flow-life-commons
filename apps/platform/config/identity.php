@@ -52,4 +52,42 @@ return [
         'audit_interval_seconds' => 60,
     ],
 
+    /*
+     * The password policy (docs/adr/0022). The rules themselves (15 code points minimum, 72 bytes
+     * maximum, NFC) are code, in PlainPassword, and are deliberately not configurable: they are a
+     * security policy, not a preference.
+     *
+     * compromised_check: how a candidate password is checked against public breaches.
+     * - driver `pwned_passwords`: the Pwned Passwords range API, k-anonymity (only the first five
+     *   characters of the password's SHA-1 leave this machine). If it cannot be reached or answers
+     *   nonsense the password is neither accepted nor refused: the caller gets a retryable 503.
+     * - driver `none`: no check, for development and tests that have no network. The container
+     *   refuses to build it outside the `local` and `testing` environments, so it cannot be a
+     *   production setting.
+     */
+    'password' => [
+        'compromised_check' => [
+            'driver' => env('IDENTITY_COMPROMISED_PASSWORD_CHECK', 'pwned_passwords'),
+            'url' => 'https://api.pwnedpasswords.com',
+            'timeout_seconds' => 3,
+        ],
+    ],
+
+    /*
+     * Rate limits for the credential endpoints, on Laravel's cache limiter (the database store; no
+     * Redis). Every attempt counts, per source address and, where the endpoint has one, per
+     * identifier, over `decay_seconds`. Each action has its own counters, so hammering one endpoint
+     * for an identifier cannot lock that identifier out of another. While a limit stays engaged, at
+     * most one authentication.rate_limited event per key per `audit_interval_seconds`.
+     *
+     * The invitation token carries 256 bits of entropy, so acceptance is limited by source address
+     * only: there is nothing to brute-force, only volume to bound.
+     */
+    'credential_throttle' => [
+        'decay_seconds' => (int) env('IDENTITY_CREDENTIAL_THROTTLE_DECAY_SECONDS', 900),
+        'audit_interval_seconds' => 60,
+        'invitation_acceptance' => [
+            'per_ip' => (int) env('IDENTITY_ACCEPT_MAX_ATTEMPTS_PER_IP', 20),
+        ],
+    ],
 ];

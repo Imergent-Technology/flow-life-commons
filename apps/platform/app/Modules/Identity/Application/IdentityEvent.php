@@ -18,4 +18,5 @@ enum IdentityEvent: string
     case SessionAbsoluteExpired = 'session.absolute_expired';
     case AccountInvited = 'account.invited';
     case AccountDisabled = 'account.disabled';
+    case InvitationAccepted = 'invitation.accepted';
 }

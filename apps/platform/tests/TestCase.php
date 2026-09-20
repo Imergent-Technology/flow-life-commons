@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests;
 
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Support\Facades\Http;
 use RuntimeException;
 
 abstract class TestCase extends BaseTestCase
@@ -12,6 +13,10 @@ abstract class TestCase extends BaseTestCase
     protected function setUp(): void
     {
         parent::setUp();
+
+        // No test may reach a real remote service (the breached-password range API included): a
+        // test that needs the network answers it with Http::fake().
+        Http::preventStrayRequests();
 
         // Integration tests run on the real engines only (ADR 0014): no SQLite
         // "stand-in", which would hide MariaDB/PostgreSQL differences.

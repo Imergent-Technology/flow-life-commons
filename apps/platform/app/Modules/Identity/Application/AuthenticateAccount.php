@@ -8,11 +8,10 @@ use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\PersonRepository;
+use App\Modules\Identity\Domain\PlainPassword;
 use App\Shared\Domain\Actor;
 use DateTimeImmutable;
-use Illuminate\Contracts\Hashing\Hasher;
 use Illuminate\Database\ConnectionInterface;
-use Illuminate\Support\Str;
 use LogicException;
 
 /**
@@ -24,22 +23,20 @@ use LogicException;
  * - Only an active Account with a credential may authenticate. Invited, disabled, unknown
  *   and wrong-password all return the same undifferentiated failure.
  * - A password check runs on EVERY path, against a throwaway hash when there is no
- *   eligible Account, so response time does not reveal whether the address exists.
+ *   eligible Account, so response time does not reveal whether the address exists. The password
+ *   is normalised by the same PlainPassword boundary as when it was set.
  * - The success event and the `last_login_at` update share one transaction (ADR 0019).
  *   Failures are not thrown from inside a transaction, so their events are kept.
  * - The plain password is used once and never stored, logged or recorded.
  */
 final class AuthenticateAccount
 {
-    /** A hash of a random string at the application's own cost, for the no-such-account path. */
-    private static ?string $decoyHash = null;
-
     public function __construct(
         private readonly AccountRepository $accounts,
         private readonly PersonRepository $people,
         private readonly LoginThrottle $throttle,
         private readonly AuthenticationAudit $audit,
-        private readonly Hasher $hasher,
+        private readonly PasswordHasher $passwords,
         private readonly ConnectionInterface $database,
         private readonly EffectiveCapabilities $capabilities,
     ) {}
@@ -59,7 +56,11 @@ final class AuthenticateAccount
 
         $account = $this->accounts->findByEmail($email);
         $eligible = $account !== null && $account->canAuthenticate() ? $account : null;
-        $passwordMatches = $this->hasher->check($password, $eligible->passwordHash ?? $this->decoyHash());
+        // The password goes through the same normalisation as when it was set (PlainPassword), and a
+        // check runs on every path, against a throwaway hash when there is no eligible Account.
+        $passwordMatches = $this->passwords->matches(
+            PlainPassword::fromInput($password), $eligible->passwordHash ?? $this->passwords->decoyHash(),
+        );
 
         if ($eligible === null || ! $passwordMatches) {
             $this->throttle->recordFailure($email);
@@ -123,10 +124,5 @@ final class AuthenticateAccount
             ! $account->canAuthenticate() => FailureReason::AccountNotActive,
             default => FailureReason::WrongPassword,
         };
-    }
-
-    private function decoyHash(): string
-    {
-        return self::$decoyHash ??= $this->hasher->make(Str::random(40));
     }
 }
