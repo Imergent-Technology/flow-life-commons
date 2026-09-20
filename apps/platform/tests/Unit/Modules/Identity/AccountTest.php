@@ -44,16 +44,6 @@ it('becomes active on acceptance, which sets the password and does NOT verify th
         ->and($active->createdAt)->toEqual(Identity::now());
 });
 
-it('verifies the email only when the caller has evidence the holder controls the mailbox', function () {
-    $later = Identity::now()->modify('+1 hour');
-
-    $verified = invited()->activate('$2y$hash', $later, mailboxDemonstrated: true);
-
-    expect($verified->status)->toBe(AccountStatus::Active)
-        ->and($verified->emailVerifiedAt)->toEqual($later)
-        ->and(invited()->activate('$2y$hash', $later, mailboxDemonstrated: false)->emailVerifiedAt)->toBeNull();
-});
-
 it('cannot be activated unless it is invited', function () {
     $active = invited()->activate('$2y$hash', Identity::now());
 
@@ -62,7 +52,13 @@ it('cannot be activated unless it is invited', function () {
 
 it('can be disabled from either live state, keeping its history', function () {
     $invited = invited();
-    $active = invited()->activate('$2y$hash', Identity::now(), mailboxDemonstrated: true);
+    $now = Identity::now();
+    $verified = $invited->activate('$2y$hash', $now);
+    // An Account whose mailbox control WAS established (by a future mechanism) is rebuilt as stored.
+    $active = Account::reconstitute(
+        $verified->id, $verified->personId, $verified->email, AccountStatus::Active, '$2y$hash', $now, $now,
+        null, null, $now, $now,
+    );
     $later = Identity::now()->modify('+2 hours');
 
     expect($invited->disable($later)->status)->toBe(AccountStatus::Disabled)

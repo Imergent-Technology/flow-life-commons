@@ -96,7 +96,7 @@ final readonly class AcceptInvitation
         }
 
         // Not verified: nothing delivered this invitation to the address, so nothing shows mailbox control.
-        $this->accounts->save($account->activate($hash, $now, mailboxDemonstrated: false));
+        $this->accounts->save($account->activate($hash, $now));
         $this->invitations->save($invitation->accept($now));
         $this->audit->invitationAccepted($account, $invitation->invitedByAccountId === null, $client);
 

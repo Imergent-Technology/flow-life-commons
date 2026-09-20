@@ -103,15 +103,14 @@ final readonly class Account
      * Invitation acceptance: the holder chose a password and the Account becomes active.
      * `$passwordHash` is an already computed hash; the domain never sees a plain password.
      *
-     * `emailVerifiedAt` means ONE thing: the platform has evidence that the Account holder
-     * demonstrated control of the email mailbox. Choosing a password does not show that, and neither
-     * does holding an invitation token: a token an operator hands over (the administrator bootstrap)
-     * says nothing about the mailbox. So activation leaves the timestamp as it was (null for an invited
-     * Account) unless the caller says `$mailboxDemonstrated`, which is true only when the invitation was
-     * actually delivered to this address and so presenting it is evidence of control of it. Nothing
-     * delivers an invitation to an address yet, so nothing passes true yet.
+     * Activation leaves `emailVerifiedAt` as it was (null for an invited Account). That field means
+     * ONE thing: the platform has evidence the holder demonstrated control of the mailbox. Choosing a
+     * password does not show that, and neither does holding an invitation token, which an operator may
+     * have handed over (the administrator bootstrap). Nothing delivers an invitation to an address yet,
+     * so nothing can establish that evidence; when something does, it introduces its own explicit
+     * operation for recording it rather than a flag on this one.
      */
-    public function activate(string $passwordHash, DateTimeImmutable $now, bool $mailboxDemonstrated = false): self
+    public function activate(string $passwordHash, DateTimeImmutable $now): self
     {
         if ($this->status !== AccountStatus::Invited) {
             throw new InvalidAccountState(sprintf('Only an invited account can be activated, not a %s one.', $this->status->value));
@@ -119,7 +118,7 @@ final readonly class Account
 
         return new self(
             $this->id, $this->personId, $this->email, AccountStatus::Active,
-            $passwordHash, $now, $mailboxDemonstrated ? $now : $this->emailVerifiedAt, null,
+            $passwordHash, $now, $this->emailVerifiedAt, null,
             $this->lastLoginAt, $this->createdAt, $now,
         );
     }
