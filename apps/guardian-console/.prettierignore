@@ -3,3 +3,6 @@ coverage
 playwright-report
 test-results
 package-lock.json
+
+# Minted by ./flow test e2e (E2eSessionSeeder): generated, git-ignored, and live (if worthless) cookies
+e2e/.fixtures/

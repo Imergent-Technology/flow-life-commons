@@ -76,10 +76,11 @@ it('shows an invited Account\'s outstanding invitation, and whether it has expir
         ->and($response->json('invitation'))->toBe(['expires_at' => '2026-09-26T12:00:00Z', 'expired' => false, 'delivery' => 'operator'])
         ->and($response->json('mfa'))->toBe(['enrolled' => false, 'recovery_codes_remaining' => 0]);
 
-    // A week on, the same invitation is reported as expired, so the Console can offer a fresh one.
-    Carbon::setTestNow('2026-09-27 12:00:00');
-    [$later] = Mfa::signedInAdmin('later@example.org', 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U'); // the first session lapsed with the clock
-    expect($later->get('/api/v1/admin/accounts/'.$invited->id->value)->json('invitation.expired'))->toBeTrue();
+    // An invitation whose lifetime has run out is reported as expired, so the Console can offer a fresh one. (Issued at a fixed
+    // instant with a one-hour life, so it is over by the test clock; the clock itself is not moved.)
+    $lapsed = Identity::savedInvitedAccount('lapsed@example.org');
+    Identity::savedInvitation($lapsed, ttl: 'PT1H');
+    expect($console->get('/api/v1/admin/accounts/'.$lapsed->id->value)->json('invitation.expired'))->toBeTrue();
 });
 
 it('lists what an Account HOLDS as catalog data, with words for a screen, under a neutral name', function () {

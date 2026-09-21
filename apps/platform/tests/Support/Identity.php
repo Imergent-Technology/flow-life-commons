@@ -111,9 +111,9 @@ final class Identity
         );
     }
 
-    public static function savedInvitation(Account $account, ?InvitationToken $token = null): AccountInvitation
+    public static function savedInvitation(Account $account, ?InvitationToken $token = null, string $ttl = 'P7D'): AccountInvitation
     {
-        $invitation = self::invitation($account, $token);
+        $invitation = self::invitation($account, $token, ttl: $ttl);
         app(AccountInvitationRepository::class)->save($invitation);
 
         return $invitation;
