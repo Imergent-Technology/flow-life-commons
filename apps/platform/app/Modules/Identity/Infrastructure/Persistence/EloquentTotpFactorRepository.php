@@ -8,6 +8,7 @@ use App\Modules\Identity\Domain\TotpFactor;
 use App\Modules\Identity\Domain\TotpFactorId;
 use App\Modules\Identity\Domain\TotpFactorRepository;
 use App\Shared\Domain\AccountId;
+use DateTimeImmutable;
 
 final class EloquentTotpFactorRepository implements TotpFactorRepository
 {
@@ -47,5 +48,27 @@ final class EloquentTotpFactorRepository implements TotpFactorRepository
     public function delete(AccountId $account): bool
     {
         return TotpFactorRecord::query()->where('account_id', $account->value)->toBase()->delete() > 0;
+    }
+
+    public function forgetStalePending(DateTimeImmutable $startedBefore): int
+    {
+        $cutoff = Utc::toColumn($startedBefore);
+
+        // Two statements, because the domain forbids a factor with neither secret: an enrolment that
+        // was only ever pending ceases to exist, and one with a proved secret merely loses the pending
+        // one. Both are plain conditional writes, so they are idempotent and portable.
+        $abandoned = TotpFactorRecord::query()
+            ->whereNull('secret_ciphertext')
+            ->whereNotNull('pending_started_at')
+            ->where('pending_started_at', '<', $cutoff)
+            ->toBase()->delete();
+
+        $cleared = TotpFactorRecord::query()
+            ->whereNotNull('secret_ciphertext')
+            ->whereNotNull('pending_started_at')
+            ->where('pending_started_at', '<', $cutoff)
+            ->toBase()->update(['pending_secret_ciphertext' => null, 'pending_started_at' => null]);
+
+        return $abandoned + $cleared;
     }
 }

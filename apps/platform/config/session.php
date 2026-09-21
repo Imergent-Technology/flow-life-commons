@@ -128,9 +128,26 @@ return [
     | rid of old sessions from storage. Here are the chances that it will
     | happen on a given request. By default, the odds are 2 out of 100.
     |
+    | TURNED OFF (a 0-in-100 chance never fires), and replaced by deterministic
+    | scheduled maintenance: `identity:prune-expired`, hourly, from Laravel's
+    | scheduler (routes/console.php). Reasons, in order:
+    |
+    | - The lottery makes a request's latency depend on whether it drew the short
+    |   straw, and the request that pays is whichever visitor happens to arrive
+    |   after a long quiet spell — exactly the request with the most to sweep.
+    | - It is not a guarantee. On a low-traffic Console there may be no request
+    |   for hours, so "eventually" is not an operational answer.
+    | - The scheduled sweep deletes in bounded batches and reports what it did.
+    |
+    | Consequence, accepted: if the production cron entry is missing, NOTHING
+    | prunes sessions and the table grows. That is a growth problem and not a
+    | security one — an idle session is refused on its `last_activity` whether or
+    | not its row is still there — and the deployment checklist and
+    | `./flow doctor --production` both call for the cron entry.
+    |
     */
 
-    'lottery' => [2, 100],
+    'lottery' => [0, 100],
 
     /*
     |--------------------------------------------------------------------------

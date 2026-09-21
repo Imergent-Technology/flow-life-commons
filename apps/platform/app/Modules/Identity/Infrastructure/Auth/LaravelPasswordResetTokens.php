@@ -51,6 +51,11 @@ final readonly class LaravelPasswordResetTokens implements PasswordResetTokens
         $this->repository->delete($this->subject($account));
     }
 
+    public function deleteExpired(): int
+    {
+        return $this->repository->deleteExpiredTokens();
+    }
+
     private function subject(Account $account): ResetSubject
     {
         return new ResetSubject($account->email->canonical);

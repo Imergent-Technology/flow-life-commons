@@ -36,4 +36,11 @@ interface PasswordResetTokens
 
     /** Removes the Account's token, so it cannot be used again. */
     public function revoke(Account $account): void;
+
+    /**
+     * Housekeeping: removes every token that has already expired, and returns how many. An expired
+     * token is refused by `isValid` whether or not it is still stored, so this frees rows and changes
+     * nothing that can be observed. Safe to run at any time, and again.
+     */
+    public function deleteExpired(): int;
 }
