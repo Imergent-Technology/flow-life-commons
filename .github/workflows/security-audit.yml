@@ -1,0 +1,69 @@
+# Dependency vulnerability audit.
+#
+# Separate from CI on purpose. CI is deterministic — the same commit gives the same answer on any
+# machine — and this is not: it asks Packagist's and npm's advisory databases what they currently know,
+# so it can go red without a commit and unavailable without a network. Keeping it apart means an
+# outage at either service never looks like a broken branch, and a new advisory against unchanged code
+# is reported as what it is.
+#
+# It runs the same command a developer runs (`./flow audit`), so there is no CI-only audit logic.
+name: Security audit
+
+on:
+  # On demand: ./flow ci (Actions tab), or when investigating a report.
+  workflow_dispatch:
+  # Weekly, because an advisory published against code nobody has touched is exactly the case CI
+  # cannot catch. Early Monday, so a finding is waiting at the start of the week rather than at the
+  # end of one.
+  schedule:
+    - cron: '0 6 * * 1'
+  # And immediately whenever the dependency graph itself changes, on either side.
+  push:
+    branches: [main]
+    paths:
+      - 'apps/platform/composer.lock'
+      - 'apps/guardian-console/package-lock.json'
+      - '.github/workflows/security-audit.yml'
+  pull_request:
+    paths:
+      - 'apps/platform/composer.lock'
+      - 'apps/guardian-console/package-lock.json'
+
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only. This workflow reports; it never opens a pull request, never commits, and never rewrites a
+# dependency graph (no `npm audit fix --force`, which installs major versions to make a number go down).
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: ./flow audit
+    runs-on: ubuntu-latest
+    # Two package installs and two registry calls. Anything longer has hung.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build PHP development image (layer-cached)
+        uses: docker/bake-action@v7
+        with:
+          files: compose.yaml
+          targets: platform
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=flow-dev-php
+            *.cache-to=type=gha,scope=flow-dev-php,mode=max
+
+      - name: Set up environment
+        run: ./flow setup --skip-build
+
+      # Fails the run, visibly, on any advisory affecting a RUNTIME dependency. Findings in
+      # development-only tooling are printed and do not fail: they cannot reach a browser or a server,
+      # and judging them needs a person (see docs/security/dependencies.md).
+      - name: Audit dependencies
+        run: ./flow audit

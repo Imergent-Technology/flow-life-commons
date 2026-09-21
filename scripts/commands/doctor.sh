@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# ./flow doctor: diagnose the host environment. Read-only; changes nothing.
+# ./flow doctor [--production]: diagnose the environment. Read-only; changes nothing.
+#
+# Without a flag it diagnoses the DEVELOPER's machine: Docker, ports, project files, local domains.
+# With --production it asks a different question entirely — "would this configuration be safe to serve
+# real people?" — by running the platform's own security:production-check inside the container. The two
+# are deliberately separate commands rather than one growing list, because a development machine is
+# supposed to fail most of the production checks and would otherwise cry wolf on every run.
 # shellcheck shell=bash
 
 DOCTOR_FAILS=0
@@ -16,6 +22,12 @@ doctor_fail() {
 }
 
 cmd_doctor() {
+    if [[ "${1:-}" == "--production" ]]; then
+        doctor_production
+        return
+    fi
+    [[ $# -eq 0 ]] || die "doctor: unknown option '$1' (only --production is supported)"
+
     step "Host"
     doctor_bash
     doctor_location
@@ -41,6 +53,22 @@ cmd_doctor() {
         return 1
     fi
     ok "No problems found ($DOCTOR_WARNS warning(s))."
+}
+
+# ./flow doctor --production: the platform's own view of whether its configuration is production-safe.
+#
+# It runs INSIDE the platform container, against whatever apps/platform/.env currently says, so on a
+# developer's machine it is expected to report problems (APP_ENV=local, APP_DEBUG=true, the no-op breach
+# checker, the raised login limit). That is the point: the same command on the production host, with the
+# production .env, must report none. The command also prints what it cannot see — everything about the
+# hosting account itself — and those stay owner verifications.
+doctor_production() {
+    require_docker
+    require_setup
+
+    step "Production readiness of the configuration in apps/platform/.env"
+    info "    Run this on the PRODUCTION host (php artisan security:production-check) for the answer that counts."
+    php_run php artisan security:production-check
 }
 
 doctor_bash() {

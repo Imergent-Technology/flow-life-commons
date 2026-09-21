@@ -29,7 +29,8 @@ Environment
   restart [service...]     Restart services
   status                   Show services and probe the local URLs
   logs [service...]        Follow logs (--no-follow to print and exit)
-  doctor                   Diagnose the host environment
+  doctor [--production]    Diagnose the host environment (--production: check this
+                           deployment's configuration against what production requires)
 
 Tooling (run inside containers)
   shell [service]          Open a shell (default: platform)
@@ -43,6 +44,7 @@ Quality
   check [repo|backend|frontend] [--pgsql]
                            Everything CI runs; exits non-zero on any failure
   build                    Production build of the Guardian Console
+  audit                    Dependency vulnerability audit (composer + npm; needs the network)
 
 Database
   db shell [--pgsql]       SQL shell (MariaDB, or PostgreSQL with --pgsql)
@@ -69,6 +71,7 @@ command_file() {
         check) echo check ;;
         db) echo db ;;
         build) echo build ;;
+        audit) echo audit ;;
         doctor) echo doctor ;;
         ci) echo ci ;;
         *) return 1 ;;

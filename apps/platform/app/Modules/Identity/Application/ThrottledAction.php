@@ -17,4 +17,12 @@ enum ThrottledAction: string
 
     /** Password plus second factor presented to prove recent security verification. Per Account. */
     case SecurityVerification = 'security_verification';
+
+    /**
+     * An operator re-sending an Account's invitation. Unlike the others this is not a guess to bound:
+     * the caller is authenticated, holds a capability and has proved themselves recently. What it
+     * bounds is MAIL to somebody else's inbox, which is the one thing about this endpoint the operator
+     * does not own. Per TARGET Account, so one address cannot be flooded, and per source address.
+     */
+    case InvitationReissue = 'invitation_reissue';
 }

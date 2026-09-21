@@ -88,6 +88,19 @@ expect_exit "help exits cleanly" 0 help
 expect_output "help documents the ci group" "ci run" help
 expect_exit "an unknown command exits 2" 2 definitely-not-a-command
 
+printf 'flow: audit and doctor --production\n'
+expect_output "help documents the audit command" "audit" help
+expect_output "help documents doctor --production" "doctor [--production]" help
+expect_exit "an unknown audit scope is rejected" 1 audit nonsense
+expect_exit "an unknown doctor option is rejected" 1 doctor --nonsense
+# The deterministic gate must never reach an advisory database: `./flow check` answers the same on any
+# machine and offline, and `./flow audit` is the command that deliberately does not.
+if grep -q 'cmd_audit\|composer audit\|npm audit' "$ROOT/scripts/commands/check.sh"; then
+    fail "./flow check must not run a dependency audit (it needs the network and changes without a commit)"
+else
+    pass "./flow check does not depend on an advisory database"
+fi
+
 printf 'flow ci: dispatch\n'
 expect_exit "a bare 'ci' exits 2" 2 ci
 expect_exit "an unknown subcommand exits 2" 2 ci definitely-not-a-subcommand

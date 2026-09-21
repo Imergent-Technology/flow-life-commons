@@ -121,6 +121,16 @@ return [
             'per_ip' => (int) env('IDENTITY_SECURITY_VERIFICATION_MAX_PER_IP', 20),
             'per_identifier' => (int) env('IDENTITY_SECURITY_VERIFICATION_MAX_PER_ACCOUNT', 5),
         ],
+        // An operator re-sending an invitation. Every other control on this endpoint is about the
+        // CALLER (authenticated, capability-checked, recently verified), and all three are strong. This
+        // one is about the recipient: a reissue mails a third party, and nothing else stopped a stuck
+        // retry or a bored operator from doing it repeatedly. Deliberately generous — an operator who
+        // legitimately resends twice must never be refused — and keyed on the Account being invited, so
+        // busy work on one person cannot delay another's.
+        'invitation_reissue' => [
+            'per_ip' => (int) env('IDENTITY_REISSUE_MAX_PER_IP', 30),
+            'per_identifier' => (int) env('IDENTITY_REISSUE_MAX_PER_ACCOUNT', 5),
+        ],
         // Completing a reset. The token has 256 bits, so this bounds volume (hashing work and audit
         // growth), not guessing. As with login, a caller can exhaust an identifier's allowance for one
         // window: the accepted trade for a small invite-only user base.

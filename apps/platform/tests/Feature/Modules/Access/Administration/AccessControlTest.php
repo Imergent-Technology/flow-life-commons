@@ -14,6 +14,7 @@ use App\Modules\Access\Application\ResetManagedMfa;
 use App\Modules\Access\Application\RevokeRoleFromAccount;
 use App\Modules\Access\Application\ShowManagedAccount;
 use App\Modules\Identity\Application\AccountSearch;
+use App\Modules\Identity\Application\ClientContext;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -177,7 +178,8 @@ it('checks the capability again inside every use case, so no other caller can sk
         fn () => app(ShowManagedAccount::class)($actor, $id),
         fn () => app(ListRoleCatalog::class)($actor),
         fn () => app(InviteOperator::class)($actor, 'new@example.org', 'New'),
-        fn () => app(ReissueOperatorInvitation::class)($actor, $id),
+        // Reissue also takes the caller's context, for the mail rate limit keyed on the target.
+        fn () => app(ReissueOperatorInvitation::class)($actor, $id, new ClientContext('127.0.0.1', 'test')),
         fn () => app(DisableManagedAccount::class)($actor, $id),
         fn () => app(EnableManagedAccount::class)($actor, $id),
         fn () => app(ResetManagedMfa::class)($actor, $id),

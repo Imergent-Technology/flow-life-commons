@@ -2,12 +2,17 @@
 
 declare(strict_types=1);
 
+use App\Modules\Access\Application\AccessDenied;
+use App\Modules\Access\Application\ReissueOperatorInvitation;
+use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\InvitationDelivery;
 use App\Modules\Identity\Infrastructure\Mail\InvitationMail;
+use App\Shared\Domain\AccountId;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Tests\Support\Access;
 use Tests\Support\Api;
 use Tests\Support\Console;
 use Tests\Support\FakeInvitationNotifier;
@@ -215,4 +220,56 @@ it('refuses to reissue for an ACTIVE Account, and for an unknown one', function 
     $console->post('/api/v1/admin/accounts/01jzzzzzzzzzzzzzzzzzzzzzzz/invitation')->assertNotFound();
     Mail::assertNothingSent();
     expect(Identity::events('invitation.reissued'))->toBe([]);
+});
+
+it('bounds how much invitation mail one address can be sent, without getting in an operator\'s way', function () {
+    // Phase 8 left reissue unthrottled, reasoning that the caller is authenticated, capability-checked and
+    // recently verified — all true, and all about the CALLER. The limit added in Phase 9 is about the
+    // RECIPIENT: a reissue mails somebody else's inbox, and nothing else bounded how often.
+    //
+    // So it has to do two things, and both are asserted here: never refuse an operator doing the ordinary
+    // thing, and stop before an inbox is flooded.
+    [$console] = Mfa::signedInAdmin();
+    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New'])->assertCreated();
+    $id = Api::string(DB::table('accounts')->where('email_canonical', 'new@example.org')->value('id'));
+
+    $allowed = config()->integer('identity.credential_throttle.invitation_reissue.per_identifier');
+    expect($allowed)->toBeGreaterThanOrEqual(5, 'a legitimate operator must be able to resend more than once or twice');
+
+    for ($sent = 0; $sent < $allowed; $sent++) {
+        $console->post("/api/v1/admin/accounts/{$id}/invitation")->assertOk();
+    }
+
+    $refused = $console->post("/api/v1/admin/accounts/{$id}/invitation");
+    expect($refused->status())->toBe(429)
+        ->and($refused->headers->get('Retry-After'))->not->toBeNull();
+
+    // It is keyed on the TARGET, so one person's invitation cannot hold up another's.
+    $console->post('/api/v1/admin/invitations', ['email' => 'other@example.org', 'display_name' => 'Other'])->assertCreated();
+    $other = Api::string(DB::table('accounts')->where('email_canonical', 'other@example.org')->value('id'));
+    $console->post("/api/v1/admin/accounts/{$other}/invitation")->assertOk();
+});
+
+it('does not spend the target\'s allowance on a caller who may not reissue at all', function () {
+    // Authorization comes first, so a refused caller cannot exhaust somebody else's limit — which would
+    // turn a capability check into a denial-of-service against the person being invited. Asserted through
+    // the use case rather than two browsers: what is being pinned is the ORDER of two steps inside it.
+    [$console] = Mfa::signedInAdmin();
+    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New'])->assertCreated();
+    $id = AccountId::fromString(Api::string(DB::table('accounts')->where('email_canonical', 'new@example.org')->value('id')));
+
+    $guardian = Access::actorFor(Mfa::guardian('guardian@example.org'));
+    $client = new ClientContext('127.0.0.1', 'test');
+    $allowed = config()->integer('identity.credential_throttle.invitation_reissue.per_identifier');
+
+    for ($attempt = 0; $attempt < $allowed + 3; $attempt++) {
+        expect(fn () => app(ReissueOperatorInvitation::class)($guardian, $id, $client))->toThrow(AccessDenied::class);
+    }
+
+    // The target's allowance is untouched: an authorized operator can still reissue the full number.
+    $admin = Access::actorFor(Access::admin('second.admin@example.org'));
+    for ($sent = 0; $sent < $allowed; $sent++) {
+        app(ReissueOperatorInvitation::class)($admin, $id, $client);
+    }
+    expect(Identity::events('invitation.reissued'))->toHaveCount($allowed);
 });
