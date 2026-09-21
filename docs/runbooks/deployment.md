@@ -11,7 +11,7 @@
 >
 > **One host item remains open: outbound mail authentication** ([production readiness](production-readiness.md), section 5), deferred pending an organizational decision. It does not block deployment; it blocks inviting people, which is step 14.
 >
-> **The `.htaccess` rules were proven individually, not composed.** The real file must carry the security headers, the maintenance arm, the API carve-out, the SPA fallback and the private-path denials together, in the right order. That is implementation-phase work.
+> **The composed public surface now exists and is proved locally.** `public/.htaccess` carries the security headers, the private-path denials, the maintenance arm, the API and `/up` carve-out and the SPA fallback, in that order, and `public/maintenance.php` is the responder. The whole contract is driven in a real browser against the production-equivalent origin, and the file's structure and rule order are pinned by a test. **What that does not do is run Apache** — the host's own evidence is still the per-rule probes of 2026-09-21, so the file itself is first exercised by the first real deployment.
 
 **Host environment, measured 2026-09-21:** Apache on CloudLinux, PHP 8.3.33 via LSAPI/`mod_lsapi` (so `PHP_SAPI` reads `litespeed` — this is **not** LiteSpeed Web Server), MariaDB `10.11.18-MariaDB-cll-lve`, direct to origin with no proxy or CDN in front.
 
@@ -326,11 +326,13 @@ The authority is **`shared/storage/framework/down`**, written by `php artisan do
 
 ```apache
 RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f
-RewriteCond %{REQUEST_URI} !^/(api/|up$|maintenance\.php$)
+RewriteCond %{REQUEST_URI} !^/(api($|/)|up$|maintenance\.php$)
 RewriteRule ^ /maintenance.php [L]
 ```
 
 An **internal rewrite** with `[L]`. The status comes from PHP, not from the rewrite engine.
+
+The exclusion reads `api($|/)` rather than the `api/` this runbook carried while the rule was still a sketch. A bare `/api`, with no trailing slash, is an API request: the development gateway routes it to Laravel and the browser suite asserts it answers a JSON 404. Under `api/` it would have been the one API path rewritten to an HTML 503, which is the failure this carve-out exists to prevent.
 
 ### The responder
 
@@ -343,7 +345,7 @@ Content-Type: text/html; charset=utf-8
 Cache-Control: no-store, no-cache, must-revalidate
 ```
 
-and emits a **self-contained** page: inline CSS, no external assets, because the rewrite blocks assets too.
+and emits a **self-contained** page with **no CSS at all**. Not merely no external stylesheet — the rewrite intercepts assets too, so one would be answered with this same page — but no inline `<style>` either: the origin's policy is `style-src 'self'` with no `'unsafe-inline'` ([ADR 0026](../adr/0026-production-browser-security-policy.md)), so a browser would refuse it. The markup is written to read correctly unstyled, which is also how it reads in a text browser, a screen reader and a `curl` transcript.
 
 ### Why not `ErrorDocument`
 
@@ -363,6 +365,8 @@ and emits a **self-contained** page: inline CSS, no external assets, because the
 | Flag **removed** | 200 immediately |
 
 No restart, cache clear or wait at any point, in either direction.
+
+**Composed and proved locally since.** Against the production-equivalent origin, with the flag raised: the Console root, client-side routes and static assets all answer the responder's 503 with `Retry-After: 120` and `no-store`; `/api` and `/api/v1/...` stay JSON and are never rewritten; `/up` is answered by Laravel rather than the responder; `/maintenance.php` serves without looping; private paths stay **403 rather than 503**, because the denials run first; the 503 carries the full browser security policy; and removing the flag restores the whole surface. The flag in those journeys is the same `storage/framework/down` that `php artisan down` writes.
 
 ---
 
@@ -527,7 +531,9 @@ Output goes to `dist/releases/` (gitignored) unless `--out` says otherwise. An e
 
 **Provenance.** The ref must be an annotated tag reachable from `main`. A rehearsal that cannot meet that passes `--allow-untagged`; the artifact is then named by release id rather than version, stamped `provenance_override: true`, and shown as such by `inspect`.
 
-**What the artifact holds.** Exactly the layout in [§0](#0-the-shape-of-it): platform code, `vendor/` (production dependencies only), the Console build merged into `public/`, the empty `storage/` and `bootstrap/cache/` skeleton, and `release.json`. It is assembled from an allowlist and then judged independently: no env files, logs, dumps, keys, tests, `.git`, development packages, cached configuration or shipped symlinks. The three approved cache commands are run against a throwaway copy to prove they still succeed (`optimize` is never run), and the build refuses if `resources/views` has appeared.
+**What the artifact holds.** Exactly the layout in [§0](#0-the-shape-of-it): platform code, `vendor/` (production dependencies only), the Console build merged into `public/`, the empty `storage/` and `bootstrap/cache/` skeleton, and `release.json`. It is assembled from an allowlist and then judged independently: no env files, logs, dumps, keys, tests, `.git`, development packages, cached configuration or shipped symlinks.
+
+**The production public surface is required, not optional.** The document root must hold the composed `.htaccess` and `public/maintenance.php`, and the validator checks the rule classes and the rule ORDER — private denials before the maintenance arm, the API carve-out before the SPA fallback — refuses the `ErrorDocument`/`R=503` mechanism that failed on this host, refuses a responder that loads Laravel, `vendor/` or the environment, and refuses an unexpected file in the document root. An artifact that fails any of that is invalid and is never written out. The three approved cache commands are run against a throwaway copy to prove they still succeed (`optimize` is never run), and the build refuses if `resources/views` has appeared.
 
 **`./flow release deploy` does not exist, and its absence is deliberate.** Nor will `backup`, `restore` or `rollback`. Everything touching production stays an explicit operator action run from this runbook, holding no credentials in the repository, until the manual procedure has been performed on the real host enough times to be worth encoding ([ADR 0027](../adr/0027-release-and-deployment-model.md), *Production operations boundary*).
 
@@ -537,11 +543,8 @@ This runbook describes the approved design. These parts of it do not exist in th
 
 - **The production environment template** (`apps/platform/.env.production.example`) and its integration with `security:production-check`. Until it exists, step 3 is hand-assembled, which is exactly the footgun the template closes.
 - **`php artisan release:show`** and the `release.json` it reads.
-- **The Apache support rules** in `public/.htaccess`: the `/api` and `/up` carve-out, the maintenance arm reading `storage/framework/down`, the SPA fallback, and private-path defence in depth. The committed file currently has the generated security headers and Laravel's stock rewrite rules only — so **the SPA fallback does not work and the maintenance responder is not reachable** ([deployment topology](../architecture/deployment-topology.md)). Each rule is individually verified on the host; **the composed file is not**, and rule ordering is where it will go wrong.
-- **`public/maintenance.php`**, the standalone responder described in [§4a](#4-maintenance-mode). It must not load Laravel, `vendor/` or `.env`, and must be self-contained, because the maintenance rule blocks assets.
-- **The lockstep change to the production-equivalent development gateway**, so the browser suite keeps proving the routing semantics Apache will serve.
 - **The cache-command check on every commit.** `./flow release build` runs it (and refuses if `resources/views` has appeared), so it gates a release; the ordinary `./flow check` does not yet, so a Blade view would only be caught when a release is built.
-- **`public/maintenance.php`-aware artifact validation.** `./flow release inspect` currently says an artifact is *not deployable yet* because it lacks the responder and the maintenance rule; that note becomes a hard requirement when those files exist.
+- **An Apache-served rehearsal.** Everything about the composed `.htaccess` that can be proved without Apache now is; the file itself is first executed by a real deployment.
 
 ---
 

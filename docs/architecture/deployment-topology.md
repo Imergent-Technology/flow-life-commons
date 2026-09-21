@@ -2,7 +2,7 @@
 
 How the platform is intended to be served in production, and what the hosting account must therefore be able to do.
 
-> **Status: the host capabilities this topology needs were probed on the real account on 2026-09-21 and confirmed** ([Owner verification](#owner-verification) below). The *procedure* that produces the topology is decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md) — but **nothing on the host is automated**, and only the developer-side artifact build exists (`./flow release`), and the routing rules this page describes are still not in the committed `.htaccess`.
+> **Status: the host capabilities this topology needs were probed on the real account on 2026-09-21 and confirmed** ([Owner verification](#owner-verification) below). The *procedure* that produces the topology is decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md). The routing rules this page describes **are** now in the committed `public/.htaccess` and are proved as a composed whole against the production-equivalent development origin. **Nothing on the host is automated**: the developer-side artifact build (`./flow release`) is all the tooling there is, and the procedure has never been run end to end.
 
 ## The production host, measured
 
@@ -85,9 +85,7 @@ The Console's `index.html` and hashed assets are served **straight from the docu
 
 **This adds a hosting requirement: `mod_headers`.** Without it the static half of the origin ships with no security headers while the API keeps them, which is a materially weaker deployment; it is item 5 of the owner verification list above.
 
-The routing rules this file will also need are **still not in it**: the `/api` and `/up` carve-out, the SPA fallback described above, a maintenance arm that reads Laravel's own `storage/framework/down` so the static half of the origin observes `artisan down`, and private-path defence in depth. All four are specified in [ADR 0027](../adr/0027-release-and-deployment-model.md) and listed in the [deployment runbook](../runbooks/deployment.md#9-not-built-yet); they are implemented in the release-tooling phase, together with the matching change to the production-equivalent development gateway, so the browser suite keeps proving the routing semantics Apache will serve.
-
-Until then, **the SPA fallback does not work**: `/people/123` reaches Laravel and gets a JSON 404 rather than the Console shell.
+The routing rules are now in it too, in one ordered file: private-path denials, the maintenance arm reading Laravel's own `storage/framework/down`, the `/api` and `/up` carve-out, and the SPA fallback. Order is the design — denials first so nothing later can answer for a private path, the API carve-out before the fallback so an unknown API path is Laravel's JSON 404 and not the Console shell — and it is pinned by a test rather than left to review. The production-equivalent development gateway mirrors the same contract section by section, so the browser suite proves the routing semantics Apache will serve ([deployment runbook](../runbooks/deployment.md#4-maintenance-mode)).
 
 ## The scheduler: one cron entry
 

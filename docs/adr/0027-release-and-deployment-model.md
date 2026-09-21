@@ -197,7 +197,7 @@ Everything in this ADR that depended on host behaviour was probed directly on th
 | Five retained releases fit the account | Yes — ~325 MB against 75 GB |
 | An intermediary page cache needing a release-time purge | **None.** Commons is direct to origin |
 
-**Proven individually, not composed.** Each rewrite rule above was tested on its own. The real `.htaccess` must carry the generated header block, the maintenance arm, the `/api` and `/up` carve-out, the SPA fallback and the private-path denials in one file in the right order, and that combination is **not yet verified**. It is implementation-phase work with the browser-suite lockstep.
+**Probed individually on the host; composed and proved locally since.** Each rewrite rule above was tested on its own on the real account. The composed file now exists — header block, private-path denials, maintenance arm, `/api` and `/up` carve-out and SPA fallback, in that order — and the whole contract is driven in a real browser against the production-equivalent origin, with the file's structure and rule order pinned by a test. That is proof of the **contract**, not of Apache: there is no Apache in development, so the `.htaccess` itself is still evidenced by the per-rule host probes plus those pins until the first real deployment runs it.
 
 **One item is open and deferred:** outbound mail authentication. SPF and DMARC records exist; a local PHP `mail()` test delivered but was unsigned and not DMARC-aligned, so `mail()` is **not approved** as the production transport. The mail topology is an organizational decision and is deliberately unmade here. It does not block release tooling; it blocks inviting people.
 
@@ -209,8 +209,8 @@ Everything in this ADR that depended on host behaviour was probed directly on th
 - **The host has hard requirements it did not have**: symlink-following with a changing target and `mysqldump`. Both are now verified on the real account, and the third — an opcache-clearing operation — turned out not to be needed at all.
 - **`php artisan optimize` must not appear in any deployment script for this repository**, and the reason is a property of the repository that a check now pins.
 - **Backup acquires a security contract.** A backup without its keyring is not a backup of the authenticators, and the restore procedure refuses rather than discovering this afterwards.
-- **The `.htaccess` in source control is not yet the file this design requires.** It carries the generated security headers and Laravel's stock rewrite rules, and lacks the API carve-out, the maintenance arm and the SPA fallback. The production-equivalent development gateway must change in lockstep, or the browser suite stops proving the routing semantics production will serve.
-- **Nothing about the production host is verified.** This ADR records a design that the host must be confirmed to support, and the confirmation has not happened.
+- **The `.htaccess` in source control is the file this design requires.** It carries the generated security headers, the private-path denials, the maintenance arm, the API and `/up` carve-out and the SPA fallback, in an order a test pins. The production-equivalent development gateway mirrors the same contract, so the browser suite keeps proving the routing semantics production will serve.
+- **The host is verified; the procedure is not.** Every host behaviour this design depends on was probed on the real account on 2026-09-21 (above). What remains unexercised is the deployment procedure itself, end to end, and with it the `.htaccess` as Apache reads it.
 
 ## Alternatives considered
 
