@@ -224,9 +224,10 @@ it('has an acyclic module graph limited to the frozen edges', function () {
     $graph = moduleGraph();
     $problems = [];
 
-    // Access -> Identity -> Audit -> Shared. Health and Security are operational and stand alone:
-    // each owns no table, no entity and no lifecycle, and nothing may come to depend on either.
-    $allowed = ['Access' => ['Identity', 'Audit'], 'Identity' => ['Audit'], 'Audit' => [], 'Health' => [], 'Security' => []];
+    // Access -> Identity -> Audit -> Shared. Health, Security and Release are operational and stand
+    // alone: each owns no table, no entity and no lifecycle, and nothing may come to depend on any of
+    // them. Release in particular reads one file the build wrote and has no HTTP surface (ADR 0027).
+    $allowed = ['Access' => ['Identity', 'Audit'], 'Identity' => ['Audit'], 'Audit' => [], 'Health' => [], 'Security' => [], 'Release' => []];
     foreach ($graph as $module => $edges) {
         if (! array_key_exists($module, $allowed)) {
             $problems[] = "{$module} is a module the frozen graph does not know";
