@@ -6,6 +6,7 @@ namespace App\Modules\Identity\Infrastructure;
 
 use App\Modules\Identity\Application\AccountDeactivationGuard;
 use App\Modules\Identity\Application\AccountDirectory;
+use App\Modules\Identity\Application\AccountSecurityGeneration;
 use App\Modules\Identity\Application\AccountSessions;
 use App\Modules\Identity\Application\ActiveAccountQuery;
 use App\Modules\Identity\Application\AttemptThrottle;
@@ -18,6 +19,7 @@ use App\Modules\Identity\Application\LoginThrottle;
 use App\Modules\Identity\Application\MultiFactorPolicy;
 use App\Modules\Identity\Application\PasswordResetNotifier;
 use App\Modules\Identity\Application\PasswordResetTokens;
+use App\Modules\Identity\Application\SessionMaintenance;
 use App\Modules\Identity\Application\TotpAuthenticator;
 use App\Modules\Identity\Application\TotpSecretCipher;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
@@ -30,6 +32,7 @@ use App\Modules\Identity\Infrastructure\Auth\AccountUserProvider;
 use App\Modules\Identity\Infrastructure\Auth\CacheAttemptThrottle;
 use App\Modules\Identity\Infrastructure\Auth\CacheLoginThrottle;
 use App\Modules\Identity\Infrastructure\Auth\LaravelPasswordResetTokens;
+use App\Modules\Identity\Infrastructure\Console\PruneTransientStateCommand;
 use App\Modules\Identity\Infrastructure\Console\ResetMfaCommand;
 use App\Modules\Identity\Infrastructure\Mail\MailInvitationNotifier;
 use App\Modules\Identity\Infrastructure\Mail\MailPasswordResetNotifier;
@@ -40,9 +43,11 @@ use App\Modules\Identity\Infrastructure\Mfa\OtphpTotpAuthenticator;
 use App\Modules\Identity\Infrastructure\Password\NoCompromisedPasswordCheck;
 use App\Modules\Identity\Infrastructure\Password\PwnedPasswordsRange;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountDirectory;
+use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountSecurityGeneration;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountSessions;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseActiveAccountQuery;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseRecoveryCodeRepository;
+use App\Modules\Identity\Infrastructure\Persistence\DatabaseSessionMaintenance;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountInvitationRepository;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountRepository;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentPersonRepository;
@@ -71,6 +76,10 @@ final class IdentityServiceProvider extends ServiceProvider
         InvitationNotifier::class => MailInvitationNotifier::class,
         ActiveAccountQuery::class => DatabaseActiveAccountQuery::class,
         AccountSessions::class => DatabaseAccountSessions::class,
+        SessionMaintenance::class => DatabaseSessionMaintenance::class,
+        // The Account's security generation (ADR 0025): what binds a session to the security state its
+        // authentication proof was checked against.
+        AccountSecurityGeneration::class => DatabaseAccountSecurityGeneration::class,
         AccountDirectory::class => DatabaseAccountDirectory::class,
         // A default that grants nothing. The Access module registers its own over this.
         EffectiveCapabilities::class => NoEffectiveCapabilities::class,
@@ -130,7 +139,7 @@ final class IdentityServiceProvider extends ServiceProvider
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
-            $this->commands([ResetMfaCommand::class]);
+            $this->commands([ResetMfaCommand::class, PruneTransientStateCommand::class]);
         }
 
         // Identity's own message templates (the password-recovery and invitation emails), namespaced `identity::`.

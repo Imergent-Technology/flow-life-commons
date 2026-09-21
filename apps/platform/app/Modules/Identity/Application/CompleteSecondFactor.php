@@ -42,6 +42,7 @@ final readonly class CompleteSecondFactor
         private MfaAudit $audit,
         private MfaStatuses $statuses,
         private EffectiveCapabilities $capabilities,
+        private AccountSecurityGeneration $generations,
         private ConnectionInterface $database,
     ) {}
 
@@ -65,16 +66,17 @@ final readonly class CompleteSecondFactor
             return SecondFactorOutcome::refused($result);
         }
 
-        [$actor, $email, $displayName, $method] = $result;
+        [$actor, $email, $displayName, $method, $securityGeneration] = $result;
 
         // Read after the sign-in commits, from current state; never stored in the session.
         return SecondFactorOutcome::signedIn(
             new CurrentAccount($actor, $email, $displayName, $this->capabilities->for($actor), $this->statuses->for($actor->accountId)),
             $method,
+            $securityGeneration,
         );
     }
 
-    /** @return array{Actor, string, string, SecondFactorMethod}|SecondFactorFailure */
+    /** @return array{Actor, string, string, SecondFactorMethod, int}|SecondFactorFailure */
     private function complete(PendingLogin $pending, SecondFactorProof $proof, ClientContext $client): array|SecondFactorFailure
     {
         $now = DateTimeImmutable::createFromInterface(now());
@@ -105,7 +107,13 @@ final readonly class CompleteSecondFactor
         }
         $this->authenticationAudit->succeeded($actor, $client, $verified->method);
 
-        return [$actor, $account->email->value, $person->displayName, $verified->method];
+        // Read under the lock this transaction already holds: the generation this proof was checked
+        // against (ADR 0025). An administrative reset waiting on that lock advances it the moment this
+        // commits, and the transport then refuses to establish the session at all.
+        return [
+            $actor, $account->email->value, $person->displayName, $verified->method,
+            $this->generations->current($account->id) ?? throw new LogicException('An account signed in without a security generation.'),
+        ];
     }
 
     private function refusal(?Account $account, PendingLogin $pending): ?SecondFactorFailure

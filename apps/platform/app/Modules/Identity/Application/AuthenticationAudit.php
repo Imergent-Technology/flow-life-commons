@@ -78,6 +78,21 @@ final readonly class AuthenticationAudit
         );
     }
 
+    /**
+     * An authenticated session was ended because the Account's security generation had moved on
+     * (ADR 0025). The two counters are recorded because they are what an operator needs to see that
+     * the session predates a reset, a disable or a credential replacement; neither is a secret, and
+     * neither says which operation advanced it (the operation recorded its own event).
+     */
+    public function sessionSuperseded(?PersonId $person, AccountId $account, ?int $held, ?int $current, ClientContext $client): void
+    {
+        ($this->record)(
+            IdentityEvent::SessionSuperseded->value, SecurityEventOutcome::Blocked,
+            null, $person, $account, $client->ip, $client->userAgent,
+            ['held_generation' => $held, 'current_generation' => $current],
+        );
+    }
+
     public function sessionExpired(?PersonId $person, AccountId $account, ExpiryReason $reason, int $lifetimeMinutes, ClientContext $client): void
     {
         ($this->record)(

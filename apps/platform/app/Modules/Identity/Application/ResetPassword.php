@@ -25,8 +25,9 @@ use Illuminate\Database\ConnectionInterface;
  *   snapshot that a lock taken afterwards does not move past): lock and re-read the Account, require it
  *   still eligible, then re-validate the token against it. Two resets with one token serialise on the
  *   Account's lock and the second finds the token gone; a disable that commits first is seen and wins.
- *   Then set the password, delete the token, delete the Account's sessions, and record
- *   `password.reset_completed`, all committed together or not at all.
+ *   Then set the password, delete the token, delete the Account's sessions, advance its security
+ *   generation (ADR 0025, so a sign-in that proved the old credential cannot establish a session after
+ *   this commits), and record `password.reset_completed`, all committed together or not at all.
  * - **One answer for every failure** (ResetRejected), and the same hashing work on every path (a
  *   throwaway check when there is no Account), so neither the response nor its timing says whether an
  *   address has an Account. A failure is recorded as `password.reset_failed` with a reason class, after
@@ -38,6 +39,7 @@ final readonly class ResetPassword
         private AccountRepository $accounts,
         private PasswordResetTokens $tokens,
         private AccountSessions $sessions,
+        private AccountSecurityGeneration $generations,
         private PasswordPolicy $policy,
         private PasswordHasher $passwords,
         private AttemptThrottle $throttle,
@@ -100,6 +102,7 @@ final readonly class ResetPassword
         $this->accounts->save($account->changePassword($hash, DateTimeImmutable::createFromInterface(now())));
         $this->tokens->revoke($account);
         $signedOut = $this->sessions->revokeAllFor($account->id);
+        $this->generations->advance($account->id);
         $this->audit->passwordResetCompleted($account, $signedOut, $client);
 
         return $account;

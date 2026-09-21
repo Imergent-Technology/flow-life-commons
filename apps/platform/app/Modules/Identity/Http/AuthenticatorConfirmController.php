@@ -19,7 +19,10 @@ final readonly class AuthenticatorConfirmController
     {
         $actor = $actors->for($request) ?? throw new NoLongerAuthenticated;
 
-        $confirm($actor, $request->proof(), $request->session()->getId(), new ClientContext($request->ip(), $request->userAgent()));
+        $securityGeneration = $confirm($actor, $request->proof(), $request->session()->getId(), new ClientContext($request->ip(), $request->userAgent()));
+        // The replacement advanced the Account's security generation, which ended every OTHER session; this
+        // one is re-bound to the generation that transaction committed (ADR 0025).
+        $session->rebind($request, $securityGeneration);
         $session->markSecurityVerified($request);
 
         return response()->noContent();

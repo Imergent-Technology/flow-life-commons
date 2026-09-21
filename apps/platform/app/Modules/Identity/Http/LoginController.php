@@ -53,7 +53,7 @@ final readonly class LoginController
             return response()->json(['message' => 'The provided credentials are incorrect.'], 401);
         }
 
-        if (! $session->establish($request, $result->account->actor->accountId)) {
+        if (! $session->establish($request, $result->account->actor->accountId, $result->securityGeneration ?? 0)) {
             return response()->json(['message' => 'The provided credentials are incorrect.'], 401);
         }
         $authenticatedAt = $session->authenticatedAt($request) ?? throw new LogicException('Session has no authentication time.');

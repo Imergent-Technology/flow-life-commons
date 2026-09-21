@@ -16,6 +16,7 @@ enum IdentityEvent: string
     case AuthenticationLogout = 'authentication.logout';
     case AuthenticationRateLimited = 'authentication.rate_limited';
     case SessionAbsoluteExpired = 'session.absolute_expired';
+    case SessionSuperseded = 'session.superseded';
     case AccountInvited = 'account.invited';
     case AccountDisabled = 'account.disabled';
     case AccountReenabled = 'account.reenabled';

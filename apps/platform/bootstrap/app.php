@@ -25,6 +25,7 @@ use App\Modules\Identity\Application\TooManyAttempts;
 use App\Modules\Identity\Http\CredentialProblems;
 use App\Modules\Identity\Http\EnforceAbsoluteSessionLifetime;
 use App\Modules\Identity\Http\EnforceSecondFactorWhereDue;
+use App\Modules\Identity\Http\EnforceSecurityGeneration;
 use App\Modules\Identity\Http\MfaProblems;
 use App\Modules\Identity\Http\RequireRecentSecurityVerification;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
@@ -62,6 +63,7 @@ return Application::configure(basePath: dirname(__DIR__))
             PreventRequestForgery::class,
             EnforceAbsoluteSessionLifetime::class,
             EnforceSecondFactorWhereDue::class,
+            EnforceSecurityGeneration::class,
         ]);
 
         // The step-up seam (ADR 0023): `->middleware('security.verified')`, after `auth:web`. Modules use the
@@ -77,7 +79,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // things: an unauthenticated request would be refused before it is ever issued its
         // XSRF-TOKEN cookie (so the Console could never obtain a token before signing in),
         // and an expired session could authenticate. The order must be:
-        //   session -> CSRF -> absolute lifetime -> second factor due -> authentication
+        //   session -> CSRF -> absolute lifetime -> second factor due -> security generation -> authentication
         // Each is inserted directly before authentication, CSRF first. The priority list
         // names the AuthenticatesRequests interface, not the Authenticate class, so that
         // is what to anchor on (anchoring on the class silently appends to the end).
@@ -85,6 +87,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->prependToPriorityList(before: AuthenticatesRequests::class, prepend: PreventRequestForgery::class);
         $middleware->prependToPriorityList(before: AuthenticatesRequests::class, prepend: EnforceAbsoluteSessionLifetime::class);
         $middleware->prependToPriorityList(before: AuthenticatesRequests::class, prepend: EnforceSecondFactorWhereDue::class);
+        // The security-generation check (ADR 0025) is last of the four, immediately before
+        // authentication: it is the one that decides whether this session's authentication still
+        // stands at all, and nothing between it and the guard may re-establish authority.
+        $middleware->prependToPriorityList(before: AuthenticatesRequests::class, prepend: EnforceSecurityGeneration::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Access's Application layer may not use Laravel's HTTP or auth machinery, so it

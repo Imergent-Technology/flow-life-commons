@@ -16,8 +16,10 @@ use Illuminate\Database\ConnectionInterface;
  *
  * Until this succeeds nothing has changed. On success, in one transaction: the pending secret becomes the
  * active one (the old authenticator stops working from this instant), the Account's OTHER sessions end (a
- * credential was replaced), and `mfa.replaced` is recorded. The caller's own session is kept, and rotated
- * by the transport. Recovery codes are untouched.
+ * credential was replaced), its security generation is advanced (ADR 0025, so a sign-in finishing on the
+ * old authenticator cannot establish a usable session after this), and `mfa.replaced` is recorded. The
+ * caller's own session is kept, rotated by the transport and re-bound to the new generation, which is why
+ * that generation is returned. Recovery codes are untouched.
  *
  * No password is asked here: the fresh proof was given when the replacement began, and the pending secret
  * can be confirmed only with a code from the secret that was generated then, which only that person saw.
@@ -29,6 +31,7 @@ final readonly class ConfirmAuthenticatorReplacement
         private TotpFactorRepository $factors,
         private SecondFactorVerifier $verifier,
         private AccountSessions $sessions,
+        private AccountSecurityGeneration $generations,
         private AttemptThrottle $throttle,
         private CredentialAudit $credentialAudit,
         private MfaAudit $audit,
@@ -37,12 +40,14 @@ final readonly class ConfirmAuthenticatorReplacement
 
     /**
      * @param  string  $keepSessionId  the caller's own session, which is kept (and rotated by the transport)
+     * @return int the Account's new security generation (ADR 0025), which the transport binds the
+     *             caller's own session to
      *
      * @throws TooManyAttempts
      * @throws NoLongerAuthenticated
      * @throws SecondFactorRejected
      */
-    public function __invoke(Actor $actor, SecondFactorProof $proof, #[\SensitiveParameter] string $keepSessionId, ClientContext $client): void
+    public function __invoke(Actor $actor, SecondFactorProof $proof, #[\SensitiveParameter] string $keepSessionId, ClientContext $client): int
     {
         $identifier = $actor->accountId->value;
         $block = $this->throttle->block(ThrottledAction::MfaChallenge, $client->ip, $identifier);
@@ -55,7 +60,7 @@ final readonly class ConfirmAuthenticatorReplacement
         $this->throttle->record(ThrottledAction::MfaChallenge, $client->ip, $identifier);
 
         try {
-            $this->database->transaction(fn () => $this->confirm($actor, $proof, $keepSessionId, $client));
+            return $this->database->transaction(fn (): int => $this->confirm($actor, $proof, $keepSessionId, $client));
         } catch (SecondFactorRejected $e) {
             $this->audit->challengeFailed($e->account, $e->reason, 'security_verification', $client);
 
@@ -63,7 +68,7 @@ final readonly class ConfirmAuthenticatorReplacement
         }
     }
 
-    private function confirm(Actor $actor, SecondFactorProof $proof, string $keepSessionId, ClientContext $client): void
+    private function confirm(Actor $actor, SecondFactorProof $proof, string $keepSessionId, ClientContext $client): int
     {
         $now = DateTimeImmutable::createFromInterface(now());
         $account = $this->accounts->findForUpdate($actor->accountId);
@@ -80,6 +85,9 @@ final readonly class ConfirmAuthenticatorReplacement
 
         $this->factors->save($factor->confirmPending($step, $now));
         $signedOut = $this->sessions->revokeAllExcept($account->id, $keepSessionId);
+        $generation = $this->generations->advance($account->id);
         $this->audit->replaced($actor, $signedOut, $client);
+
+        return $generation;
     }
 }

@@ -45,6 +45,7 @@ final class AuthenticateAccount
         private readonly SecondFactorRequirement $secondFactor,
         private readonly CredentialMarker $marker,
         private readonly MfaStatuses $mfa,
+        private readonly AccountSecurityGeneration $generations,
     ) {}
 
     public function __invoke(EmailAddress $email, string $password, ClientContext $client): AuthenticationResult
@@ -75,7 +76,7 @@ final class AuthenticateAccount
             return AuthenticationResult::failed();
         }
 
-        $current = $this->database->transaction(fn (): CurrentAccount|PendingLogin|FailureReason => $this->signIn($eligible, $client));
+        $current = $this->database->transaction(fn (): array|PendingLogin|FailureReason => $this->signIn($eligible, $client));
         if ($current instanceof FailureReason) {
             // The Account changed between the read above and the lock below.
             $this->throttle->recordFailure($email);
@@ -91,15 +92,20 @@ final class AuthenticateAccount
             return AuthenticationResult::secondFactorPending($current);
         }
 
+        [$signedIn, $securityGeneration] = $current;
+
         // Read after the sign-in commits, from current state; never stored in the session.
         return AuthenticationResult::authenticated(new CurrentAccount(
-            $current->actor, $current->email, $current->displayName, $this->capabilities->for($current->actor),
-            $this->mfa->for($current->actor->accountId),
-        ));
+            $signedIn->actor, $signedIn->email, $signedIn->displayName, $this->capabilities->for($signedIn->actor),
+            $this->mfa->for($signedIn->actor->accountId),
+        ), $securityGeneration);
     }
 
     /**
-     * Records the sign-in, or says why it must not be recorded.
+     * Records the sign-in, or says why it must not be recorded. On success it returns the signed-in
+     * Account together with the security generation it was checked against.
+     *
+     * @return array{CurrentAccount, int}|PendingLogin|FailureReason
      *
      * The Account was read, and its password verified, BEFORE this transaction opened. Saving that
      * copy back would write its whole state, and if a disable committed in between it would undo
@@ -110,7 +116,7 @@ final class AuthenticateAccount
      * proves nothing about the hash now stored: if a reset or change committed in between, the
      * caller proved a password that has since been replaced, and must not be signed in with it.
      */
-    private function signIn(Account $verified, ClientContext $client): CurrentAccount|PendingLogin|FailureReason
+    private function signIn(Account $verified, ClientContext $client): array|PendingLogin|FailureReason
     {
         $account = $this->accounts->findForUpdate($verified->id);
         if ($account === null || ! $account->canAuthenticate()) {
@@ -135,7 +141,12 @@ final class AuthenticateAccount
         $this->accounts->save($account->recordLogin(DateTimeImmutable::createFromInterface(now())));
         $this->audit->succeeded($actor, $client);
 
-        return new CurrentAccount($actor, $account->email->value, $person->displayName);
+        // Read under the same lock as everything else here, so it is the generation this proof was
+        // checked against (ADR 0025). Anything that advances it afterwards supersedes the session.
+        return [
+            new CurrentAccount($actor, $account->email->value, $person->displayName),
+            $this->generations->current($account->id) ?? throw new LogicException('An account signed in without a security generation.'),
+        ];
     }
 
     private function reasonFor(?Account $account): FailureReason

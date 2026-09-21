@@ -28,10 +28,13 @@ final readonly class ChangePasswordController
     ): Response {
         $actor = $actors->for($request) ?? throw new NoLongerAuthenticated;
 
-        $change(
+        $securityGeneration = $change(
             $actor, $request->currentPassword(), $request->password(),
             $request->session()->getId(), new ClientContext($request->ip(), $request->userAgent()),
         );
+        // The change advanced the Account's security generation, which ended every OTHER session. This one
+        // is re-bound to the generation that transaction committed (ADR 0025), then rotated.
+        $session->rebind($request, $securityGeneration);
         $session->reauthenticate($request);
 
         return response()->noContent();

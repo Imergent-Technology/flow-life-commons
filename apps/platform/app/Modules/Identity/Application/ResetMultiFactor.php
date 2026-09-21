@@ -26,8 +26,10 @@ use Illuminate\Database\ConnectionInterface;
  * second factor locks the same row, so whatever was waiting on it then decides on what this committed):
  *
  * - removes the authenticator, active or pending, and every recovery code;
- * - ends every session of the Account. A half-finished sign-in is not attributable to an Account (it has no
- *   `user_id`), so it is not deleted; it is DEFEATED, because finishing it needs a live factor and there is none;
+ * - ends every session of the Account and advances its security generation (ADR 0025), so a challenge that
+ *   committed a moment before this cannot establish a usable session afterwards either. A half-finished sign-in
+ *   is not attributable to an Account (it has no `user_id`), so it is not deleted; it is DEFEATED, because
+ *   finishing it needs a live factor and there is none;
  * - records `mfa.administratively_reset` or `mfa.reset_from_server`, with counts and no secret of any kind.
  *
  * What it does NOT do: change the password, the status, the roles or the Person; generate a secret; show a code.
@@ -43,6 +45,7 @@ final readonly class ResetMultiFactor
         private TotpFactorRepository $factors,
         private RecoveryCodeRepository $recoveryCodes,
         private AccountSessions $sessions,
+        private AccountSecurityGeneration $generations,
         private RecordSecurityEvent $record,
         private ConnectionInterface $database,
     ) {}
@@ -81,6 +84,7 @@ final readonly class ResetMultiFactor
             }
 
             $signedOut = $this->sessions->revokeAllFor($target);
+            $this->generations->advance($target);
 
             ($this->record)(
                 $event->value, SecurityEventOutcome::Success,

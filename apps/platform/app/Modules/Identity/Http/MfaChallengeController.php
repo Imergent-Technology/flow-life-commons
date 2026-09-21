@@ -15,9 +15,10 @@ use Illuminate\Http\JsonResponse;
  * surface (cookie and CSRF apply) but NOT behind authentication: what it needs is the pending sign-in.
  *
  * Only success establishes the authenticated session, and only after CompleteSecondFactor has re-read the
- * Account under a lock and committed. A wrong code is a validation error and counts toward ending the
- * pending sign-in; every other refusal (Account disabled, password replaced, wrong step, nothing pending)
- * ends it and reads the same as an expired one.
+ * Account under a lock and committed, and only if the Account's security generation is still the one that
+ * proof was checked against (ADR 0025). A wrong code is a validation error and counts toward ending the
+ * pending sign-in; every other refusal (Account disabled, password replaced, wrong step, nothing pending,
+ * a reset that overtook the proof) ends it and reads the same as an expired one.
  */
 final readonly class MfaChallengeController
 {
@@ -47,8 +48,11 @@ final readonly class MfaChallengeController
             return MfaProblems::signInExpired();
         }
 
-        if (! $session->establish($request, $outcome->account->actor->accountId, secondFactor: true)) {
-            return MfaProblems::signInExpired(); // disabled between the commit and here
+        if (! $session->establish($request, $outcome->account->actor->accountId, $outcome->securityGeneration ?? 0, secondFactor: true)) {
+            // Disabled, or its security state superseded, between the commit and here (ADR 0025).
+            $session->forgetPending($request);
+
+            return MfaProblems::signInExpired();
         }
 
         return response()->json($presenter->present(

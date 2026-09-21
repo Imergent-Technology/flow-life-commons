@@ -41,6 +41,7 @@ final readonly class ConfirmTotpEnrollment
         private MfaAudit $audit,
         private MfaStatuses $statuses,
         private EffectiveCapabilities $capabilities,
+        private AccountSecurityGeneration $generations,
         private ConnectionInterface $database,
     ) {}
 
@@ -64,16 +65,17 @@ final readonly class ConfirmTotpEnrollment
             return SecondFactorOutcome::refused($result);
         }
 
-        [$actor, $email, $displayName, $codes] = $result;
+        [$actor, $email, $displayName, $codes, $securityGeneration] = $result;
 
         // Read after the sign-in commits, from current state; never stored in the session.
         return SecondFactorOutcome::enrolled(
             new CurrentAccount($actor, $email, $displayName, $this->capabilities->for($actor), $this->statuses->for($actor->accountId)),
             $codes,
+            $securityGeneration,
         );
     }
 
-    /** @return array{Actor, string, string, list<string>}|SecondFactorFailure */
+    /** @return array{Actor, string, string, list<string>, int}|SecondFactorFailure */
     private function confirm(PendingLogin $pending, SecondFactorProof $proof, ClientContext $client): array|SecondFactorFailure
     {
         $now = DateTimeImmutable::createFromInterface(now());
@@ -106,7 +108,11 @@ final readonly class ConfirmTotpEnrollment
         $this->audit->enabled($account, $actor, $client);
         $this->authenticationAudit->succeeded($actor, $client, SecondFactorMethod::Enrollment);
 
-        return [$actor, $account->email->value, $person->displayName, $codes];
+        // Under the lock this transaction holds: the generation this proof was checked against (ADR 0025).
+        return [
+            $actor, $account->email->value, $person->displayName, $codes,
+            $this->generations->current($account->id) ?? throw new LogicException('An account signed in without a security generation.'),
+        ];
     }
 
     private function refusal(?Account $account, ?TotpFactor $factor, PendingLogin $pending, DateTimeImmutable $now): ?SecondFactorFailure

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Identity\Http;
 
+use App\Modules\Identity\Application\AccountSecurityGeneration;
 use App\Modules\Identity\Application\PendingLogin;
 use App\Modules\Identity\Application\SecondFactorNeed;
 use App\Shared\Domain\AccountId;
@@ -32,10 +33,18 @@ use InvalidArgumentException;
  *   the session (Account, the digest that binds it to the password proved, what is due, when it began,
  *   how many codes were wrong). It is NOT a guard login: `/me` is unauthenticated, no Gate is satisfied,
  *   and it lives for minutes, measured from the password and never extended by activity.
+ *
+ * And one more, which is what makes the session's authority revocable (ADR 0025):
+ *
+ * - `security_generation`: the Account's security generation as it stood when the proof behind this
+ *   session was checked, under the Account's row lock. EnforceSecurityGeneration compares it with the
+ *   Account's current one on every request.
  */
 final readonly class ConsoleSession
 {
     public const string AUTHENTICATED_AT = 'authenticated_at';
+
+    public const string SECURITY_GENERATION = 'security_generation';
 
     public const string SECOND_FACTOR_VERIFIED_AT = 'second_factor_verified_at';
 
@@ -43,15 +52,31 @@ final readonly class ConsoleSession
 
     public const string PENDING = 'pending_sign_in';
 
-    public function __construct(private AuthManager $auth, private Config $config) {}
+    public function __construct(
+        private AuthManager $auth,
+        private Config $config,
+        private AccountSecurityGeneration $generations,
+    ) {}
 
     /**
      * Establishes an authenticated session for an Account that has already been verified.
      * The session id and CSRF token are both regenerated, so nothing an attacker planted
      * before login (session fixation) survives it.
+     *
+     * `$securityGeneration` is the Account's security generation as the use case read it under the
+     * Account's row lock (ADR 0025). It is checked against committed state FIRST, so a reset, disable
+     * or credential replacement that committed between that proof and this call means no session is
+     * created at all rather than one that has to be cleaned up. The generation is then stored on the
+     * session, which is what makes the remaining instant — between here and the transport writing the
+     * row — harmless: EnforceSecurityGeneration refuses the row on its first use.
      */
-    public function establish(Request $request, AccountId $accountId, bool $secondFactor = false): bool
+    public function establish(Request $request, AccountId $accountId, int $securityGeneration, bool $secondFactor = false): bool
     {
+        if ($this->generations->current($accountId) !== $securityGeneration) {
+            // Superseded between the proof committing and here: nothing is established for it.
+            return false;
+        }
+
         // loginUsingId regenerates the session: a new id, the old one destroyed, and a new
         // CSRF token (Store::regenerate does all three). Nothing planted before login survives.
         if ($this->guard()->loginUsingId($accountId->value) === false) {
@@ -61,6 +86,7 @@ final readonly class ConsoleSession
 
         $request->session()->forget(self::PENDING);
         $request->session()->put(self::AUTHENTICATED_AT, now()->getTimestamp());
+        $request->session()->put(self::SECURITY_GENERATION, $securityGeneration);
         if ($secondFactor) {
             // Password AND a second factor were just proved, so this is also a fresh security verification.
             $request->session()->put(self::SECOND_FACTOR_VERIFIED_AT, now()->getTimestamp());
@@ -222,6 +248,24 @@ final readonly class ConsoleSession
     public function authenticatedAtRaw(Request $request): mixed
     {
         return $request->session()->get(self::AUTHENTICATED_AT);
+    }
+
+    /** The security generation this session is bound to, raw, so the check can fail safe on anything odd. */
+    public function securityGenerationRaw(Request $request): mixed
+    {
+        return $request->session()->get(self::SECURITY_GENERATION);
+    }
+
+    /**
+     * Re-binds THIS session to a security generation the platform has just committed for the Account
+     * (ADR 0025). Only the two operations that deliberately keep the acting session while advancing the
+     * generation call it — an authenticated password change, and confirming a replacement authenticator
+     * — and only with the value their own transaction committed. Binding to anything else (a value read
+     * afterwards, say) would let this session survive a reset that landed in between.
+     */
+    public function rebind(Request $request, int $securityGeneration): void
+    {
+        $request->session()->put(self::SECURITY_GENERATION, $securityGeneration);
     }
 
     public function authenticatedAt(Request $request): ?CarbonImmutable

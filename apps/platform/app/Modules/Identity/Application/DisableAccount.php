@@ -27,8 +27,9 @@ use Illuminate\Database\ConnectionInterface;
  *    fixed order is what keeps concurrent removals from deadlocking.
  * 2. The Account is re-read WITH a lock, and re-checked: what the guards decided is only
  *    valid for the state they saw.
- * 3. It is disabled and saved, every session of the Account is deleted, and `account.disabled`
- *    is recorded (ADR 0019). If the audit write fails, all of it rolls back.
+ * 3. It is disabled and saved, every session of the Account is deleted, the Account's security
+ *    generation is advanced (ADR 0025), and `account.disabled` is recorded (ADR 0019). If the audit
+ *    write fails, all of it rolls back.
  *
  * **This use case does not authorize its caller.** Identity cannot ask Access what a caller
  * may do (that dependency runs the other way), so whichever adapter exposes this must require a
@@ -43,6 +44,7 @@ final readonly class DisableAccount
     public function __construct(
         private AccountRepository $accounts,
         private AccountSessions $sessions,
+        private AccountSecurityGeneration $generations,
         private RecordSecurityEvent $record,
         private ConnectionInterface $database,
         private iterable $guards,
@@ -73,6 +75,7 @@ final readonly class DisableAccount
 
             $this->accounts->save($current->disable(DateTimeImmutable::createFromInterface(now())));
             $signedOut = $this->sessions->revokeAllFor($accountId);
+            $this->generations->advance($accountId);
 
             ($this->record)(
                 IdentityEvent::AccountDisabled->value, SecurityEventOutcome::Success,

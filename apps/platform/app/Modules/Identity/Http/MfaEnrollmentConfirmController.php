@@ -36,7 +36,9 @@ final readonly class MfaEnrollmentConfirmController
             return MfaProblems::signInExpired();
         }
 
-        if (! $session->establish($request, $outcome->account->actor->accountId, secondFactor: true)) {
+        if (! $session->establish($request, $outcome->account->actor->accountId, $outcome->securityGeneration ?? 0, secondFactor: true)) {
+            $session->forgetPending($request);
+
             return MfaProblems::signInExpired();
         }
 
