@@ -31,6 +31,10 @@ services:
     volumes:
       - ./infrastructure/docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./apps/platform/public:/var/www/platform/public:ro
+      # Read-only, and only so the production-equivalent site can TEST for the maintenance flag
+      # (storage/framework/down) the way Apache does through the shared storage symlink. The gateway
+      # never writes it: `php artisan down` and `php artisan up` remain the only authority.
+      - ./apps/platform/storage:/var/www/platform/storage:ro
       # The Console's production BUILD, served by the production-equivalent gateway site
       # (prod.flowlife.localhost) so the strict production CSP can be proved in a real browser.
       # `./flow build`, which `./flow test e2e` runs first, is what fills it.
@@ -157,6 +161,10 @@ services:
       E2E_BASE_URL: http://commons.flowlife.localhost:${FLOW_GATEWAY_PORT:-18080}
     volumes:
       - ./apps/guardian-console:/app
+      # Writable, so the maintenance journeys can raise and clear the authoritative flag
+      # (storage/framework/down) that both halves of the origin observe. Those journeys run in a
+      # dedicated serial pass (./flow test e2e), because the flag is global to the origin.
+      - ./apps/platform/storage:/var/www/platform/storage
     depends_on:
       - gateway
 

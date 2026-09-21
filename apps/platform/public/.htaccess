@@ -1,16 +1,47 @@
 # Flow Life Commons: the production document root (docs/architecture/deployment-topology.md).
 #
 # This file governs the WHOLE production origin, not just Laravel: the Guardian Console's index.html
-# and hashed assets are served straight from here by Apache and never reach PHP, so the browser
-# security policy (ADR 0026) has to be stated at this level to cover them.
+# and hashed assets are served straight from here by Apache and never reach PHP, so both the browser
+# security policy (ADR 0026) and the routing contract (ADR 0027) have to be stated at this level.
 #
-# The block below is GENERATED from apps/platform/config/security.php by
-# `php artisan security:headers --format=apache`. Do not hand-edit it: a test compares this file with
-# that command's output, so an edit here that is not in the config fails the build (and vice versa).
+# ORDER IS THE DESIGN. The sections below run in the order they are written, and each one exists
+# because an earlier or later position would be wrong:
+#
+#   1. directory behaviour   no listings, no content negotiation, and / resolves to the Console
+#   2. security headers      GENERATED; `Header always set` applies to every response, this file's
+#                            403s and the maintenance 503 included
+#   3. private paths         FIRST of the rewrites, so no later rule — maintenance or SPA fallback —
+#                            can turn a request for a private path into a 200 or a 503 page
+#   4. maintenance           before routing, so an outage is answered before anything else is
+#                            considered; excludes /api, /up and this responder itself
+#   5. Laravel's own rules   header forwarding and the trailing-slash redirect, unchanged
+#   6. API and /up           explicit, so an API path can never fall through to the Console shell
+#   7. SPA fallback          LAST, and only for what is neither a real file nor a real directory
+#
+# The composed contract is exercised in a browser against the production-equivalent development
+# origin (apps/guardian-console/e2e/production-surface.spec.ts) and pinned structurally by
+# tests/Feature/Modules/Security/ProductionSurfaceTest.php. Rule ordering is where a file like this
+# goes wrong, so both tests assert order, not just presence.
+
+# --- 1. Directory behaviour -------------------------------------------------------------------
+# DirectoryIndex puts the Console's shell ahead of the front controller, so `/` is the Console and
+# not Laravel (deployment topology). -Indexes because a directory listing on a document root is a
+# map of the deployment; -MultiViews because content negotiation can serve `/index` as `index.php`.
+<IfModule mod_negotiation.c>
+    Options -MultiViews
+</IfModule>
+Options -Indexes
+DirectoryIndex index.html index.php
+
+# --- 2. Browser security policy ---------------------------------------------------------------
+#
+# GENERATED from apps/platform/config/security.php by `php artisan security:headers --format=apache`.
+# Do not hand-edit it: a test compares this file with that command's output, so an edit here that is
+# not in the config fails the build (and vice versa).
 #
 # It needs mod_headers. If the hosting account does not have it, the Console's static files ship with
-# NO security headers while the API keeps them, which is a materially weaker origin — see the
-# production readiness runbook's hosting checklist, where confirming mod_headers is an owner action.
+# NO security headers while the API keeps them, which is a materially weaker origin — verified
+# present on this host on 2026-09-21 (production readiness, item R7).
 
 <IfModule mod_headers.c>
     Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
@@ -24,11 +55,47 @@
 </IfModule>
 
 <IfModule mod_rewrite.c>
-    <IfModule mod_negotiation.c>
-        Options -MultiViews -Indexes
-    </IfModule>
-
     RewriteEngine On
+
+    # --- 3. Private paths, denied before anything else ----------------------------------------
+    #
+    # Defence in depth, not the primary control: the document root is the release's `public/`, so
+    # `.env`, `vendor/`, `storage/` and the source are physically outside the served tree already
+    # (ADR 0027). These rules are what answers if that is ever untrue — a mis-set document root, a
+    # stray copy, an unpacked archive — and they come first so that neither the maintenance arm nor
+    # the SPA fallback can answer for a private path instead.
+    #
+    # Any path segment beginning with a dot: `/.env`, and `/.git/config`, whose FILE name does not
+    # begin with a dot and which a <FilesMatch "^\."> would therefore miss. `.well-known` is the one
+    # exception, because cPanel's certificate renewal serves ACME challenges from it.
+    RewriteRule "(^|/)\.(?!well-known/)" - [F,L]
+
+    # Application directories, if one ever lands inside the document root.
+    RewriteRule "^(app|bootstrap|config|database|routes|storage|tests|node_modules|vendor)(/|$)" - [F,L]
+
+    # Application files, likewise. release.json names the commit and is not the public's business
+    # (ADR 0027: release identity stays off the public surface).
+    RewriteRule "^(artisan|composer\.(json|lock)|package(-lock)?\.json|release\.json|phpunit\.xml|phpstan\.neon)$" - [F,L]
+
+    # --- 4. Maintenance -----------------------------------------------------------------------
+    #
+    # One authority, two enforcement points (ADR 0027). The flag is Laravel's own
+    # `storage/framework/down`, reached from this document root through the shared storage symlink;
+    # the `-f` test was verified against the real host on 2026-09-21, symlink and all.
+    #
+    # An INTERNAL rewrite with [L]. Never `R=503`, and never `ErrorDocument`: that idiom was tried on
+    # this host and returned the server's own bare 503 body instead of the page. The status, and the
+    # headers that go with it, come from maintenance.php itself.
+    #
+    # The exclusions are the API carve-out. `/api` is excluded with and without a trailing path, so a
+    # bare `/api` still reaches Laravel and is answered as JSON: a static HTML 503 delivered to an API
+    # client is worse than the outage it reports. `/up` is Laravel's liveness probe and answers 503
+    # itself while down. maintenance.php excludes itself, or the internal rewrite would loop.
+    RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f
+    RewriteCond %{REQUEST_URI} !^/(api($|/)|up$|maintenance\.php$)
+    RewriteRule ^ /maintenance.php [L]
+
+    # --- 5. Laravel's own rules, unchanged ----------------------------------------------------
 
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
@@ -43,8 +110,20 @@
     RewriteCond %{REQUEST_URI} (.+)/$
     RewriteRule ^ %1 [L,R=301]
 
-    # Send Requests To Front Controller...
-    RewriteCond %{REQUEST_FILENAME} !-d
+    # --- 6. The API and the liveness probe belong to Laravel ----------------------------------
+    #
+    # Explicit, and before the fallback: without this an unknown API path would be neither a file nor
+    # a directory, fall through to section 7 and be answered with the Console's HTML shell and a 200.
+    # Laravel must answer it, with its own JSON 404. This is the same split the development gateway
+    # makes (`path /api /api/* /up`), and the reason no Console route may begin with /api or be /up.
+    RewriteRule "^(api($|/)|up$)" index.php [L]
+
+    # --- 7. The Console, and its client-side routes -------------------------------------------
+    #
+    # LAST. A real file or directory is served as-is — index.html, the hashed assets, favicon.ico,
+    # robots.txt — and everything else is the Console's shell, so a deep link like /people/123 boots
+    # the Console instead of returning 404 (deployment topology).
     RewriteCond %{REQUEST_FILENAME} !-f
-    RewriteRule ^ index.php [L]
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ /index.html [L]
 </IfModule>

@@ -106,5 +106,18 @@ test_e2e() {
     cp apps/platform/storage/app/private/e2e-sessions.json apps/guardian-console/e2e/.fixtures/sessions.json
     php_run php artisan cache:clear --no-interaction
     step "E2E tests (Playwright, chromium)"
-    dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test "$@"
+    local status=0
+    dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test --grep-invert @maintenance "$@" || status=$?
+
+    # The maintenance journeys raise the authoritative `storage/framework/down` flag, and that flag is
+    # global to the origin: every other journey running beside them would be answered with a 503. So
+    # they run alone, in their own pass, with one worker.
+    step "E2E maintenance journeys (serial: these take the whole origin down)"
+    dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test --grep @maintenance --workers=1 "$@" || status=$?
+
+    # Unconditionally, through the real authority: a crashed or interrupted pass must never leave the
+    # development origin in maintenance mode for the next person.
+    php_run php artisan up --no-interaction >/dev/null 2>&1 || true
+
+    return "$status"
 }

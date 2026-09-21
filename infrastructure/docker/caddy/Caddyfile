@@ -43,6 +43,22 @@ http://commons.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
 	}
 }
 
+# The production browser security policy (ADR 0026), GENERATED from apps/platform/config/security.php
+# by `php artisan security:headers --format=caddy`. Defined once and imported where it is needed, so
+# the generated block appears in this file exactly once and cannot drift between uses.
+# HSTS is absent deliberately: this origin is plain HTTP, and Apache emits it conditionally on HTTPS.
+(prod_security_headers) {
+	header {
+		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), publickey-credentials-get=(), screen-wake-lock=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+	}
+}
+
 # The PRODUCTION-EQUIVALENT surface, in development. Same shape as the real thing: one origin, the
 # Guardian Console's actual Vite BUILD served as static files, the Laravel API beside it, and the exact
 # production security headers — generated from apps/platform/config/security.php by
@@ -54,26 +70,86 @@ http://commons.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
 #
 # It is not HTTPS, so HSTS is absent here; that one header is the only part of the production policy
 # this surface cannot exercise, and Apache emits it conditionally on HTTPS in production.
+#
+# The sections below mirror apps/platform/public/.htaccess SECTION BY SECTION and in the same order.
+# The two files cannot share syntax, so what is kept in lockstep is the externally visible contract,
+# and that is asserted in a browser rather than by comparing text: e2e/production-surface.spec.ts
+# drives every request class against this origin, and scripts/tests/public-surface.sh fails if one
+# file gains a rule class the other does not have. Where a mechanism differs it is noted inline.
 http://prod.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
-	@laravel path /api /api/* /up
+	# .htaccess section 2 is the (prod_security_headers) snippet above. Apache states the policy ONCE for the whole
+	# document root and replaces whatever PHP already sent; Caddy cannot replace a header on a
+	# proxied response (it appends, and two identical CSP headers are not one), so the block is
+	# imported into every branch that answers WITHOUT Laravel, and the Laravel branch keeps the
+	# identical headers its own middleware sets (ADR 0026). One header per response either way.
 
+	# .htaccess section 3: private paths, denied before anything else, so that neither the
+	# maintenance arm nor the SPA fallback can answer for one. Apache uses a negative lookahead for
+	# the `.well-known` exception; Go's RE2 has none, so it is a separate `not path` here.
+	@private_dot {
+		path_regexp (^|/)\.
+		not path /.well-known/*
+	}
+	@private_app path /app /app/* /bootstrap /bootstrap/* /config /config/* /database /database/* /routes /routes/* /storage /storage/* /tests /tests/* /node_modules /node_modules/* /vendor /vendor/* /artisan /composer.json /composer.lock /package.json /package-lock.json /release.json /phpunit.xml /phpstan.neon
+	handle @private_dot {
+		import prod_security_headers
+		respond 403
+	}
+	handle @private_app {
+		import prod_security_headers
+		respond 403
+	}
+
+	# In production the responder is simply a real file in the document root, so Apache serves it
+	# whether or not the flag is set. Here that takes an explicit route, or the Console's fallback
+	# would answer for it and the two origins would disagree on one path.
+	handle /maintenance.php {
+		import prod_security_headers
+		root * /var/www/platform/public
+		php_fastcgi platform:9000
+	}
+
+	# .htaccess section 4: one authority, two enforcement points (ADR 0027). The flag is Laravel's
+	# own storage/framework/down — the file `php artisan down` writes — which production reaches
+	# through the shared storage symlink and this gateway reaches through a read-only mount. The
+	# path exclusions are the API carve-out, stated here exactly as the RewriteCond states them.
+	@maintenance {
+		not path /api /api/* /up /maintenance.php
+		file {
+			root /var/www/platform
+			try_files storage/framework/down
+		}
+	}
+	handle @maintenance {
+		import prod_security_headers
+		root * /var/www/platform/public
+		rewrite * /maintenance.php
+		php_fastcgi platform:9000
+	}
+
+	# .htaccess section 6: the API and the liveness probe belong to Laravel, which does its own
+	# content-negotiated maintenance handling, so an API client gets JSON rather than the HTML page.
+	@laravel path /api /api/* /up
 	handle @laravel {
 		root * /var/www/platform/public
 		php_fastcgi platform:9000
 	}
 
+	# In production the document root is ONE directory holding the platform's public files and the
+	# Console's build merged together, so favicon.ico and robots.txt are real files beside the shell.
+	# Here they live in a different mount, and without this they would fall through to the SPA
+	# fallback and answer 200 text/html — a difference in the static surface rather than in the app.
+	@platform_static path /favicon.ico /robots.txt
+	handle @platform_static {
+		import prod_security_headers
+		root * /var/www/platform/public
+		file_server
+	}
+
+	# .htaccess section 7: a real file wins, anything else is the Console shell.
 	handle {
+		import prod_security_headers
 		root * /var/www/console
-		header {
-			Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-			X-Content-Type-Options "nosniff"
-			Referrer-Policy "same-origin"
-			X-Frame-Options "DENY"
-			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), publickey-credentials-get=(), screen-wake-lock=()"
-			Cross-Origin-Opener-Policy "same-origin"
-			Cross-Origin-Resource-Policy "same-origin"
-		}
-		# The SPA fallback production needs: a real file wins, anything else is the Console shell.
 		try_files {path} /index.html
 		file_server
 	}
