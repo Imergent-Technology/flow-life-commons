@@ -6,6 +6,13 @@ import type { CurrentAccount } from '../api/auth.ts'
 
 export const CONSOLE_ACCESS = 'console.access'
 
+// Operator administration. The server decides every request; these only choose what to show.
+export const ACCOUNTS_VIEW = 'identity.accounts.view'
+export const ACCOUNTS_MANAGE = 'identity.accounts.manage'
+export const INVITATIONS_ISSUE = 'identity.invitations.issue'
+export const MFA_RECOVER = 'identity.mfa.recover'
+export const ROLES_ASSIGN = 'access.roles.assign'
+
 export function hasCapability(current: CurrentAccount, capability: string): boolean {
   return current.capabilities.includes(capability)
 }

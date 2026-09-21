@@ -11,7 +11,7 @@ export interface RecordedCall {
 }
 
 type Handler = (call: RecordedCall) => Response | Promise<Response>
-type Route = `${'GET' | 'POST'} /api/v1/${string}`
+type Route = `${'GET' | 'POST' | 'DELETE'} /api/v1/${string}`
 
 export function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return Response.json(body, { status, headers })
@@ -118,7 +118,10 @@ export class FakeApi {
           init,
         }
         this.calls.push(call)
-        const handler = this.handlers.get(`${method} ${path}`)
+        // A route may be registered with or without its query string; the exact one wins.
+        const handler =
+          this.handlers.get(`${method} ${path}`) ??
+          this.handlers.get(`${method} ${path.split('?')[0] ?? path}`)
         if (handler === undefined) {
           return Promise.reject(new Error(`Unexpected request in test: ${method} ${path}`))
         }

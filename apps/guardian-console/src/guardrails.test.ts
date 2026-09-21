@@ -25,10 +25,12 @@ const rules: Rule[] = [
     because:
       'the Console asks about capabilities, never roles (ADR 0017); a role check here is the rot the design forbids',
     // Not `role="alert"`: that is an ARIA role, which the Console uses legitimately.
+    // `access.roles.assign` is a CAPABILITY identifier (what an operator may do), not a role property, so it is the one
+    // dotted name that contains `.roles` and is allowed; `account.roles` and `.role` stay flagged.
     pattern:
-      /platform_administrator|['"`]guardian['"`]|\bis(?:Guardian|Admin|Administrator)\b|\.roles?\b|\broles\s*:/,
+      /platform_administrator|['"`]guardian['"`]|\bis(?:Guardian|Admin|Administrator)\b|(?<!access)\.roles?\b|\broles\s*:/,
     offends: "if (account.roles.includes('platform_administrator')) show()",
-    fine: '<div role="alert">Flow Life Guardian Console</div> hasCapability(current, \'console.access\')',
+    fine: "<div role=\"alert\">Flow Life Guardian Console</div> hasCapability(current, 'console.access') const ROLES_ASSIGN = 'access.roles.assign'",
   },
   {
     name: 'browser storage',

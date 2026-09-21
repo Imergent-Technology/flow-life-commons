@@ -1,6 +1,8 @@
 import { NavLink, Outlet } from 'react-router'
 
 import { useCurrentAccount } from '../auth/auth-context.ts'
+import { ACCOUNTS_VIEW, hasCapability } from '../auth/capabilities.ts'
+import { StepUpProvider } from '../auth/StepUpProvider.tsx'
 import { SignOutButton } from './SignOutButton.tsx'
 
 const link = ({ isActive }: { isActive: boolean }) =>
@@ -11,7 +13,7 @@ export function ConsoleLayout() {
   const current = useCurrentAccount()
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 p-6">
+    <div className="mx-auto flex min-h-screen max-w-4xl flex-col gap-6 p-6">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
         <div className="flex flex-wrap items-center gap-4">
           <p className="font-semibold">Flow Life Guardian Console</p>
@@ -19,6 +21,11 @@ export function ConsoleLayout() {
             <NavLink to="/" end className={link}>
               Home
             </NavLink>
+            {hasCapability(current, ACCOUNTS_VIEW) ? (
+              <NavLink to="/admin/accounts" className={link}>
+                Accounts
+              </NavLink>
+            ) : null}
             <NavLink to="/account/security" className={link}>
               Account security
             </NavLink>
@@ -30,7 +37,9 @@ export function ConsoleLayout() {
         </div>
       </header>
       <main className="flex-1">
-        <Outlet />
+        <StepUpProvider>
+          <Outlet />
+        </StepUpProvider>
       </main>
     </div>
   )

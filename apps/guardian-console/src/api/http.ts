@@ -20,10 +20,19 @@ export type Failure =
   | { kind: 'unauthenticated' }
   /** 403: signed in, but not permitted. */
   | { kind: 'forbidden' }
+  /**
+   * 403 with `verification_required: true`: the account may do this, but its last password-and-second-factor
+   * proof is too old. Prove again (`POST /security/verify`), then ask again; nothing is retried automatically.
+   */
+  | { kind: 'verification-required' }
+  /** 404: what was asked about no longer exists. */
+  | { kind: 'not-found' }
+  /** 409: the request was understood and refused because of the state of things; `code` is the stable reason. */
+  | { kind: 'conflict'; code: string }
   /** 419: the request-forgery check refused even after a fresh token was fetched. */
   | { kind: 'csrf' }
   /** 422: the request was refused and nothing changed; `errors` is keyed by request field. */
-  | { kind: 'invalid'; message: string; errors: FieldErrors }
+  | { kind: 'invalid'; message: string; errors: FieldErrors; code?: string }
   /** 429 */
   | { kind: 'rate-limited'; retryAfterSeconds: number | null }
   /** 5xx, including the 503 with which a dependency is reported as temporarily unavailable. */
@@ -36,7 +45,7 @@ export type Failure =
 export type Result<T> = { ok: true; value: T } | { ok: false; failure: Failure }
 
 export interface RequestOptions {
-  method: 'GET' | 'POST'
+  method: 'GET' | 'POST' | 'DELETE'
   path: ApiPath
   /** JSON body. Never logged, and never placed in a URL. */
   body?: object
@@ -135,6 +144,10 @@ async function send(options: RequestOptions): Promise<Reply | null> {
   return reply
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 function isFieldErrors(value: unknown): value is FieldErrors {
   return (
     typeof value === 'object' &&
@@ -153,15 +166,28 @@ function failureFor(reply: Reply | null): Failure {
     case 401:
       return { kind: 'unauthenticated' }
     case 403:
-      return { kind: 'forbidden' }
+      return isRecord(reply.body) && reply.body.verification_required === true
+        ? { kind: 'verification-required' }
+        : { kind: 'forbidden' }
+    case 404:
+      return { kind: 'not-found' }
+    case 409:
+      return {
+        kind: 'conflict',
+        code: isRecord(reply.body) && typeof reply.body.code === 'string' ? reply.body.code : '',
+      }
     case 419:
       return { kind: 'csrf' }
     case 422: {
       const b = reply.body
       if (typeof b === 'object' && b !== null) {
-        const { message, errors } = b as { message?: unknown; errors?: unknown }
+        const { message, errors, code } = b as {
+          message?: unknown
+          errors?: unknown
+          code?: unknown
+        }
         if (typeof message === 'string' && isFieldErrors(errors)) {
-          return { kind: 'invalid', message, errors }
+          return { kind: 'invalid', message, errors, ...(typeof code === 'string' && { code }) }
         }
       }
       return { kind: 'unexpected', status: reply.status }

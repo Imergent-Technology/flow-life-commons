@@ -121,7 +121,17 @@ describe('failures', () => {
       { kind: 'unavailable', retryAfterSeconds: 30 },
     ],
     [500, 'oops', {}, { kind: 'unavailable', retryAfterSeconds: null }],
-    [404, { message: 'x' }, {}, { kind: 'unexpected', status: 404 }],
+    [404, { message: 'x' }, {}, { kind: 'not-found' }],
+    // Administration (ADR 0024): a stale proof is told apart from a plain refusal, and a conflict carries its stable code.
+    [403, { message: 'x', verification_required: true }, {}, { kind: 'verification-required' }],
+    [403, { message: 'x', verification_required: false }, {}, { kind: 'forbidden' }],
+    [
+      409,
+      { message: 'x', code: 'last_administrator_required' },
+      {},
+      { kind: 'conflict', code: 'last_administrator_required' },
+    ],
+    [409, { message: 'x' }, {}, { kind: 'conflict', code: '' }],
   ]
 
   it.each(cases)('classifies HTTP %i', async (status, body, headers, expected) => {

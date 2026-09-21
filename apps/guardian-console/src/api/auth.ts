@@ -252,3 +252,17 @@ export function confirmReplacement(input: { code: string }): Promise<Result<null
     authenticated: true,
   })
 }
+
+/**
+ * POST /security/verify: proves the password AND a second factor again (step-up). The server records it on the session for
+ * a while (`GET /me` reports `mfa.security_verified_until`) and rotates the session id. It changes nothing else, and the
+ * proof is held only for the request.
+ */
+export function verifySecurity(proof: FreshProof): Promise<Result<null>> {
+  return requestVoid({
+    method: 'POST',
+    path: '/api/v1/security/verify',
+    body: freshBody(proof),
+    authenticated: true,
+  })
+}

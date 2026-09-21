@@ -39,6 +39,15 @@ export function describeFailure(failure: Failure): Problem {
       }
     case 'forbidden':
       return { message: 'You are not permitted to do that.', fields: {} }
+    case 'verification-required':
+      return { message: 'Confirm it is you first, then try again.', fields: {} }
+    case 'not-found':
+      return { message: 'That account no longer exists.', fields: {} }
+    case 'conflict':
+      return {
+        message: 'That could not be done in the current state. Reload and check.',
+        fields: {},
+      }
     case 'unauthenticated':
       return { message: 'You are not signed in.', fields: {} }
     case 'unexpected':
