@@ -46,6 +46,12 @@ Quality
   build                    Production build of the Guardian Console
   audit                    Dependency vulnerability audit (composer + npm; needs the network)
 
+Release (developer-side only: builds and inspects; never touches the production host)
+  release build --ref REF --previous REF|none --schema-rollback VALUE
+                           Build a release artifact from an exact ref (see release --help)
+  release inspect ARTIFACT Verify the checksum, validate the artifact, print its manifest
+  release migrations       List a release's migrations and the scanner's warnings
+
 Database
   db shell [--pgsql]       SQL shell (MariaDB, or PostgreSQL with --pgsql)
   db fresh [-y]            DROP all tables and re-run migrations (local only)
@@ -72,6 +78,7 @@ command_file() {
         db) echo db ;;
         build) echo build ;;
         audit) echo audit ;;
+        release) echo release ;;
         doctor) echo doctor ;;
         ci) echo ci ;;
         *) return 1 ;;

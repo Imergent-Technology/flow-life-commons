@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ./flow build: production build of the Guardian Console.
-# The platform release build and release packaging are deliberately deferred
-# until the release process is designed (production is cPanel, not Docker).
+# This is only the Console's build. Release artifacts (platform + Console, from an
+# exact ref, in isolation) are built by `./flow release build`.
 # shellcheck shell=bash
 
 cmd_build() {
