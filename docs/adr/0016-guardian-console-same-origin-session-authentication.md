@@ -4,7 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
-- **Refined by:** [ADR 0023](0023-multi-factor-authentication.md), which adds the second factor and the step-up this ADR deferred to MFA
+- **Refined by:** [ADR 0023](0023-multi-factor-authentication.md), which adds the second factor and the step-up this ADR deferred to MFA; [ADR 0025](0025-account-security-generation.md), which makes a session's authority revocable by binding it to the Account's security generation rather than to the presence of its row; [ADR 0026](0026-production-browser-security-policy.md), which states the browser security policy the single origin serves under
 - **Clarified:** 2026-09-20. Two bullets under Decision named Laravel mechanics more specifically than the intent required; they are reworded below in light of the implementation. The decision itself is unchanged.
 
 ## Context

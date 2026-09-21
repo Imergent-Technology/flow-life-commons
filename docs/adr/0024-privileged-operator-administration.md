@@ -4,6 +4,7 @@
 - **Date:** 2026-09-22
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0025](0025-account-security-generation.md), which closes the reset/session-establishment window this ADR recorded as a residual
 - **Refines:** [ADR 0008](0008-platform-owned-authorization.md), [ADR 0017](0017-capabilities-and-roles-in-code.md), [ADR 0020](0020-administrator-bootstrap-and-last-administrator-invariant.md), [ADR 0022](0022-password-policy-and-credential-handling.md), [ADR 0023](0023-multi-factor-authentication.md)
 
 ## Context
