@@ -31,6 +31,8 @@ Flow Life Global is building a long-lived organizational platform for **members,
 
 Production initially runs on **shared cPanel hosting** ([deployment topology](deployment-topology.md)). Production must not depend on permanent worker processes, Redis, Docker, Node.js or long-running daemons. Queues are therefore intended to be drained from the scheduler tick (cron) rather than by a resident worker, the Guardian Console ships as static files, and Docker exists for development only. Development may provide richer infrastructure than production, but nothing may be built that *only* works with it.
 
+How a release reaches that host — immutable release directories behind a `current` symlink, artifacts built off-host from an exact tag, migrations inside a short maintenance window — is decided in [ADR 0027](../adr/0027-release-and-deployment-model.md). It is **designed and not yet built**, and the hosting account remains unverified ([production readiness](../runbooks/production-readiness.md)).
+
 ## Foundational rules
 
 Status: **Encoded** = a test, config or tool fails when broken; **Partial** = enforced in part; **Documented** = a convention until there is code to enforce it.

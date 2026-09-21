@@ -2,7 +2,9 @@
 
 How the platform is intended to be served in production, and what the hosting account must therefore be able to do.
 
-> **Status: requirements and assumptions, not verified facts about the production host.** The mechanism below has been exercised on Apache with PHP 8.3 in a representative container. The actual cPanel account has **not** been checked; the items under [Owner verification](#owner-verification) remain open. Nothing here is implemented or automated — deployment procedure is still a [deferred runbook](../runbooks/README.md).
+> **Status: requirements and assumptions, not verified facts about the production host.** The mechanism below has been exercised on Apache with PHP 8.3 in a representative container. The actual cPanel account has **not** been checked; the items under [Owner verification](#owner-verification) remain open.
+>
+> The *procedure* that produces this topology is now decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md) — but **none of it is implemented or automated**, and the document root described below is reached through a `current` symlink whose behaviour on the real host is itself unverified.
 
 ## Same origin, by requirement
 
@@ -47,7 +49,9 @@ Exercised on Apache 2.4 with PHP 8.3 against a live database, using Laravel's st
 
 `DirectoryIndex index.html index.php` is set explicitly so `/` resolves to the Console rather than the front controller. Laravel's stock rules already forward the `Authorization` and `X-XSRF-Token` headers, which the CSRF design depends on.
 
-**Consequence:** the Console and the platform stay separately built and separately tested, but become **one web-server deployment unit**. Releasing the Console means writing its build output into the platform's document root. The release procedure is not designed yet.
+**Consequence:** the Console and the platform stay separately built and separately tested, but become **one web-server deployment unit**. Releasing the Console means writing its build output into the platform's document root — which is why the Console's production build is assembled into the artifact rather than shipped separately ([ADR 0027](../adr/0027-release-and-deployment-model.md)), so the two halves of the origin cannot drift.
+
+In production the document root is not a release directory but `current/public`, where `current` is a symlink swapped atomically at each release. The serving arrangement above is unchanged by that indirection; whether Apache and PHP-FPM *observe* the swap promptly is the highest-priority open host question.
 
 ## Owner verification
 
@@ -73,7 +77,9 @@ The Console's `index.html` and hashed assets are served **straight from the docu
 
 **This adds a hosting requirement: `mod_headers`.** Without it the static half of the origin ships with no security headers while the API keeps them, which is a materially weaker deployment; it is item 5 of the owner verification list above.
 
-The routing rules this file will also need — the `/api` carve-out and the SPA fallback described above — are **still not in it**. They belong with the deployment procedure, which is not designed.
+The routing rules this file will also need are **still not in it**: the `/api` and `/up` carve-out, the SPA fallback described above, a maintenance arm that reads Laravel's own `storage/framework/down` so the static half of the origin observes `artisan down`, and private-path defence in depth. All four are specified in [ADR 0027](../adr/0027-release-and-deployment-model.md) and listed in the [deployment runbook](../runbooks/deployment.md#8-not-built-yet); they are implemented in the release-tooling phase, together with the matching change to the production-equivalent development gateway, so the browser suite keeps proving the routing semantics Apache will serve.
+
+Until then, **the SPA fallback does not work**: `/people/123` reaches Laravel and gets a JSON 404 rather than the Console shell.
 
 ## The scheduler: one cron entry
 

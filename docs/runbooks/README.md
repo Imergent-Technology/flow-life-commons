@@ -4,20 +4,21 @@ Operational procedures live here: step-by-step, tested, written for someone unde
 
 | Runbook | Purpose |
 | --- | --- |
+| [Release and deployment](deployment.md) | First deployment, subsequent releases, rollback, backup, scheduler, verification |
 | [Create the first (or a recovery) administrator](administrator-bootstrap.md) | `identity:create-administrator`: bootstrap and lockout recovery |
 | [Recover a lost second factor](mfa-recovery.md) | An operator's reset in the Console, and `identity:reset-mfa` when no other administrator can |
 | [Production readiness](production-readiness.md) | What must be true before serving real people, and who can establish each thing |
 | [Rotate the application key](app-key-rotation.md) | `APP_KEY` and `APP_PREVIOUS_KEYS`, without locking anyone out of their authenticator |
-| [Backup and restore](backup-and-restore.md) | The constraints a backup process must satisfy — not a procedure |
+| [Backup and restore](backup-and-restore.md) | The keyring pairing rule and the contract a restore must satisfy |
 
-Everything else is still to come. Production is not deployed and no other operational process has been designed. Deliberately deferred until designed properly (each becomes a runbook and, where a decision is involved, an ADR):
+**Written is not proven.** The deployment runbook describes an approved design ([ADR 0027](../adr/0027-release-and-deployment-model.md)) that **has never been executed against the production host**, and two of its steps are placeholders only the real host can fill in. The gating checklist is [production readiness](production-readiness.md), section 4a.
 
-- Backup and restore tooling (databases, uploaded files, secrets). The *constraints* it must satisfy are now recorded in [backup-and-restore.md](backup-and-restore.md); the procedure and the tooling are not designed.
-- Release and deployment to cPanel hosting (including the platform artifact, Guardian Console static build, migrations, cron for the scheduler/queue). The *topology* this must satisfy, and the hosting capabilities it assumes, are recorded in [architecture/deployment-topology.md](../architecture/deployment-topology.md); the procedure is not designed.
-- Rollback
+Still to come, deliberately deferred until designed properly (each becomes a runbook and, where a decision is involved, an ADR):
+
+- **Release, backup and restore tooling.** The procedures are now designed; the commands are not built. `./flow release build`, `inspect` and `migrations` are planned developer-side helpers.
 - Incident response and audit-trail review (including a retention policy for `security_events`, which is append-only and never pruned)
 - PostgreSQL migration rehearsal
 
-`./flow` intentionally has no `backup`, `restore` or `release` commands, because a fake or unsafe one would be worse than none.
+`./flow` intentionally has **no `backup`, `restore`, `rollback` or `release deploy` command.** Everything touching production stays an explicit operator action run from a runbook, holding no credentials in the repository, until the manual procedure has been performed on the real host enough times to be worth encoding ([ADR 0027](../adr/0027-release-and-deployment-model.md)).
 
 Template for new runbooks: purpose, when to use, prerequisites, numbered steps with expected output, verification, rollback, owner, last tested date.

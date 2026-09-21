@@ -16,7 +16,7 @@
 
 The **procedure** is [app-key-rotation.md](../runbooks/app-key-rotation.md), and its central claims are proved by tests rather than asserted: old ciphertext keeps working while the old key is a previous key, new ciphertext is written under the current key, and retiring the old key breaks the old ciphertext loudly. A test also asserts that **nothing else in the schema is ciphertext**, so the runbook's list of what a rotation touches stays complete.
 
-**A database backup is worthless without the key it was taken under.** Restoring one under a different `APP_KEY` leaves every enrolled authenticator intact and permanently unreadable. See [backup and restore](../runbooks/backup-and-restore.md).
+**A database backup is worthless without the keyring it was taken under** — not just the current `APP_KEY`, because a dump can hold ciphertext written under any key that was ever current. Restoring one under a keyring that cannot decrypt it leaves every enrolled authenticator intact and permanently unreadable. Each backup therefore records non-secret fingerprints of the keys it needs, and the restore refuses if any of them is missing. See [backup and restore](../runbooks/backup-and-restore.md).
 
 ## Development credentials
 
@@ -26,6 +26,8 @@ The MariaDB and PostgreSQL passwords in `compose.yaml` and the `.example` files 
 
 `.env.example` is a **development** configuration (`APP_ENV=local`, `APP_DEBUG=true`, Mailpit, dev database host). Production must run with `APP_ENV=production` and `APP_DEBUG=false`, with its own host-supplied database credentials, mail settings and `APP_KEY`. `./flow db fresh` refuses to run unless `APP_ENV=local`.
 
+**A production environment template is required and does not exist yet.** Today the only template is the development one, and its two most dangerous values — `APP_DEBUG=true` and `IDENTITY_COMPROMISED_PASSWORD_CHECK=none` — reach production by being copied, which is the specific accident `security:production-check` was written to catch *after the fact*. A `apps/platform/.env.production.example` carrying production-shaped defaults and no development values makes the footgun harder to reach rather than only detectable, and it is what the [deployment runbook](../runbooks/deployment.md) expects an operator to start from. It arrives with the release tooling; until then the production file is hand-assembled from this page and the production check.
+
 ## Frontend
 
 Everything prefixed `VITE_` is embedded in the public JavaScript bundle. Never put a secret, token or credential in a `VITE_*` variable; only public values such as the API base URL.
@@ -34,7 +36,7 @@ Everything prefixed `VITE_` is embedded in the public JavaScript bundle. Never p
 
 - Keep secrets out of shell history and CI logs; prefer the platform's secret store for CI.
 - Rotate anything suspected leaked, and remove it from history rather than just deleting the file.
-- Production secrets on cPanel live outside the web root or in host-managed environment configuration (to be specified in the deployment runbook).
+- Production secrets on cPanel live in `shared/.env`, mode `0600`, outside the document root and outside every release directory ([ADR 0027](../adr/0027-release-and-deployment-model.md), [deployment runbook](../runbooks/deployment.md)). It is the only secret on the host, and each release reaches it by symlink.
 
 ## Dependencies
 
