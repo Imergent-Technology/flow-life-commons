@@ -2,6 +2,9 @@
 .env
 .env.*
 !.env.example
+# The production TEMPLATE, which is documentation and holds no secret: every value that is secret is
+# left blank for the operator to supply on the host. The real production file never leaves the host.
+!.env.production.example
 
 # OS / editor
 .DS_Store

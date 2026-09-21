@@ -176,6 +176,9 @@ make_fixture() {
         # fixture has to carry the ones production will actually serve.
         cp "$ROOT/apps/platform/public/.htaccess" $p/public/.htaccess
         cp "$ROOT/apps/platform/public/maintenance.php" $p/public/maintenance.php
+        # The real production environment TEMPLATE. It is committed documentation, and the build must
+        # never carry it into an artifact: the operator copies it to shared/.env by hand.
+        cp "$ROOT/apps/platform/.env.production.example" $p/.env.production.example
         echo '<?php // test' >$p/tests/ExampleTest.php
         echo 'openapi: 3.1.0' >$p/openapi/openapi.yaml
         echo 'APP_DEBUG=true' >$p/.env.example
@@ -484,6 +487,14 @@ expect_true "…and the composed .htaccess, with its maintenance arm" grep -q 's
 expect_true "…its API carve-out" grep -q 'index.php \[L\]' "$TREE/public/.htaccess"
 expect_true "…its SPA fallback" grep -q '/index.html \[L\]' "$TREE/public/.htaccess"
 expect_true "…and its private-path denials" grep -q '\[F,L\]' "$TREE/public/.htaccess"
+expect_false "the production environment template never ships in an artifact" test -e "$TREE/.env.production.example"
+expect_false "…nor does any other .env file, anywhere outside vendor/" bash -c "find '$TREE' -path '$TREE/vendor' -prune -o -name '.env*' -print | grep -q ."
+# `php artisan release:show` reads these fields on the host and refuses to run without any of them
+# (app/Modules/Release/Application/ReleaseIdentity.php). A build that stopped writing one would ship a
+# release that cannot identify itself; this is the build-side half of that contract.
+for field in manifest_version release_id version built_at ref commit tag annotated_tag on_main provenance_override previous value classified_by; do
+    expect_true "release.json carries '$field', which release:show requires" grep -q "\"$field\":" "$TREE/release.json"
+done
 expect_true "release.json records the classification" grep -q '"value": "code-only"' "$TREE/release.json"
 expect_true "…and who supplied it" grep -q '"classified_by": "Release Tester <tester@example.invalid>"' "$TREE/release.json"
 expect_true "…and the previous release as a full sha" grep -qE '"previous": \{"ref": "v1.0.0", "commit": "[0-9a-f]{40}"\}' "$TREE/release.json"

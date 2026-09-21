@@ -15,9 +15,19 @@ use Illuminate\Console\Command;
  *
  * It is READ-ONLY and takes no destructive action, so it is safe to run on a live host at any time.
  *
- * It ends by printing what it CANNOT see, and that list is not decoration: a green result here says
- * the application is configured correctly, and says nothing whatever about whether the hosting account
- * can serve it. Conflating the two is how a checklist becomes false comfort.
+ * It reports in three parts, and the separation is the point:
+ *
+ *   CHECKS          configuration this deployment is running under. A failure here is unsafe to serve.
+ *   DELIBERATELY    decisions that have been deferred on purpose and documented as deferred. Reported
+ *   OPEN            every time so they cannot be forgotten, and never failing the command, because a
+ *                   check that always fails is one people stop reading.
+ *   NOT CHECKED     what no amount of configuration reading can establish. A green result says the
+ *                   application is configured correctly and says nothing whatever about whether the
+ *                   hosting account can serve it. Conflating the two is how a checklist becomes false
+ *                   comfort.
+ *
+ * No check prints a secret. Several read one — APP_KEY, the database password — and report only what
+ * is wrong with it, because this is run on a live host and its output gets pasted into tickets.
  */
 final class ProductionReadinessCommand extends Command
 {
@@ -53,6 +63,18 @@ final class ProductionReadinessCommand extends Command
             }
         }
 
+        $deferred = $readiness->deferred();
+        if ($deferred !== []) {
+            $this->newLine();
+            $this->line('<options=bold>Deliberately open: decided to defer, and not a reason to stop</>');
+            foreach ($deferred as $item) {
+                $this->line($item->passed ? "  <fg=green>✓</> {$item->name}" : "  <fg=yellow>—</> {$item->name}");
+                if (! $item->passed && $item->detail !== '') {
+                    $this->line("      {$item->detail}");
+                }
+            }
+        }
+
         $this->newLine();
         $this->line('<options=bold>Not checked here: verify these on the hosting account itself</>');
         foreach (self::OWNER_VERIFICATIONS as $item) {
@@ -66,7 +88,10 @@ final class ProductionReadinessCommand extends Command
             return self::FAILURE;
         }
 
-        $this->info('Configuration is as production requires. The owner verifications above are still outstanding.');
+        $open = count(array_filter($deferred, static fn (ReadinessCheck $c): bool => ! $c->passed));
+        $this->info('Configuration is as production requires. '
+            .($open > 0 ? $open.' item(s) remain deliberately open, and the ' : 'The ')
+            .'owner verifications above are still outstanding.');
 
         return self::SUCCESS;
     }
