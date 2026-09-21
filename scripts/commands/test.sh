@@ -86,6 +86,12 @@ test_e2e() {
     if ! [[ "$attempts" =~ ^[0-9]+$ ]] || ((attempts < 100)); then
         die "e2e signs in many times from one address, but the platform allows only '${attempts:-unset}' attempts per address per window. Set IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP=200 in apps/platform/.env (see .env.example) and retry."
     fi
+    # The browser security journeys (e2e/security.spec.ts) run against the gateway's
+    # production-equivalent site, which serves the Console's real production BUILD under the production
+    # security headers. Building it here is what makes that surface the thing being tested rather than
+    # whatever happened to be in dist/ from an earlier day.
+    step "Building the Guardian Console (the production-equivalent origin serves this build)"
+    node_run npm run build
     step "Migrating the development database (a newer schema than the stack was built with would fail the seed)"
     php_run php artisan migrate --force --no-interaction
     step "Seeding the e2e fixture account (development only)"

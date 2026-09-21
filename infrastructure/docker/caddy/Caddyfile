@@ -24,7 +24,58 @@ http://commons.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
 
 	handle {
 		# Vite dev server; websocket upgrades (HMR) are proxied automatically.
+		#
+		# DEVELOPMENT CSP, and deliberately not the production one (ADR 0026). Vite's dev
+		# server injects inline module scripts, rewrites styles from JavaScript and talks
+		# to an HMR websocket, so it needs 'unsafe-inline', 'unsafe-eval' and ws:. That is
+		# what a dev server is; the production build needs none of it, which was measured
+		# rather than assumed, and the production policy is NOT weakened to match this.
+		#
+		# What stays strict even here: no framing, no base-uri, no external origins. So the
+		# development Console cannot be embedded or pointed at another server by accident.
+		header {
+			Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "same-origin"
+			X-Frame-Options "DENY"
+		}
 		reverse_proxy guardian:5173
+	}
+}
+
+# The PRODUCTION-EQUIVALENT surface, in development. Same shape as the real thing: one origin, the
+# Guardian Console's actual Vite BUILD served as static files, the Laravel API beside it, and the exact
+# production security headers — generated from apps/platform/config/security.php by
+# `php artisan security:headers --format=caddy`, and pinned to it by a test.
+#
+# It exists so the strict production CSP is proved in a real browser against the real build
+# (apps/guardian-console/e2e/security.spec.ts) instead of being asserted as a string and discovered to
+# be broken after deployment. `./flow test e2e` builds the Console before running those journeys.
+#
+# It is not HTTPS, so HSTS is absent here; that one header is the only part of the production policy
+# this surface cannot exercise, and Apache emits it conditionally on HTTPS in production.
+http://prod.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
+	@laravel path /api /api/* /up
+
+	handle @laravel {
+		root * /var/www/platform/public
+		php_fastcgi platform:9000
+	}
+
+	handle {
+		root * /var/www/console
+		header {
+			Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "same-origin"
+			X-Frame-Options "DENY"
+			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), publickey-credentials-get=(), screen-wake-lock=()"
+			Cross-Origin-Opener-Policy "same-origin"
+			Cross-Origin-Resource-Policy "same-origin"
+		}
+		# The SPA fallback production needs: a real file wins, anything else is the Console shell.
+		try_files {path} /index.html
+		file_server
 	}
 }
 

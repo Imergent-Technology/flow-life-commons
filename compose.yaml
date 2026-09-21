@@ -31,6 +31,10 @@ services:
     volumes:
       - ./infrastructure/docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./apps/platform/public:/var/www/platform/public:ro
+      # The Console's production BUILD, served by the production-equivalent gateway site
+      # (prod.flowlife.localhost) so the strict production CSP can be proved in a real browser.
+      # `./flow build`, which `./flow test e2e` runs first, is what fills it.
+      - ./apps/guardian-console/dist:/var/www/console:ro
     depends_on:
       - platform
       - guardian

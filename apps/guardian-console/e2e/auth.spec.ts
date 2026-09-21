@@ -187,15 +187,25 @@ test.describe('Guardian Console session authentication', () => {
     // commons.flowlife.localhost. It attacks with the user's browser and their cookies.
     const attacker = await context.newPage()
     await attacker.goto(`http://127.0.0.1:${new URL(page.url()).port}/`)
-    await attacker.evaluate(
+    const attempt = await attacker.evaluate(
       async (target) => {
-        await fetch(target, { method: 'POST', mode: 'no-cors', credentials: 'include' })
+        try {
+          await fetch(target, { method: 'POST', mode: 'no-cors', credentials: 'include' })
+          return 'sent'
+        } catch {
+          // Since ADR 0026 the API answers `Cross-Origin-Resource-Policy: same-origin`, so the
+          // browser now refuses this opaque cross-origin request before it is even dispatched.
+          // The defence moved EARLIER; what must not change is the outcome asserted below.
+          return 'refused by the browser'
+        }
       },
       `http://${HOST}:${new URL(page.url()).port}/api/v1/logout`,
     )
     await attacker.close()
+    expect(['sent', 'refused by the browser']).toContain(attempt)
 
-    // Still signed in: SameSite=Lax withheld the cookie and CSRF protection would refuse it anyway.
+    // Still signed in. Three independent things say so now: the browser's own cross-origin resource
+    // policy, SameSite=Lax withholding the cookie, and CSRF protection refusing the request.
     expect((await api(page, 'GET', '/api/v1/me')).status).toBe(200)
     await api(page, 'POST', '/api/v1/logout')
   })

@@ -168,6 +168,25 @@ final class E2eAccountSeeder extends Seeder
 
     public const string PLAIN_GUARDIAN_SECRET = '4HFMO76JYHG4I4F6ZX5ODMD4HGNABX3F';
 
+    /**
+     * A Console ADMINISTRATOR of its own, for the production browser-security journey
+     * (e2e/security.spec.ts), which runs against the production-equivalent origin. It has its own
+     * account and its own secret so that journey never competes with another for a time step, a code,
+     * or an account's state.
+     */
+    public const string CSP_ADMIN_EMAIL = 'e2e.security.admin@example.org';
+
+    public const string CSP_ADMIN_PASSWORD = 'e2e-security-admin-password-not-a-secret';
+
+    public const string CSP_ADMIN_SECRET = 'PB2XQZ3EMF2GK43UNBSWY3DPFQQHO33S';
+
+    /** A second one, because the two signing-in security journeys run in parallel and each secret's time steps are single-use. */
+    public const string CSP_CODES_EMAIL = 'e2e.security.codes@example.org';
+
+    public const string CSP_CODES_PASSWORD = 'e2e-security-codes-password-not-a-secret';
+
+    public const string CSP_CODES_SECRET = 'GIYDCMBSGE3TQMRSGE3DAOBSGIYDCMBS';
+
     /** An ordinary active Account the step-up journey disables. It holds no access. */
     public const string STALE_TARGET_EMAIL = 'e2e.admin.target@example.org';
 
@@ -286,6 +305,8 @@ final class E2eAccountSeeder extends Seeder
             [self::ADMIN_STALE_EMAIL, 'E2E Admin Stale', self::ADMIN_STALE_PASSWORD, self::ADMIN_STALE_SECRET, 'J'],
             [self::ADMIN_STORY_EMAIL, 'E2E Admin Story', self::ADMIN_STORY_PASSWORD, self::ADMIN_STORY_SECRET, 'N'],
             [self::ADMIN_RECOVER_EMAIL, 'E2E Admin Recover', self::ADMIN_RECOVER_PASSWORD, self::ADMIN_RECOVER_SECRET, 'Q'],
+            [self::CSP_ADMIN_EMAIL, 'E2E Security Admin', self::CSP_ADMIN_PASSWORD, self::CSP_ADMIN_SECRET, 'W'],
+            [self::CSP_CODES_EMAIL, 'E2E Security Codes', self::CSP_CODES_PASSWORD, self::CSP_CODES_SECRET, 'X'],
         ] as [$email, $name, $password, $secret, $tag]) {
             $account = $this->activeAccount($accounts, $people, $hasher, $now, $email, $name, $password);
             $consoleUser->administrator($account->personId);

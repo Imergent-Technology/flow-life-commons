@@ -1,3 +1,28 @@
+# Flow Life Commons: the production document root (docs/architecture/deployment-topology.md).
+#
+# This file governs the WHOLE production origin, not just Laravel: the Guardian Console's index.html
+# and hashed assets are served straight from here by Apache and never reach PHP, so the browser
+# security policy (ADR 0026) has to be stated at this level to cover them.
+#
+# The block below is GENERATED from apps/platform/config/security.php by
+# `php artisan security:headers --format=apache`. Do not hand-edit it: a test compares this file with
+# that command's output, so an edit here that is not in the config fails the build (and vice versa).
+#
+# It needs mod_headers. If the hosting account does not have it, the Console's static files ship with
+# NO security headers while the API keeps them, which is a materially weaker origin — see the
+# production readiness runbook's hosting checklist, where confirming mod_headers is an owner action.
+
+<IfModule mod_headers.c>
+    Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "same-origin"
+    Header always set X-Frame-Options "DENY"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), publickey-credentials-get=(), screen-wake-lock=()"
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+    Header always set Cross-Origin-Resource-Policy "same-origin"
+    Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
+</IfModule>
+
 <IfModule mod_rewrite.c>
     <IfModule mod_negotiation.c>
         Options -MultiViews -Indexes
