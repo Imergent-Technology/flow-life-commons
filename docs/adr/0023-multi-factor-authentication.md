@@ -5,6 +5,7 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0016](0016-guardian-console-same-origin-session-authentication.md), [ADR 0022](0022-password-policy-and-credential-handling.md)
+- **Refined by:** [ADR 0024](0024-privileged-operator-administration.md), which builds the administrative recovery of a lost second factor and the first production use of the step-up this ADR provided
 
 ## Context
 

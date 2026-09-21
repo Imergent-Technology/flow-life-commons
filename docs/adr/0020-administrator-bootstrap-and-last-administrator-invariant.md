@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0024](0024-privileged-operator-administration.md), which adds the operator-administration surface over the same invariant (and a server command for a lost second factor) without changing the bootstrap or the invariant
 
 ## Context
 

@@ -6,6 +6,7 @@
 - **Superseded by:** none
 - **Refines:** [ADR 0015](0015-identity-owns-person.md), [ADR 0016](0016-guardian-console-same-origin-session-authentication.md)
 - **Clarified:** 2026-09-20, at the Phase 5 closeout. What `email_verified_at` means was tightened (acceptance no longer sets it), the no-session-on-acceptance lifecycle was recorded with its reasons, the bcrypt tradeoff was made explicit, and the test gate was made self-contained. The password policy itself is unchanged.
+- **Refined by:** [ADR 0024](0024-privileged-operator-administration.md): an invitation the platform *emails* to the address is the evidence of mailbox control this ADR said no invitation yet provided, so accepting one sets `email_verified_at`; an operator-delivered invitation still does not
 
 ## Context
 

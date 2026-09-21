@@ -31,9 +31,17 @@ Sensitive actions and privileged access will require **durable auditing**: who d
 | Second factor | Required to use the Console: TOTP plus single-use recovery codes, tied to holding `console.access` and not to a role; step-up (`security.verified`) is a reusable middleware | [ADR 0023](../adr/0023-multi-factor-authentication.md) |
 | Console access | Invite-only for Guardians, operators and administrators; no self-service registration | [ADR 0015](../adr/0015-identity-owns-person.md) |
 
-## Still open
+## Operator administration (Phase 8)
 
-- **Administrative recovery of a lost second factor.** MFA and the step-up seam exist ([ADR 0023](../adr/0023-multi-factor-authentication.md)); a person who loses both their authenticator and their recovery codes has no self-service way back, and the explicit administrative operation that resets it is later work.
+The first surface that can alter another person's access ([ADR 0024](../adr/0024-privileged-operator-administration.md)). Every mutation needs **both**:
+
+1. **A capability** from Access: `identity.accounts.view`, `identity.accounts.manage`, `identity.invitations.issue`, `identity.mfa.recover` or `access.roles.assign`, decided from current persisted state, in the route and again in the use case. `guardian` holds none of them; `platform_administrator` holds them all by derivation.
+2. **Recent verification** (`security.verified`): the session's last password-and-second-factor proof within 15 minutes. A stolen session cookie is not enough.
+
+Neither replaces the other, and neither is a role check. The capability is checked first, so a caller without it is never asked to prove anything. The Console's buttons decide only what to *show*; the server refuses whatever it must. The role catalog is served by Access as data; no other module and no part of the Console names a role.
+
+
+- ~~**Administrative recovery of a lost second factor.**~~ *Built in Phase 8 ([ADR 0024](../adr/0024-privileged-operator-administration.md); [runbook](../runbooks/mfa-recovery.md)).* Originally: MFA and the step-up seam exist ([ADR 0023](../adr/0023-multi-factor-authentication.md)); a person who loses both their authenticator and their recovery codes has no self-service way back, and the explicit administrative operation that resets it is later work.
 - **External identity providers** and the linking flows.
 - **Scoped access** (for example Guardian *of a particular programme*).
 - **Anonymisation and deletion** of identity data.

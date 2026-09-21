@@ -37,9 +37,10 @@ Copy [template.md](template.md). Number sequentially (`NNNN-short-title.md`). St
 | [0021](0021-cross-module-referential-integrity.md) | Cross-module referential integrity | Accepted |
 | [0022](0022-password-policy-and-credential-handling.md) | Password policy and credential handling | Accepted |
 | [0023](0023-multi-factor-authentication.md) | Multi-factor authentication for the Guardian Console | Accepted |
+| [0024](0024-privileged-operator-administration.md) | Privileged operator administration | Accepted |
 
 Domain events and the transactional outbox are a documented *direction* ([integration model](../architecture/integration-model.md)), not yet a decision: they get an ADR when the first real consumer shapes the design.
 
-ADRs 0015–0021 record the Identity and Access design gate; ADR 0022 records the password policy and credential decisions made while implementing it, and ADR 0023 the multi-factor authentication that the Console now requires. The consolidated design they refer to — vocabulary, module layout, schema, lifecycles and the scope of the first implementation epic — is in [architecture/identity-and-access.md](../architecture/identity-and-access.md). It is being implemented in phases; its *Implementation status* section records how far.
+ADRs 0015–0021 record the Identity and Access design gate; ADR 0022 records the password policy and credential decisions made while implementing it, ADR 0024 the privileged operator administration that builds on them, and ADR 0023 the multi-factor authentication that the Console now requires. The consolidated design they refer to — vocabulary, module layout, schema, lifecycles and the scope of the first implementation epic — is in [architecture/identity-and-access.md](../architecture/identity-and-access.md). It is being implemented in phases; its *Implementation status* section records how far.
 
 Some ADRs carry a **Refined by** or **Amended by** line. Those decisions remain Accepted and unchanged; the pointer records that a later ADR adds detail within the same direction, as distinct from superseding it. A **Clarified** line records that the *wording* of a decision was corrected in light of implementation, with the decision itself unchanged.

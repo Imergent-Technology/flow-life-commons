@@ -5,6 +5,7 @@ Operational procedures live here: step-by-step, tested, written for someone unde
 | Runbook | Purpose |
 | --- | --- |
 | [Create the first (or a recovery) administrator](administrator-bootstrap.md) | `identity:create-administrator`: bootstrap and lockout recovery |
+| [Recover a lost second factor](mfa-recovery.md) | An operator's reset in the Console, and `identity:reset-mfa` when no other administrator can |
 
 Everything else is still to come. Production is not deployed and no other operational process has been designed. Deliberately deferred until designed properly (each becomes a runbook and, where a decision is involved, an ADR):
 
