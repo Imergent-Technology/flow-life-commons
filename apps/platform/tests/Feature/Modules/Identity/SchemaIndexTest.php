@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Tests\Support\Access;
 use Tests\Support\Identity;
-use Tests\Support\Mfa;
 
 /*
  * The indexes the Identity, Access and Audit hot paths depend on.
@@ -68,44 +68,46 @@ it('indexes role assignments for both directions they are read in', function () 
         ->and($indexes)->toContain('role_assignments_role_key_index');
 });
 
-it('resolves an Account lookup by email without reading the table', function () {
-    // The single most frequent query in the system. `const`/`eq_ref` means the unique index answered it;
-    // anything else would be a scan on every sign-in attempt, including every failed one.
-    Identity::savedActiveAccount('ada@example.org');
-
-    $plan = DB::select('explain select * from accounts where email_canonical = ?', ['ada@example.org']);
-
-    expect(planUsesIndex($plan))->toBeTrue('a sign-in scanned the accounts table');
-});
-
-it('resolves an Account\'s sessions without scanning the session table', function () {
-    // The table with the most rows by far, and the one every disable, reset and password change deletes from.
-    [, $account] = Mfa::signedIn();
-
-    $plan = DB::select('explain select id from sessions where user_id = ?', [$account->id->value]);
-
-    expect(planUsesIndex($plan))->toBeTrue('revoking an Account\'s sessions scanned the session table');
-});
-
-it('resolves the idle-session prune through an index once there is anything to prune', function () {
-    // Enough rows that a scan is not simply the cheaper plan. Both engines choose a sequential scan on a
-    // tiny table and are right to, so asserting the plan on an empty one would prove only that the
-    // planner can count; the question worth asking is what happens after a long outage, when the table
-    // is large and the prune has a backlog to clear.
-    $rows = [];
+it('resolves every hot lookup through an index once the tables are not trivially small', function () {
+    // Measured on a populated schema, deliberately. Both engines scan a one-row table and are RIGHT to:
+    // asserting a plan on an empty one proves only that the planner can count, and it passes or fails
+    // depending on what ran before. The question worth asking is what these queries do at a size where
+    // the difference matters — a sign-in on every request, revoking an Account's sessions on every
+    // disable and reset, and the prune after an outage.
+    $now = Identity::now()->format('Y-m-d H:i:s');
+    $people = $accounts = $sessions = [];
     for ($n = 0; $n < 2000; $n++) {
-        $rows[] = [
-            'id' => 'plan-'.$n, 'user_id' => null, 'ip_address' => '127.0.0.1', 'user_agent' => 'plan',
-            'payload' => 'e30=', 'last_activity' => time() - ($n < 1990 ? 10 : 86400),
+        $person = (string) Str::ulid();
+        $account = (string) Str::ulid();
+        $people[] = ['id' => $person, 'display_name' => "Person {$n}", 'created_at' => $now, 'updated_at' => $now];
+        $accounts[] = [
+            'id' => $account, 'person_id' => $person, 'email' => "person{$n}@example.org",
+            'email_canonical' => "person{$n}@example.org", 'password_hash' => 'not-a-real-hash',
+            'password_updated_at' => $now, 'status' => 'active', 'created_at' => $now, 'updated_at' => $now,
+        ];
+        $sessions[] = [
+            'id' => 'plan-'.$n, 'user_id' => $n < 1990 ? $account : null, 'ip_address' => '127.0.0.1',
+            'user_agent' => 'plan', 'payload' => 'e30=', 'last_activity' => time() - ($n < 1990 ? 10 : 86400),
         ];
     }
-    DB::table('sessions')->insert($rows);
-    DB::statement('analyze '.(DB::getDriverName() === 'pgsql' ? 'sessions' : 'table sessions'));
+    DB::table('people')->insert($people);
+    DB::table('accounts')->insert($accounts);
+    DB::table('sessions')->insert($sessions);
+    foreach (['people', 'accounts', 'sessions'] as $table) {
+        DB::statement('analyze '.(DB::getDriverName() === 'pgsql' ? $table : "table {$table}"));
+    }
 
-    // Selective: ten of two thousand rows are old enough to go.
-    $plan = DB::select('explain select id from sessions where last_activity < ?', [time() - 3600]);
+    // The single most frequent query in the system: every sign-in attempt, including every failed one.
+    expect(planUsesIndex(DB::select('explain select * from accounts where email_canonical = ?', ['person7@example.org'])))
+        ->toBeTrue('a sign-in scanned the accounts table');
 
-    expect(planUsesIndex($plan))->toBeTrue('the scheduled prune scanned the session table');
+    // The table with the most rows by far, and the one every disable, reset and password change deletes from.
+    expect(planUsesIndex(DB::select('explain select id from sessions where user_id = ?', [$accounts[3]['id']])))
+        ->toBeTrue('revoking an Account\'s sessions scanned the session table');
+
+    // The scheduled prune, clearing a backlog: ten of two thousand rows are old enough to go.
+    expect(planUsesIndex(DB::select('explain select id from sessions where last_activity < ?', [time() - 3600])))
+        ->toBeTrue('the scheduled prune scanned the session table');
 });
 
 it('accepts that the operator directory search is a scan, and says why', function () {

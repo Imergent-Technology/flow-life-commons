@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { apiFrom, nextCode } from './support.ts'
+import { apiFrom, nextCode, signedInAs } from './support.ts'
 
 /**
  * The PRODUCTION browser security policy (ADR 0026), in a real browser, against the real production
@@ -204,6 +204,7 @@ test.describe('the production security policy', () => {
   test('blocks a script from another origin, an inline script, and eval', async ({ page }) => {
     // The probe. Without it, every assertion above would pass just as well against a header the
     // browser was ignoring.
+    violations(page) // installs the reporter this test reads back
     await page.goto(`${PROD}/login`)
 
     const external = await page.evaluate(async (src) => {
@@ -309,7 +310,9 @@ test.describe('the production security policy', () => {
     // Account administration: the list and a detail page.
     await page.goto(`${PROD}/admin/accounts`)
     await expect(page.getByRole('heading', { level: 1, name: 'Accounts' })).toBeVisible()
-    await page.getByRole('link', { name: 'E2E Security Admin' }).first().click()
+    await page.getByLabel('Name or email').fill(ADMIN.email)
+    await page.getByRole('button', { name: 'Search' }).click()
+    await page.getByRole('link', { name: 'E2E Security Admin', exact: true }).click()
     await expect(page.getByRole('heading', { level: 1, name: 'E2E Security Admin' })).toBeVisible()
 
     // The QR code is drawn in the browser as inline SVG from the module matrix. It is the one place a
@@ -363,6 +366,46 @@ test.describe('the production security policy', () => {
 
       expect(logged).toEqual([])
       expect(await reported(page)).toEqual([])
+    } finally {
+      await context.close()
+    }
+  })
+
+  test('loads nothing from anywhere but its own origin, and puts no secret in a URL', async ({
+    browser,
+  }) => {
+    // The CSP would refuse a third-party resource, so this is the complementary question: does the
+    // Console try? A blocked request is still a request, and one to a CDN or an analytics host would
+    // leak the fact that an operator is administering accounts even if the response never arrived.
+    // A minted session rather than a sign-in: the two journeys here that DO sign in already have an
+    // authenticator each, and a third sharing one would race them for a time step.
+    const page = await signedInAs(browser, PROD, 'admin-read')
+    const context = page.context()
+    const requested: string[] = []
+    page.on('request', (request) => requested.push(request.url()))
+
+    try {
+      await page.goto(`${PROD}/`)
+      await expect(
+        page.getByRole('heading', { level: 1, name: 'Flow Life Guardian Console' }),
+      ).toBeVisible()
+      await page.goto(`${PROD}/admin/accounts`)
+      await expect(page.getByRole('heading', { level: 1, name: 'Accounts' })).toBeVisible()
+
+      const foreign = requested.filter(
+        (url) => !url.startsWith(PROD) && !url.startsWith('data:') && !url.startsWith('blob:'),
+      )
+      expect(foreign).toEqual([])
+
+      // No mixed content, and no http:// to anywhere else. (The whole origin is plain HTTP here, so
+      // the meaningful form of the check is "every request went to THIS origin", above.)
+      expect(requested.filter((url) => url.startsWith('https://'))).toEqual([])
+
+      // And nothing secret travels in a query string, where an access log or a Referer would catch it:
+      // the reset and invitation links use the FRAGMENT, and the credential endpoints use the body.
+      for (const url of requested) {
+        expect(new URL(url).search).not.toMatch(/token|password|code|secret/i)
+      }
     } finally {
       await context.close()
     }
