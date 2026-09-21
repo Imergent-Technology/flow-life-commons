@@ -69,6 +69,7 @@ A fresh development database has no accounts. `identity:create-administrator` cr
 ./flow db shell             # SQL shell
 ./flow db fresh             # drop everything and re-migrate (local only, asks first)
 ./flow build                # production build of the Guardian Console
+./flow release build ...    # build a release artifact from a tag (developer-side; see the deployment runbook)
 ./flow ci run               # trigger CI on GitHub; then ./flow ci watch
 ```
 

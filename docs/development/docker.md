@@ -104,4 +104,4 @@ CI uses the same `compose.yaml` and `./flow` commands. The only CI-specific step
 
 ## Not covered yet
 
-Production images, release packaging, backup/restore and any deployment are deliberately deferred until designed (see [runbooks](../runbooks/README.md)).
+Production images and any deployment are not part of this environment. The release artifact is built by `./flow release` ([deployment runbook](../runbooks/deployment.md#8-flow-release-the-developer-side-tooling)); backup, restore and deployment stay runbook actions ([runbooks](../runbooks/README.md)).

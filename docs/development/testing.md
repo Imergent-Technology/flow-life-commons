@@ -16,7 +16,7 @@ Strategy and rationale: [ADR 0014](../adr/0014-testing-and-database-compatibilit
 
 | Scope | Checks |
 | --- | --- |
-| repo | Compose config validates, shellcheck on `flow`/`scripts`, `./flow` CLI behaviour tests, actionlint on workflows, WordPress plugin PHP syntax |
+| repo | Compose config validates, shellcheck on `flow`/`scripts`, `./flow` CLI and `./flow release` behaviour tests (a real git fixture and the real artifact validator, with Composer/npm stubbed), actionlint on workflows, WordPress plugin PHP syntax |
 | backend | `composer validate --strict`, Pint (`--test`), Larastan level `max`, Pest on MariaDB incl. architecture tests, (with `--pgsql`) Pest on PostgreSQL |
 | frontend | `tsc -b` strict, ESLint, Prettier check, Vitest, production build, build verification |
 

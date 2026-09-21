@@ -11,11 +11,11 @@ Operational procedures live here: step-by-step, tested, written for someone unde
 | [Rotate the application key](app-key-rotation.md) | `APP_KEY` and `APP_PREVIOUS_KEYS`, without locking anyone out of their authenticator |
 | [Backup and restore](backup-and-restore.md) | The keyring pairing rule and the contract a restore must satisfy |
 
-**The mechanisms are proven; the procedure is not yet rehearsed.** The host capabilities behind [ADR 0027](../adr/0027-release-and-deployment-model.md) were probed on the production account on 2026-09-21 and all passed, so the runbook no longer carries placeholders. **The procedure itself has never been executed end to end**, no release tooling exists, and **outbound mail authentication is open and deferred** ([production readiness](production-readiness.md), section 5).
+**The mechanisms are proven; the procedure is not yet rehearsed.** The host capabilities behind [ADR 0027](../adr/0027-release-and-deployment-model.md) were probed on the production account on 2026-09-21 and all passed, so the runbook no longer carries placeholders. **The procedure itself has never been executed end to end**, the artifact tooling exists but nothing on the host is automated, and **outbound mail authentication is open and deferred** ([production readiness](production-readiness.md), section 5).
 
 Still to come, deliberately deferred until designed properly (each becomes a runbook and, where a decision is involved, an ADR):
 
-- **Release, backup and restore tooling.** The procedures are now designed; the commands are not built. `./flow release build`, `inspect` and `migrations` are planned developer-side helpers.
+- **Host-side release, backup and restore.** The procedures are designed and stay operator actions. The developer-side `./flow release build`, `inspect` and `migrations` now exist ([deployment §8](deployment.md#8-flow-release-the-developer-side-tooling)); nothing that touches the host does.
 - Incident response and audit-trail review (including a retention policy for `security_events`, which is append-only and never pruned)
 - PostgreSQL migration rehearsal
 

@@ -2,7 +2,7 @@
 
 How the platform is intended to be served in production, and what the hosting account must therefore be able to do.
 
-> **Status: the host capabilities this topology needs were probed on the real account on 2026-09-21 and confirmed** ([Owner verification](#owner-verification) below). The *procedure* that produces the topology is decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md) — but **none of it is implemented or automated yet**, and the routing rules this page describes are still not in the committed `.htaccess`.
+> **Status: the host capabilities this topology needs were probed on the real account on 2026-09-21 and confirmed** ([Owner verification](#owner-verification) below). The *procedure* that produces the topology is decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md) — but **nothing on the host is automated**, and only the developer-side artifact build exists (`./flow release`), and the routing rules this page describes are still not in the committed `.htaccess`.
 
 ## The production host, measured
 

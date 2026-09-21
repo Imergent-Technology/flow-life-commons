@@ -182,7 +182,7 @@ Steps 4 to 10 are the maintenance window. Everything before it is reversible by 
 
 ### 1. Have a built, gated artifact
 
-Built off-host from an annotated tag, with its gate green and its `schema_rollback` classification set ([§7](#8-flow-release-planned-boundary)). Know that classification **before** you start; it is what you will act on if step 11 fails.
+Built off-host from an annotated tag, with its gate green and its `schema_rollback` classification set ([§8](#8-flow-release-the-developer-side-tooling)). Know that classification **before** you start; it is what you will act on if step 11 fails.
 
 ### 2. Upload, checksum, extract, wire
 
@@ -504,19 +504,29 @@ The negative checks matter more than the positive ones. `.env` holds the applica
 
 ---
 
-## 8. `./flow release`: planned boundary
+## 8. `./flow release`: the developer-side tooling
 
-**None of this is implemented.** Planned, developer-side only:
+Implemented, developer-side only: pure functions of a commit, run on a developer machine, holding no production credentials and unable to reach the host ([ADR 0027](../adr/0027-release-and-deployment-model.md), *Production operations boundary*).
 
 | Command | Does |
 | --- | --- |
-| `./flow release build --ref <tag> --schema-rollback=<value>` | Builds the artifact in an isolated worktree at that exact ref, from lockfiles, and writes `release.json` |
-| `./flow release inspect <artifact>` | Verifies the checksum and prints the manifest, migrations and classification |
-| `./flow release migrations [--ref]` | Lists a release's migrations and emits scanner warnings |
+| `./flow release build --ref <tag> --previous <ref\|none> --schema-rollback <value>` | Builds the artifact in an isolated worktree at that exact commit, from the lockfiles, in the project's own PHP and Node images. Writes `release.json`, packages `commons-<version>.tar.gz` and its `.sha256`, then re-extracts and validates what it packaged before publishing anything |
+| `./flow release inspect <artifact>` | Verifies the checksum, extracts safely, validates the artifact and prints its manifest, migrations and classification. Refuses anything malformed |
+| `./flow release migrations [--ref] [--previous]` | Lists a release's migrations and the scanner's warnings |
+
+Output goes to `dist/releases/` (gitignored) unless `--out` says otherwise. An existing artifact is never overwritten. `./flow release --help` lists every option.
+
+**What a person supplies, and the build refuses to guess:**
+
+- **`--previous <ref>|none`** is the release **currently on the host**, named by you. It is never inferred from tags, because a tag may never have been deployed. `none` means a first release. It is resolved to a commit and recorded.
+- **`--schema-rollback`** is always supplied by a person ([classification](#3-rollback)). The build only refuses inconsistent choices: `not-applicable` exactly when no migration is new; on a first release (`--previous none`) always `restore-required`, because there is no earlier code to switch back to and recovery is the pre-release backup.
+- **`--acknowledge-scanner-findings`** is required only when the migration scanner reports findings *and* you chose something less conservative than `restore-required`. Choosing `restore-required` never needs it. The findings, your classification, who supplied it (`--classified-by`, default your git identity) and whether acknowledgement was required and given are all recorded in `release.json`. The scanner is a red-flag generator: a clean scan proves nothing.
+
+**Provenance.** The ref must be an annotated tag reachable from `main`. A rehearsal that cannot meet that passes `--allow-untagged`; the artifact is then named by release id rather than version, stamped `provenance_override: true`, and shown as such by `inspect`.
+
+**What the artifact holds.** Exactly the layout in [§0](#0-the-shape-of-it): platform code, `vendor/` (production dependencies only), the Console build merged into `public/`, the empty `storage/` and `bootstrap/cache/` skeleton, and `release.json`. It is assembled from an allowlist and then judged independently: no env files, logs, dumps, keys, tests, `.git`, development packages, cached configuration or shipped symlinks. The three approved cache commands are run against a throwaway copy to prove they still succeed (`optimize` is never run), and the build refuses if `resources/views` has appeared.
 
 **`./flow release deploy` does not exist, and its absence is deliberate.** Nor will `backup`, `restore` or `rollback`. Everything touching production stays an explicit operator action run from this runbook, holding no credentials in the repository, until the manual procedure has been performed on the real host enough times to be worth encoding ([ADR 0027](../adr/0027-release-and-deployment-model.md), *Production operations boundary*).
-
----
 
 ## 9. Not built yet
 
@@ -524,11 +534,11 @@ This runbook describes the approved design. These parts of it do not exist in th
 
 - **The production environment template** (`apps/platform/.env.production.example`) and its integration with `security:production-check`. Until it exists, step 3 is hand-assembled, which is exactly the footgun the template closes.
 - **`php artisan release:show`** and the `release.json` it reads.
-- **The `./flow release` commands** in [§7](#8-flow-release-planned-boundary).
 - **The Apache support rules** in `public/.htaccess`: the `/api` and `/up` carve-out, the maintenance arm reading `storage/framework/down`, the SPA fallback, and private-path defence in depth. The committed file currently has the generated security headers and Laravel's stock rewrite rules only — so **the SPA fallback does not work and the maintenance responder is not reachable** ([deployment topology](../architecture/deployment-topology.md)). Each rule is individually verified on the host; **the composed file is not**, and rule ordering is where it will go wrong.
 - **`public/maintenance.php`**, the standalone responder described in [§4a](#4-maintenance-mode). It must not load Laravel, `vendor/` or `.env`, and must be self-contained, because the maintenance rule blocks assets.
 - **The lockstep change to the production-equivalent development gateway**, so the browser suite keeps proving the routing semantics Apache will serve.
-- **The cache-command check** asserting that `config:cache`, `event:cache` and `route:cache` succeed and that `resources/views` still does not exist.
+- **The cache-command check on every commit.** `./flow release build` runs it (and refuses if `resources/views` has appeared), so it gates a release; the ordinary `./flow check` does not yet, so a Blade view would only be caught when a release is built.
+- **`public/maintenance.php`-aware artifact validation.** `./flow release inspect` currently says an artifact is *not deployable yet* because it lacks the responder and the maintenance rule; that note becomes a hard requirement when those files exist.
 
 ---
 
