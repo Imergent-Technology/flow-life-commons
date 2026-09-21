@@ -172,7 +172,10 @@ make_fixture() {
         echo '<?php return [];' >$p/config/app.php
         echo '<?php // routes' >$p/routes/api.php
         echo '<?php // front controller' >$p/public/index.php
-        echo '# fixture htaccess' >$p/public/.htaccess
+        # The REAL composed public surface, not a stub: the validator judges these files, so the
+        # fixture has to carry the ones production will actually serve.
+        cp "$ROOT/apps/platform/public/.htaccess" $p/public/.htaccess
+        cp "$ROOT/apps/platform/public/maintenance.php" $p/public/maintenance.php
         echo '<?php // test' >$p/tests/ExampleTest.php
         echo 'openapi: 3.1.0' >$p/openapi/openapi.yaml
         echo 'APP_DEBUG=true' >$p/.env.example
@@ -470,6 +473,17 @@ expect_true "…with its assets" test -f "$TREE/public/assets/index-abc123.css"
 expect_true "Laravel's own front controller is untouched" grep -q 'front controller' "$TREE/public/index.php"
 expect_false "bootstrap/cache holds nothing but its placeholder" bash -c "find '$TREE/bootstrap/cache' -type f ! -name .gitignore | grep -q ."
 expect_false "no cache the smoke check built is shipped" test -e "$TREE/bootstrap/cache/config.php"
+# The runbook seeds shared/storage from this skeleton on first deployment (`cp -an storage/. ...`),
+# so whatever ships here becomes PERSISTENT state on the host. That makes the skeleton's contents a
+# security boundary rather than packaging trivia: only inert placeholders and empty directories.
+expect_false "nothing but .gitignore placeholders ships in the storage skeleton" bash -c "find '$TREE/storage' -type f ! -name .gitignore | grep -q ."
+expect_false "…and no symlink, which the seeding copy would follow out of the artifact" bash -c "find '$TREE/storage' '$TREE/bootstrap/cache' -type l | grep -q ."
+expect_false "…nor anything but placeholders in bootstrap/cache" bash -c "find '$TREE/bootstrap/cache' -type f ! -name .gitignore | grep -q ."
+expect_true "the document root carries the maintenance responder" test -f "$TREE/public/maintenance.php"
+expect_true "…and the composed .htaccess, with its maintenance arm" grep -q 'storage/framework/down' "$TREE/public/.htaccess"
+expect_true "…its API carve-out" grep -q 'index.php \[L\]' "$TREE/public/.htaccess"
+expect_true "…its SPA fallback" grep -q '/index.html \[L\]' "$TREE/public/.htaccess"
+expect_true "…and its private-path denials" grep -q '\[F,L\]' "$TREE/public/.htaccess"
 expect_true "release.json records the classification" grep -q '"value": "code-only"' "$TREE/release.json"
 expect_true "…and who supplied it" grep -q '"classified_by": "Release Tester <tester@example.invalid>"' "$TREE/release.json"
 expect_true "…and the previous release as a full sha" grep -qE '"previous": \{"ref": "v1.0.0", "commit": "[0-9a-f]{40}"\}' "$TREE/release.json"
@@ -532,7 +546,7 @@ expect_out "…its checksum is verified first" "checksum matches"
 expect_out "…the classification is shown" "schema_rollback  code-only"
 expect_out "…and who supplied it" "classified by    Release Tester <tester@example.invalid>"
 expect_out "…and the previous release" "previous release v1.0.0 @"
-expect_out "…and says plainly that this tooling stage cannot yet deploy it" "NOT DEPLOYABLE YET"
+expect_no_out "…and no longer calls the artifact rehearsal-only" "NOT DEPLOYABLE"
 expect_no_out "…without an untagged warning when provenance was met" "BUILT WITH --allow-untagged"
 flow_run release inspect "$OVERRIDE"
 expect_out "an --allow-untagged artifact is flagged by inspect" "BUILT WITH --allow-untagged"
@@ -590,6 +604,64 @@ refuses "a migration list that disagrees with the directory" miglist 'touch data
 refuses "a hand-edited acknowledgement flag" ackflip "sed -i 's/\"required\": false/\"required\": true/' release.json" "acknowledgement.required disagrees"
 refuses "a provenance override claimed although provenance was met" ovr "sed -i 's/\"provenance_override\": false/\"provenance_override\": true/' release.json" "although the provenance requirements were met"
 refuses "a release id that does not match its commit" idmismatch "sed -i 's/\"release_id\": \"\\([0-9T]*\\)-[0-9a-f]*\"/\"release_id\": \"\\1-0000000\"/' release.json" "does not end in the short sha"
+
+printf 'flow release inspect: the composed production surface is required\n'
+# Work package 1 shipped rehearsal-only artifacts and said so in a note. That ends here: an artifact
+# without the production public surface is INVALID, not merely flagged.
+refuses "a missing maintenance responder" noresponder 'rm public/maintenance.php' "required file missing: public/maintenance.php"
+refuses "a missing .htaccess" nohtaccess 'rm public/.htaccess' "required file missing: public/.htaccess"
+refuses "an .htaccess with no maintenance arm" nomaint \
+    "sed -i '/storage.framework.down/d' public/.htaccess" \
+    "the maintenance arm must read"
+refuses "an .htaccess with no SPA fallback" nofallback \
+    "sed -i '/index.html .L./d' public/.htaccess" \
+    "client-side routes must fall back"
+refuses "an .htaccess with no private-path denials" nodeny \
+    "sed -i '/.F,L./d' public/.htaccess" \
+    "private paths must be denied"
+refuses "an .htaccess whose maintenance rule would swallow the API" noexclude \
+    "sed -i '/REQUEST_URI. !/d' public/.htaccess" \
+    "must be excluded from the maintenance rewrite"
+refuses "the ErrorDocument mechanism that failed on this host" errordoc \
+    "printf 'ErrorDocument 503 /maintenance.html\\n' >>public/.htaccess" \
+    "forbidden mechanism 'ErrorDocument'"
+refuses "an external maintenance redirect" r503 \
+    "printf 'RewriteRule ^ - [R=503,L]\\n' >>public/.htaccess" \
+    "forbidden mechanism 'R=503'"
+refuses "a legacy static maintenance page" mhtml \
+    "printf 'ErrorDoc\\n' >/dev/null; printf 'RewriteRule ^ /maintenance.html [L]\\n' >>public/.htaccess" \
+    "forbidden mechanism 'maintenance.html'"
+refuses "a cache-purge step for an edge Commons does not have" lscache \
+    "printf 'Header set X-LSCache-Purge \"*\"\\n' >>public/.htaccess" \
+    "forbidden mechanism 'LSCache'"
+refuses "an unexpected file in the document root" strayfile 'echo notes >public/README.txt' \
+    "unexpected entry in the document root: public/README.txt"
+refuses "a responder that bootstraps the framework" bootstrapped \
+    "printf '<?php require __DIR__.\"/../vendor/autoload.php\"; http_response_code(503);' >public/maintenance.php" \
+    "must answer even when the release around it is broken"
+refuses "a responder that forgets its headers" noheaders \
+    "printf '<?php http_response_code(503); echo \"<h1>Down for maintenance</h1>\";' >public/maintenance.php" \
+    "does not set the Retry-After header"
+refuses "a responder that depends on an asset the rewrite blocks" responderasset \
+    "printf '<?php http_response_code(503);\\nheader(\"Retry-After: 120\");\\nheader(\"Cache-Control: no-store, no-cache, must-revalidate\");\\nheader(\"Content-Type: text/html; charset=utf-8\");\\necho \"<link rel=stylesheet href=/m.css><h1>Down for maintenance</h1>\";' >public/maintenance.php" \
+    "references an external asset"
+
+# Ordering: each of these still serves an ordinary request correctly and fails only for the request
+# class nobody tried by hand, which is exactly why the validator pins the order rather than the set.
+# Shipped into the mutation snippets by `declare -f`, which is why shellcheck cannot see it called.
+# shellcheck disable=SC2329
+reordered() { # BODY: an .htaccess carrying every required rule, in the given order
+    printf '%s\n' \
+        'DirectoryIndex index.html index.php' \
+        'Header always set Content-Security-Policy "default-src '"'"'none'"'"'"' \
+        "$@"
+}
+refuses "an SPA fallback placed before the API carve-out" apilate \
+    "$(declare -f reordered); reordered 'RewriteRule \"(^|/)\\.\" - [F,L]' 'RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f' 'RewriteCond %{REQUEST_URI} !^/(api(\$|/)|up\$|maintenance\\.php\$)' 'RewriteRule ^ /maintenance.php [L]' 'RewriteRule ^ /index.html [L]' 'RewriteRule \"^(api(\$|/)|up\$)\" index.php [L]' >public/.htaccess" \
+    "routes the API AFTER the SPA fallback"
+refuses "private denials placed after the maintenance arm" denylate \
+    "$(declare -f reordered); reordered 'RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f' 'RewriteCond %{REQUEST_URI} !^/(api(\$|/)|up\$|maintenance\\.php\$)' 'RewriteRule ^ /maintenance.php [L]' 'RewriteRule \"^(api(\$|/)|up\$)\" index.php [L]' 'RewriteRule \"(^|/)\\.\" - [F,L]' 'RewriteRule ^ /index.html [L]' >public/.htaccess" \
+    "denies private paths AFTER the maintenance arm"
 
 # The acknowledged artifact: findings + code-only must carry a provided acknowledgement.
 ART_ACK="$WORK/out-ack/commons-v1.2.0.tar.gz"

@@ -37,7 +37,7 @@ const TOP_LEVEL = [
 const REQUIRED_FILES = [
     'release.json', 'artisan', 'composer.json', 'composer.lock',
     'bootstrap/app.php', 'bootstrap/providers.php',
-    'public/index.php', 'public/.htaccess', 'public/index.html',
+    'public/index.php', 'public/.htaccess', 'public/index.html', 'public/maintenance.php',
     'vendor/autoload.php', 'vendor/composer/installed.json',
 ];
 
@@ -64,6 +64,59 @@ const FORBIDDEN_FILE_PATTERNS = [
 
 /** Dev-only commands `./flow` has no business shipping; a Vite dev-server marker in the Console shell. */
 const DEV_SERVER_MARKERS = ['@vite/client', 'localhost:5173'];
+
+/**
+ * The only entries permitted in public/, which IS the production document root: the platform's own
+ * public files plus the Console's build merged into them. Anything else is served to the world, so a
+ * new entry has to be added here deliberately rather than arriving with a build-tool upgrade.
+ */
+const PUBLIC_TOP_LEVEL = [
+    '.htaccess', 'assets', 'favicon.ico', 'index.html', 'index.php', 'maintenance.php', 'robots.txt',
+];
+
+/**
+ * Rule classes the composed .htaccess must carry (ADR 0027; deployment runbook sections 4 and 8).
+ *
+ * Deliberately NOT an Apache parser. It checks that each class of rule is present, that the
+ * mechanisms known to be wrong are absent, and that the few orderings that matter hold. Behaviour is
+ * proved against a live origin by the browser suite; pretending to evaluate mod_rewrite here would
+ * only prove that two implementations of it agree.
+ */
+const HTACCESS_REQUIRED = [
+    'DirectoryIndex index.html index.php' => 'the Console shell must answer / ahead of the front controller',
+    'Content-Security-Policy' => 'the generated browser security policy (ADR 0026)',
+    '%{DOCUMENT_ROOT}/../storage/framework/down -f' => 'the maintenance arm must read Laravel\'s own flag through the storage symlink',
+    '/maintenance.php [L]' => 'maintenance must be an INTERNAL rewrite to the standalone responder',
+    '!^/(api($|/)|up$|maintenance\\.php$)' => 'the API, /up and the responder must be excluded from the maintenance rewrite',
+    'index.php [L]' => 'the API and /up must reach Laravel\'s front controller',
+    '/index.html [L]' => 'the Console\'s client-side routes must fall back to its shell',
+    '[F,L]' => 'private paths must be denied',
+];
+
+/** Mechanisms that must never come back. The first two failed on this host; the rest are not ours. */
+const HTACCESS_FORBIDDEN = [
+    'ErrorDocument' => 'the ErrorDocument idiom returned the server\'s own bare 503 body on this host',
+    'R=503' => 'the maintenance rewrite is internal ([L]); an external redirect was measured not to work',
+    'maintenance.html' => 'the responder is public/maintenance.php, which sets its own status and headers',
+    'LSCache' => 'Commons is direct to origin: there is no edge cache to purge',
+    'X-Forwarded' => 'Commons trusts no reverse proxy (trust boundaries)',
+];
+
+/** The responder must answer when the release around it does not, so it may load nothing. */
+const RESPONDER_FORBIDDEN = [
+    'vendor/autoload' => 'Composer\'s autoloader',
+    'bootstrap/app' => 'the Laravel application',
+    'Illuminate' => 'the framework',
+    '$_ENV' => 'the environment',
+    'getenv' => 'the environment',
+];
+
+const RESPONDER_REQUIRED = [
+    'http_response_code(503)' => 'the 503 status',
+    'Retry-After: 120' => 'the Retry-After header',
+    'Cache-Control: no-store, no-cache, must-revalidate' => 'the Cache-Control header',
+    'text/html; charset=utf-8' => 'the Content-Type header',
+];
 
 $problems = [];
 $notes = [];
@@ -258,13 +311,96 @@ function checkPublicSurface(string $root): void
         }
     }
 
-    // Until the public-surface work lands (composed .htaccess, standalone maintenance responder) an
-    // artifact cannot serve the static half's maintenance page. Said plainly rather than passed
-    // silently; it becomes a required file when that work exists.
-    $htaccess = is_file("$root/public/.htaccess") ? (string) file_get_contents("$root/public/.htaccess") : '';
-    if (! is_file("$root/public/maintenance.php") || ! str_contains($htaccess, 'maintenance.php')) {
-        note('NOT DEPLOYABLE YET: no public/maintenance.php responder and no maintenance rule in public/.htaccess (deployment runbook §4). '
-            .'This artifact is for rehearsal and inspection only.');
+    // public/ IS the document root. Everything in it is served.
+    foreach (array_diff(scandir("$root/public") ?: [], ['.', '..']) as $entry) {
+        if (! in_array($entry, PUBLIC_TOP_LEVEL, true)) {
+            problem("unexpected entry in the document root: public/$entry (permitted: ".implode(', ', PUBLIC_TOP_LEVEL).')');
+        }
+    }
+
+    checkHtaccess($root);
+    checkResponder($root);
+}
+
+/** Commentary names the mechanisms that must not be used, and explains why; absence is about rules. */
+function withoutComments(string $text, string $marker): string
+{
+    return implode("\n", array_filter(
+        explode("\n", $text),
+        static fn (string $line): bool => ! str_starts_with(ltrim($line), $marker),
+    ));
+}
+
+function checkHtaccess(string $root): void
+{
+    $file = "$root/public/.htaccess";
+    if (! is_file($file)) {
+        return; // already reported as missing
+    }
+    $htaccess = (string) file_get_contents($file);
+    $rules = withoutComments($htaccess, '#');
+
+    foreach (HTACCESS_REQUIRED as $needle => $why) {
+        if (! str_contains($rules, $needle)) {
+            problem("public/.htaccess is missing a required rule ($why): expected to find '$needle'");
+        }
+    }
+    foreach (HTACCESS_FORBIDDEN as $needle => $why) {
+        if (str_contains($rules, $needle)) {
+            problem("public/.htaccess uses a forbidden mechanism '$needle' ($why)");
+        }
+    }
+
+    // The orderings that matter. Each of these, reversed, still serves an ordinary request correctly
+    // and fails only for the request class nobody tried by hand.
+    $denials = strpos($rules, '[F,L]');
+    $maintenance = strpos($rules, '%{DOCUMENT_ROOT}/../storage/framework/down -f');
+    $api = strpos($rules, 'index.php [L]');
+    $fallback = strpos($rules, '/index.html [L]');
+    if ($denials === false || $maintenance === false || $api === false || $fallback === false) {
+        return; // each absence is already reported above
+    }
+    if ($denials > $maintenance) {
+        problem('public/.htaccess denies private paths AFTER the maintenance arm: during an outage a private path would be answered with the maintenance page instead of being refused');
+    }
+    if ($denials > $fallback) {
+        problem("public/.htaccess denies private paths AFTER the SPA fallback: a private path would be answered 200 with the Console's shell");
+    }
+    if ($api > $fallback) {
+        problem("public/.htaccess routes the API AFTER the SPA fallback: an unknown API path would be answered 200 with the Console's shell instead of Laravel's JSON 404");
+    }
+    if ($maintenance > $fallback) {
+        problem('public/.htaccess places the maintenance arm AFTER the SPA fallback: the Console would keep serving while the platform is down');
+    }
+}
+
+function checkResponder(string $root): void
+{
+    $file = "$root/public/maintenance.php";
+    if (! is_file($file)) {
+        return; // already reported as missing
+    }
+    $responder = (string) file_get_contents($file);
+    $code = withoutComments(preg_replace('#/\*.*?\*/#s', '', $responder) ?? $responder, '//');
+
+    foreach (RESPONDER_REQUIRED as $needle => $what) {
+        if (! str_contains($responder, $needle)) {
+            problem("public/maintenance.php does not set $what (expected '$needle')");
+        }
+    }
+    foreach (RESPONDER_FORBIDDEN as $needle => $what) {
+        if (str_contains($code, $needle)) {
+            problem("public/maintenance.php loads $what ('$needle'): the responder must answer even when the release around it is broken");
+        }
+    }
+    if (preg_match('/\b(require|require_once|include|include_once)\b/', $code) === 1) {
+        problem('public/maintenance.php includes another file: it must be self-contained');
+    }
+    if (! str_contains($responder, '<h1>Down for maintenance</h1>')) {
+        problem('public/maintenance.php does not emit the maintenance page');
+    }
+    if (preg_match('/<(script|link|img)\b/', $code) === 1) {
+        problem('public/maintenance.php references an external asset: the maintenance rewrite intercepts assets too, so it would be answered with this same page');
     }
 }
 
