@@ -4,7 +4,7 @@
 
 **Owner.** Whoever holds the hosting account.
 
-**Status.** The *contract* below is decided ([ADR 0027](../adr/0027-release-and-deployment-model.md)). The procedure for **taking** a backup is in the [deployment runbook](deployment.md#4-taking-a-backup). **No backup or restore tooling exists**, and `./flow` has no `backup` or `restore` command; both are operator actions, deliberately ([runbooks](README.md)). Nothing here has been executed against the production host.
+**Status.** The *contract* below is decided ([ADR 0027](../adr/0027-release-and-deployment-model.md)). The procedure for **taking** a backup is in the [deployment runbook](deployment.md#5-taking-a-backup). **No backup or restore tooling exists**, and `./flow` has no `backup` or `restore` command; both are operator actions, deliberately ([runbooks](README.md)). The **dump command** below is verified on the production host (2026-09-21); the restore contract has never been exercised there.
 
 ---
 
@@ -41,7 +41,7 @@ These are not independent tables. A restore that takes some at one point in time
 
 `sessions`, `password_reset_tokens`, the cache tables and the queue tables are **not restored with data**. A restored session, a restored queued job and a restored reset token are each a live thing resurrected from the past, and the last of those is a credential.
 
-This is enforced by **how the dump is produced**, not by an instruction someone is expected to follow at the worst possible moment: the dump is written in two passes so that every table is recreated but only durable tables carry rows ([deployment runbook](deployment.md#4-taking-a-backup)). Restoring it verbatim is therefore the correct action. A full dump paired with a written warning is a trap, and this replaces one.
+This is enforced by **how the dump is produced**, not by an instruction someone is expected to follow at the worst possible moment: the dump is written in two passes so that every table is recreated but only durable tables carry rows ([deployment runbook](deployment.md#5-taking-a-backup)). Restoring it verbatim is therefore the correct action. A full dump paired with a written warning is a trap, and this replaces one.
 
 The cost is small and worth naming: anyone mid-password-reset requests a new link, and everyone signs in again. The security generation ([ADR 0025](../adr/0025-account-security-generation.md)) would have refused the old sessions regardless.
 
@@ -58,7 +58,7 @@ Checked **before the database is touched**, in this order. Each step is a stop, 
    - **Any fingerprint missing** → **stop.** Name the missing fingerprint and find that key before going further. Restoring anyway leaves every authenticator enrolled under it permanently unreadable, and no administrator can undo that.
 4. **Restore** the dump.
 5. **Reconcile invitations.** List invitations whose account is already `active` and revoke them: the restore may have resurrected an invitation that was already accepted, and an unreconciled one is a way to set someone's password.
-6. **Verify** as after a deployment ([health and release verification](deployment.md#6-health-and-release-verification)), then have someone sign in.
+6. **Verify** as after a deployment ([health and release verification](deployment.md#7-health-and-release-verification)), then have someone sign in.
 
 If step 3 fails and the key genuinely cannot be found, the platform is still recoverable and no passwords are lost — see the next section — but every enrolled authenticator must be reset and re-enrolled.
 

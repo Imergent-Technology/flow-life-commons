@@ -5,6 +5,7 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0016](0016-guardian-console-same-origin-session-authentication.md), [ADR 0003](0003-react-guardian-console.md)
+- **Clarified:** 2026-09-21, after the production host was probed. The policy is unchanged. `mod_headers` is confirmed present and the generated block effective; the `expose_php = Off` wording is corrected to match what was measured (see *HSTS, deliberately narrow* and the note on `X-Powered-By`).
 
 ## Context
 
@@ -45,7 +46,7 @@ Derived from the three things the build loads, and no wider:
 
 Alongside it: `X-Content-Type-Options: nosniff`; `Referrer-Policy: same-origin`; `X-Frame-Options: DENY` (defence in depth for anything that does not honour CSP 2); a `Permissions-Policy` denying the device features the Console does not use; `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Resource-Policy: same-origin`; and `Cache-Control: no-store` on API responses, which carry the signed-in person's name, address, capabilities and factor state.
 
-`X-Powered-By` is turned off (`expose_php = Off`): it names a PHP patch level to look up and tells a user nothing.
+`X-Powered-By` must not be sent: it names a PHP patch level to look up and tells a user nothing. (Measured on the production host 2026-09-21: `expose_php` reads **On** in the ini, but **no `X-Powered-By` header reaches clients**, so nothing is being advertised today. Setting `expose_php = Off` remains worthwhile belt-and-braces, not an open finding.)
 
 Deliberately **not** sent: `X-XSS-Protection` (the filter it enables is gone from every current browser and introduced holes of its own), `Expect-CT` (obsolete), `Feature-Policy` (superseded), `Cross-Origin-Embedder-Policy` (buys cross-origin isolation this application has no use for, at the cost of a constraint on every future subresource).
 
@@ -71,7 +72,7 @@ The second half is the point. A header that is present but not enforced is indis
 ## Consequences
 
 - The Console's own HTML carries the policy in production, which a Laravel-only middleware could never have achieved.
-- **The policy depends on `mod_headers` on the production host.** Without it, the static half of the origin ships with no security headers while the API keeps them. That is an owner verification item, recorded in the [production readiness runbook](../runbooks/production-readiness.md), not something this repository can prove.
+- **The policy depends on `mod_headers` on the production host.** Without it, the static half of the origin ships with no security headers while the API keeps them. That is an owner verification item rather than something this repository can prove — and it was **verified on the real host on 2026-09-21**: a `Header always set` inside `<IfModule mod_headers.c>` reached the client, so the generated block is effective. Recorded in the [production readiness runbook](../runbooks/production-readiness.md).
 - Any future dependency that needs an inline script, `eval`, a web font, a CDN or a third-party image **will break loudly** in the browser journeys before it reaches production. That is the intended cost.
 - Passkeys would require revisiting `publickey-credentials-get=()` in the Permissions-Policy. They are explicitly out of scope, and the line is a deliberate tripwire.
 - The e2e suite now builds the Console before it runs, so the production-equivalent site tests the current build rather than whatever was in `dist/` from another day.

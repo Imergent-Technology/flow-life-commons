@@ -5,6 +5,7 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0011](0011-docker-compose-development-environment.md), [ADR 0016](0016-guardian-console-same-origin-session-authentication.md), [ADR 0023](0023-multi-factor-authentication.md), [ADR 0026](0026-production-browser-security-policy.md)
+- **Clarified:** 2026-09-21, after the production host was probed. The decisions are unchanged and were validated rather than reopened. Two pieces of *wording* were corrected by measurement: the release switch is no longer provisional, and the static-half maintenance response is served by a standalone PHP responder rather than `ErrorDocument`. See [Verified on the production host](#verified-on-the-production-host-2026-09-21).
 
 ## Context
 
@@ -12,7 +13,7 @@ The application considers itself production-ready and is not deployable. Identit
 
 Everything below is shaped by four constraints that are already decided elsewhere and are not reopened here:
 
-- **The host is shared cPanel**: Apache, PHP 8.3, MariaDB, cron. No Docker, no Node, no Redis, no resident daemons ([charter](../architecture/charter.md)).
+- **The host is shared cPanel**: Apache, PHP 8.3, MariaDB, cron. No Docker, no Node, no Redis, no resident daemons ([charter](../architecture/charter.md)). Measured since: Apache on CloudLinux with PHP served through LSAPI/`mod_lsapi`, so `PHP_SAPI` reads `litespeed` — **not** LiteSpeed Web Server, and not a reason to assume an LSCache layer.
 - **The Console and the API are one deployment unit on one origin**, because the session cookie is host-only ([ADR 0016](0016-guardian-console-same-origin-session-authentication.md)). Releasing the Console means writing its build output into the platform's document root.
 - **`APP_KEY` is not a session secret.** Every enrolled authenticator is ciphertext under it ([ADR 0023](0023-multi-factor-authentication.md)), which makes backup and restore a security operation rather than an operational chore.
 - **The browser security policy is generated from configuration into the web server's own files** ([ADR 0026](0026-production-browser-security-policy.md)), so the deployment carries a file that a test pins.
@@ -33,7 +34,9 @@ Five releases are retained. The previous release staying intact and complete on 
 
 **The release switch is an atomic replacement of the symlink**: the new link is created at a temporary path and then `rename(2)`d over `current`. `ln -sfn` is rejected — it unlinks and re-links, so `current` is briefly absent, and without `-n` it creates the link *inside* the target directory.
 
-**The exact swap mechanism is provisional.** Two host behaviours decide it and neither is verified: whether Apache and PHP-FPM observe a change to the symlink's target promptly (Apache's realpath cache and PHP's opcache both sit in the path, and opcache keys on resolved paths), and what operation clears FPM's opcache for this account. If the swap is not reliably observed, the fallback is **rsync-in-place under maintenance**, and the cost is stated plainly because it is not small: instant rollback is lost entirely, recovery becomes re-extracting the previous artifact, and there is a window in which the tree is a mixture of two releases. That is a materially weaker position and a reason to evaluate the host, not a comfortable default.
+**The swap mechanism was provisional and is now measured.** Two host behaviours decided it: whether the web server and PHP observe a change to the symlink's target promptly, and what operation clears the opcache. Probed on 2026-09-21, the **first** request after an atomic swap already served the new release for both PHP and static content, over thirty consecutive observations, with `__FILE__` resolving under the new release directory. **No opcache reset, restart or wait is required, and none is in the procedure.**
+
+The rsync-in-place fallback is retained here as a record of what the alternative would have cost — instant rollback lost entirely, recovery by re-extracting the previous artifact, and a window in which the tree is a mixture of two releases — but it is **not in use**. If a future release ever serves stale code, that is a change in host behaviour: re-run the A/B swap probe before adding a reset step, rather than adding one pre-emptively.
 
 ### Build model: off-host, from an exact immutable ref
 
@@ -94,6 +97,8 @@ The Console loads completely and then every API call fails. So:
 
 - **Laravel owns `/api/*` and `/up`.** Its shim is content-negotiation aware and answers JSON callers with JSON. Apache must not intercept these: a static HTML 503 delivered to an API client is worse than the current behaviour.
 - **Apache owns the static half** — the Console shell, client-side routes and assets — which PHP never sees. It tests the same `storage/framework/down` file, so there is still one authority and two places that observe it.
+
+**The static half's 503 is produced by a standalone PHP responder, not by `ErrorDocument`.** An internal rewrite (`[L]`, never `R=503`) hands the request to `public/maintenance.php`, which sets the status, `Retry-After` and `Cache-Control: no-store` itself and loads neither Laravel, `vendor/` nor `.env` — because the situation it exists for includes a release that is broken or half-installed. The Apache idiom, `ErrorDocument 503` paired with `RewriteRule ^ - [R=503,L]`, was tried first and **does not work on this host**: the server returned its own bare 503 body instead of the page. The responder is also more portable and can set headers the idiom cannot, so it is the decision rather than a workaround.
 
 **No maintenance bypass is supported at the Apache level.** Laravel ships `down --secret=`, and its shim honours the secret URL and cookie, but Apache's rule fires before PHP reaches it, so honouring a bypass would mean reimplementing the cookie HMAC check in `.htaccess`. Declined. The consequence is accepted deliberately: the live application cannot be exercised over HTTP while maintenance is active, which is why verification is split the way it is below.
 
@@ -172,12 +177,36 @@ A deployment must be able to answer which release is serving. That answer comes 
 
 It is deliberately **not** added to `/api/v1/health`, which is public and unauthenticated and whose contract is to expose nothing beyond coarse status. A commit sha is a small disclosure, and the deployment procedure has shell access, so there is nothing to buy by widening a public endpoint.
 
+
+## Verified on the production host (2026-09-21)
+
+Everything in this ADR that depended on host behaviour was probed directly on the production account. **Every check that could have forced a redesign passed**, so this ADR is validated rather than reopened. The full record, with measured values, is in the [production readiness runbook](../runbooks/production-readiness.md).
+
+| Decision | Outcome |
+| --- | --- |
+| Atomic symlink replacement | Works. `rename(2)` via PHP; `ln -sfn` stays rejected |
+| The swap is observed by the server | **Immediately**, PHP and static alike, first request after the swap |
+| An opcache reset is needed | **No.** None required, none added |
+| Independent document root reached through a symlink | Accepted by cPanel |
+| `.htaccess`, `mod_rewrite`, `mod_headers` | All honoured |
+| The maintenance flag is visible to `.htaccess` through the storage symlink | Yes — `%{DOCUMENT_ROOT}/../storage/framework/down -f` resolves |
+| The maintenance responder returns a real 503 with `Retry-After` and `no-store` | Yes; `/api/*` never intercepted |
+| Private paths unreachable over HTTP | Yes — 403 or 404, never 200 |
+| `mysqldump` with `--no-tablespaces --single-transaction --quick` | Works. `--no-tablespaces` is **required**: shared-hosting users lack `PROCESS` |
+| Cron every minute, with an absolute `/usr/local/bin/php` | Works, and the absolute path is **necessary** — bare `php` under cron is `cgi-fcgi`, not `cli` |
+| Five retained releases fit the account | Yes — ~325 MB against 75 GB |
+| An intermediary page cache needing a release-time purge | **None.** Commons is direct to origin |
+
+**Proven individually, not composed.** Each rewrite rule above was tested on its own. The real `.htaccess` must carry the generated header block, the maintenance arm, the `/api` and `/up` carve-out, the SPA fallback and the private-path denials in one file in the right order, and that combination is **not yet verified**. It is implementation-phase work with the browser-suite lockstep.
+
+**One item is open and deferred:** outbound mail authentication. SPF and DMARC records exist; a local PHP `mail()` test delivered but was unsigned and not DMARC-aligned, so `mail()` is **not approved** as the production transport. The mail topology is an organizational decision and is deliberately unmade here. It does not block release tooling; it blocks inviting people.
+
 ## Consequences
 
 - **A release becomes a reviewable object.** A checksummed artifact with a manifest naming its commit, its tag, its lockfile digests, its migrations and its human rollback classification can be inspected before it is deployed and identified after.
 - **Rollback is two mechanisms, not one**, and the manifest says which applies. This is the most important consequence: the failure mode this design exists to prevent is an operator switching `current` back and assuming a `restore-required` release is recovered.
 - **Every release has downtime**, deliberately, measured in tens of seconds. This is a trade against migration complexity that is correct at the current scale and should be revisited if the platform ever serves people who notice.
-- **The host now has hard requirements it did not have**: symlink-following with a changing target, an opcache-clearing operation, and `mysqldump`. Two of them are unverified and one of them can force the degraded fallback.
+- **The host has hard requirements it did not have**: symlink-following with a changing target and `mysqldump`. Both are now verified on the real account, and the third — an opcache-clearing operation — turned out not to be needed at all.
 - **`php artisan optimize` must not appear in any deployment script for this repository**, and the reason is a property of the repository that a check now pins.
 - **Backup acquires a security contract.** A backup without its keyring is not a backup of the authenticators, and the restore procedure refuses rather than discovering this afterwards.
 - **The `.htaccess` in source control is not yet the file this design requires.** It carries the generated security headers and Laravel's stock rewrite rules, and lacks the API carve-out, the maintenance arm and the SPA fallback. The production-equivalent development gateway must change in lockstep, or the browser suite stops proving the routing semantics production will serve.

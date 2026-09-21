@@ -3,13 +3,17 @@
 - **Purpose:** put a release of the Commons platform onto the production host, and get it off again when it is wrong.
 - **Owner:** whoever holds the hosting account and server access.
 - **Design:** [ADR 0027](../adr/0027-release-and-deployment-model.md). Read it once before the first deployment; this runbook assumes its decisions rather than re-arguing them.
-- **Last tested:** **never.** No part of this procedure has been executed against the production host.
+- **Last tested:** the **host capabilities** this procedure depends on were probed directly on 2026-09-21 and are recorded in [production readiness](production-readiness.md), section 4. **The procedure itself has never been executed end to end.**
 
-> **Status: this runbook is written, not proven.**
+> **Status: the mechanisms are proven on this host; the procedure is not yet rehearsed.**
 >
-> Two things in it are placeholders that only the real host can fill in — the **opcache/FPM reload operation** and whether the **`current` symlink swap is observed at all**. Both are marked where they appear. The [production readiness](production-readiness.md) checklist lists every host capability this procedure assumes, and **none of them is verified**.
+> The two placeholders this runbook previously carried are gone. The `current` symlink swap **is** observed immediately by both PHP and static requests, and **no opcache reset, restart or wait is required** — measured, not assumed. The maintenance mechanism is verified end to end, including the rewrite condition reading the flag through the storage symlink.
 >
-> Nothing here may be run against real data until that checklist is complete.
+> **One host item remains open: outbound mail authentication** ([production readiness](production-readiness.md), section 5), deferred pending an organizational decision. It does not block deployment; it blocks inviting people, which is step 14.
+>
+> **The `.htaccess` rules were proven individually, not composed.** The real file must carry the security headers, the maintenance arm, the API carve-out, the SPA fallback and the private-path denials together, in the right order. That is implementation-phase work.
+
+**Host environment, measured 2026-09-21:** Apache on CloudLinux, PHP 8.3.33 via LSAPI/`mod_lsapi` (so `PHP_SAPI` reads `litespeed` — this is **not** LiteSpeed Web Server), MariaDB `10.11.18-MariaDB-cll-lve`, direct to origin with no proxy or CDN in front.
 
 ---
 
@@ -20,7 +24,7 @@
   releases/
     20260921T140311-96c9eb1/      immutable; UTC timestamp + short commit sha
       artisan  app/  bootstrap/  config/  database/  routes/  vendor/
-      public/     index.php  .htaccess  maintenance.html
+      public/     index.php  .htaccess  maintenance.php
                   index.html  assets/  favicon.ico  robots.txt
       release.json
       storage -> ../../shared/storage
@@ -51,7 +55,7 @@ Different from every later release, and gated. Steps 1 and 10 are the ones that 
 
 ### 1. Complete owner/host verification
 
-Work through [production readiness](production-readiness.md) in full. **Do not start step 2 until the blocking checks pass.** If the symlink probe or the opcache question fails, this procedure changes shape (see [ADR 0027](../adr/0027-release-and-deployment-model.md), *Release model*) and must be revised before use.
+Work through [production readiness](production-readiness.md) in full. **On this account, section 4a was probed on 2026-09-21 and every blocking check passed**, so this step is a re-confirmation rather than an open question — re-run it if the hosting account, plan or PHP version has changed since. The one open item is outbound mail (section 5), which blocks step 14, not step 2.
 
 ### 2. Create the directory structure and point the docroot
 
@@ -59,7 +63,15 @@ Work through [production readiness](production-readiness.md) in full. **Do not s
 mkdir -p /home/<user>/commons/{releases,shared/storage,backups}
 ```
 
-Set the subdomain's document root to `/home/<user>/commons/current/public` in cPanel → Domains. Confirm HTTPS serves that host before continuing: without it the `__Host-` session cookie cannot be issued at all and nobody can sign in ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)).
+Set the subdomain's document root in cPanel → Domains. **Type the home-relative value, not an absolute path:**
+
+```
+commons/current/public
+```
+
+This cPanel UI prepends the account home directory itself, so an absolute `/home/<user>/…` produces a doubled path that silently fails ([production readiness](production-readiness.md#6-the-cpanel-document-root-quirk)). Confirmed on 2026-09-21.
+
+Confirm HTTPS serves that host before continuing: without it the `__Host-` session cookie cannot be issued at all and nobody can sign in ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)).
 
 ### 3. Install the production environment file
 
@@ -69,7 +81,7 @@ Create `/home/<user>/commons/shared/.env` from the production template, and lock
 chmod 600 /home/<user>/commons/shared/.env
 ```
 
-> The production environment template does not exist yet — see [§8](#8-not-built-yet). Until it does, build the file from [secrets](../security/secrets.md) and the checks in `security:production-check`, and **do not copy `apps/platform/.env.example`**: it is a development file whose `APP_DEBUG=true` and `IDENTITY_COMPROMISED_PASSWORD_CHECK=none` are exactly the values that must never reach production.
+> The production environment template does not exist yet — see [§8](#9-not-built-yet). Until it does, build the file from [secrets](../security/secrets.md) and the checks in `security:production-check`, and **do not copy `apps/platform/.env.example`**: it is a development file whose `APP_DEBUG=true` and `IDENTITY_COMPROMISED_PASSWORD_CHECK=none` are exactly the values that must never reach production.
 
 ### 4. Generate and record `APP_KEY`
 
@@ -124,25 +136,27 @@ readlink current        # confirm it names the new release
 
 `rename(2)` replaces the symlink atomically. **Do not use `ln -sfn`**: it unlinks before re-linking, so `current` is briefly absent, and without `-n` it creates the link inside the target directory.
 
-### 10. Clear or reload the opcache
+### 10. Nothing — the swap needs no opcache step
 
-> **OWNER-VERIFIED PLACEHOLDER — the operation for this account is not known.**
->
-> PHP's opcache keys on resolved paths and the CLI has its own separate opcache, so `php artisan` cannot clear the web server's. Candidates, in the order worth trying: restarting the PHP-FPM pool from cPanel's PHP selector; `cloudlinux-selector restart --interpreter php` on a CloudLinux account; touching the docroot to invalidate the realpath cache. **Establish which one works, record it here, and stop treating this as a placeholder.**
->
-> Until this is known, treat every release as potentially serving stale code and verify step 12 carefully.
+**Verified 2026-09-21: there is no reset, restart or wait to perform.**
+
+Two releases were swapped by atomic `rename(2)` and observed over thirty iterations. The **first** request after the swap already served the new release, for PHP and static content alike, with `__FILE__` resolving under the new release directory. No stale bytecode, no stale realpath, at any point.
+
+The host's settings would have bounded any staleness regardless: `opcache.validate_timestamps=1`, `opcache.revalidate_freq=2`, `realpath_cache_ttl=120`.
+
+**Do not add a reset step "just in case."** It would be unverified cargo — nobody would know whether it worked, and it would mask a regression rather than reveal one. If a future release ever *does* serve stale code, that is a real change in host behaviour: re-run the A/B swap probe before adding anything, and record what changed.
 
 ### 11. Install the scheduler cron
 
-See [§5](#5-scheduler). One entry, through `current`.
+See [§5](#6-scheduler). One entry, through `current`.
 
 ### 12. CLI verification
 
-See [§6](#6-health-and-release-verification). All of it must pass, `security:production-check` included, with no "clean except".
+See [§6](#7-health-and-release-verification). All of it must pass, `security:production-check` included, with no "clean except".
 
 ### 13. HTTP and security verification
 
-See [§6](#6-health-and-release-verification), including every negative check. `.env`, `vendor/` and the storage logs must not be reachable.
+See [§6](#7-health-and-release-verification), including every negative check. `.env`, `vendor/` and the storage logs must not be reachable.
 
 ### 14. Administrator bootstrap ceremony
 
@@ -168,7 +182,7 @@ Steps 4 to 10 are the maintenance window. Everything before it is reversible by 
 
 ### 1. Have a built, gated artifact
 
-Built off-host from an annotated tag, with its gate green and its `schema_rollback` classification set ([§7](#7-flow-release-planned-boundary)). Know that classification **before** you start; it is what you will act on if step 11 fails.
+Built off-host from an annotated tag, with its gate green and its `schema_rollback` classification set ([§7](#8-flow-release-planned-boundary)). Know that classification **before** you start; it is what you will act on if step 11 fails.
 
 ### 2. Upload, checksum, extract, wire
 
@@ -196,7 +210,7 @@ php artisan down
 
 ### 5. Take the pre-migration backup
 
-See [§4](#4-taking-a-backup). Inside the window, deliberately: a backup taken before maintenance leaves a gap of live writes that a restore would lose.
+See [§4](#5-taking-a-backup). Inside the window, deliberately: a backup taken before maintenance leaves a gap of live writes that a restore would lose.
 
 ### 6. Migrate
 
@@ -213,13 +227,13 @@ php -r 'rename("current.next","current") or exit(1);'
 readlink current
 ```
 
-### 8. Clear or reload the opcache
+### 8. No opcache step
 
-The host-verified operation from first deployment step 10.
+Nothing to do — see first-deployment step 10. The swap is observed immediately on this host.
 
 ### 9. CLI verification, still in maintenance
 
-The CLI half of [§6](#6-health-and-release-verification): `release:show`, `about`, `migrate:status`, `security:production-check`, `schedule:list`. Do as much as possible here, while nothing is exposed.
+The CLI half of [§6](#7-health-and-release-verification): `release:show`, `about`, `migrate:status`, `security:production-check`, `schedule:list`. Do as much as possible here, while nothing is exposed.
 
 ### 10. Leave maintenance
 
@@ -230,7 +244,7 @@ php artisan up
 
 ### 11. HTTP and security verification, immediately
 
-The HTTP half of [§6](#6-health-and-release-verification). Run it now, not after a coffee: this is the only unverified-exposure window in the procedure and the point is to keep it short.
+The HTTP half of [§6](#7-health-and-release-verification). Run it now, not after a coffee: this is the only unverified-exposure window in the procedure and the point is to keep it short.
 
 ### 12. On any failure
 
@@ -262,7 +276,7 @@ php artisan release:show        # among other things, prints schema_rollback
 
 1. `php artisan down` (if not already).
 2. Point `current` back at the previous release, atomically, as in step 7 above.
-3. Clear/reload the opcache.
+3. No opcache step is needed (see first-deployment step 10).
 4. CLI verification.
 5. `php artisan up`, then HTTP verification.
 
@@ -279,7 +293,7 @@ Nothing is lost.
 **Maintenance stays on for the whole of this.**
 
 1. `php artisan down` — and confirm it, because everything below assumes no writes are arriving.
-2. Point `current` back at the previous release; clear/reload the opcache.
+2. Point `current` back at the previous release. No opcache step is needed.
 3. **Restore the pre-release backup** — follow [backup and restore](backup-and-restore.md), including the keyring verification, which happens *before* the database is touched.
 4. Reconcile invitations (see that runbook): revoke any invitation whose account is already active.
 5. CLI verification against the restored release and restored database.
@@ -294,7 +308,62 @@ Nothing is lost.
 
 ---
 
-## 4. Taking a backup
+## 4. Maintenance mode
+
+**One authority, two enforcement points.** Verified end to end on this host on 2026-09-21.
+
+The authority is **`shared/storage/framework/down`**, written by `php artisan down` and removed by `php artisan up`. Nothing else creates or deletes it, and there is no second flag. Because `storage/` is shared across releases, the state **survives the `current` swap**: you go down in the old release and come up in the new one, with nothing to carry across.
+
+(Laravel also writes `storage/framework/maintenance.php`, a handler shim the front controller loads, whose first act is to check for `down`. `up` removes both. The flag is `down`; the shim is the mechanism that reads it.)
+
+- **Laravel covers `/api/*` and `/up`.** Its shim negotiates content, so JSON callers get a JSON 503. Apache must not intercept these.
+- **Apache covers the static half** — the Console shell, client-side routes and assets, which PHP never sees. It reads the same file.
+
+### The rule
+
+```apache
+RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f
+RewriteCond %{REQUEST_URI} !^/(api/|up$|maintenance\.php$)
+RewriteRule ^ /maintenance.php [L]
+```
+
+An **internal rewrite** with `[L]`. The status comes from PHP, not from the rewrite engine.
+
+### The responder
+
+`public/maintenance.php` ships in the artifact as a standalone PHP file. **It must not load Laravel, `vendor/` or `.env`** — the situation it exists for includes a release that is broken or half-installed. It sets:
+
+```
+http_response_code(503)
+Retry-After: 120
+Content-Type: text/html; charset=utf-8
+Cache-Control: no-store, no-cache, must-revalidate
+```
+
+and emits a **self-contained** page: inline CSS, no external assets, because the rewrite blocks assets too.
+
+### Why not `ErrorDocument`
+
+`ErrorDocument 503 /maintenance.html` paired with `RewriteRule ^ - [R=503,L]` is the usual Apache idiom, and **it does not work on this host** — the server returned its own bare `503 Service Unavailable` body instead of the page. The cause was not pursued, because the PHP responder works, is portable to any server, and does something the idiom cannot: set `Retry-After` and `Cache-Control` itself.
+
+**Do not reintroduce the `ErrorDocument` / `R=503` mechanism.**
+
+### What was verified
+
+| Check | Result |
+| --- | --- |
+| `-f` sees the flag through the storage symlink, outside the document root | yes |
+| Flag **absent** | static 200, rewrite 200, `/api/v1/nope` 404 |
+| Flag **present** | static 503, rewrite 503, `/api/v1/nope` **404 — the API is never intercepted** |
+| Response | 503 with `Retry-After: 120`, `Cache-Control: no-store, no-cache, must-revalidate`, `text/html; charset=utf-8` |
+| Body | the maintenance page itself, served |
+| Flag **removed** | 200 immediately |
+
+No restart, cache clear or wait at any point, in either direction.
+
+---
+
+## 5. Taking a backup
 
 Taken inside the maintenance window before every release, before any key rotation, and on demand.
 
@@ -374,7 +443,7 @@ The **restore** contract — including the keyring subset rule that must be chec
 
 ---
 
-## 5. Scheduler
+## 6. Scheduler
 
 **Exactly one cron entry**, and everything it runs is in source control:
 
@@ -395,7 +464,7 @@ Verify: `php artisan schedule:list` shows `identity:prune-expired` with a sane n
 
 ---
 
-## 6. Health and release verification
+## 7. Health and release verification
 
 ### CLI — run these while maintenance is still active
 
@@ -435,7 +504,7 @@ The negative checks matter more than the positive ones. `.env` holds the applica
 
 ---
 
-## 7. `./flow release`: planned boundary
+## 8. `./flow release`: planned boundary
 
 **None of this is implemented.** Planned, developer-side only:
 
@@ -449,15 +518,15 @@ The negative checks matter more than the positive ones. `.env` holds the applica
 
 ---
 
-## 8. Not built yet
+## 9. Not built yet
 
 This runbook describes the approved design. These parts of it do not exist in the repository, and the implementation phase adds them:
 
 - **The production environment template** (`apps/platform/.env.production.example`) and its integration with `security:production-check`. Until it exists, step 3 is hand-assembled, which is exactly the footgun the template closes.
 - **`php artisan release:show`** and the `release.json` it reads.
-- **The `./flow release` commands** in [§7](#7-flow-release-planned-boundary).
-- **The Apache support rules** in `public/.htaccess`: the `/api` and `/up` carve-out, the maintenance arm reading `storage/framework/down`, the SPA fallback, and private-path defence in depth. The committed file currently has the generated security headers and Laravel's stock rewrite rules only — so **the SPA fallback does not work and `maintenance.html` is not served** ([deployment topology](../architecture/deployment-topology.md)).
-- **`maintenance.html`** itself, which must be entirely self-contained because the maintenance rule blocks assets.
+- **The `./flow release` commands** in [§7](#8-flow-release-planned-boundary).
+- **The Apache support rules** in `public/.htaccess`: the `/api` and `/up` carve-out, the maintenance arm reading `storage/framework/down`, the SPA fallback, and private-path defence in depth. The committed file currently has the generated security headers and Laravel's stock rewrite rules only — so **the SPA fallback does not work and the maintenance responder is not reachable** ([deployment topology](../architecture/deployment-topology.md)). Each rule is individually verified on the host; **the composed file is not**, and rule ordering is where it will go wrong.
+- **`public/maintenance.php`**, the standalone responder described in [§4a](#4-maintenance-mode). It must not load Laravel, `vendor/` or `.env`, and must be self-contained, because the maintenance rule blocks assets.
 - **The lockstep change to the production-equivalent development gateway**, so the browser suite keeps proving the routing semantics Apache will serve.
 - **The cache-command check** asserting that `config:cache`, `event:cache` and `route:cache` succeed and that `resources/views` still does not exist.
 

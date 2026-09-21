@@ -11,7 +11,7 @@ Operational procedures live here: step-by-step, tested, written for someone unde
 | [Rotate the application key](app-key-rotation.md) | `APP_KEY` and `APP_PREVIOUS_KEYS`, without locking anyone out of their authenticator |
 | [Backup and restore](backup-and-restore.md) | The keyring pairing rule and the contract a restore must satisfy |
 
-**Written is not proven.** The deployment runbook describes an approved design ([ADR 0027](../adr/0027-release-and-deployment-model.md)) that **has never been executed against the production host**, and two of its steps are placeholders only the real host can fill in. The gating checklist is [production readiness](production-readiness.md), section 4a.
+**The mechanisms are proven; the procedure is not yet rehearsed.** The host capabilities behind [ADR 0027](../adr/0027-release-and-deployment-model.md) were probed on the production account on 2026-09-21 and all passed, so the runbook no longer carries placeholders. **The procedure itself has never been executed end to end**, no release tooling exists, and **outbound mail authentication is open and deferred** ([production readiness](production-readiness.md), section 5).
 
 Still to come, deliberately deferred until designed properly (each becomes a runbook and, where a decision is involved, an ADR):
 

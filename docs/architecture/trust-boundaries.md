@@ -11,6 +11,25 @@ Where trust changes, and what must be true on each side. **Authorization is alwa
 | Platform → External services | Outbound calls go through `Infrastructure` boundaries, outside database transactions, with timeouts and retry safety ([integration model](integration-model.md)). Inbound callbacks/webhooks must verify signatures. |
 | Development → Production | Nothing in the dev stack (Mailpit, Docker, dev credentials, `APP_DEBUG=true`) may be assumed in production. Debug configuration is confined to `.env.example` development placeholders. |
 
+## The edge: no proxy in front of Commons, and why that is load-bearing
+
+**Measured 2026-09-21.** `commons.flowlifeglobal.org` resolves straight to the hosting origin: `Server: Apache`, no proxy, no CDN, no intermediary page cache. The WordPress apex `flowlifeglobal.org` resolves elsewhere and **is** behind GoDaddy Website Security / Sucuri (`Server: Sucuri/Cloudproxy`).
+
+That asymmetry is **not an inconsistency to fix.** WordPress and Commons are deliberately different trust levels on different origins ([ADR 0004](../adr/0004-wordpress-adapter-not-authority.md)); nothing requires them to share an edge topology, and the host-only session cookie already depends on them being separate origins ([ADR 0016](../adr/0016-guardian-console-same-origin-session-authentication.md)).
+
+What matters is that the platform **deliberately trusts no reverse proxies** — `bootstrap/app.php` configures none, so `X-Forwarded-*` is never honoured and the client address the platform sees is the real one. That assumption is correct **today, because of this measurement**, and it is what two security controls rest on:
+
+- **Per-address rate limiting** on login, password reset, invitation acceptance and the second-factor challenge.
+- **Client-address attribution in `security_events`** ([ADR 0019](../adr/0019-security-event-auditing-seam.md)).
+
+> **If Commons is ever placed behind Sucuri, another CDN or any reverse proxy, that is not a transparent infrastructure change.**
+>
+> Left unchanged, every request would appear to originate from the proxy's addresses. **Per-address login throttling would become effectively global** — one attacker's failures would throttle everyone — and **every audit row would record the proxy's address**, gutting the client-address evidence for exactly the incidents the audit trail exists for.
+>
+> Before making such a change: configure **only the specific proxy addresses or ranges**, never a wildcard; then re-verify client-IP handling, login rate limiting, `security_events` attribution, cache behaviour, and whether a release-time purge or bypass step is now required.
+
+No release-time cache purge is needed for Commons in the current topology, and none is in the [deployment runbook](../runbooks/deployment.md). Note also that PHP reports `PHP_SAPI = litespeed` on this host because PHP is served through LSAPI/`mod_lsapi`; that is **not** evidence of LiteSpeed Web Server and not a reason to add an LSCache purge.
+
 ## Public, unauthenticated surface today
 
 Only `GET /api/v1/health` (coarse pass/fail, no versions or hostnames) and Laravel's `GET /up`. Everything added later must be authenticated and authorized by default; public endpoints are the exception and need a stated reason.

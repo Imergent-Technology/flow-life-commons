@@ -2,9 +2,17 @@
 
 How the platform is intended to be served in production, and what the hosting account must therefore be able to do.
 
-> **Status: requirements and assumptions, not verified facts about the production host.** The mechanism below has been exercised on Apache with PHP 8.3 in a representative container. The actual cPanel account has **not** been checked; the items under [Owner verification](#owner-verification) remain open.
->
-> The *procedure* that produces this topology is now decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md) — but **none of it is implemented or automated**, and the document root described below is reached through a `current` symlink whose behaviour on the real host is itself unverified.
+> **Status: the host capabilities this topology needs were probed on the real account on 2026-09-21 and confirmed** ([Owner verification](#owner-verification) below). The *procedure* that produces the topology is decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md) — but **none of it is implemented or automated yet**, and the routing rules this page describes are still not in the committed `.htaccess`.
+
+## The production host, measured
+
+| | Measured 2026-09-21 |
+| --- | --- |
+| Web server | **Apache**, on **CloudLinux** |
+| PHP handler | **LSAPI / `mod_lsapi`**, so `PHP_SAPI` reports `litespeed`. **Not LiteSpeed Web Server** — `/usr/local/apache` and `/opt/alt` exist, `/usr/local/lsws` does not, and MariaDB reports `cll-lve`. Do not infer an LSCache layer from that SAPI string |
+| PHP | 8.3.33 for web requests, with every required extension |
+| Database | `10.11.18-MariaDB-cll-lve`, matching the development engine |
+| Edge | **Direct to origin**, no proxy, CDN or page cache. The WordPress apex is separately behind Sucuri/Cloudproxy — see [trust boundaries](trust-boundaries.md) |
 
 ## Same origin, by requirement
 
@@ -51,25 +59,25 @@ Exercised on Apache 2.4 with PHP 8.3 against a live database, using Laravel's st
 
 **Consequence:** the Console and the platform stay separately built and separately tested, but become **one web-server deployment unit**. Releasing the Console means writing its build output into the platform's document root — which is why the Console's production build is assembled into the artifact rather than shipped separately ([ADR 0027](../adr/0027-release-and-deployment-model.md)), so the two halves of the origin cannot drift.
 
-In production the document root is not a release directory but `current/public`, where `current` is a symlink swapped atomically at each release. The serving arrangement above is unchanged by that indirection; whether Apache and PHP-FPM *observe* the swap promptly is the highest-priority open host question.
+In production the document root is not a release directory but `current/public`, where `current` is a symlink swapped atomically at each release. The serving arrangement above is unchanged by that indirection, and **the host was measured doing it**: the first request after an atomic swap served the new release for both PHP and static content, with no cache clear, restart or wait.
 
 ## Owner verification
 
-Open items. None of them affect the architecture — only whether this hosting account can serve it as designed.
+**Probed on the real account on 2026-09-21. All of these passed.** None of them affected the architecture — only whether this hosting account could serve it as designed, and it can. The full record, including what was measured and the one item still open, is in the [production readiness runbook](../runbooks/production-readiness.md).
 
-| # | To confirm | Where | If unavailable |
-| --- | --- | --- | --- |
-| 1 | `commons.flowlifeglobal.org` can have an **independent document root** (for example `/home/<user>/commons/platform/public`), not forced under `public_html`, and not shared with WordPress | cPanel → Domains → subdomain document root | The Console and API could not be isolated from the WordPress docroot; revisit before the epic ships |
-| 2 | **`.htaccess` overrides are honoured** with `mod_rewrite` on that subdomain (`AllowOverride All` or equivalent) | Try a rewrite rule and observe | Routing must move into server config; the arrangement is unchanged but no longer self-contained |
-| 3 | **PHP 8.3** selectable for the subdomain with `pdo_mysql`, `mbstring`, `openssl`, `intl`, `bcmath`, `zip`, `fileinfo`, `ctype`, `tokenizer` | cPanel → MultiPHP Manager, Select PHP Version → Extensions | The platform cannot run; a different host or PHP build is needed |
-| 4 | **HTTPS is active** on the subdomain (AutoSSL or equivalent) | cPanel → SSL/TLS Status | **Hard blocker for the cookie design.** `__Host-` requires `Secure`, so the session cookie cannot be issued over plain HTTP |
-| 5 | **`mod_headers` is enabled** | Set a header in `.htaccess` and read a response | The Console's static files ship with **no** security headers while the API keeps them. Treat as a blocker ([ADR 0026](../adr/0026-production-browser-security-policy.md)) |
-| 6 | **Cron runs `schedule:run` every minute** | cPanel → Cron Jobs | Nothing prunes idle sessions; the table grows without limit (a capacity problem, not a security one) |
-| 7 | **No web access to `.env`, `storage/`, `vendor/` or the repository** | Request each path over HTTPS | **`.env` holds the application key and the database password.** Hard blocker |
-
-The full list, with what each failure costs, is in the [production readiness runbook](../runbooks/production-readiness.md).
+| # | Confirmed | Status |
+| --- | --- | --- |
+| 1 | An **independent document root** for the subdomain, not under `public_html`, not shared with WordPress, **and reached through a symlink** | Verified. Note the cPanel UI takes a *home-relative* path |
+| 2 | **`.htaccess` overrides honoured**, with `mod_rewrite` | Verified, including a condition testing a file outside the document root through the storage symlink |
+| 3 | **PHP 8.3** with every required extension | Verified — 8.3.33, none missing |
+| 4 | **HTTPS is active** on the subdomain | Verified |
+| 5 | **`mod_headers` is enabled** | Verified — a header set inside `<IfModule mod_headers.c>` reached the client, so the generated block will be effective |
+| 6 | **Cron runs every minute** | Verified. The binary must be the absolute `/usr/local/bin/php`: bare `php` under cron is `cgi-fcgi`, not `cli` |
+| 7 | **No web access to `.env`, `storage/`, `vendor/` or the repository** | Verified — every private path returned 403 or 404 |
 
 Items 1, 4, 5 and 7 are load-bearing for security; the rest are correctness or operations.
+
+**Still open:** outbound mail authentication, deliberately deferred pending an organizational decision about Flow Life's mail arrangement. It does not affect this topology.
 
 ## Security headers, and why they live in `.htaccess`
 
@@ -77,7 +85,7 @@ The Console's `index.html` and hashed assets are served **straight from the docu
 
 **This adds a hosting requirement: `mod_headers`.** Without it the static half of the origin ships with no security headers while the API keeps them, which is a materially weaker deployment; it is item 5 of the owner verification list above.
 
-The routing rules this file will also need are **still not in it**: the `/api` and `/up` carve-out, the SPA fallback described above, a maintenance arm that reads Laravel's own `storage/framework/down` so the static half of the origin observes `artisan down`, and private-path defence in depth. All four are specified in [ADR 0027](../adr/0027-release-and-deployment-model.md) and listed in the [deployment runbook](../runbooks/deployment.md#8-not-built-yet); they are implemented in the release-tooling phase, together with the matching change to the production-equivalent development gateway, so the browser suite keeps proving the routing semantics Apache will serve.
+The routing rules this file will also need are **still not in it**: the `/api` and `/up` carve-out, the SPA fallback described above, a maintenance arm that reads Laravel's own `storage/framework/down` so the static half of the origin observes `artisan down`, and private-path defence in depth. All four are specified in [ADR 0027](../adr/0027-release-and-deployment-model.md) and listed in the [deployment runbook](../runbooks/deployment.md#9-not-built-yet); they are implemented in the release-tooling phase, together with the matching change to the production-equivalent development gateway, so the browser suite keeps proving the routing semantics Apache will serve.
 
 Until then, **the SPA fallback does not work**: `/people/123` reaches Laravel and gets a JSON 404 rather than the Console shell.
 
