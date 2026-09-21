@@ -103,9 +103,12 @@ tar -xzf commons-<version>.tar.gz -C /home/<user>/commons/releases/<release-id>
 
 ```bash
 cd /home/<user>/commons/releases/<release-id>
+cp -an storage/. ../../shared/storage/      # seed shared/storage from the artifact's skeleton; never overwrites
 rm -rf storage && ln -s ../../shared/storage storage
 ln -s ../../shared/.env .env
 ```
+
+The **seeding line matters on the first deployment**: `shared/storage` starts empty, and `php artisan down` fails there (`file_put_contents(storage/framework/down): No such file or directory`) because `storage/framework/` does not exist. The artifact ships the directory skeleton (placeholder `.gitignore` files only, never runtime state); `cp -an` copies it into `shared/` once and is a harmless no-op on every later release.
 
 Confirm `storage/` and `bootstrap/cache/` are writable by the PHP user.
 
