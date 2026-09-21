@@ -16,9 +16,10 @@ use LogicException;
  * end-to-end tests have a signed-in user with a capability to observe.
  *
  * It exists so that code outside Access (the development seeder) never has to name a role: it
- * asks for "a Console user", and Access decides what that means. It bypasses authorization and
- * audit on purpose, and so it refuses to run anywhere but the local and testing environments.
- * It is not the administrator bootstrap and grants no administrator authority.
+ * asks for "a Console user" (or "a Console administrator", for the operator-administration journeys), and
+ * Access decides what that means. It bypasses authorization and audit on purpose, and so it refuses to run
+ * anywhere but the local and testing environments. It is not the administrator bootstrap: nothing in
+ * production can reach it.
  */
 final readonly class ConsoleUserFixture
 {
@@ -29,16 +30,27 @@ final readonly class ConsoleUserFixture
 
     public function __invoke(PersonId $person): void
     {
+        $this->give($person, Role::Guardian);
+    }
+
+    /** A Console user who may also administer operators: what the administration journeys sign in as. */
+    public function administrator(PersonId $person): void
+    {
+        $this->give($person, Role::PlatformAdministrator);
+    }
+
+    private function give(PersonId $person, Role $role): void
+    {
         if (! in_array($this->config->string('app.env'), ['local', 'testing'], true)) {
             throw new LogicException('The Console user fixture may only run in a local or testing environment.');
         }
 
         foreach ($this->assignments->forPerson($person) as $existing) {
-            if ($existing->roleKey === Role::Guardian->value) {
+            if ($existing->roleKey === $role->value) {
                 return;
             }
         }
 
-        $this->assignments->add(RoleAssignment::grant($person, Role::Guardian->value, null, DateTimeImmutable::createFromInterface(now())));
+        $this->assignments->add(RoleAssignment::grant($person, $role->value, null, DateTimeImmutable::createFromInterface(now())));
     }
 }

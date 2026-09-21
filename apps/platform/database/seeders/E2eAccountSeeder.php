@@ -132,6 +132,54 @@ final class E2eAccountSeeder extends Seeder
 
     public const string SESSION_PASSWORD = 'e2e-session-password-not-a-secret';
 
+    /**
+     * Operator administration (ADR 0024). Each journey has its OWN administrator, because a step-up rotates a session and
+     * the platform accepts each authenticator time step once. The sessions they start from are minted by
+     * E2eSessionSeeder through the real sign-in, so these journeys do not spend the public login rate budget.
+     * Administrators (with a second factor), one plain Console user (a guardian), and the people they act on. Public, worthless.
+     */
+    public const string ADMIN_READ_EMAIL = 'e2e.admin.read@example.org';
+
+    public const string ADMIN_READ_PASSWORD = 'e2e-admin-read-password-not-a-secret';
+
+    public const string ADMIN_READ_SECRET = 'OXYIMCFIPNZB575Y7MZF7OBR26YHQGEY';
+
+    public const string ADMIN_STALE_EMAIL = 'e2e.admin.stale@example.org';
+
+    public const string ADMIN_STALE_PASSWORD = 'e2e-admin-stale-password-not-a-secret';
+
+    public const string ADMIN_STALE_SECRET = 'YGDVPF7NJEC7MJ54SW3IKGUW7MTJWSEO';
+
+    public const string ADMIN_STORY_EMAIL = 'e2e.admin.story@example.org';
+
+    public const string ADMIN_STORY_PASSWORD = 'e2e-admin-story-password-not-a-secret';
+
+    public const string ADMIN_STORY_SECRET = 'WPASVORC3QYT2LZHKBMKTHAYVK3OI242';
+
+    public const string ADMIN_RECOVER_EMAIL = 'e2e.admin.recover@example.org';
+
+    public const string ADMIN_RECOVER_PASSWORD = 'e2e-admin-recover-password-not-a-secret';
+
+    public const string ADMIN_RECOVER_SECRET = '2FESGCFGXJ7JEMBIVYHTWUXA7NDCLLV3';
+
+    public const string PLAIN_GUARDIAN_EMAIL = 'e2e.admin.guardian@example.org';
+
+    public const string PLAIN_GUARDIAN_PASSWORD = 'e2e-admin-guardian-password-not-a-secret';
+
+    public const string PLAIN_GUARDIAN_SECRET = '4HFMO76JYHG4I4F6ZX5ODMD4HGNABX3F';
+
+    /** An ordinary active Account the step-up journey disables. It holds no access. */
+    public const string STALE_TARGET_EMAIL = 'e2e.admin.target@example.org';
+
+    public const string STALE_TARGET_PASSWORD = 'e2e-admin-target-password-not-a-secret';
+
+    /** A Console user with a known second factor, whose second factor the recovery journey resets. */
+    public const string RECOVER_TARGET_EMAIL = 'e2e.admin.recovertarget@example.org';
+
+    public const string RECOVER_TARGET_PASSWORD = 'e2e-admin-recovertarget-password-not-a-secret';
+
+    public const string RECOVER_TARGET_SECRET = 'MOUYMASSFUZOSF2XUTWSGM7XYTNSZYWX';
+
     public function run(
         AccountRepository $accounts,
         PersonRepository $people,
@@ -162,6 +210,7 @@ final class E2eAccountSeeder extends Seeder
         // A Console user needs a second factor: enrolled with a known secret (idempotent: reset every run).
         $totp($account->id, self::GUARDIAN_SECRET, self::recoveryCodes('G'));
 
+        $this->resetAdministrationFixtures($accounts, $people, $hasher, $consoleUser, $totp, $now);
         $this->resetCredentialFixtures($accounts, $people, $invitations, $hasher, $consoleUser, $now);
         $this->resetConsoleFixtures($accounts, $people, $invitations, $hasher, $consoleUser, $totp, $now);
     }
@@ -218,6 +267,41 @@ final class E2eAccountSeeder extends Seeder
             $consoleUser($account->personId);
             $totp($account->id, $secret, self::recoveryCodes($tag));
         }
+    }
+
+    /**
+     * The people the administration journeys (e2e/administration.spec.ts) act as and on. Everyone is recreated on every run.
+     * Administrators come from Access ("a Console administrator"), and this seeder still names no role.
+     */
+    private function resetAdministrationFixtures(
+        AccountRepository $accounts,
+        PersonRepository $people,
+        Hasher $hasher,
+        ConsoleUserFixture $consoleUser,
+        EnrollTotpFixture $totp,
+        DateTimeImmutable $now,
+    ): void {
+        foreach ([
+            [self::ADMIN_READ_EMAIL, 'E2E Admin Read', self::ADMIN_READ_PASSWORD, self::ADMIN_READ_SECRET, 'H'],
+            [self::ADMIN_STALE_EMAIL, 'E2E Admin Stale', self::ADMIN_STALE_PASSWORD, self::ADMIN_STALE_SECRET, 'J'],
+            [self::ADMIN_STORY_EMAIL, 'E2E Admin Story', self::ADMIN_STORY_PASSWORD, self::ADMIN_STORY_SECRET, 'N'],
+            [self::ADMIN_RECOVER_EMAIL, 'E2E Admin Recover', self::ADMIN_RECOVER_PASSWORD, self::ADMIN_RECOVER_SECRET, 'Q'],
+        ] as [$email, $name, $password, $secret, $tag]) {
+            $account = $this->activeAccount($accounts, $people, $hasher, $now, $email, $name, $password);
+            $consoleUser->administrator($account->personId);
+            $totp($account->id, $secret, self::recoveryCodes($tag));
+        }
+
+        foreach ([
+            [self::PLAIN_GUARDIAN_EMAIL, 'E2E Plain Guardian', self::PLAIN_GUARDIAN_PASSWORD, self::PLAIN_GUARDIAN_SECRET, 'S'],
+            [self::RECOVER_TARGET_EMAIL, 'E2E Recover Target', self::RECOVER_TARGET_PASSWORD, self::RECOVER_TARGET_SECRET, 'T'],
+        ] as [$email, $name, $password, $secret, $tag]) {
+            $account = $this->activeAccount($accounts, $people, $hasher, $now, $email, $name, $password);
+            $consoleUser($account->personId);
+            $totp($account->id, $secret, self::recoveryCodes($tag));
+        }
+
+        $this->activeAccount($accounts, $people, $hasher, $now, self::STALE_TARGET_EMAIL, 'E2E Stale Target', self::STALE_TARGET_PASSWORD);
     }
 
     /** An active Account with a known password, created afresh (a previous run's copy is removed first). */

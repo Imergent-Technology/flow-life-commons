@@ -17,6 +17,7 @@ vendor/
 dist/
 
 # Test / tooling output
+apps/guardian-console/e2e/.fixtures/
 coverage/
 test-results/
 playwright-report/

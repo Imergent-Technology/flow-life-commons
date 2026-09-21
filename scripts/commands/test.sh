@@ -86,10 +86,18 @@ test_e2e() {
     if ! [[ "$attempts" =~ ^[0-9]+$ ]] || ((attempts < 100)); then
         die "e2e signs in many times from one address, but the platform allows only '${attempts:-unset}' attempts per address per window. Set IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP=200 in apps/platform/.env (see .env.example) and retry."
     fi
+    step "Migrating the development database (a newer schema than the stack was built with would fail the seed)"
+    php_run php artisan migrate --force --no-interaction
     step "Seeding the e2e fixture account (development only)"
     # A known active Account to sign in as, and a cleared cache so login throttle counters
     # left by earlier runs cannot make this one flaky. Both are development data.
     php_run php artisan db:seed --class=E2eAccountSeeder --force --no-interaction
+    # Legitimately authenticated sessions for the journeys that are not about signing in (development only). They are minted
+    # by the platform's own sign-in, in-process, so no journey spends the public login rate budget just to get started. The
+    # file holds live (if worthless) session cookies: it is git-ignored, and rewritten on every run.
+    php_run php artisan db:seed --class=E2eSessionSeeder --force --no-interaction
+    mkdir -p apps/guardian-console/e2e/.fixtures
+    cp apps/platform/storage/app/private/e2e-sessions.json apps/guardian-console/e2e/.fixtures/sessions.json
     php_run php artisan cache:clear --no-interaction
     step "E2E tests (Playwright, chromium)"
     dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test "$@"

@@ -1,6 +1,13 @@
 import { createHmac } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 
-import { expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
+import {
+  expect,
+  type APIRequestContext,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from '@playwright/test'
 
 // Helpers shared by the browser journeys. Nothing here is a test.
 
@@ -179,4 +186,74 @@ export async function apiFrom(
     },
     { method, path, body, token },
   )
+}
+
+// --- sessions the platform itself minted (apps/platform/database/seeders/E2eSessionSeeder.php) --------------------
+
+/** The sessions `./flow test e2e` mints before the run, one per journey that needs one. */
+export type FixtureSession =
+  'admin-read' | 'admin-stale' | 'admin-story' | 'admin-recover' | 'plain-guardian'
+
+interface MintedSession {
+  session: string
+  xsrf: string
+}
+
+/**
+ * A page that is ALREADY signed in, for journeys that are about something other than signing in. The platform minted the
+ * session by its own login and second-factor challenge (in-process, with a known Account and a single-use recovery code),
+ * so it is exactly what a browser signing in would hold: it is not a shortcut around the platform's checks, only around
+ * spending the public login rate budget on set-up. Journeys about signing in itself (invitation, enrolment, the challenge)
+ * still do it for real, in the browser.
+ *
+ * Chromium will not have a Secure `__Host-` cookie injected for an http address, but accepts it for the same host addressed
+ * as https, and then sends it to the http origin the Console is served from (as it does the one the server sets itself).
+ */
+export async function signedInAs(
+  browser: Browser,
+  baseURL: string,
+  name: FixtureSession,
+): Promise<Page> {
+  const all = JSON.parse(readFileSync('e2e/.fixtures/sessions.json', 'utf8')) as Record<
+    string,
+    MintedSession
+  >
+  const fixture = all[name]
+  if (fixture === undefined)
+    throw new Error(`No minted session named ${name}. Run ./flow test e2e.`)
+
+  const context = await browser.newContext({ baseURL })
+  await context.addCookies([
+    {
+      name: SESSION_COOKIE,
+      value: fixture.session,
+      url: `https://${new URL(baseURL).host}`,
+      secure: true,
+      httpOnly: true,
+      sameSite: 'Lax',
+    },
+  ])
+  return context.newPage()
+}
+
+/** The invitation the platform mailed to an address: the whole link (with the token in its fragment), once it arrives. */
+export async function invitationEmailedTo(
+  request: APIRequestContext,
+  baseURL: string,
+  email: string,
+): Promise<{ link: string; token: string; text: string }> {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const ids = await messageIdsTo(request, baseURL, email)
+    const id = ids[0]
+    if (id !== undefined) {
+      const message = await mailpit(request, baseURL, `/api/v1/message/${id}`)
+      const text = ((await message.json()) as { Text: string }).Text
+      const found = /(https?:\/\/\S+\/accept-invitation#token=([A-Za-z0-9_-]{43}))/.exec(text)
+      if (found?.[1] !== undefined && found[2] !== undefined) {
+        return { link: found[1], token: found[2], text }
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  throw new Error(`No invitation email arrived for ${email}.`)
 }
