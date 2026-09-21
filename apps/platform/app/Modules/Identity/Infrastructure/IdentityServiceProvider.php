@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Identity\Infrastructure;
 
 use App\Modules\Identity\Application\AccountDeactivationGuard;
+use App\Modules\Identity\Application\AccountDirectory;
 use App\Modules\Identity\Application\AccountSessions;
 use App\Modules\Identity\Application\ActiveAccountQuery;
 use App\Modules\Identity\Application\AttemptThrottle;
@@ -38,6 +39,7 @@ use App\Modules\Identity\Infrastructure\Mfa\LaravelTotpSecretCipher;
 use App\Modules\Identity\Infrastructure\Mfa\OtphpTotpAuthenticator;
 use App\Modules\Identity\Infrastructure\Password\NoCompromisedPasswordCheck;
 use App\Modules\Identity\Infrastructure\Password\PwnedPasswordsRange;
+use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountDirectory;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountSessions;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseActiveAccountQuery;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseRecoveryCodeRepository;
@@ -69,6 +71,7 @@ final class IdentityServiceProvider extends ServiceProvider
         InvitationNotifier::class => MailInvitationNotifier::class,
         ActiveAccountQuery::class => DatabaseActiveAccountQuery::class,
         AccountSessions::class => DatabaseAccountSessions::class,
+        AccountDirectory::class => DatabaseAccountDirectory::class,
         // A default that grants nothing. The Access module registers its own over this.
         EffectiveCapabilities::class => NoEffectiveCapabilities::class,
         // Multi-factor authentication (ADR 0023). The policy default FAILS CLOSED (everyone is asked for a

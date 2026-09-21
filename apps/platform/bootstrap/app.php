@@ -3,13 +3,24 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\AccessDenied;
+use App\Modules\Access\Application\AccountNotDisabled;
+use App\Modules\Access\Application\LastAdministratorRequired;
+use App\Modules\Access\Application\MfaNotEnrolled;
+use App\Modules\Access\Application\UnknownPerson;
+use App\Modules\Access\Application\UnknownRole;
+use App\Modules\Access\Http\AdministrationProblems;
+use App\Modules\Identity\Application\AccountNotFound;
 use App\Modules\Identity\Application\CompromisedPasswordCheckUnavailable;
 use App\Modules\Identity\Application\CurrentPasswordIncorrect;
+use App\Modules\Identity\Application\EmailAlreadyInUse;
+use App\Modules\Identity\Application\InvalidInvitationDetails;
+use App\Modules\Identity\Application\InvitationNotIssuable;
 use App\Modules\Identity\Application\InvitationRejected;
 use App\Modules\Identity\Application\NoLongerAuthenticated;
 use App\Modules\Identity\Application\PasswordRejected;
 use App\Modules\Identity\Application\ResetRejected;
 use App\Modules\Identity\Application\SecondFactorRejected;
+use App\Modules\Identity\Application\SelfMfaResetProhibited;
 use App\Modules\Identity\Application\TooManyAttempts;
 use App\Modules\Identity\Http\CredentialProblems;
 use App\Modules\Identity\Http\EnforceAbsoluteSessionLifetime;
@@ -79,6 +90,17 @@ return Application::configure(basePath: dirname(__DIR__))
         // Access's Application layer may not use Laravel's HTTP or auth machinery, so it
         // throws its own AccessDenied; this is the edge that turns it into a 403.
         $exceptions->render(fn (AccessDenied $e, Request $request) => response()->json(['message' => $e->getMessage()], 403));
+        // Operator administration (ADR 0024): each refusal has a stable `code`, so the Console never parses a sentence.
+        $exceptions->render(fn (AccountNotFound $e) => AdministrationProblems::notFound());
+        $exceptions->render(fn (UnknownPerson $e) => AdministrationProblems::notFound());
+        $exceptions->render(fn (LastAdministratorRequired $e) => AdministrationProblems::conflict('last_administrator_required', $e->getMessage()));
+        $exceptions->render(fn (AccountNotDisabled $e) => AdministrationProblems::conflict('account_not_disabled', $e->getMessage()));
+        $exceptions->render(fn (EmailAlreadyInUse $e) => AdministrationProblems::conflict('email_already_in_use', 'An account already uses that email address.'));
+        $exceptions->render(fn (InvitationNotIssuable $e) => AdministrationProblems::conflict('invitation_not_issuable', $e->getMessage()));
+        $exceptions->render(fn (MfaNotEnrolled $e) => AdministrationProblems::conflict('mfa_not_enrolled', $e->getMessage()));
+        $exceptions->render(fn (UnknownRole $e) => AdministrationProblems::invalid('unknown_role', 'key', $e->getMessage()));
+        $exceptions->render(fn (SelfMfaResetProhibited $e) => AdministrationProblems::invalid('self_mfa_reset_prohibited', 'account', $e->getMessage()));
+        $exceptions->render(fn (InvalidInvitationDetails $e) => AdministrationProblems::invalidDetails($e));
         // The same for Identity's credential endpoints: Application throws, this is the wire format.
         $exceptions->render(fn (PasswordRejected $e) => CredentialProblems::passwordRejected($e));
         $exceptions->render(fn (CompromisedPasswordCheckUnavailable $e) => CredentialProblems::checkUnavailable());

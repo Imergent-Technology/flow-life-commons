@@ -7,7 +7,6 @@ use App\Modules\Identity\Application\InvitationDetails;
 use App\Modules\Identity\Application\InvitationNotIssuable;
 use App\Modules\Identity\Application\InviteAccount;
 use App\Modules\Identity\Application\ReissueInvitation;
-use App\Modules\Identity\Domain\InvitationChannel;
 use App\Shared\Domain\AccountId;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Carbon;
@@ -18,7 +17,7 @@ use Tests\Support\Identity;
 use Tests\Support\Invitations;
 
 it('issues a fresh invitation, and the old token stops working', function () {
-    $first = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $first = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     $second = app(ReissueInvitation::class)($first->accountId);
 
@@ -36,7 +35,7 @@ it('issues a fresh invitation, and the old token stops working', function () {
 
 it('preserves the Account and the Person, and records who reissued it', function () {
     $admin = Access::admin('admin@example.org');
-    $first = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $first = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     app(ReissueInvitation::class)($first->accountId, Access::actorFor($admin));
 
@@ -51,7 +50,7 @@ it('preserves the Account and the Person, and records who reissued it', function
 });
 
 it('replaces an EXPIRED invitation with a usable one', function () {
-    $first = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $first = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
     Carbon::setTestNow(now()->addDays(8));
 
     Invitations::accept($first->revealToken())->assertStatus(422);
@@ -89,7 +88,7 @@ it('fails for an unknown Account', function () {
 });
 
 it('rolls the whole reissue back when its audit write fails: the old invitation is still there', function () {
-    $first = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $first = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
     Faults::auditFailsAt(1);
 
     expect(fn () => app(ReissueInvitation::class)($first->accountId))->toThrow(RuntimeException::class)
@@ -100,7 +99,7 @@ it('takes the invitation locks BEFORE the Account lock: the order acceptance tak
     // Acceptance locks the invitation, then the Account. A reissue that locked the Account first could wait on an
     // acceptance that is itself waiting for the Account, and the database would have to kill one of them. The
     // outcome of a race cannot show this (the Account lock alone serialises the outcomes), so the ORDER is pinned.
-    $first = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $first = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
     $locking = [];
     DB::listen(function (QueryExecuted $query) use (&$locking): void {
         if (preg_match('/\bfrom\s+["`]?(account_invitations|accounts)["`]?.*\bfor update\b/is', $query->sql, $m) === 1) {

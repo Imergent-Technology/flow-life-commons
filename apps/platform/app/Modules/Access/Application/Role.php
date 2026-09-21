@@ -35,6 +35,23 @@ enum Role: string
         };
     }
 
+    /** What an operator sees in the role list. Access owns the words; the Console renders whatever it is told. */
+    public function displayName(): string
+    {
+        return match ($this) {
+            self::PlatformAdministrator => 'Platform administrator',
+            self::Guardian => 'Guardian',
+        };
+    }
+
+    public function description(): string
+    {
+        return match ($this) {
+            self::PlatformAdministrator => 'Everything the platform can do, including administering other people\'s access.',
+            self::Guardian => 'May use the Guardian Console. Nothing more yet.',
+        };
+    }
+
     public function grants(Capability $capability): bool
     {
         return in_array($capability, $this->capabilities(), true);

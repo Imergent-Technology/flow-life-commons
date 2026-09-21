@@ -66,6 +66,16 @@ final class Console
     }
 
     /**
+     * @param  array<string, mixed>  $data
+     * @param  array<string, string>  $headers
+     * @return TestResponse<Response>
+     */
+    public function delete(string $path, array $data = [], array $headers = []): TestResponse
+    {
+        return $this->send('DELETE', $path, $data, $headers);
+    }
+
+    /**
      * Gets a session and CSRF cookie the way the Console does before signing in.
      *
      * @return TestResponse<Response>

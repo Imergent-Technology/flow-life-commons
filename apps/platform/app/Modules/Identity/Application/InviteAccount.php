@@ -35,9 +35,9 @@ use Illuminate\Database\ConnectionInterface;
  * - An email address already in use fails cleanly and touches nothing: it never repurposes or
  *   merges an existing Account.
  * - Nothing is sent from here: delivery is DeliverInvitation's, after the transaction that created this has
- *   committed. `$channel` says how the token WILL reach its holder, and is what decides whether accepting it shows
- *   mailbox control (ADR 0024): EMAIL only for a caller that then mails it to the address. The bootstrap hands
- *   the token to a server operator and so keeps the default, OPERATOR.
+ *   committed. The method chosen says how the token WILL reach its holder, and decides whether accepting it shows
+ *   mailbox control (ADR 0024): `byEmail` only for a caller that then mails it to the address. The bootstrap hands
+ *   the token to a server operator and so uses the plain invocation.
  *
  * **This use case does not authorize its caller.** Identity cannot ask Access what a caller may
  * do. Whichever adapter exposes it must decide who may invite first: the administrator bootstrap command
@@ -55,9 +55,29 @@ final readonly class InviteAccount
     ) {}
 
     /**
+     * An invitation whose token an OPERATOR hands over (the administrator bootstrap): accepting it shows nothing
+     * about the mailbox.
+     *
      * @throws EmailAlreadyInUse
      */
-    public function __invoke(InvitationDetails $details, ?Actor $invitedBy = null, InvitationChannel $channel = InvitationChannel::Operator): IssuedInvitation
+    public function __invoke(InvitationDetails $details, ?Actor $invitedBy = null): IssuedInvitation
+    {
+        return $this->issue($details, $invitedBy, InvitationChannel::Operator);
+    }
+
+    /**
+     * An invitation the platform WILL MAIL to the address (DeliverInvitation, after the commit): accepting it shows the
+     * holder reached that mailbox. Only a caller that then delivers it by email may use this. The channel is a Domain
+     * concept, so callers in other modules choose it by which method they call, never by naming it.
+     *
+     * @throws EmailAlreadyInUse
+     */
+    public function byEmail(InvitationDetails $details, ?Actor $invitedBy = null): IssuedInvitation
+    {
+        return $this->issue($details, $invitedBy, InvitationChannel::Email);
+    }
+
+    private function issue(InvitationDetails $details, ?Actor $invitedBy, InvitationChannel $channel): IssuedInvitation
     {
         $ttlDays = max(1, $this->config->integer('identity.invitation.ttl_days'));
 

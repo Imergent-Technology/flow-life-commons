@@ -16,9 +16,10 @@ info:
     **Implemented so far:** infrastructure health, Guardian Console session
     authentication (`login`, `logout`, `me`), capability-based authorization
     (see below), and the credential lifecycle (invitation acceptance, password
-    recovery and password change), and multi-factor authentication (authenticator
+    recovery and password change), multi-factor authentication (authenticator
     enrolment, the sign-in challenge, recovery codes and recent-verification
-    step-up). No endpoint changes role assignments yet.
+    step-up), and **operator administration** (`/admin/...`: Accounts, invitations, role
+    assignments, disable and re-enable, and recovery of a lost second factor).
 
 
     ## Authorization
@@ -26,8 +27,11 @@ info:
 
     What a person may do is a set of **capabilities** (for example `console.access`),
     bundled into roles that are assigned to people. Capabilities are named by
-    identifier; **role names are never exposed** and must never be used to decide what
-    to show or do. The platform evaluates capabilities against the person's *current*
+    identifier. **Role names are never used to decide what to show or do**: `GET /me` and
+    every other endpoint a caller's own access depends on speak only in capabilities. The
+    one place roles appear is operator administration (`/admin/roles`, and the
+    `assignments` an administered account holds), where they are *data being administered*,
+    served by Access, that the Console renders and never interprets. The platform evaluates capabilities against the person's *current*
     assignments on every request: a revoked role takes effect on the next request with no
     new sign-in, and nothing about them is stored in the session or accepted from the
     client. A signed-in account without a capability receives `403`.
@@ -113,7 +117,38 @@ info:
       `security_verified_at` on the session (`GET /me` reports `mfa.security_verified_until`).
       A route that demands it answers `403` with `verification_required: true` when the last
       proof is older than 15 minutes, and the caller re-proves with `POST /security/verify`.
-      No route requires it yet; it is the seam for the administration that follows.
+      **Every mutation under `/admin` requires it** (operator administration, below).
+
+
+    ## Operator administration
+
+
+    `/admin/...` is the first surface that can alter another person's access (ADR 0024). It is
+    inside the Console boundary (`console.access`, which already requires a second factor) and
+    every operation is decided by **two independent checks**:
+
+    - **A capability**, from Access, evaluated against current persisted state on every request:
+      `identity.accounts.view` (list and inspect, and the role catalog),
+      `identity.accounts.manage` (disable and re-enable), `identity.invitations.issue` (invite,
+      and issue a fresh invitation), `identity.mfa.recover` (reset another account's second
+      factor) and `access.roles.assign` (grant and revoke roles). A signed-in caller without it
+      receives `403` **before** being asked to prove anything.
+
+    - **Recent verification** for every mutation (not for reads): `403` with
+      `verification_required: true` until the caller re-proves password and a second factor
+      (`POST /security/verify`) within 15 minutes. A client re-proves and then asks again
+      deliberately; nothing is retried on its behalf.
+
+
+    Refusals the Console must tell apart carry a stable `code` (`409` and `422`):
+    `last_administrator_required`, `email_already_in_use`, `invitation_not_issuable`,
+    `account_not_disabled`, `mfa_not_enrolled`, `self_mfa_reset_prohibited`, `unknown_role`,
+    `invalid_invitation_details`, `account_not_found`.
+
+
+    An administered account is shown with administration-relevant fields only; **never** a
+    password or hash, a factor secret or recovery code, an invitation token, a session id or
+    anything from the audit trail.
 
 
     ## Passwords
@@ -323,12 +358,14 @@ paths:
         of the account wins; acceptance never re-enables it.
 
 
-        Acceptance does **not** verify the email address. `email_verified_at` means the
-        platform has evidence the holder controls the mailbox, and choosing a password is not
-        that. An invitation whose token an operator handed over (the administrator bootstrap)
-        says nothing about the mailbox, so its account becomes active with the email still
-        unverified; it can sign in all the same, because nothing makes verification a
-        condition of signing in.
+        Whether acceptance verifies the email address depends on **how the invitation was
+        delivered**, which is fixed when it is issued. `email_verified_at` means the platform has
+        evidence the holder controls the mailbox. An invitation the platform **emailed** to the
+        address (operator administration) is that evidence, so accepting it sets
+        `email_verified_at`. An invitation whose token an operator handed over (the
+        administrator bootstrap) says nothing about the mailbox, so its account becomes active
+        with the email still **unverified**; it can sign in all the same, because nothing
+        makes verification a condition of signing in.
 
 
         Limited by source address (see `429`).
@@ -978,6 +1015,545 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+  /admin/accounts:
+    get:
+      operationId: listManagedAccounts
+      summary: List Accounts
+      description: >-
+        Needs `identity.accounts.view`. A modest, bounded page (25 by default, at most 100) ordered by
+        display name, optionally narrowed by a plain fragment `q` of the email or name (a `%` or `_` is a
+        character, not a wildcard) and by `status`. There is no query language. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.accounts.view
+      x-requires-recent-verification: false
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1}
+        - name: per_page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 100}
+        - name: status
+          in: query
+          schema: {type: string, enum: [invited, active, disabled]}
+      responses:
+        '200':
+          description: A page of Accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccountPage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: A malformed `page`, `per_page` or `status`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+  /admin/accounts/{account}:
+    get:
+      operationId: getManagedAccount
+      summary: Inspect an Account
+      description: >-
+        Needs `identity.accounts.view`. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.accounts.view
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: The Account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccount'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/roles:
+    get:
+      operationId: listRoleCatalog
+      summary: List the system roles
+      description: >-
+        Needs `identity.accounts.view`. The role catalog, **from Access**: a stable key, words for a screen,
+        and the capabilities the role grants (informational). The Console renders this as data and
+        defines no role of its own. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.accounts.view
+      x-requires-recent-verification: false
+      responses:
+        '200':
+          description: The system roles.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleCatalog'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+  /admin/invitations:
+    post:
+      operationId: inviteOperator
+      summary: Invite a new operator
+      description: >-
+        Needs `identity.invitations.issue` (and `access.roles.assign` when roles are chosen) **and recent
+        verification**. In one transaction it creates a Person, an *invited* Account with no password, a
+        single-use expiring invitation and any initial role assignments (each audited); if any part fails
+        none remains and nothing is mailed. The invitation is then **emailed to the address, after the commit
+        and outside it**, with the secret in the URL *fragment* of a link to the Console.
+
+
+        **`201` means the Account exists**, whether or not the message could be sent: `delivery.status` is
+        `sent` or `failed`. On `failed` the state stays committed and the remedy is
+        `POST /admin/accounts/{account}/invitation`. The response **never** contains the invitation secret.
+        Accepting an emailed invitation verifies the email address. An Account with no role can be created; it
+        simply cannot enter the Console.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.invitations.issue
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteOperatorRequest'
+      responses:
+        '201':
+          description: The Account, and whether the invitation was sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResult'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '409':
+          description: 'An account already uses that address (`code: email_already_in_use`). Nothing was changed or sent.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: An invalid address or name (`invalid_invitation_details`), an unknown role key (`unknown_role`), or a malformed request. Nothing was changed or sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedValidationError'
+  /admin/accounts/{account}/invitation:
+    post:
+      operationId: reissueInvitation
+      summary: Issue a fresh invitation
+      description: >-
+        Needs `identity.invitations.issue` **and recent verification**. For an Account that is still *invited*
+        (its invitation expired, the message was lost, or delivery failed): deletes every unaccepted invitation
+        of the Account and issues one fresh one, emailed after the commit, so exactly one is ever usable.
+        Never for an active Account (`409 invitation_not_issuable`). The secret is never returned.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.invitations.issue
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The Account, and whether the new invitation was sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResult'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The Account is not invited (`invitation_not_issuable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/accounts/{account}/disable:
+    post:
+      operationId: disableAccount
+      summary: Disable an Account
+      description: >-
+        Needs `identity.accounts.manage` **and recent verification**. Takes the Account out of service through
+        the existing safe path: every session ends, and the Person, role assignments and history are kept.
+        Refused for the last active administrator (`409 last_administrator_required`). Disabling an Account
+        that is already disabled succeeds and changes nothing.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.accounts.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The Account, now disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccount'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The platform must keep at least one active administrator (`last_administrator_required`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/accounts/{account}/enable:
+    post:
+      operationId: enableAccount
+      summary: Re-enable an Account
+      description: >-
+        Needs `identity.accounts.manage` **and recent verification**. Puts a *disabled* Account back where it was
+        (`active` if it ever chose a password, `invited` if it did not). It creates **no session**, sets no
+        password, changes no role and does **not** bypass MFA: the person still signs in with their password and
+        a second factor. An Account that is not disabled is refused (`409 account_not_disabled`).
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.accounts.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The Account, back in service.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccount'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The Account is not disabled (`account_not_disabled`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/accounts/{account}/mfa/reset:
+    post:
+      operationId: resetAccountMfa
+      summary: Reset another Account's second factor
+      description: >-
+        Needs `identity.mfa.recover` **and recent verification**. For a person who has lost their authenticator
+        and every recovery code: removes the Account's authenticator (active or pending) and every recovery code and
+        ends every session of the Account. The password, status, roles and Person are untouched; **no secret is
+        generated and no code is shown**. At their next password sign-in the person enrols a new authenticator.
+
+
+        **Never the caller's own Account** (`422 self_mfa_reset_prohibited`): someone who still holds a factor
+        replaces it themselves, and one who lost everything is recovered by another administrator or by the server
+        command `identity:reset-mfa`. It is not a way to remove administrator authority, so the last-administrator
+        rule is not involved.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.mfa.recover
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The Account, with no second factor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccount'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: There was nothing to reset (`mfa_not_enrolled`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: The target is the acting Account (`self_mfa_reset_prohibited`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedValidationError'
+  /admin/accounts/{account}/assignments:
+    post:
+      operationId: grantRole
+      summary: Grant a system role
+      description: >-
+        Needs `access.roles.assign` **and recent verification**. Grants a role from the catalog to the Person behind
+        the Account, through the same use case as everywhere else: audited, and idempotent (granting a role already
+        held changes and records nothing). The client names a **key**; it can never name a capability, and an unknown
+        key is refused (`422 unknown_role`).
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: access.roles.assign
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantRoleRequest'
+      responses:
+        '200':
+          description: The Account with its current assignments.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccount'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: An unknown role key (`unknown_role`) or a malformed request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedValidationError'
+  /admin/accounts/{account}/assignments/{key}:
+    delete:
+      operationId: revokeRole
+      summary: Revoke a system role
+      description: >-
+        Needs `access.roles.assign` **and recent verification**. Removes a role from the Person behind the Account,
+        audited; revoking a role not held succeeds and changes nothing. Revoking `platform_administrator` from the last
+        active administrator is refused (`409 last_administrator_required`).
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: access.roles.assign
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - name: key
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The Account with its current assignments.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedAccount'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The platform must keep at least one active administrator (`last_administrator_required`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: An unknown role key (`unknown_role`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedValidationError'
 components:
   securitySchemes:
     sessionCookie:
@@ -988,6 +1564,14 @@ components:
         Same-origin, host-only session cookie (ADR 0016). Not readable by scripts.
         Bounded by 30 minutes of request inactivity and a 12-hour absolute lifetime.
   parameters:
+    AccountId:
+      name: account
+      in: path
+      required: true
+      description: An Account's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
     XsrfToken:
       name: X-XSRF-TOKEN
       in: header
@@ -1036,6 +1620,159 @@ components:
             type: array
             items:
               type: string
+    CodedMessage:
+      type: object
+      required: [message, code]
+      properties:
+        message:
+          type: string
+        code:
+          type: string
+          description: A stable, machine-readable reason. Clients branch on this, never on `message`.
+    CodedValidationError:
+      type: object
+      required: [message, code, errors]
+      properties:
+        message:
+          type: string
+        code:
+          type: string
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    VerificationRequiredOrDenied:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        verification_required:
+          type: boolean
+          description: Present and `true` when the account holds the capability but its proof is stale.
+    ManagedAccount:
+      type: object
+      description: >-
+        An Account as an operator administers it. Administration-relevant fields only: never a password or hash,
+        a factor secret or recovery code, an invitation token, a session id or audit content.
+      required: [id, person_id, display_name, email, email_verified_at, status, created_at, last_login_at, disabled_at, mfa, invitation, assignments]
+      properties:
+        id: {type: string}
+        person_id: {type: string}
+        display_name: {type: string}
+        email: {type: string}
+        email_verified_at:
+          type: [string, 'null']
+          format: date-time
+          description: When the platform first had evidence the holder controls the mailbox (accepting an emailed invitation). Null otherwise.
+        status:
+          type: string
+          enum: [invited, active, disabled]
+        created_at: {type: string, format: date-time}
+        last_login_at: {type: [string, 'null'], format: date-time}
+        disabled_at: {type: [string, 'null'], format: date-time}
+        mfa:
+          type: object
+          required: [enrolled, recovery_codes_remaining]
+          properties:
+            enrolled: {type: boolean}
+            recovery_codes_remaining: {type: integer}
+        invitation:
+          description: The outstanding (never accepted) invitation, or null.
+          type: [object, 'null']
+          required: [expires_at, expired, delivery]
+          properties:
+            expires_at: {type: string, format: date-time}
+            expired: {type: boolean}
+            delivery:
+              type: string
+              enum: [email, operator]
+              description: How it reached its holder. Only an `email` invitation verifies the email when accepted.
+        assignments:
+          type: array
+          description: What the Account's Person holds, as catalog data from Access. For display; the Console never decides from it.
+          items:
+            type: object
+            required: [key, name, description, granted_at]
+            properties:
+              key: {type: string}
+              name: {type: string}
+              description: '{type: string}'
+              granted_at: {type: string, format: date-time}
+    ManagedAccountPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ManagedAccount'
+        meta:
+          type: object
+          required: [page, per_page, total, last_page]
+          properties:
+            page: {type: integer}
+            per_page: {type: integer}
+            total: {type: integer}
+            last_page: {type: integer}
+    RoleCatalog:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required: [key, name, description, capabilities]
+            properties:
+              key: {type: string}
+              name: {type: string}
+              description: '{type: string}'
+              capabilities:
+                type: array
+                description: Informational. Nothing decides from this but Access.
+                items: {type: string}
+    InviteOperatorRequest:
+      type: object
+      required: [email, display_name]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+        display_name:
+          type: string
+          maxLength: 200
+        initial_assignments:
+          type: array
+          maxItems: 10
+          description: Role keys from `GET /admin/roles`. Optional; none is required for the Account to be created.
+          items: {type: string, maxLength: 64}
+    GrantRoleRequest:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          maxLength: 64
+          description: A role key from `GET /admin/roles`. A capability cannot be named here.
+    InvitationResult:
+      type: object
+      required: [account, delivery]
+      properties:
+        account:
+          $ref: '#/components/schemas/ManagedAccount'
+        delivery:
+          type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [sent, failed]
+              description: >-
+                Whether the mail system accepted the message. `failed` leaves the Account and its invitation committed;
+                issue a fresh invitation. The secret is never in this response.
     LoginRequest:
       type: object
       required: [email, password]

@@ -290,8 +290,10 @@ it('gives a password-only session no way to replace or regenerate anything', fun
 
 it('gives no way to switch multi-factor authentication off', function () {
     // The absence of a route is the property: there is no disable, remove, reset or delete endpoint, and
-    // nothing under /mfa or /security accepts anything but POST.
+    // nothing under /mfa or /security accepts anything but POST. This is about a person's OWN factor: the
+    // administrative reset of ANOTHER account's is a different, capability-guarded route (ADR 0024), pinned below.
     $routes = collect(app('router')->getRoutes()->getRoutes())
+        ->filter(fn ($route) => ! str_starts_with($route->uri(), 'api/v1/admin/'))
         ->filter(fn ($route) => str_contains($route->uri(), '/mfa') || str_contains($route->uri(), '/security'));
 
     expect($routes)->not->toBeEmpty();
@@ -304,4 +306,10 @@ it('gives no way to switch multi-factor authentication off', function () {
     foreach (['/api/v1/mfa/disable', '/api/v1/mfa/authenticator/disable', '/api/v1/mfa/reset'] as $path) {
         $console->post($path)->assertNotFound();
     }
+
+    // The one route that removes a factor is another person's, needs a capability and recent verification, and
+    // has no counterpart for the caller's own account.
+    $reset = collect(app('router')->getRoutes()->getRoutes())->filter(fn ($route) => str_contains($route->uri(), 'mfa/reset'));
+    expect($reset->map(fn ($route) => $route->uri())->values()->all())->toBe(['api/v1/admin/accounts/{account}/mfa/reset'])
+        ->and($reset->first()?->gatherMiddleware())->toContain('security.verified', 'can:identity.mfa.recover');
 });

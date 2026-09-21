@@ -22,6 +22,7 @@ declare(strict_types=1);
  *   php worker.php mfa_reset '{"account":"..."}'
  *   php worker.php security_verify '{"account":"...","person":"...","password":"...","code":"..."}'
  *   php worker.php replace_begin '{"account":"...","person":"...","password":"...","code":"..."}'
+ *   php worker.php managed_disable '{"actor_account":"...","actor_person":"...","account":"..."}'
  *   php worker.php enable '{"account":"..."}'
  *   php worker.php reissue '{"account":"..."}'
  *   php worker.php invite '{"email":"...","name":"..."}'
@@ -31,6 +32,7 @@ declare(strict_types=1);
  * database whose name does not end in "_test".
  */
 
+use App\Modules\Access\Application\DisableManagedAccount;
 use App\Modules\Access\Application\RevokeRole;
 use App\Modules\Access\Application\Role;
 use App\Modules\Identity\Application\AcceptInvitation;
@@ -56,7 +58,6 @@ use App\Modules\Identity\Application\SecondFactorProof;
 use App\Modules\Identity\Application\VerifySecurityAccess;
 use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\EmailAddress;
-use App\Modules\Identity\Domain\InvitationChannel;
 use App\Modules\Identity\Domain\InvitationToken;
 use App\Modules\Identity\Domain\RecoveryCodeRepository;
 use App\Shared\Domain\AccountId;
@@ -154,6 +155,11 @@ try {
             Actor::user(AccountId::fromString($arg('account')), PersonId::fromString($arg('person'))),
             $arg('password'), SecondFactorProof::totp($arg('code')), new ClientContext('127.0.0.1', 'worker'),
         );
+    } elseif ($operation === 'managed_disable') {
+        $app->make(DisableManagedAccount::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            AccountId::fromString($arg('account')),
+        );
     } elseif ($operation === 'enable') {
         if ($app->make(EnableAccount::class)(AccountId::fromString($arg('account'))) !== ReactivationOutcome::Enabled) {
             throw new RuntimeException('the account was not disabled');
@@ -161,7 +167,7 @@ try {
     } elseif ($operation === 'reissue') {
         $app->make(ReissueInvitation::class)(AccountId::fromString($arg('account')));
     } elseif ($operation === 'invite') {
-        $app->make(InviteAccount::class)(InvitationDetails::from($arg('email'), $arg('name')), null, InvitationChannel::Email);
+        $app->make(InviteAccount::class)->byEmail(InvitationDetails::from($arg('email'), $arg('name')));
     } elseif ($operation === 'lock_invitation') {
         // Just takes and releases the invitation row lock: it finishes only once it has been granted.
         DB::transaction(fn () => $app->make(AccountInvitationRepository::class)->findByTokenForUpdate(InvitationToken::fromPresented($arg('token'))));

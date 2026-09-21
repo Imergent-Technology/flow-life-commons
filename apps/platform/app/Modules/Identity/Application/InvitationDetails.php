@@ -34,7 +34,7 @@ final readonly class InvitationDetails
         } catch (InvalidEmailAddress) {
             throw new InvalidInvitationDetails('That is not a valid email address (printable ASCII; internationalised domains as punycode).');
         } catch (InvalidArgumentException) {
-            throw new InvalidInvitationDetails('A display name must be 1 to '.Person::MAX_DISPLAY_NAME_LENGTH.' characters.');
+            throw new InvalidInvitationDetails('A display name must be 1 to '.Person::MAX_DISPLAY_NAME_LENGTH.' characters.', 'display_name');
         }
 
         return new self($address, $name);

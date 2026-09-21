@@ -164,10 +164,15 @@ it('never names a role in Identity: the multi-factor requirement is not keyed to
 });
 
 it('never adds a capability or a role to represent MFA: it is authentication strength, not authorization', function () use ($root) {
+    // The requirement to HAVE a second factor is the surface's, never a capability or a role. The one capability that
+    // mentions MFA is the power to RECOVER someone else's (ADR 0024): an administrative act, checked like any other.
     $capabilities = (string) file_get_contents("{$root}/app/Modules/Access/Application/Capability.php");
     $roles = (string) file_get_contents("{$root}/app/Modules/Access/Application/Role.php");
+    $pattern = '/case\s+(?!RecoverMfa\b)\w*(Mfa|MultiFactor|SecondFactor|Totp)\w*\s*=/i';
 
-    expect(preg_match('/case\s+\w*(Mfa|MultiFactor|SecondFactor|Totp)\w*\s*=/i', $capabilities.$roles))->toBe(0);
+    expect(preg_match($pattern, $capabilities.$roles))->toBe(0)
+        ->and(preg_match('/case\s+(?!RecoverMfa\b)\w*(Mfa)\w*\s*=/i', "case RequireMfa = 'mfa.required';"))->toBe(1)
+        ->and(preg_match($pattern, "case RecoverMfa = 'identity.mfa.recover';"))->toBe(0);
 });
 
 arch('Identity: the multi-factor policy port is consulted from one place, and answered by Access only', function () use ($identity) {

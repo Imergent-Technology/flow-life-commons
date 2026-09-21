@@ -139,6 +139,11 @@ final class Faults
                 return $this->inner->forPerson($personId);
             }
 
+            public function forPeople(array $personIds): array
+            {
+                return $this->inner->forPeople($personIds);
+            }
+
             public function add(RoleAssignment $assignment): void
             {
                 throw new RuntimeException('assignment write failed');

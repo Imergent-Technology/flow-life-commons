@@ -56,6 +56,37 @@ final readonly class DatabaseRoleAssignmentRepository implements RoleAssignmentR
         return $assignments;
     }
 
+    public function forPeople(array $personIds): array
+    {
+        $byPerson = [];
+        foreach ($personIds as $personId) {
+            $byPerson[$personId->value] = [];
+        }
+        if ($personIds === []) {
+            return $byPerson;
+        }
+
+        $rows = $this->database->table('role_assignments')
+            ->whereIn('person_id', array_map(static fn (PersonId $p): string => $p->value, $personIds))
+            ->orderBy('granted_at')->orderBy('id')
+            ->get();
+
+        foreach ($rows as $row) {
+            assert(is_string($row->id) && is_string($row->person_id) && is_string($row->role_key) && is_string($row->granted_at));
+            assert($row->granted_by_account_id === null || is_string($row->granted_by_account_id));
+
+            $byPerson[$row->person_id][] = RoleAssignment::reconstitute(
+                RoleAssignmentId::fromString($row->id),
+                PersonId::fromString($row->person_id),
+                $row->role_key,
+                $row->granted_by_account_id === null ? null : AccountId::fromString($row->granted_by_account_id),
+                new DateTimeImmutable($row->granted_at, new DateTimeZone('UTC')),
+            );
+        }
+
+        return $byPerson;
+    }
+
     public function remove(PersonId $personId, string $roleKey): bool
     {
         // Compared exactly, for the same reason holders are (see holdersOf): on MariaDB the

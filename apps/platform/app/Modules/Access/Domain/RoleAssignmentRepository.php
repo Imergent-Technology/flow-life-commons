@@ -24,6 +24,15 @@ interface RoleAssignmentRepository
     public function forPerson(PersonId $personId): array;
 
     /**
+     * The CURRENT assignments of several people in ONE query, for a page of the Account list. Keyed by person id,
+     * oldest first within each, and every requested person has an entry (an empty list if they hold nothing).
+     *
+     * @param  list<PersonId>  $personIds
+     * @return array<string, list<RoleAssignment>>
+     */
+    public function forPeople(array $personIds): array;
+
+    /**
      * @throws RoleAlreadyAssigned the Person already holds this role
      */
     public function add(RoleAssignment $assignment): void;

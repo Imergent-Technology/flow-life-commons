@@ -9,7 +9,6 @@ use App\Modules\Identity\Application\InvitationDetails;
 use App\Modules\Identity\Application\InvitationNotifier;
 use App\Modules\Identity\Application\InviteAccount;
 use App\Modules\Identity\Application\IssuedInvitation;
-use App\Modules\Identity\Domain\InvitationChannel;
 use App\Modules\Identity\Infrastructure\Mail\InvitationMail;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\DB;
@@ -35,7 +34,7 @@ it('leaves the email UNVERIFIED when an operator-delivered (bootstrap) invitatio
 });
 
 it('VERIFIES the email when an invitation the platform emailed is accepted', function () {
-    $issued = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $issued = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     Invitations::accept($issued->revealToken())->assertNoContent();
 
@@ -47,14 +46,14 @@ it('VERIFIES the email when an invitation the platform emailed is accepted', fun
 });
 
 it('records the channel on the invitation event, and the platform-issued one is still not vouched for by an Account', function () {
-    app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     expect(Identity::context(Identity::events('account.invited')[0]))->toBe(['expires_in_days' => 7, 'channel' => 'email']);
 });
 
 it('mails the link with the token in the URL FRAGMENT, and nowhere else', function () {
     Mail::fake();
-    $issued = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $issued = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     $outcome = app(DeliverInvitation::class)($issued, null, 'issued');
 
@@ -74,7 +73,7 @@ it('mails the link with the token in the URL FRAGMENT, and nowhere else', functi
 it('reports a delivery failure, records it, and keeps the committed Account and invitation', function () {
     Log::spy();
     Mail::shouldReceive('to')->andThrow(new RuntimeException('smtp is down'));
-    $issued = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $issued = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     $outcome = app(DeliverInvitation::class)($issued, null, 'issued');
 
@@ -96,7 +95,7 @@ it('never writes the raw token to the log when delivery fails', function () {
     Log::listen(function (MessageLogged $message) use (&$lines): void {
         $lines[] = $message->message.json_encode($message->context);
     });
-    $issued = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $issued = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     app(InvitationNotifier::class)->send($issued);
 
@@ -104,7 +103,7 @@ it('never writes the raw token to the log when delivery fails', function () {
 });
 
 it('does not persist the raw token anywhere: only its hash', function () {
-    $issued = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $issued = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
     $token = $issued->revealToken();
 
     $everything = json_encode([
@@ -135,7 +134,7 @@ it('does not mail before the invitation has committed: the message is not sent f
     });
 
     DB::transaction(function () use ($sent): void {
-        app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+        app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
         expect(count($sent))->toBe(0);
     });
 
@@ -143,7 +142,7 @@ it('does not mail before the invitation has committed: the message is not sent f
 });
 
 it('accepts an emailed invitation exactly once', function () {
-    $issued = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $issued = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     Invitations::accept($issued->revealToken())->assertNoContent();
     Invitations::accept($issued->revealToken())->assertStatus(422);

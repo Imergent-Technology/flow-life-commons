@@ -168,6 +168,11 @@ it('keeps Access out of Identity\'s tables', function () {
 
     foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator(dirname(__DIR__, 2).'/app/Modules/Access', FilesystemIterator::SKIP_DOTS)) as $file) {
         assert($file instanceof SplFileInfo);
+        // Http/routes.php names URL paths (`accounts`), not tables; Access's Http layer touches no database at all
+        // (its own rule below), so it is not where a table name could matter.
+        if (str_contains($file->getPathname(), '/Access/Http/')) {
+            continue;
+        }
         if ($file->getExtension() === 'php' && preg_match($pattern, (string) file_get_contents($file->getPathname())) === 1) {
             $offenders[] = $file->getFilename();
         }
@@ -258,4 +263,70 @@ it('has an acyclic module graph limited to the frozen edges', function () {
     expect($graph['Identity'])->toContain('Audit')
         ->and($graph['Access'])->toContain('Identity')
         ->and($graph['Access'])->toContain('Audit'); // role mutation is audited through Audit's Application layer
+});
+
+// --- Operator administration (docs/adr/0024) -------------------------------------------------------------------
+
+$adminHttp = 'App\\Modules\\Access\\Http';
+
+arch('Access: Http reaches Access\'s Application layer only, never its Domain, its Infrastructure or the database', function () use ($adminHttp, $access) {
+    // Controllers validate, call ONE use case and shape the response. Persistence and the authorization decision are
+    // not theirs: nothing here can read or write a table, or ask a repository.
+    expect($adminHttp)->not->toUse(["{$access}\\Domain", "{$access}\\Infrastructure", 'Illuminate\\Database', 'Illuminate\\Support\\Facades\\DB']);
+});
+
+arch('Access: no controller names a Role: what an Account holds arrives as data from the catalog', function () use ($adminHttp) {
+    // RoleDescriptor is data; Role is the decision. A controller that could import Role could write `if ($role === ...)`.
+    expect($adminHttp)->not->toUse('App\\Modules\\Access\\Application\\Role');
+});
+
+foreach ([
+    'App\\Modules\\Identity\\Application\\DisableAccount',
+    'App\\Modules\\Identity\\Application\\EnableAccount',
+    'App\\Modules\\Identity\\Application\\ResetMultiFactor',
+    'App\\Modules\\Identity\\Application\\InviteAccount',
+    'App\\Modules\\Identity\\Application\\ReissueInvitation',
+    'App\\Modules\\Identity\\Application\\DeliverInvitation',
+    'App\\Modules\\Identity\\Application\\IssuedInvitation',
+    'App\\Modules\\Identity\\Application\\AccountDeactivationGuard',
+    'App\\Modules\\Access\\Application\\GrantRole',
+    'App\\Modules\\Access\\Application\\RevokeRole',
+    'App\\Modules\\Access\\Application\\AdministratorContinuity',
+] as $mutation) {
+    arch("Access: no controller calls {$mutation} directly, so none can skip the authorizing use case", function () use ($adminHttp, $mutation) {
+        // Identity's use cases "do not authorize their caller". Whatever a controller calls must be an Access use case
+        // that does, and that is the only thing a request is ever handed.
+        expect($adminHttp)->not->toUse($mutation);
+    });
+}
+
+arch('Identity\'s mutating use cases are called only by the Access use cases that authorize them (and their own wiring)', function () {
+    $identity = 'App\\Modules\\Identity\\Application';
+    $access = 'App\\Modules\\Access\\Application';
+
+    expect("{$identity}\\DisableAccount")->toOnlyBeUsedIn(["{$access}\\DisableManagedAccount", 'App\\Modules\\Identity\\Infrastructure\\IdentityServiceProvider']);
+    expect("{$identity}\\EnableAccount")->toOnlyBeUsedIn("{$access}\\EnableManagedAccount");
+    expect("{$identity}\\ReissueInvitation")->toOnlyBeUsedIn("{$access}\\ReissueOperatorInvitation");
+    expect("{$identity}\\InviteAccount")->toOnlyBeUsedIn(["{$access}\\InviteOperator", "{$access}\\BootstrapAdministrator"]);
+    expect("{$identity}\\DeliverInvitation")->toOnlyBeUsedIn(["{$access}\\InviteOperator", "{$access}\\ReissueOperatorInvitation"]);
+});
+
+arch('Identity\'s account directory is read only through Access\'s presenting use cases', function () {
+    expect('App\\Modules\\Identity\\Application\\AccountDirectory')->toOnlyBeUsedIn([
+        'App\\Modules\\Access\\Application\\AccountViews',
+        'App\\Modules\\Access\\Application\\ListManagedAccounts',
+        'App\\Modules\\Access\\Application\\GrantRoleToAccount',
+        'App\\Modules\\Access\\Application\\RevokeRoleFromAccount',
+        'App\\Modules\\Identity\\Infrastructure\\IdentityServiceProvider',
+        'App\\Modules\\Identity\\Infrastructure\\Persistence\\DatabaseAccountDirectory',
+    ]);
+});
+
+arch('An invitation channel is Identity\'s own concept: Access chooses it by which method it calls, never by naming it', function () {
+    expect('App\\Modules\\Identity\\Domain\\InvitationChannel')->toOnlyBeUsedIn('App\\Modules\\Identity');
+});
+
+arch('Access: the administration surface never sees an invitation secret or a notifier', function () use ($adminHttp) {
+    expect($adminHttp)->not->toUse(['App\\Modules\\Identity\\Application\\InvitationNotifier', 'App\\Modules\\Identity\\Domain\\InvitationToken']);
+    expect('App\\Modules\\Access\\Application\\OperatorInvitation')->not->toUse(['App\\Modules\\Identity\\Application\\IssuedInvitation', 'App\\Modules\\Identity\\Domain\\InvitationToken']);
 });

@@ -23,4 +23,16 @@ enum Capability: string
 
     /** May grant and revoke role assignments. The narrowest capability the administration workflow needs. */
     case AssignRoles = 'access.roles.assign';
+
+    /** May list and inspect Accounts (and see the role catalog): administration's read side. Changes nothing. */
+    case ViewAccounts = 'identity.accounts.view';
+
+    /** May disable and re-enable an Account. Ending someone's access is a materially bigger power than seeing it. */
+    case ManageAccounts = 'identity.accounts.manage';
+
+    /** May invite a new operator, and issue a fresh invitation for one who is still invited. */
+    case IssueInvitations = 'identity.invitations.issue';
+
+    /** May reset ANOTHER Account's second factor when its owner has lost the authenticator and every recovery code. */
+    case RecoverMfa = 'identity.mfa.recover';
 }

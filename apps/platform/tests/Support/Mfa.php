@@ -108,6 +108,22 @@ final class Mfa
         return [$console, $account, $factor];
     }
 
+    /**
+     * An operator: an active Account holding the administrator role, with an authenticator, signed in through the
+     * real two steps. Their session was established WITH a second factor, so it is freshly verified.
+     *
+     * @return array{Console, Account, array{secret: string, codes: list<string>}}
+     */
+    public static function signedInAdmin(string $email = 'admin@example.org', string $secret = Totp::SECRET): array
+    {
+        $account = Access::admin($email);
+        $factor = self::enroll($account, $secret);
+        $console = new Console;
+        $console->loginWithMfa($email, Identity::PASSWORD, $secret)->assertOk();
+
+        return [$console, $account, $factor];
+    }
+
     /** The whole text of every recorded security event, for asserting what must never be in it. */
     public static function auditText(): string
     {

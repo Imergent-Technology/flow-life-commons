@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Access\Application\RevokeRoleFromAccount;
 use App\Modules\Identity\Application\AcceptInvitation;
 use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\DisableAccount;
@@ -9,9 +10,9 @@ use App\Modules\Identity\Application\EnableAccount;
 use App\Modules\Identity\Application\InvitationDetails;
 use App\Modules\Identity\Application\InviteAccount;
 use App\Modules\Identity\Application\ReissueInvitation;
-use App\Modules\Identity\Domain\InvitationChannel;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Tests\Support\Access;
 use Tests\Support\Identity;
 use Tests\Support\Passwords;
 use Tests\Support\Race;
@@ -67,7 +68,7 @@ it('lets exactly one of two simultaneous re-enables act: the second finds the Ac
 it('refuses to accept an invitation that a reissue replaced while the acceptance waited', function () {
     // The reissue holds the invitation locks and has not committed. The acceptance of the OLD token waits, and
     // when it gets the row the row is gone: the old token is dead, the Account is still invited.
-    $first = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $first = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
     $token = $first->revealToken();
 
     $race = Race::against(
@@ -86,7 +87,7 @@ it('refuses to accept an invitation that a reissue replaced while the acceptance
 it('refuses to reissue for an Account whose invitation was accepted while the reissue waited', function () {
     // The acceptance holds the invitation row and has not committed. The reissue waits, sees an ACTIVE Account,
     // and refuses: an accepted invitation is never followed by a fresh one, and nothing new is created.
-    $first = app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'New Person'), channel: InvitationChannel::Email);
+    $first = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
 
     $race = Race::against(
         fn (Closure $pause) => app(AcceptInvitation::class)($first->revealToken(), Passwords::STRONG, new ClientContext('127.0.0.1', 'first')),
@@ -102,7 +103,7 @@ it('refuses to reissue for an Account whose invitation was accepted while the re
 
 it('creates one Account when two invitations for the same address are issued at once', function () {
     $race = Race::against(
-        fn (Closure $pause) => app(InviteAccount::class)(InvitationDetails::from('new@example.org', 'First'), null, InvitationChannel::Email),
+        fn (Closure $pause) => app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'First')),
         'account.invited', 'invite', ['email' => 'New@Example.ORG', 'name' => 'Second'],
     );
 
@@ -112,4 +113,25 @@ it('creates one Account when two invitations for the same address are issued at 
         ->and(DB::table('accounts')->count())->toBe(1)
         ->and(DB::table('people')->count())->toBe(1) // the loser's Person did not survive
         ->and(DB::table('account_invitations')->count())->toBe(1);
+});
+
+it('keeps one active administrator when an administrative role revoke and an administrative disable race through the HTTP use cases', function () {
+    // Two administrators. One is revoked (as the surface does it) while the other is disabled (as the surface does it):
+    // each would leave the platform with the other still standing, and both together would leave none. The shared
+    // last-administrator lock (ADR 0020) makes the second wait, then see that the first committed, and refuse.
+    $first = Access::admin('first@example.org');
+    $second = Access::admin('second@example.org');
+    $actor = Access::actorFor($first);
+
+    $race = Race::against(
+        fn (Closure $pause) => app(RevokeRoleFromAccount::class)($actor, $first->id, 'platform_administrator'),
+        'role.revoked', 'managed_disable',
+        ['actor_account' => $first->id->value, 'actor_person' => $first->personId->value, 'account' => $second->id->value],
+    );
+
+    expect($race['blocked'])->toBeTrue('the disable did not wait for the revoke to commit')
+        ->and($race['exit'])->toBe(2)
+        ->and($race['class'])->toBe('App\\Modules\\Access\\Application\\LastAdministratorRequired')
+        ->and(Access::activeAdministrators())->toBe(1)
+        ->and(DB::table('accounts')->where('id', $second->id->value)->value('status'))->toBe('active');
 });

@@ -140,6 +140,11 @@ it('treats losing a race with an identical grant as a no-op too', function () {
             return $personId->equals($this->hidden) ? [] : $this->inner->forPerson($personId);
         }
 
+        public function forPeople(array $personIds): array
+        {
+            return $this->inner->forPeople($personIds);
+        }
+
         public function add(RoleAssignment $assignment): void
         {
             throw new RoleAlreadyAssigned; // ...but the constraint said otherwise

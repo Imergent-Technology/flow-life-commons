@@ -10,11 +10,15 @@ use App\Shared\Domain\AccountId;
 use App\Shared\Domain\PersonId;
 use Tests\Support\Identity;
 
-it('has exactly the initial capability catalog, so adding one is a deliberate decision', function () {
+it('has exactly the capability catalog, so adding one is a deliberate decision', function () {
     // A capability is added when the functionality that checks it exists. Extending this list
     // is meant to be a visible act in review, not a side effect.
     expect(array_map(fn (Capability $c): string => $c->value, Capability::cases()))
-        ->toBe(['console.access', 'access.roles.assign']);
+        ->toBe([
+            'console.access', 'access.roles.assign',
+            // Operator administration (ADR 0024): each exists because a route checks it.
+            'identity.accounts.view', 'identity.accounts.manage', 'identity.invitations.issue', 'identity.mfa.recover',
+        ]);
 });
 
 it('has exactly the initial system roles', function () {
@@ -50,6 +54,18 @@ it('gives the guardian the Console and nothing more', function () {
     expect(Role::Guardian->capabilities())->toBe([Capability::ConsoleAccess])
         ->and(Role::Guardian->grants(Capability::ConsoleAccess))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::AssignRoles))->toBeFalse();
+});
+
+it('gives the guardian NO administrative capability: being let into the Console is not being let to administer it', function () {
+    foreach ([Capability::AssignRoles, Capability::ViewAccounts, Capability::ManageAccounts, Capability::IssueInvitations, Capability::RecoverMfa] as $administrative) {
+        expect(Role::Guardian->grants($administrative))->toBeFalse();
+    }
+});
+
+it('gives every role a display name and description, which Access owns and the Console renders', function () {
+    foreach (Role::cases() as $role) {
+        expect($role->displayName())->not->toBe('')->and($role->description())->not->toBe('');
+    }
 });
 
 it('makes the administrator the only role that resolves to every capability', function () {
