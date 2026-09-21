@@ -15,7 +15,7 @@ Operational procedures live here: step-by-step, tested, written for someone unde
 
 Still to come, deliberately deferred until designed properly (each becomes a runbook and, where a decision is involved, an ADR):
 
-- **Host-side release, backup and restore.** The procedures are designed and stay operator actions. The developer-side `./flow release build`, `inspect` and `migrations` now exist ([deployment §8](deployment.md#8-flow-release-the-developer-side-tooling)); nothing that touches the host does.
+- **Host-side release, backup and restore.** The procedures are designed and stay operator actions. The developer-side `./flow release build`, `inspect` and `migrations` now exist ([deployment §8](deployment.md#8-flow-release-the-developer-side-tooling)), as do `php artisan release:show` and the production environment template (`apps/platform/.env.production.example`) that `security:production-check` is tested against; nothing that touches the host does.
 - Incident response and audit-trail review (including a retention policy for `security_events`, which is append-only and never pruned)
 - PostgreSQL migration rehearsal
 

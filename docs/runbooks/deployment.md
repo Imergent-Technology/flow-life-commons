@@ -75,21 +75,32 @@ Confirm HTTPS serves that host before continuing: without it the `__Host-` sessi
 
 ### 3. Install the production environment file
 
-Create `/home/<user>/commons/shared/.env` from the production template, and lock it down:
+Start from **`apps/platform/.env.production.example`** in the repository, at the commit you are releasing. It is documentation, not artifact content: the release validator refuses any `.env*` file in an artifact, so it is never inside the tarball, and the real file never leaves the host. Copy it to the host as `shared/.env` and lock it down:
 
 ```bash
 chmod 600 /home/<user>/commons/shared/.env
 ```
 
-> The production environment template does not exist yet — see [§8](#9-not-built-yet). Until it does, build the file from [secrets](../security/secrets.md) and the checks in `security:production-check`, and **do not copy `apps/platform/.env.example`**: it is a development file whose `APP_DEBUG=true` and `IDENTITY_COMPROMISED_PASSWORD_CHECK=none` are exactly the values that must never reach production.
+**Do not start from `apps/platform/.env.example`**: that is the development file, and its `APP_DEBUG=true` and `IDENTITY_COMPROMISED_PASSWORD_CHECK=none` are exactly the values that must never reach production. The template carries production values throughout and leaves blank only what the operator must supply:
+
+| Setting | Where it comes from |
+| --- | --- |
+| `APP_KEY` | step 4, below |
+| `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` | cPanel → MySQL Databases. cPanel prefixes both names with the account name, so copy what it shows rather than what you typed |
+
+Every other value is already correct for this host and should be left alone unless something about the host has changed. Two that look optional are not: `APP_MAINTENANCE_DRIVER=file` is what makes `php artisan down` write the file Apache's maintenance arm reads, and `MAIL_MAILER=log` is the documented deferral of outbound mail (see [production readiness](production-readiness.md#5-outbound-mail--the-one-open-item)) — it sends nothing, deliberately.
+
+Nothing in the template trusts a proxy, and there is no variable that would: Commons is direct to origin, and trusting a proxy is a reviewed code change ([trust boundaries](../architecture/trust-boundaries.md)).
 
 ### 4. Generate and record `APP_KEY`
 
+No release is on the host yet (that is step 5), so `artisan` is not available here. Generate the key with the host's PHP directly — this is exactly what `php artisan key:generate --show` does for the application's cipher, 32 random bytes, base64-encoded:
+
 ```bash
-php artisan key:generate --show
+/usr/local/bin/php -r 'echo "base64:".base64_encode(random_bytes(32)), PHP_EOL;'
 ```
 
-Paste it into `shared/.env` as `APP_KEY`. **Record it in the owner's secure secret store together with today's date**, because every database backup from now on is only restorable alongside it ([backup and restore](backup-and-restore.md)).
+Paste it into `shared/.env` as `APP_KEY`. **Record it in the owner's secure secret store together with today's date**, because every database backup from now on is only restorable alongside it ([backup and restore](backup-and-restore.md)). The key is generated on the host and goes nowhere else except that store. `security:production-check` (step 12) refuses a key of the wrong size, and never prints the key itself.
 
 ### 5. Upload, checksum and extract the release
 
@@ -477,7 +488,7 @@ Verify: `php artisan schedule:list` shows `identity:prune-expired` with a sane n
 
 | Command | Proves |
 | --- | --- |
-| `php artisan release:show` | `current` points at the release and commit you intended |
+| `php artisan release:show` | The release serving is the one you built. Compare its release id and commit with the artifact (`./flow release inspect` printed both). It also prints the `schema_rollback` classification and the previous release — read them now, while there is time, rather than during a rollback |
 | `php artisan about` | The application boots, config resolves, the database connection reports |
 | `php artisan migrate:status` | Nothing pending |
 | `php artisan security:production-check` | Configuration is production-safe — clean, not "clean except" |
@@ -508,6 +519,12 @@ Verify: `php artisan schedule:list` shows `identity:prune-expired` with a sane n
 The negative checks matter more than the positive ones. `.env` holds the application key and the database password.
 
 **Release identity is not on the public surface**, by decision: `/api/v1/health` stays coarse and anonymous, and `release:show` over SSH is how you learn what is deployed ([ADR 0027](../adr/0027-release-and-deployment-model.md)).
+
+`release:show` reads the `release.json` that shipped **inside the release directory it is run from** — Laravel's base path, beside `artisan` — so it always describes the code that is executing, never the newest release on disk or anything in `shared/`. It never consults git (the host has none). It is read-only, and **fail-closed**: no manifest, an unreadable one, malformed JSON, or any missing or invalid identity field exits non-zero and names the field. There is no "unknown" release. If it fails on a deployed release, re-upload the artifact and verify its checksum before doing anything else.
+
+`security:production-check` reports in three parts. **Checks** are configuration this deployment runs under, and any failure means do not serve: environment and debug, `APP_URL`, `APP_KEY` presence and size, the breached-password checker, bcrypt cost, every session-cookie invariant, the rate limits and reset floor, CORS, PHP version and extensions, writable runtime directories, `expose_php`, the **file** maintenance driver, database engine and credentials (and that no development credential is in use), no dependency on a service this host lacks, and that PHP `mail()` is not the transport. **Deliberately open** lists decisions that are deferred on purpose and do not fail the command — today that is outbound mail. **Not checked here** lists the owner verifications no configuration read can establish. No check ever prints a secret; a failing one names the setting and what is wrong with it.
+
+A green "writable runtime directories" at first deployment is the first time that item is observed on the real filesystem ([production readiness](production-readiness.md), item 9). It is implemented and tested locally; it is not verified on the host until that run.
 
 ---
 
@@ -541,8 +558,6 @@ Output goes to `dist/releases/` (gitignored) unless `--out` says otherwise. An e
 
 This runbook describes the approved design. These parts of it do not exist in the repository, and the implementation phase adds them:
 
-- **The production environment template** (`apps/platform/.env.production.example`) and its integration with `security:production-check`. Until it exists, step 3 is hand-assembled, which is exactly the footgun the template closes.
-- **`php artisan release:show`** and the `release.json` it reads.
 - **The cache-command check on every commit.** `./flow release build` runs it (and refuses if `resources/views` has appeared), so it gates a release; the ordinary `./flow check` does not yet, so a Blade view would only be caught when a release is built.
 - **An Apache-served rehearsal.** Everything about the composed `.htaccess` that can be proved without Apache now is; the file itself is first executed by a real deployment.
 

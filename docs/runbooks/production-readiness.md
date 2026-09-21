@@ -45,7 +45,11 @@ php artisan security:production-check
 
 (`./flow doctor --production` runs the same thing in the development container, against the development environment file, where it is *expected* to fail.)
 
-It reads the configuration this deployment is actually running under and refuses anything dangerous: `APP_ENV`, `APP_DEBUG`, an `http://` application URL, the no-op breached-password checker, a test-speed bcrypt cost, every session-cookie invariant, the session driver and lifetimes, the raised development login limit, the reset-response floor, CORS, PHP version and extensions, writable runtime directories, and `expose_php`.
+It reads the configuration this deployment is actually running under and refuses anything dangerous: `APP_ENV`, `APP_DEBUG`, an `http://` application URL, `APP_KEY` presence and size, the no-op breached-password checker, a test-speed bcrypt cost, every session-cookie invariant, the session driver and lifetimes, the raised development login limit, the reset-response floor, CORS, PHP version and extensions, writable runtime directories, `expose_php`, a maintenance driver other than `file` (under which `php artisan down` never writes the file Apache's maintenance arm reads), missing database credentials or the development ones, any cache or queue store needing a service this host does not run, and PHP `mail()` as the transport. No check prints a secret: a failing `APP_KEY` or database password is named, never shown.
+
+Start the production file from **`apps/platform/.env.production.example`**, not the development `.env.example` ([deployment runbook](deployment.md), first deployment step 3). A test loads that template as the environment, fills in only the four operator-supplied values, and runs this command against it — so the template and the check cannot drift apart without the build failing.
+
+Deferred decisions are reported in their own section, **Deliberately open**, and never fail the command: a check that always fails on a correct deployment is one people stop reading. Today the only item there is outbound mail (section 5).
 
 Two of those deserve naming, because both come from copying `apps/platform/.env.example`:
 

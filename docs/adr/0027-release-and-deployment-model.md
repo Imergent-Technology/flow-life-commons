@@ -177,6 +177,8 @@ A deployment must be able to answer which release is serving. That answer comes 
 
 It is deliberately **not** added to `/api/v1/health`, which is public and unauthenticated and whose contract is to expose nothing beyond coarse status. A commit sha is a small disclosure, and the deployment procedure has shell access, so there is nothing to buy by widening a public endpoint.
 
+*Implemented as `php artisan release:show`.* It reads the `release.json` beside `artisan` — the application base path, so the manifest of the release directory it runs from and nothing else — and is fail-closed: a missing, unreadable or malformed manifest, or any missing identity field, is an error rather than an "unknown". It needed no change to the manifest schema.
+
 
 ## Verified on the production host (2026-09-21)
 
