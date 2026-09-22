@@ -11,7 +11,9 @@
 >
 > **One host item remains open: outbound mail authentication** ([production readiness](production-readiness.md), section 5), deferred pending an organizational decision. It does not block deployment; it blocks inviting people, which is step 14.
 >
-> **The composed public surface now exists and is proved locally.** `public/.htaccess` carries the security headers, the private-path denials, the maintenance arm, the API and `/up` carve-out and the SPA fallback, in that order, and `public/maintenance.php` is the responder. The whole contract is driven in a real browser against the production-equivalent origin, and the file's structure and rule order are pinned by a test. **What that does not do is run Apache** — the host's own evidence is still the per-rule probes of 2026-09-21, so the file itself is first exercised by the first real deployment.
+> **The composed public surface now exists and is proved at two levels, neither of which is the host.** `public/.htaccess` carries the security headers, the private-path denials, the maintenance arm, the API and `/up` carve-out and the SPA fallback, in that order, and `public/maintenance.php` is the responder. The whole *contract* is driven in a real browser against Caddy, the production-equivalent development gateway, and the file's structure and rule order are pinned by a test. Separately, `scripts/tests/apache-surface.sh` runs the real committed `.htaccess` and `maintenance.php` under a disposable Apache container and asserts the routing and header-composition behaviour directly — this is what caught and now regression-tests an Apache-specific bug Caddy could not see (below). **Neither proves the production host**, which runs Apache on CloudLinux through LSAPI, not the container's mod_php: the host's own evidence is still the per-rule probes of 2026-09-21, so the file itself is first exercised by the first real deployment.
+>
+> **An Apache-specific defect was found and fixed during a pre-deployment audit (2026-09-21).** Section 6's API/`/up` rewrite used `[L]`, which ends only the current per-directory pass; Apache's own internal redirect to `index.php` re-ran the whole ruleset as a second pass, and the maintenance rule caught the rewritten request because its exclusion did not name `/index.php` — so every `/api` and `/up` request got the HTML maintenance page instead of Laravel while the flag was raised. This is precisely the gap between "proved against Caddy" and "proved against Apache": Caddy does not re-run its rules on an internal rewrite, so the browser suite and every text-comparison test kept passing while the composed file was wrong. Fixed with `[END]`, which stops rewrite processing outright; verified on a real Apache 2.4 container and now a standing regression test (`scripts/tests/apache-surface.sh`, `./flow check repo`). A related header-duplication defect was found and fixed the same way: Apache's `Header always set` appends to a header Laravel's own middleware already sent rather than replacing it, so every PHP-answered response carried each of the seven ADR 0026 headers twice; fixed by pairing each with `Header onsuccess unset` first (`security:headers --format=apache`).
 
 **Host environment, measured 2026-09-21:** Apache on CloudLinux, PHP 8.3.33 via LSAPI/`mod_lsapi` (so `PHP_SAPI` reads `litespeed` — this is **not** LiteSpeed Web Server), MariaDB `10.11.18-MariaDB-cll-lve`, direct to origin with no proxy or CDN in front.
 
@@ -104,49 +106,58 @@ Paste it into `shared/.env` as `APP_KEY`. **Record it in the owner's secure secr
 
 ### 5. Upload, checksum and extract the release
 
+Every step from here on names the release directory through **one variable, `R`**, set once and used as an absolute path in every command — never a bare `cd` that a later command silently trusts. If a step's `cd` ever fails, every command after it in this runbook is written so that it still resolves against `$R` or another absolute path, not against wherever the shell happened to land.
+
 ```bash
+R=/home/<user>/commons/releases/<release-id>
 sha256sum -c commons-<version>.tar.gz.sha256      # must pass before extracting
-mkdir -p /home/<user>/commons/releases/<release-id>
-tar -xzf commons-<version>.tar.gz -C /home/<user>/commons/releases/<release-id>
+mkdir -p "$R"
+tar -xzf commons-<version>.tar.gz -C "$R"
 ```
 
 ### 6. Wire the shared links
 
 ```bash
-cd /home/<user>/commons/releases/<release-id>
-cp -an storage/. ../../shared/storage/      # seed shared/storage from the artifact's skeleton; never overwrites
-rm -rf storage && ln -s ../../shared/storage storage
-ln -s ../../shared/.env .env
+cp -an "$R/storage/." /home/<user>/commons/shared/storage/      # seed shared/storage from the artifact's skeleton; never overwrites
+rm -rf "$R/storage" && ln -s ../../shared/storage "$R/storage"
+ln -s ../../shared/.env "$R/.env"
 ```
 
-The **seeding line matters on the first deployment**: `shared/storage` starts empty, and `php artisan down` fails there (`file_put_contents(storage/framework/down): No such file or directory`) because `storage/framework/` does not exist. The artifact ships the directory skeleton (placeholder `.gitignore` files only, never runtime state); `cp -an` copies it into `shared/` once and is a harmless no-op on every later release.
+No `cd` in this step, deliberately: every path is absolute or built from `$R`, so there is nothing for the destructive `rm -rf` to inherit if an earlier command in the session left the shell somewhere unexpected.
+
+The **seeding line matters on the first deployment**: `shared/storage` starts empty, and `php artisan down` fails there (`file_put_contents(storage/framework/down): No such file or directory`) because `storage/framework/` does not exist. The artifact ships the directory skeleton (placeholder `.gitignore` files only, never runtime state, and pinned exactly by `scripts/release/artifact.php`); `cp -an` copies it into `shared/` once and is a harmless no-op on every later release. `cp -an` does not overwrite an existing file, but it **does** touch the directories it creates — on a first deployment `shared/storage` does not exist yet, so this is the one time this command runs against nothing, and the modes it leaves are the artifact's own (whatever `tar` extracted them as). Confirm they are what step 12's writable-directories check expects; if not, `chmod` them explicitly rather than re-running `cp -an` a second time hoping for a different result.
 
 Confirm `storage/` and `bootstrap/cache/` are writable by the PHP user.
 
 ### 7. Migrate the empty database
 
 ```bash
-php artisan migrate --force
+/usr/local/bin/php "$R/artisan" migrate --force
 ```
+
+Giving `artisan` as a path (`$R/artisan`), not a bare command from an assumed working directory, is what makes this migrate the release you just wired in steps 5–6 rather than whatever release an earlier `cd` in the session happened to leave the shell inside. It also uses `/usr/local/bin/php`: bare `php` under cron on this host is a different SAPI entirely (§3, [production readiness](production-readiness.md#3-the-scheduler-one-cron-entry-and-everything-else-in-source-control)), and using the verified binary consistently in every command here is cheaper than remembering which contexts need it.
 
 ### 8. Build the caches
 
 ```bash
-php artisan config:cache
-php artisan event:cache
-php artisan route:cache
+/usr/local/bin/php "$R/artisan" config:cache
+/usr/local/bin/php "$R/artisan" event:cache
+/usr/local/bin/php "$R/artisan" route:cache
 ```
 
 **Not `php artisan optimize`.** It includes `view:cache`, which fails on this repository because there is no `resources/views`, and it fails *after* writing the other three caches — so a script that runs it and checks the exit status aborts with the release half-optimized. The reasoning is in [ADR 0027](../adr/0027-release-and-deployment-model.md), *Optimization model*.
 
+**If `shared/.env` is edited after this step**, the change has no effect until the cache is rebuilt: `config:cache` bakes the resolved configuration into `$R/bootstrap/cache/config.php`, and Laravel reads that file instead of re-parsing `.env` once it exists. Re-run this step (against the same `$R`) after any `.env` edit, including one made to fix something step 12 just failed on.
+
 ### 9. Activate the release
 
 ```bash
-cd /home/<user>/commons
-ln -s releases/<release-id> current.next
-php -r 'rename("current.next","current") or exit(1);'
-readlink current        # confirm it names the new release
+ln -s "releases/<release-id>" /home/<user>/commons/current.next
+/usr/local/bin/php -r 'rename("/home/<user>/commons/current.next","/home/<user>/commons/current") or exit(1);'
+readlink /home/<user>/commons/current        # confirm it names the new release
 ```
+
+No `cd` here either: the symlink's *target* text (`releases/<release-id>`) is deliberately relative, because that is what makes `current` still resolve correctly from inside a release directory, but the *command* that creates it is given the link's own location as an absolute path, so it does not matter what the shell's working directory is.
 
 `rename(2)` replaces the symlink atomically. **Do not use `ln -sfn`**: it unlinks before re-linking, so `current` is briefly absent, and without `-n` it creates the link inside the target directory.
 
@@ -162,15 +173,15 @@ The host's settings would have bounded any staleness regardless: `opcache.valida
 
 ### 11. Install the scheduler cron
 
-See [§5](#6-scheduler). One entry, through `current`.
+See [§6](#6-scheduler). One entry, through `current`.
 
 ### 12. CLI verification
 
-See [§6](#7-health-and-release-verification). All of it must pass, `security:production-check` included, with no "clean except".
+See [§7](#7-health-and-release-verification). All of it must pass, `security:production-check` included, with no "clean except".
 
 ### 13. HTTP and security verification
 
-See [§6](#7-health-and-release-verification), including every negative check. `.env`, `vendor/` and the storage logs must not be reachable.
+See [§7](#7-health-and-release-verification), including every negative check. `.env`, `vendor/` and the storage logs must not be reachable.
 
 ### 14. Administrator bootstrap ceremony
 
@@ -200,46 +211,49 @@ Built off-host from an annotated tag, with its gate green and its `schema_rollba
 
 ### 2. Upload, checksum, extract, wire
 
-As first deployment steps 5 and 6. The new release is on disk and serving nothing.
+As first deployment steps 5 and 6, with `R=/home/<user>/commons/releases/<new-release-id>`. The new release is on disk and serving nothing; `current` still points at the old one.
 
 ### 3. Warm the caches
 
 ```bash
-cd /home/<user>/commons/releases/<new-release-id>
-php artisan config:cache
-php artisan event:cache
-php artisan route:cache
+/usr/local/bin/php "$R/artisan" config:cache
+/usr/local/bin/php "$R/artisan" event:cache
+/usr/local/bin/php "$R/artisan" route:cache
 ```
 
-Safe to do before the window, because this release is not yet serving.
+Safe to do before the window, because this release is not yet serving. Against `$R`, the new release, deliberately — not `current`, which is still the old one.
 
 ### 4. Enter maintenance
 
 ```bash
-cd /home/<user>/commons/current
-php artisan down
+/usr/local/bin/php /home/<user>/commons/current/artisan down
 ```
+
+Against `current`, the release actually serving: `down` and `up` write `shared/storage/framework/down`, and that file is shared across every release regardless of which release's `artisan` writes it — but the *code that runs* to write it must be code that can still boot, and until the swap in step 7 that is the OLD release.
 
 **The window starts here.** Confirm: `/api/v1/health` returns 503, and the Console shell returns the maintenance page rather than loading.
 
 ### 5. Take the pre-migration backup
 
-See [§4](#5-taking-a-backup). Inside the window, deliberately: a backup taken before maintenance leaves a gap of live writes that a restore would lose.
+See [§5](#5-taking-a-backup). Inside the window, deliberately: a backup taken before maintenance leaves a gap of live writes that a restore would lose.
 
 ### 6. Migrate
 
 ```bash
-php artisan migrate --force
+/usr/local/bin/php "$R/artisan" migrate --force
 ```
+
+Against `$R`, the **new** release — this is what makes the migration run the new release's migration files, not the old release's. Do not run this against `current`: at this point in the procedure `current` is still the release you are about to replace, and it has no new migrations to run.
 
 ### 7. Switch `current`
 
 ```bash
-cd /home/<user>/commons
-ln -s releases/<new-release-id> current.next
-php -r 'rename("current.next","current") or exit(1);'
-readlink current
+ln -s "releases/<new-release-id>" /home/<user>/commons/current.next
+/usr/local/bin/php -r 'rename("/home/<user>/commons/current.next","/home/<user>/commons/current") or exit(1);'
+readlink /home/<user>/commons/current
 ```
+
+As first-deployment step 9: no `cd`, every path absolute or anchored to `$R`.
 
 ### 8. No opcache step
 
@@ -247,30 +261,49 @@ Nothing to do — see first-deployment step 10. The swap is observed immediately
 
 ### 9. CLI verification, still in maintenance
 
-The CLI half of [§6](#7-health-and-release-verification): `release:show`, `about`, `migrate:status`, `security:production-check`, `schedule:list`. Do as much as possible here, while nothing is exposed.
+The CLI half of [§7](#7-health-and-release-verification): `release:show`, `about`, `migrate:status`, `security:production-check`, `schedule:list`. Do as much as possible here, while nothing is exposed. **Against `current`, now the new release** — the swap in step 7 already moved it. If any of these commands need naming which release they mean, that is a sign something about the swap did not take; `readlink /home/<user>/commons/current` from step 7 is what answers it.
 
 ### 10. Leave maintenance
 
 ```bash
-cd /home/<user>/commons/current
-php artisan up
+/usr/local/bin/php /home/<user>/commons/current/artisan up
 ```
 
 ### 11. HTTP and security verification, immediately
 
-The HTTP half of [§6](#7-health-and-release-verification). Run it now, not after a coffee: this is the only unverified-exposure window in the procedure and the point is to keep it short.
+The HTTP half of [§7](#7-health-and-release-verification). Run it now, not after a coffee: this is the only unverified-exposure window in the procedure and the point is to keep it short.
 
 ### 12. On any failure
 
 ```bash
-php artisan down
+/usr/local/bin/php /home/<user>/commons/current/artisan down
 ```
 
-then go to [§3](#3-rollback) and follow the release's `schema_rollback` classification. **Do not improvise this under pressure — the classification was decided when there was time to think.**
+Against `current` — whichever release is actually live at the moment of failure, which is the only release guaranteed able to boot and write the flag. If `current` itself cannot boot (a failure *during* step 7's swap, or the new release crashing immediately after it), the release still on disk at the OLD path is intact until you delete it: `/usr/local/bin/php /home/<user>/commons/releases/<old-release-id>/artisan down` reaches the same shared flag from there.
 
-### 13. Retain five releases
+Then go to [§3](#3-rollback) and follow the release's `schema_rollback` classification. **Do not improvise this under pressure — the classification was decided when there was time to think.**
 
-Delete the oldest beyond five. Never delete the release `current` points at, nor the one before it.
+### 13. Prune releases beyond the retention policy
+
+Five releases are retained ([ADR 0027](../adr/0027-release-and-deployment-model.md)). This is the exact, safe procedure — never freehand `rm` in `releases/`:
+
+```bash
+cd /home/<user>/commons/releases || exit 1
+CURRENT_TARGET="$(basename "$(readlink -f /home/<user>/commons/current)")"
+# Release directory names sort chronologically as text (UTC timestamp prefix), so the oldest are
+# first. `head -n -5` prints everything EXCEPT the five most recent; `ls -1` here, and nowhere below,
+# is the only place this procedure reads the working directory rather than an absolute path — the
+# destructive command on the next line still takes one.
+for old in $(ls -1 | sort | head -n -5); do
+    if [[ "$old" == "$CURRENT_TARGET" ]]; then
+        echo "refusing to delete current ($old) — retention policy or CURRENT_TARGET is wrong; stop and look" >&2
+        continue
+    fi
+    rm -rf "/home/<user>/commons/releases/$old"
+done
+```
+
+This **never touches `shared/`**: it only ever lists and removes entries under `commons/releases/`, and the `rm -rf` target is always an absolute path built from a name the loop just listed there — never an empty or unset variable, and never `shared` or `current` themselves, which are not release directory names `ls -1` in this directory can produce. It refuses `current`'s own target explicitly, as a second check beyond "the five most recent will always include it under a working retention policy." The release *before* `current` is a policy consequence of retaining five, not a separate rule this script enforces: as long as the count stays at five and deployments happen one at a time, the previous release is always inside that window.
 
 ### 14. Record the result
 
@@ -283,22 +316,32 @@ Append to `shared/deploy.log`, including failures and what was done about them.
 **Which procedure applies is not a judgement call at the time.** It is the `schema_rollback` value in the release's `release.json`, decided by a person when the artifact was built ([ADR 0027](../adr/0027-release-and-deployment-model.md), *Migration rollback classification*).
 
 ```bash
-php artisan release:show        # among other things, prints schema_rollback
+/usr/local/bin/php /home/<user>/commons/current/artisan release:show        # among other things, prints schema_rollback
 ```
+
+Every step below that "points `current` back" means exactly first-deployment step 9's technique, aimed at the previous release: no `cd`, every path absolute.
+
+```bash
+ln -s "releases/<previous-release-id>" /home/<user>/commons/current.next
+/usr/local/bin/php -r 'rename("/home/<user>/commons/current.next","/home/<user>/commons/current") or exit(1);'
+readlink /home/<user>/commons/current        # confirm it now names the PREVIOUS release
+```
+
+Every `artisan` command after that swap is run as `/usr/local/bin/php /home/<user>/commons/current/artisan ...` — against `current`, which the swap just pointed at the previous release, never against a release directory named from memory.
 
 ### `not-applicable` — no migrations in this release
 
-1. `php artisan down` (if not already).
-2. Point `current` back at the previous release, atomically, as in step 7 above.
+1. `artisan down` (if not already).
+2. Point `current` back at the previous release, as above.
 3. No opcache step is needed (see first-deployment step 10).
-4. CLI verification.
-5. `php artisan up`, then HTTP verification.
+4. CLI verification, against `current`.
+5. `artisan up`, then HTTP verification.
 
 Nothing was done to the database. Nothing is lost.
 
 ### `code-only` — the previous release runs against the new schema
 
-Same five steps, with one addition between 3 and 4: **verify the previous release against the already-migrated schema** before coming up. `php artisan about` and `php artisan migrate:status` from the restored release, and exercise one authenticated read if you can. The schema stays migrated; you are relying on the classification that the old code tolerates it.
+Same five steps, with one addition between 3 and 4: **verify the previous release against the already-migrated schema** before coming up. `artisan about` and `artisan migrate:status`, against `current` (now the restored release), and exercise one authenticated read if you can. The schema stays migrated; you are relying on the classification that the old code tolerates it.
 
 Nothing is lost.
 
@@ -306,12 +349,12 @@ Nothing is lost.
 
 **Maintenance stays on for the whole of this.**
 
-1. `php artisan down` — and confirm it, because everything below assumes no writes are arriving.
-2. Point `current` back at the previous release. No opcache step is needed.
+1. `artisan down` — and confirm it, because everything below assumes no writes are arriving.
+2. Point `current` back at the previous release, as above. No opcache step is needed.
 3. **Restore the pre-release backup** — follow [backup and restore](backup-and-restore.md), including the keyring verification, which happens *before* the database is touched.
 4. Reconcile invitations (see that runbook): revoke any invitation whose account is already active.
-5. CLI verification against the restored release and restored database.
-6. `php artisan up`, then HTTP verification.
+5. CLI verification against `current` (the restored release) and the restored database.
+6. `artisan up`, then HTTP verification.
 7. Record in `shared/deploy.log` what was lost (see below).
 
 > **Data loss is explicit here.** Everything written between the pre-migration backup and the moment maintenance was re-entered is gone. Because the backup is taken inside the maintenance window, that is normally only what happened during the failed release itself — but if the release was up and serving for a while before the failure was noticed, it includes every sign-in, every audit event and every administrative act in that period.
@@ -319,6 +362,10 @@ Nothing is lost.
 > **The audit trail loses that period too** ([ADR 0019](../adr/0019-security-event-auditing-seam.md)). Record in the deploy log what the gap was, because `security_events` can no longer tell you.
 
 **`migrate:rollback` is not a recovery mechanism.** Every migration in this application creates or adds; their `down()` methods destroy data. Do not reach for it here.
+
+> **First deployment is a distinct case of this, and step 3 above does not apply to it.** `--previous none` is always classified `restore-required` ([ADR 0027](../adr/0027-release-and-deployment-model.md)), but the reason is not that a backup exists to restore: on a first deployment the production database **begins empty**, there is no prior application data, and no `code-only` rollback target exists because there is no earlier release's code to fall back to. If first deployment itself fails after migrations have run, step 3's "restore the pre-release backup" does not apply — there is no pre-release application backup, only an empty schema. Recovery there means dropping what the failed migration created and returning the database to that known-empty state, then re-attempting from step 5, not restoring a backup that was never taken because nothing existed yet to back up.
+>
+> **The general `restore-required` procedure above is the decided design, and it has never been rehearsed end to end.** No backup or restore tooling exists in this repository ([backup and restore](backup-and-restore.md)); taking a dump is a documented `mysqldump` command, verified on the host, but loading one back, checking the keyring fingerprints before the database is touched, and reconciling invitations afterward are procedures a person follows by hand, untested against a real failure. **Treat this as explicitly open work**, to be completed and rehearsed before the first *later* release whose classification is `restore-required` — do not assume it is ready merely because the steps are written down.
 
 ---
 
@@ -377,7 +424,9 @@ and emits a **self-contained** page with **no CSS at all**. Not merely no extern
 
 No restart, cache clear or wait at any point, in either direction.
 
-**Composed and proved locally since.** Against the production-equivalent origin, with the flag raised: the Console root, client-side routes and static assets all answer the responder's 503 with `Retry-After: 120` and `no-store`; `/api` and `/api/v1/...` stay JSON and are never rewritten; `/up` is answered by Laravel rather than the responder; `/maintenance.php` serves without looping; private paths stay **403 rather than 503**, because the denials run first; the 503 carries the full browser security policy; and removing the flag restores the whole surface. The flag in those journeys is the same `storage/framework/down` that `php artisan down` writes.
+**Composed and proved at two levels since.** Against the production-equivalent Caddy origin, with the flag raised: the Console root, client-side routes and static assets all answer the responder's 503 with `Retry-After: 120` and `no-store`; `/api` and `/api/v1/...` stay JSON and are never rewritten; `/up` is answered by Laravel rather than the responder; `/maintenance.php` serves without looping; private paths stay **403 rather than 503**, because the denials run first; the 503 carries the full browser security policy; and removing the flag restores the whole surface. The flag in those journeys is the same `storage/framework/down` that `php artisan down` writes.
+
+Separately, `scripts/tests/apache-surface.sh` runs the *actual* `.htaccess` and `maintenance.php` under a real Apache container and asserts the same "`/api` and `/up` are never rewritten" claim directly against Apache's own second-pass rewrite behaviour, which Caddy does not have and cannot exercise — this is the check that found the `[L]`/`[END]` defect above. Neither level is the production host: LSAPI on CloudLinux, not a container's mod_php, is what actually serves this file, and that remains unrehearsed until the first real deployment.
 
 ---
 
@@ -476,7 +525,7 @@ Four things about that line are deliberate:
 - **Output goes to a shared log**, not `/dev/null`. At one line an hour this costs nothing, and it is the only evidence that pruning ran at all.
 - **Cron does not name individual Laravel commands.** The application schedule (`routes/console.php`) owns the task list, so it is reviewed like code and survives a host migration. Per-task cron entries are how environments drift.
 
-Verify: `php artisan schedule:list` shows `identity:prune-expired` with a sane next run, and after an hour `select count(*) from sessions` stops climbing.
+Verify: `/usr/local/bin/php /home/<user>/commons/current/artisan schedule:list` shows `identity:prune-expired` with a sane next run, and after an hour `select count(*) from sessions` stops climbing.
 
 **During a deployment nothing needs doing.** Scheduled tasks skip while the application is in maintenance mode, and no task in this application opts out of that.
 
@@ -486,15 +535,17 @@ Verify: `php artisan schedule:list` shows `identity:prune-expired` with a sane n
 
 ### CLI — run these while maintenance is still active
 
+Run every command below as `/usr/local/bin/php <artisan> COMMAND`, where `<artisan>` is the path the calling step named — `$R/artisan` for the release being brought up before the swap, `/home/<user>/commons/current/artisan` for whichever release `current` points at afterward. Never a bare `php artisan`, and never a path chosen by whatever the shell's working directory happens to be.
+
 | Command | Proves |
 | --- | --- |
-| `php artisan release:show` | The release serving is the one you built. Compare its release id and commit with the artifact (`./flow release inspect` printed both). It also prints the `schema_rollback` classification and the previous release — read them now, while there is time, rather than during a rollback |
-| `php artisan about` | The application boots, config resolves, the database connection reports |
-| `php artisan migrate:status` | Nothing pending |
-| `php artisan security:production-check` | Configuration is production-safe — clean, not "clean except" |
-| `php artisan schedule:list` | The prune task is registered with a sane next run |
+| `release:show` | The release serving is the one you built. Compare its release id and commit with the artifact (`./flow release inspect` printed both). It also prints the `schema_rollback` classification and the previous release — read them now, while there is time, rather than during a rollback |
+| `about` | The application boots, config resolves, the database connection reports |
+| `migrate:status` | Nothing pending |
+| `security:production-check` | Configuration is production-safe — clean, not "clean except" |
+| `schedule:list` | The prune task is registered with a sane next run |
 
-### HTTP — run these immediately after `php artisan up`
+### HTTP — run these immediately after `artisan up`
 
 **Positive:**
 
@@ -522,7 +573,7 @@ The negative checks matter more than the positive ones. `.env` holds the applica
 
 `release:show` reads the `release.json` that shipped **inside the release directory it is run from** — Laravel's base path, beside `artisan` — so it always describes the code that is executing, never the newest release on disk or anything in `shared/`. It never consults git (the host has none). It is read-only, and **fail-closed**: no manifest, an unreadable one, malformed JSON, or any missing or invalid identity field exits non-zero and names the field. There is no "unknown" release. If it fails on a deployed release, re-upload the artifact and verify its checksum before doing anything else.
 
-`security:production-check` reports in three parts. **Checks** are configuration this deployment runs under, and any failure means do not serve: environment and debug, `APP_URL`, `APP_KEY` presence and size, the breached-password checker, bcrypt cost, every session-cookie invariant, the rate limits and reset floor, CORS, PHP version and extensions, writable runtime directories, `expose_php`, the **file** maintenance driver, database engine and credentials (and that no development credential is in use), no dependency on a service this host lacks, and that PHP `mail()` is not the transport. **Deliberately open** lists decisions that are deferred on purpose and do not fail the command — today that is outbound mail. **Not checked here** lists the owner verifications no configuration read can establish. No check ever prints a secret; a failing one names the setting and what is wrong with it.
+`security:production-check` reports in three parts. **Checks** are configuration this deployment runs under, and any failure means do not serve: environment and debug, `APP_URL`, `APP_KEY` presence and size, the breached-password checker, bcrypt cost, every session-cookie invariant, the rate limits and reset floor, CORS, PHP version and extensions, writable runtime directories, the **file** maintenance driver, database engine and credentials (and that no development credential is in use), no dependency on a service this host lacks, and that PHP `mail()` is not the transport. **Deliberately open** lists decisions that are deferred on purpose and do not fail the command — today that is outbound mail. **Not checked here** lists the owner verifications no configuration read can establish. No check ever prints a secret; a failing one names the setting and what is wrong with it.
 
 A green "writable runtime directories" at first deployment is the first time that item is observed on the real filesystem ([production readiness](production-readiness.md), item 9). It is implemented and tested locally; it is not verified on the host until that run.
 
@@ -539,6 +590,8 @@ Implemented, developer-side only: pure functions of a commit, run on a developer
 | `./flow release migrations [--ref] [--previous]` | Lists a release's migrations and the scanner's warnings |
 
 Output goes to `dist/releases/` (gitignored) unless `--out` says otherwise. An existing artifact is never overwritten. `./flow release --help` lists every option.
+
+**This build runs on the developer's own machine, and needs GNU userland there — not merely inside a container.** `scripts/lib/release.sh` calls `date -d` and `tar --sort=name --mtime=…` directly from the outer shell, on the host, before anything reaches a container; the container images (`flowlife-dev/php:8.3`, `node:24-bookworm-slim`) only run the Composer/npm/cache steps inside. BSD `date`/`tar` (macOS, the default on a Mac without `coreutils`/`gnu-tar` installed) do not accept the same flags. The development target is Linux or WSL2 ([getting started](../development/getting-started.md)); this is a property of that same requirement, not a new one, and is not a promise of macOS support.
 
 **What a person supplies, and the build refuses to guess:**
 
@@ -559,7 +612,7 @@ Output goes to `dist/releases/` (gitignored) unless `--out` says otherwise. An e
 This runbook describes the approved design. These parts of it do not exist in the repository, and the implementation phase adds them:
 
 - **The cache-command check on every commit.** `./flow release build` runs it (and refuses if `resources/views` has appeared), so it gates a release; the ordinary `./flow check` does not yet, so a Blade view would only be caught when a release is built.
-- **An Apache-served rehearsal.** Everything about the composed `.htaccess` that can be proved without Apache now is; the file itself is first executed by a real deployment.
+- **A production-host rehearsal.** The composed `.htaccess` is now proved against Caddy (the contract) and against a real, disposable Apache container (`scripts/tests/apache-surface.sh`, routing and header composition), which is what caught the `[L]`/`[END]` and header-duplication defects a Caddy-only suite could not see. Neither is the actual host: LSAPI on CloudLinux, with its own module set and version, is first executed by a real deployment.
 
 ---
 
