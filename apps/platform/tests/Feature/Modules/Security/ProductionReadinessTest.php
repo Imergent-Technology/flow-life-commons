@@ -244,6 +244,22 @@ it('names what it cannot see, and does not pretend otherwise', function () {
         ->assertSuccessful();
 });
 
+it('never fails on expose_php, and says why', function () {
+    // Regression: the CLI process's own ini is not necessarily the web server's — cPanel commonly ships
+    // separate ea-php83 (web) and ea-php83-cli packages with independent php.ini files — so failing the
+    // command on THIS process's expose_php reading would block a deployment over a fact about the wrong
+    // process. Measured on the host: the ini read On and no X-Powered-By ever reached a client. This
+    // stays informational, never a `checks()` entry, regardless of what this test process's own ini says.
+    asProduction();
+
+    expect(readiness())->not->toHaveKey('the version of PHP is not announced');
+
+    commandProductionReadiness('security:production-check')
+        ->expectsOutputToContain('expose_php reads')
+        ->expectsOutputToContain('not the web server')
+        ->assertSuccessful();
+});
+
 it('exits non-zero so a deployment script can stop on it', function () {
     config(['app.debug' => true]);
 
@@ -264,23 +280,51 @@ describe('outbound mail: deferred, exactly as documented', function () {
         asProduction();
         config(['mail.default' => 'log']);
 
-        expect(deferredItems()['outbound mail is configured with an authenticated transport'])->toBeFalse();
+        expect(deferredItems()['outbound mail is authenticated and its deliverability is verified'])->toBeFalse();
 
         commandProductionReadiness('security:production-check')
             ->expectsOutputToContain('Deliberately open')
-            ->expectsOutputToContain('outbound mail is configured with an authenticated transport')
+            ->expectsOutputToContain('outbound mail is authenticated')
             ->expectsOutputToContain('1 item(s) remain deliberately open')
             ->assertSuccessful();
     });
 
-    it('closes the item only when a real transport is configured, and never by approving mail()', function () {
+    it('never closes the item, however plausible the configured transport looks', function () {
+        // Regression: the earlier version of this check closed on ANY mailer other than log/array,
+        // including an smtp transport with real-looking host/credentials that had never actually been
+        // verified — reporting "closed" from configuration SHAPE alone, when what the item claims
+        // (SPF alignment, DKIM, DMARC, real delivery) can only be established by sending real mail and
+        // checking where it landed. This can never be "closed" by this command, on any configuration.
         asProduction();
-        config(['mail.default' => 'smtp']);
-        expect(deferredItems()['outbound mail is configured with an authenticated transport'])->toBeTrue();
+        foreach (['smtp', 'ses', 'postmark', 'resend', 'log', 'array'] as $mailer) {
+            config(['mail.default' => $mailer]);
+            expect(deferredItems()['outbound mail is authenticated and its deliverability is verified'])
+                ->toBeFalse("mailer '$mailer' must not close the item");
+        }
+    });
 
-        // sendmail would "close" the deferred item and fail the required one: the required check wins.
+    it('describes a configured transport differently from an unconfigured one, without closing either', function () {
+        asProduction();
+
+        config(['mail.default' => 'log']);
+        commandProductionReadiness('security:production-check')
+            ->expectsOutputToContain('so nothing is sent')
+            ->assertSuccessful();
+
+        config(['mail.default' => 'smtp']);
+        commandProductionReadiness('security:production-check')
+            ->expectsOutputToContain('necessary but not')
+            ->assertSuccessful();
+    });
+
+    it('still fails the deployment on sendmail through the required check, independent of the deferred item', function () {
+        // sendmail is refused outright (it is the specific transport measured unsigned and DMARC-
+        // misaligned on 2026-09-21), and that refusal does not depend on the deferred item's wording.
+        asProduction();
         config(['mail.default' => 'sendmail']);
+
         expect(readiness()['the unapproved PHP mail() transport is not in use'])->toBeFalse();
+        expect(deferredItems()['outbound mail is authenticated and its deliverability is verified'])->toBeFalse();
         commandProductionReadiness('security:production-check')->assertFailed();
     });
 });

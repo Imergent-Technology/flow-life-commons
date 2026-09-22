@@ -41,7 +41,7 @@ final class ProductionReadinessCommand extends Command
         'The subdomain has its OWN document root, pointing at the platform\'s public/ directory and shared with nothing.',
         '.htaccess overrides are honoured (AllowOverride) and mod_rewrite is on.',
         'mod_headers is enabled. Without it the Console\'s static files ship with NO security headers while the API keeps them.',
-        'The WEB SERVER\'s PHP (not the CLI this command ran under) is 8.3 with the same extensions, and has expose_php off.',
+        'The WEB SERVER\'s PHP (not the CLI this command ran under) is 8.3 with the same extensions.',
         'A cron entry runs `php artisan schedule:run` every minute. Nothing else drives scheduled maintenance.',
         'Outbound HTTPS to api.pwnedpasswords.com works, or no password can be accepted.',
         'Outbound mail works: an invitation or reset that cannot be sent leaves the person unable to proceed.',
@@ -80,6 +80,11 @@ final class ProductionReadinessCommand extends Command
         foreach (self::OWNER_VERIFICATIONS as $item) {
             $this->line("  <fg=yellow>?</> {$item}");
         }
+        // Informational, never a check: see ProductionReadiness::exposePhp() for why the CLI's own
+        // reading is not acted on here, and confirm the web-facing fact (no X-Powered-By reaching a
+        // client) is what was actually verified on the hosting account.
+        $this->line("  <fg=yellow>?</> This CLI process's expose_php reads '{$readiness->exposePhp()}'.");
+        $this->line('      That is not the web server\'s PHP. Confirm no X-Powered-By header reaches a real client.');
 
         $this->newLine();
         if ($failed !== []) {

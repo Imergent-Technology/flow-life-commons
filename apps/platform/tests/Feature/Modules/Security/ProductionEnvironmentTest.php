@@ -35,14 +35,27 @@ function productionTemplateAssignments(): string
     ));
 }
 
+/** Config files underEnvironment() rebuilds from disk, and must therefore also restore. */
+const UNDER_ENVIRONMENT_CONFIG_FILES = ['app', 'cache', 'cors', 'database', 'hashing', 'identity', 'mail', 'queue', 'session'];
+
 /**
- * Run $callback with the process environment replaced by $values ALONE, then put everything back.
+ * Run $callback with the process environment replaced by $values ALONE, then put everything back —
+ * $_ENV, $_SERVER, putenv() state AND the rebuilt config() values, whatever happened inside.
  *
  * "Alone" is the point. The test suite's own environment comes from phpunit.xml, which sets exactly
  * the development values the template must not rely on (`none` for the breach checker, a 4-round
  * bcrypt cost, a 0 ms reset floor). Every key it sets is cleared first, so a value only passes because
  * the template set it or the application's own default is correct — which is precisely the production
  * situation, where nothing but `shared/.env` exists.
+ *
+ * EVERY mutation this function makes is inside the try, and every one is undone in the finally,
+ * regardless of where an exception is thrown — including one thrown while saving or clearing the
+ * environment, not only from $callback. Two things are restored, not one: the earlier version of this
+ * helper restored $_ENV/$_SERVER/putenv() but never the config() values it rebuilt from disk, so a
+ * production-shaped config (a 12-round bcrypt cost, `pwned_passwords`, `database` cache and queue…)
+ * leaked into every test that ran afterward in the same process — PHPUnit does not fork a process per
+ * test, so that contamination was silent and order-dependent rather than a failure at the call site
+ * where it happened.
  *
  * @param  array<string, string>  $values
  */
@@ -53,33 +66,41 @@ function underEnvironment(array $values, Closure $callback): mixed
     foreach ($phpunit !== false ? ($phpunit->xpath('//php/env') ?: []) : [] as $node) {
         $injected[] = (string) $node['name'];
     }
-
     $keys = array_values(array_unique([...$injected, ...ProductionEnvironment::FORBIDDEN_KEYS, ...array_keys($values)]));
-    $saved = [];
-    foreach ($keys as $key) {
-        $saved[$key] = [
-            array_key_exists($key, $_ENV) ? $_ENV[$key] : null, array_key_exists($key, $_ENV),
-            array_key_exists($key, $_SERVER) ? $_SERVER[$key] : null, array_key_exists($key, $_SERVER),
-            getenv($key),
-        ];
-        unset($_ENV[$key], $_SERVER[$key]);
-        putenv($key);
-    }
-    foreach ($values as $key => $value) {
-        $_ENV[$key] = $value;
-        $_SERVER[$key] = $value;
-        putenv("$key=$value");
-    }
 
+    $savedEnv = [];
+    $savedConfig = [];
     try {
+        foreach ($keys as $key) {
+            $savedEnv[$key] = [
+                array_key_exists($key, $_ENV) ? $_ENV[$key] : null, array_key_exists($key, $_ENV),
+                array_key_exists($key, $_SERVER) ? $_SERVER[$key] : null, array_key_exists($key, $_SERVER),
+                getenv($key),
+            ];
+            unset($_ENV[$key], $_SERVER[$key]);
+            putenv($key);
+        }
+        foreach ($values as $key => $value) {
+            $_ENV[$key] = $value;
+            $_SERVER[$key] = $value;
+            putenv("$key=$value");
+        }
+
         // Rebuilt from the config files themselves, so every env() default is the application's own.
-        foreach (['app', 'cache', 'cors', 'database', 'hashing', 'identity', 'mail', 'queue', 'session'] as $file) {
+        // The PRE-rebuild value of each file is captured here, not assumed to be config()'s current
+        // state at exit: a nested call, or a test that already mutated config() before calling this,
+        // would otherwise be restored to the wrong thing.
+        foreach (UNDER_ENVIRONMENT_CONFIG_FILES as $file) {
+            $savedConfig[$file] = config($file);
             config([$file => require config_path("$file.php")]);
         }
 
         return $callback();
     } finally {
-        foreach ($saved as $key => [$env, $hadEnv, $server, $hadServer, $put]) {
+        foreach ($savedConfig as $file => $value) {
+            config([$file => $value]);
+        }
+        foreach ($savedEnv as $key => [$env, $hadEnv, $server, $hadServer, $put]) {
             unset($_ENV[$key], $_SERVER[$key]);
             if ($hadEnv) {
                 $_ENV[$key] = $env;
@@ -238,7 +259,7 @@ describe('the template against the real check', function () {
             return $names;
         });
 
-        expect($open)->toBe(['outbound mail is configured with an authenticated transport']);
+        expect($open)->toBe(['outbound mail is authenticated and its deliverability is verified']);
     });
 
     it('fails the check if the operator forgets any one of the four values', function () {
@@ -271,6 +292,29 @@ describe('the template against the real check', function () {
         }
 
         expect(getenv('IDENTITY_COMPROMISED_PASSWORD_CHECK'))->toBe($before);
+    });
+
+    it('restores config(), not only the environment, whatever happened inside', function () {
+        // Regression: an earlier version of this helper rebuilt config() from disk but never restored
+        // it, so a production-shaped config LEAKED into every test that ran afterward in the same
+        // process — silent, and dependent on test order, because nothing failed at the call site where
+        // it happened. bcrypt cost is a clean witness: the suite runs at 4 (phpunit.xml) and production
+        // is 12, so a leak here is unmistakable and not a coincidence of some other default.
+        $before = config('hashing.bcrypt.rounds');
+        expect($before)->not->toBe(12, 'the test suite is expected to run at a different cost than production');
+
+        underEnvironment(filledIn(ProductionEnvironment::templatePath()), fn () => config('hashing.bcrypt.rounds'));
+
+        expect(config('hashing.bcrypt.rounds'))->toBe($before);
+
+        try {
+            underEnvironment(filledIn(ProductionEnvironment::templatePath()), static function (): never {
+                throw new RuntimeException('inside');
+            });
+        } catch (RuntimeException) {
+        }
+
+        expect(config('hashing.bcrypt.rounds'))->toBe($before, 'a throw inside the callback must not leave the production config() in place either');
     });
 });
 

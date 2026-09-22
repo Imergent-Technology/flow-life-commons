@@ -60,18 +60,35 @@ final readonly class ProductionReadiness
     public function deferred(): array
     {
         $mailer = $this->config->string('mail.default');
+        $configured = ! in_array($mailer, ['log', 'array'], true);
 
         return [
             ReadinessCheck::assert(
-                'outbound mail is configured with an authenticated transport',
-                ! in_array($mailer, ['log', 'array'], true),
-                'MAIL_MAILER is "'.$mailer.'", so nothing is sent: an invitation is written to the log instead. '
-                .'This is the documented deferred state, not a fault — Flow Life\'s mail topology is an organizational '
-                .'decision that has not been made, and PHP mail() is not approved (it delivered unsigned and not '
-                .'DMARC-aligned when tested on 2026-09-21). Deployment is not blocked: the first administrator\'s '
-                .'invitation token is delivered out of band over SSH. Inviting anyone else is blocked until a transport '
-                .'is chosen and SPF alignment, DKIM, DMARC and inbox placement are each verified with a real invitation '
-                .'(docs/runbooks/production-readiness.md, section 5).',
+                'outbound mail is authenticated and its deliverability is verified',
+                // ALWAYS reported open, regardless of what MAIL_MAILER is set to. SPF alignment for the
+                // actual envelope sender, DKIM signing, a DMARC pass and inbox-rather-than-spam
+                // placement can only be established by sending real mail and looking at where it
+                // landed (production-readiness.md, section 5) — a fact no configuration read can
+                // produce. Deriving "closed" from the mailer name alone was the earlier version of
+                // this check, and it was wrong in the dangerous direction: an authenticated-LOOKING
+                // transport (a real SMTP host, real credentials) reports exactly the same "configured"
+                // shape whether or not it has ever actually been verified, so a person could read a
+                // green result here as "mail works" when nothing has confirmed that at all.
+                false,
+                $configured
+                    ? 'MAIL_MAILER is "'.$mailer.'": a transport is configured, which is necessary but not '
+                        .'sufficient. Configuration shape cannot establish SPF alignment for the real envelope '
+                        .'sender, DKIM signing or a DMARC pass — those are only established by sending a real '
+                        .'invitation and checking where it lands (docs/runbooks/production-readiness.md, section 5). '
+                        .'Record the result there once done; this command has no way to read it back.'
+                    : 'MAIL_MAILER is "'.$mailer.'", so nothing is sent: an invitation is written to the log instead. '
+                        .'This is the documented deferred state, not a fault — Flow Life\'s mail topology is an '
+                        .'organizational decision that has not been made, and PHP mail() is not approved (it '
+                        .'delivered unsigned and not DMARC-aligned when tested on 2026-09-21). Deployment is not '
+                        .'blocked: the first administrator\'s invitation token is delivered out of band over SSH. '
+                        .'Inviting anyone else is blocked until a transport is chosen and SPF alignment, DKIM, DMARC '
+                        .'and inbox placement are each verified with a real invitation '
+                        .'(docs/runbooks/production-readiness.md, section 5).',
             ),
         ];
     }
@@ -300,12 +317,36 @@ final readonly class ProductionReadiness
             ReadinessCheck::assert('PHP is 8.3 or newer', version_compare(PHP_VERSION, '8.3.0', '>='), 'PHP is '.PHP_VERSION.'.'),
             ReadinessCheck::assert('every required PHP extension is loaded', $missing === [], 'Missing: '.implode(', ', $missing).'.'),
             ReadinessCheck::assert('the runtime directories are writable', $writable === [], 'Not writable: '.implode(', ', $writable).'.'),
-            ReadinessCheck::assert(
-                'the version of PHP is not announced',
-                ini_get('expose_php') === '' || ini_get('expose_php') === '0' || ini_get('expose_php') === 'Off',
-                'expose_php is on, so responses carry X-Powered-By with the PHP patch level. NOTE: this reads the CLI configuration; the web server may differ, which is an owner verification.',
-            ),
+            // `expose_php` is deliberately NOT a check here: see exposePhp() below for why.
         ];
+    }
+
+    /**
+     * The CLI process's own `expose_php` reading, informational only — NOT a check, and deliberately
+     * so.
+     *
+     * `ini_get('expose_php')` here reads the ini of the process running this command, which on a
+     * shared host is very often a DIFFERENT PHP build from the one answering HTTP requests: cPanel
+     * commonly ships separate `ea-php83` (web, through LSAPI) and `ea-php83-cli` (interactive CLI)
+     * packages with independent `php.ini` files, and this command always runs under the CLI one. A
+     * hard failure here would therefore fail or pass on a fact about the wrong process — measured
+     * directly on 2026-09-21: the ini read `On`, and no `X-Powered-By` header ever reached a client
+     * (production-readiness.md, section 4b, item 2). Making that CLI reading a release blocker would
+     * have blocked first deployment on a setting this command cannot act on and that turned out not to
+     * matter, while adding nothing the browser-facing observation had not already established.
+     *
+     * The fact that actually matters — whether `X-Powered-By` reaches a real client — cannot be
+     * established by reading local configuration at all (this command connects to nothing); it is an
+     * owner verification, confirmed once on the host and re-confirmed if the account's PHP changes.
+     */
+    public function exposePhp(): string
+    {
+        $value = ini_get('expose_php');
+        if ($value === false) {
+            return 'unknown (the ini setting could not be read)';
+        }
+
+        return $value === '' || $value === '0' ? 'Off' : $value;
     }
 
     /** How many bytes of key material APP_KEY actually carries. Never returns or logs the key itself. */
