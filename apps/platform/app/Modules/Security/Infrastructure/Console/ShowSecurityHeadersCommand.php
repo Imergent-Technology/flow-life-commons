@@ -61,11 +61,22 @@ final class ShowSecurityHeadersCommand extends Command
             return implode("\n", $lines);
         }
 
+        // `onsuccess unset` before `always set`: Laravel's own middleware (ApplyBrowserSecurityHeaders)
+        // sets these same seven headers on every response it answers, so without the unset Apache's
+        // `Header always set` APPENDS a second copy rather than replacing PHP's — measured on a real
+        // Apache 2.4 container serving this exact .htaccess against a PHP response, where every response
+        // class routed to the front controller (including a 404) carried each header twice. `unset`
+        // first empties whatever PHP sent (regardless of status; verified on 200, 404, 403 and 503
+        // responses through the front controller), then `always set` states the one value that governs,
+        // so the origin — not the application code answering a given request — is the single source of
+        // this policy for every response, including ones Apache serves without PHP at all.
         $lines = ['<IfModule mod_headers.c>'];
         foreach ($headers as $name => $value) {
+            $lines[] = sprintf('    Header onsuccess unset %s', $name);
             $lines[] = sprintf('    Header always set %s %s', $name, self::quote($value));
         }
         foreach ($hsts as $name => $value) {
+            $lines[] = sprintf('    Header onsuccess unset %s', $name);
             $lines[] = sprintf('    Header always set %s %s "expr=%%{HTTPS} == \'on\'"', $name, self::quote($value));
         }
         $lines[] = '</IfModule>';

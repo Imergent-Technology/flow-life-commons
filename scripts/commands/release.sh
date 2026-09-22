@@ -224,8 +224,17 @@ release_build() {
     RELEASE_PARTIALS+=("$out/.$name.partial" "$out/.$name.sha256.partial")
     cp "$work/$name" "$out/.$name.partial"
     cp "$work/$name.sha256" "$out/.$name.sha256.partial"
-    mv "$out/.$name.partial" "$out/$name"
-    mv "$out/.$name.sha256.partial" "$out/$name.sha256"
+    # -n (no-clobber): the existence check above ran before this build started, and a build can take
+    # minutes, so a concurrent build finishing in between is a real window, not a hypothetical one.
+    # -n makes this rename refuse rather than overwrite if that happened, and the tarball is moved into
+    # place FIRST and checked before the checksum is touched at all: a torn pairing (one build's
+    # tarball with a different build's checksum) can only happen if something removes files out from
+    # under this process between the two lines, which is a different failure than a race between two
+    # runs of this command.
+    mv -n "$out/.$name.partial" "$out/$name" ||
+        die "release: $out/$name was published by another build while this one was running. This build's output was discarded; nothing of the other build's was touched."
+    mv -n "$out/.$name.sha256.partial" "$out/$name.sha256" ||
+        die "release: $out/$name.sha256 was published by another build while this one's tarball, just placed at $out/$name, was still being finished. Do not trust that pairing — remove both and re-run whichever build you meant to keep."
 
     echo
     ok "Built $release_id"

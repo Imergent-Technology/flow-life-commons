@@ -15,7 +15,9 @@
 #   4. maintenance           before routing, so an outage is answered before anything else is
 #                            considered; excludes /api, /up and this responder itself
 #   5. Laravel's own rules   header forwarding and the trailing-slash redirect, unchanged
-#   6. API and /up           explicit, so an API path can never fall through to the Console shell
+#   6. API and /up           explicit, so an API path can never fall through to the Console shell;
+#                            [END] so Apache's internal redirect to index.php does not re-run this
+#                            ruleset and let section 4 catch the rewritten request on a second pass
 #   7. SPA fallback          LAST, and only for what is neither a real file nor a real directory
 #
 # The composed contract is exercised in a browser against the production-equivalent development
@@ -42,15 +44,31 @@ DirectoryIndex index.html index.php
 # It needs mod_headers. If the hosting account does not have it, the Console's static files ship with
 # NO security headers while the API keeps them, which is a materially weaker origin — verified
 # present on this host on 2026-09-21 (production readiness, item R7).
+#
+# EACH header is `onsuccess unset` before it is `always set`. Laravel's own middleware
+# (ApplyBrowserSecurityHeaders) sets these same seven headers on every response it answers, so without
+# the unset, Apache's `always set` APPENDS a second copy instead of replacing PHP's: measured on a real
+# Apache 2.4 container serving this exact file, every response the front controller answered — 200,
+# 301, 302, 400, 403, 404, 500 and 503 alike — carried each header twice. The unset clears whatever PHP
+# sent regardless of that response's status, so `always set`'s value is always the one a client
+# receives, and it is sent exactly once whether Apache or Laravel answered the request.
 
 <IfModule mod_headers.c>
+    Header onsuccess unset Content-Security-Policy
     Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    Header onsuccess unset X-Content-Type-Options
     Header always set X-Content-Type-Options "nosniff"
+    Header onsuccess unset Referrer-Policy
     Header always set Referrer-Policy "same-origin"
+    Header onsuccess unset X-Frame-Options
     Header always set X-Frame-Options "DENY"
+    Header onsuccess unset Permissions-Policy
     Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), display-capture=(), publickey-credentials-get=(), screen-wake-lock=()"
+    Header onsuccess unset Cross-Origin-Opener-Policy
     Header always set Cross-Origin-Opener-Policy "same-origin"
+    Header onsuccess unset Cross-Origin-Resource-Policy
     Header always set Cross-Origin-Resource-Policy "same-origin"
+    Header onsuccess unset Strict-Transport-Security
     Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
 </IfModule>
 
@@ -116,7 +134,17 @@ DirectoryIndex index.html index.php
     # a directory, fall through to section 7 and be answered with the Console's HTML shell and a 200.
     # Laravel must answer it, with its own JSON 404. This is the same split the development gateway
     # makes (`path /api /api/* /up`), and the reason no Console route may begin with /api or be /up.
-    RewriteRule "^(api($|/)|up$)" index.php [L]
+    #
+    # [END], not [L]. `.htaccess` is per-directory context: `[L]` ends only the CURRENT pass, and a
+    # rewrite to a real file (index.php) triggers Apache's own internal redirect, which re-runs this
+    # whole ruleset from the top as a SECOND pass. On that second pass %{REQUEST_URI} is /index.php,
+    # which the section 4 exclusion does not name, so the maintenance rule matched it and sent every
+    # /api and /up request to the HTML responder instead of Laravel — measured on a real Apache 2.4
+    # container with this file while the flag was raised. `[END]` stops mod_rewrite processing for the
+    # request outright, so no second pass happens and section 4 is never re-evaluated. Requires Apache
+    # 2.4.24+ (mod_rewrite), which every CloudLinux build in current use carries; verified locally on
+    # 2.4.68 and unverified beyond that on the production host.
+    RewriteRule "^(api($|/)|up$)" index.php [END]
 
     # --- 7. The Console, and its client-side routes -------------------------------------------
     #

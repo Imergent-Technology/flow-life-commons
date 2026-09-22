@@ -161,8 +161,7 @@ make_fixture() {
         cd "$d"
         git init -q -b main
         local p=apps/platform
-        mkdir -p $p/app $p/bootstrap/cache $p/config $p/routes $p/public $p/tests $p/openapi \
-            $p/storage/logs $p/storage/framework/cache $p/storage/app apps/guardian-console
+        mkdir -p $p/app $p/bootstrap $p/config $p/routes $p/public $p/tests $p/openapi apps/guardian-console
         echo '<?php // artisan' >$p/artisan
         echo '{"name":"fixture/platform"}' >$p/composer.json
         echo '{"content-hash":"fixture-lock-1"}' >$p/composer.lock
@@ -183,7 +182,13 @@ make_fixture() {
         echo 'openapi: 3.1.0' >$p/openapi/openapi.yaml
         echo 'APP_DEBUG=true' >$p/.env.example
         echo '<phpunit/>' >$p/phpunit.xml
-        for skel in bootstrap/cache storage/logs storage/framework/cache storage/app; do : >$p/$skel/.gitignore; done
+        # The REAL persistent-storage skeleton, from git's index rather than the working tree: exactly
+        # the committed placeholders (scripts/release/artifact.php pins their content too), never
+        # whatever runtime state happens to sit in a developer's own apps/platform/storage right now.
+        while IFS= read -r rel; do
+            mkdir -p "$p/$(dirname "${rel#apps/platform/}")"
+            cp "$ROOT/$rel" "$p/${rel#apps/platform/}"
+        done < <(git -C "$ROOT" ls-files apps/platform/storage apps/platform/bootstrap/cache)
         echo '{"name":"console"}' >apps/guardian-console/package.json
         echo '{"lockfileVersion":3}' >apps/guardian-console/package-lock.json
         write_migration "$m" 2026_01_01_000001_create_things_table.php "        Schema::create('things', function (\$table) { \$table->id(); });"
@@ -277,6 +282,42 @@ fixture_clean() {
 printf 'flow release: fixture repository\n'
 make_fixture "$FX"
 pass "fixture built (main, annotated tags, an off-main tag, a lightweight tag, edited and views branches)"
+
+printf 'flow release: provenance is bound to the resolved commit, not re-trusted from the ref name (L1)\n'
+# release_provenance takes the commit ALREADY resolved by its caller, as a separate parameter, and must
+# not trust that refs/tags/<ref> still names it: a tag force-moved between commit resolution and this
+# check (a real TOCTOU window — they are two separate git reads) must not stamp annotated-tag provenance
+# onto a commit the tag no longer points at. Exercised directly, not through the CLI, because a single
+# test process cannot race git against itself; this calls the exact function with the exact mismatch a
+# race would produce.
+(
+    cd "$FX" || exit 1
+    # shellcheck source=/dev/null
+    FLOW_ROOT="$FX" source "$FX/scripts/lib/release.sh"
+    real_commit="$(git rev-parse "v1.0.0^{commit}")"
+    other_commit="$(git rev-parse "v1.1.0^{commit}")"
+    [[ "$real_commit" != "$other_commit" ]] || { echo "fixture tags must differ" >&2; exit 1; }
+
+    release_provenance v1.0.0 "$real_commit"
+    if [[ "$SRC_ANNOTATED" == 1 && "$SRC_TAG" == v1.0.0 ]]; then
+        echo "PASS: matching commit is trusted as annotated"
+    else
+        echo "FAIL: matching commit was not trusted (SRC_ANNOTATED=$SRC_ANNOTATED SRC_TAG=$SRC_TAG)"
+    fi
+
+    release_provenance v1.0.0 "$other_commit"
+    if [[ "$SRC_ANNOTATED" == 0 && "$SRC_TAG" == "" ]]; then
+        echo "PASS: a mismatched commit is not trusted, even though refs/tags/v1.0.0 is a real annotated tag"
+    else
+        echo "FAIL: a mismatched commit was trusted (SRC_ANNOTATED=$SRC_ANNOTATED SRC_TAG=$SRC_TAG)"
+    fi
+) >"$WORK/provenance-toctou.out" 2>&1
+if grep -q "^FAIL" "$WORK/provenance-toctou.out"; then
+    fail "provenance is bound to the resolved commit"
+    sed 's/^/        /' "$WORK/provenance-toctou.out" >&2
+else
+    pass "a tag object must peel to the exact commit already resolved, or annotation is not trusted"
+fi
 
 printf 'flow release: the boundary\n'
 flow_run help
@@ -484,7 +525,7 @@ expect_false "…and no symlink, which the seeding copy would follow out of the 
 expect_false "…nor anything but placeholders in bootstrap/cache" bash -c "find '$TREE/bootstrap/cache' -type f ! -name .gitignore | grep -q ."
 expect_true "the document root carries the maintenance responder" test -f "$TREE/public/maintenance.php"
 expect_true "…and the composed .htaccess, with its maintenance arm" grep -q 'storage/framework/down' "$TREE/public/.htaccess"
-expect_true "…its API carve-out" grep -q 'index.php \[L\]' "$TREE/public/.htaccess"
+expect_true "…its API carve-out" grep -q 'index.php \[END\]' "$TREE/public/.htaccess"
 expect_true "…its SPA fallback" grep -q '/index.html \[L\]' "$TREE/public/.htaccess"
 expect_true "…and its private-path denials" grep -q '\[F,L\]' "$TREE/public/.htaccess"
 expect_false "the production environment template never ships in an artifact" test -e "$TREE/.env.production.example"
@@ -592,16 +633,39 @@ refuses "node_modules" nodemods 'mkdir app/node_modules' "forbidden directory"
 refuses "a log file in storage/" log 'echo x >storage/logs/laravel.log' "runtime state in the shipped skeleton"
 refuses "populated storage/framework" sess 'echo x >storage/framework/cache/abc' "runtime state in the shipped skeleton"
 refuses "a cached config in bootstrap/cache" cache 'echo "<?php" >bootstrap/cache/config.php' "runtime state in the shipped skeleton"
+# The persistent-storage skeleton is pinned exactly (M3): the runbook seeds shared/storage from this
+# tree with a copy that never overwrites an existing file, so whatever ships here can become permanent
+# host state on the first deployment. A DIRECTORY named `down` is the sharpest case: file_exists() sees
+# it (Laravel's own check), Apache's `-f` test does not (a regular-file test), and `php artisan up`
+# cannot remove a directory with unlink().
+refuses "a directory named 'down' in the storage skeleton" downdir \
+    'rm -rf storage/framework && mkdir -p storage/framework/down && : >storage/framework/down/.gitignore && : >storage/framework/.gitignore' \
+    "unexpected directory in the persistent-storage skeleton: storage/framework/down"
+refuses "a directory where a log file placeholder belongs" logdir \
+    'rm -rf storage/logs && mkdir -p storage/logs/laravel.log && : >storage/logs/laravel.log/.gitignore' \
+    "unexpected directory in the persistent-storage skeleton: storage/logs/laravel.log"
+refuses "a .gitignore placeholder carrying unexpected content" giwrong \
+    'echo "APP_KEY=base64:not-a-real-key" >storage/app/.gitignore' \
+    "storage/app/.gitignore does not carry its expected placeholder content"
+refuses "a missing skeleton placeholder" gimissing \
+    'rm storage/framework/sessions/.gitignore' \
+    "missing persistent-storage skeleton placeholder: storage/framework/sessions/.gitignore"
+refuses "an extra file in the storage skeleton, correctly named .gitignore but in the wrong place" giextra \
+    'mkdir -p storage/framework/cache/extra && : >storage/framework/cache/extra/.gitignore' \
+    "unexpected directory in the persistent-storage skeleton: storage/framework/cache/extra"
 refuses "a database dump" dump 'echo x >database/backup.sql' "runtime state or a backup"
 refuses "key material" pem 'echo x >config/server.pem' "key material"
 refuses "a .git directory anywhere, even in vendor" git 'mkdir -p vendor/pkg/.git' "forbidden directory: vendor/pkg/.git"
 refuses "an .env inside vendor" vendorenv 'mkdir -p vendor/pkg && echo x >vendor/pkg/.env' "environment file inside vendor"
 refuses "an unlisted top-level file" stray 'echo hi >notes.txt' "unexpected top-level entry 'notes.txt'"
-refuses "a symlink outside vendor" link 'ln -s /etc/passwd app/link' "symlink outside vendor/"
+refuses "a symlink outside vendor" link 'ln -s ../composer.json app/link' "symlink outside vendor/"
+refuses "a symlink with an absolute target, refused before extraction" abstarget 'ln -s /etc/passwd app/link' "absolute target"
 refuses "the storage link shipped instead of created on the host" storlink 'rm -rf storage && ln -s ../../shared/storage storage' "symlink outside vendor/"
 refuses "a vendor symlink that escapes the artifact" escape 'ln -s ../../../../../../etc vendor/escape' "escapes the artifact"
 refuses "an absolute vendor symlink" abslink 'ln -s /etc vendor/abs' "absolute"
 refuses "a world-writable file" ww 'chmod o+w app/Example.php' "world-writable"
+refuses "a setuid file" suid 'chmod u+s app/Example.php' "setuid or setgid"
+refuses "a setgid directory" sgid 'chmod g+s app' "setuid or setgid"
 refuses "a Vite dev-server marker file" hot 'echo http://localhost:5173 >public/hot' "public/hot"
 refuses "a Console shell pointing at the dev server" devhtml 'echo "<script src=\"/@vite/client\"></script>" >>public/index.html' "Vite dev server"
 refuses "an empty assets directory" noassets 'rm -rf public/assets/* ' "public/assets is empty"
@@ -668,11 +732,14 @@ reordered() { # BODY: an .htaccess carrying every required rule, in the given or
         "$@"
 }
 refuses "an SPA fallback placed before the API carve-out" apilate \
-    "$(declare -f reordered); reordered 'RewriteRule \"(^|/)\\.\" - [F,L]' 'RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f' 'RewriteCond %{REQUEST_URI} !^/(api(\$|/)|up\$|maintenance\\.php\$)' 'RewriteRule ^ /maintenance.php [L]' 'RewriteRule ^ /index.html [L]' 'RewriteRule \"^(api(\$|/)|up\$)\" index.php [L]' >public/.htaccess" \
+    "$(declare -f reordered); reordered 'RewriteRule \"(^|/)\\.\" - [F,L]' 'RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f' 'RewriteCond %{REQUEST_URI} !^/(api(\$|/)|up\$|maintenance\\.php\$)' 'RewriteRule ^ /maintenance.php [L]' 'RewriteRule ^ /index.html [L]' 'RewriteRule \"^(api(\$|/)|up\$)\" index.php [END]' >public/.htaccess" \
     "routes the API AFTER the SPA fallback"
 refuses "private denials placed after the maintenance arm" denylate \
-    "$(declare -f reordered); reordered 'RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f' 'RewriteCond %{REQUEST_URI} !^/(api(\$|/)|up\$|maintenance\\.php\$)' 'RewriteRule ^ /maintenance.php [L]' 'RewriteRule \"^(api(\$|/)|up\$)\" index.php [L]' 'RewriteRule \"(^|/)\\.\" - [F,L]' 'RewriteRule ^ /index.html [L]' >public/.htaccess" \
+    "$(declare -f reordered); reordered 'RewriteCond %{DOCUMENT_ROOT}/../storage/framework/down -f' 'RewriteCond %{REQUEST_URI} !^/(api(\$|/)|up\$|maintenance\\.php\$)' 'RewriteRule ^ /maintenance.php [L]' 'RewriteRule \"^(api(\$|/)|up\$)\" index.php [END]' 'RewriteRule \"(^|/)\\.\" - [F,L]' 'RewriteRule ^ /index.html [L]' >public/.htaccess" \
     "denies private paths AFTER the maintenance arm"
+refuses "the API/up rewrite using [L] instead of [END]" apiendmissing \
+    "sed -i 's/index\\.php \\[END\\]/index.php [L]/' public/.htaccess" \
+    "forbidden mechanism 'index.php [L]'"
 
 # The acknowledged artifact: findings + code-only must carry a provided acknowledgement.
 ART_ACK="$WORK/out-ack/commons-v1.2.0.tar.gz"
@@ -681,7 +748,28 @@ expect_rc "an acknowledged artifact is valid" 0
 expect_out "…and inspect shows the finding" "[keyword]"
 ART="$ART_ACK"
 refuses "findings + code-only with the acknowledgement stripped" ackgone "sed -i 's/\"provided\": true/\"provided\": false/' release.json" "need the acknowledgement"
+# L2: release.json must be at least as strict as release:show, which reads it on the host
+# (app/Modules/Release/Application/ReleaseIdentity.php). A migration listed as modified with no
+# matching scanner finding is claiming a comparison the build recorded no evidence for (ADR 0027).
+refuses "a migration listed as modified with no matching scanner finding" modnofinding \
+    'sed -i "s/\"modified\": \[\],/\"modified\": [\"2026_01_01_000001_create_things_table.php\"],/" release.json' \
+    "is listed in migrations.modified with no matching scanner_findings entry"
 ART="$OUTDIR/commons-v1.1.0.tar.gz"
+# L2, continued, against a plain artifact (no findings to entangle with): every field ReleaseIdentity
+# reads must be at least as strict here as it is there, so a manifest this validator accepts cannot
+# later be rejected — or accepted with a different meaning — by release:show on the host.
+refuses "an empty source.ref" refempty \
+    'sed -i "s/^    \"ref\": \"[^\"]*\",\$/    \"ref\": \"\",/" release.json' \
+    "source.ref must be a non-empty string"
+refuses "a tag recorded despite annotated_tag being false" faketag \
+    'sed -i "s/\"annotated_tag\": true,/\"annotated_tag\": false,/" release.json' \
+    "source.tag must be null when annotated_tag is false"
+refuses "an empty migrations.previous.ref" prevrefempty \
+    'sed -i "s/\"previous\": {\"ref\": \"[^\"]*\"/\"previous\": {\"ref\": \"\"/" release.json' \
+    "migrations.previous must be null or {ref, commit} with a full sha and a non-empty ref"
+refuses "a control character in schema_rollback.classified_by" byctrl \
+    "sed -i 's/\"classified_by\": \"[^\"]*\"/\"classified_by\": \"Eve\\\\u0001\"/' release.json" \
+    "no control characters"
 
 printf 'flow release inspect: checksum and archive safety\n'
 cp "$ART" "$WORK/t.tar.gz"

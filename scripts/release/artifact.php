@@ -46,6 +46,55 @@ const REQUIRED_DIRS = [
     'storage', 'bootstrap/cache', 'public/assets',
 ];
 
+/**
+ * The persistent-storage skeleton: EXACTLY these placeholder files, and exactly this content, may
+ * exist under storage/ or bootstrap/cache/. This is pinned tighter than an ordinary allowlist because
+ * the deployment runbook seeds `shared/storage` from this exact tree with a non-destructive copy
+ * (`cp -an storage/. ../../shared/storage/`) on first deployment, so whatever ships here can become
+ * PERSISTENT host state, forever, silently: `cp -an` never overwrites an existing file, so wrong
+ * content here is wrong content on the host the moment it is first seeded and on every host after that
+ * until someone notices and removes it by hand.
+ *
+ * Content is pinned, not merely presence, for the same reason: a `.gitignore` that happens to be named
+ * right but carries something else (a stray value, a different Laravel version's skeleton) would still
+ * pass a name-only check and still become permanent.
+ */
+const STORAGE_SKELETON = [
+    'bootstrap/cache/.gitignore' => "*\n!.gitignore\n",
+    'storage/app/.gitignore' => "*\n!private/\n!public/\n!.gitignore\n",
+    'storage/app/private/.gitignore' => "*\n!.gitignore\n",
+    'storage/app/public/.gitignore' => "*\n!.gitignore\n",
+    'storage/framework/.gitignore' => "compiled.php\nconfig.php\ndown\nevents.scanned.php\nlsp-*.php\nmaintenance.php\nroutes.php\nroutes.scanned.php\nschedule-*\nservices.json\n",
+    'storage/framework/cache/.gitignore' => "*\n!data/\n!.gitignore\n",
+    'storage/framework/cache/data/.gitignore' => "*\n!.gitignore\n",
+    'storage/framework/sessions/.gitignore' => "*\n!.gitignore\n",
+    'storage/framework/testing/.gitignore' => "*\n!.gitignore\n",
+    'storage/framework/views/.gitignore' => "*\n!.gitignore\n",
+    'storage/logs/.gitignore' => "*\n!.gitignore\n",
+];
+
+/**
+ * Every directory the skeleton is allowed to create. A directory NAMED `down` here (rather than the
+ * regular file `php artisan down` writes) would make `file_exists(storage/framework/down)` true for
+ * Laravel's own front-controller check while Apache's `-f` test (a regular-file test) stays false: the
+ * two maintenance enforcement points would disagree about whether the site is down, and `php artisan
+ * up`, which calls `unlink()`, cannot remove a directory at all.
+ */
+const STORAGE_SKELETON_DIRS = [
+    'bootstrap/cache',
+    'storage',
+    'storage/app',
+    'storage/app/private',
+    'storage/app/public',
+    'storage/framework',
+    'storage/framework/cache',
+    'storage/framework/cache/data',
+    'storage/framework/sessions',
+    'storage/framework/testing',
+    'storage/framework/views',
+    'storage/logs',
+];
+
 /** Directory names that must not exist anywhere (`.git` even inside vendor). */
 const FORBIDDEN_DIRS_ANYWHERE = ['.git'];
 
@@ -88,15 +137,19 @@ const HTACCESS_REQUIRED = [
     '%{DOCUMENT_ROOT}/../storage/framework/down -f' => 'the maintenance arm must read Laravel\'s own flag through the storage symlink',
     '/maintenance.php [L]' => 'maintenance must be an INTERNAL rewrite to the standalone responder',
     '!^/(api($|/)|up$|maintenance\\.php$)' => 'the API, /up and the responder must be excluded from the maintenance rewrite',
-    'index.php [L]' => 'the API and /up must reach Laravel\'s front controller',
+    'index.php [END]' => 'the API and /up must reach Laravel\'s front controller, and END rather than L so Apache\'s own internal redirect cannot re-run this ruleset and let the maintenance rule catch the rewritten request on a second pass',
     '/index.html [L]' => 'the Console\'s client-side routes must fall back to its shell',
     '[F,L]' => 'private paths must be denied',
 ];
 
-/** Mechanisms that must never come back. The first two failed on this host; the rest are not ours. */
+/** Mechanisms that must never come back. The first three failed on this host; the rest are not ours. */
 const HTACCESS_FORBIDDEN = [
     'ErrorDocument' => 'the ErrorDocument idiom returned the server\'s own bare 503 body on this host',
     'R=503' => 'the maintenance rewrite is internal ([L]); an external redirect was measured not to work',
+    'index.php [L]' => 'measured on a real Apache container: [L] lets Apache\'s own internal redirect to '
+        .'index.php re-run this ruleset, and the maintenance rule then catches the rewritten request on '
+        .'that second pass, sending every /api and /up request to the HTML responder instead of Laravel '
+        .'while the flag is raised. The API and /up rewrite must use [END].',
     'maintenance.html' => 'the responder is public/maintenance.php, which sets its own status and headers',
     'LSCache' => 'Commons is direct to origin: there is no edge cache to purge',
     'X-Forwarded' => 'Commons trusts no reverse proxy (trust boundaries)',
@@ -180,6 +233,21 @@ function isStringList(mixed $value): bool
     return true;
 }
 
+/**
+ * A non-empty, non-control-character string, matching what `ReleaseIdentity::string()`
+ * (app/Modules/Release/Application/ReleaseIdentity.php) requires of the same field at read time on the
+ * host — this exists so a manifest this validator accepts cannot later be rejected, or accepted with a
+ * different meaning, there. `ReleaseIdentity` itself only requires non-empty after trim; the control-
+ * character rule is stricter than that on purpose, matching what `./flow release build` already
+ * refuses for `classified_by` (scripts/commands/release.sh), because these values are echoed to an
+ * operator's terminal by `release:show` and a control character there is a display-injection risk,
+ * not merely a cosmetic one.
+ */
+function isCleanString(mixed $value): bool
+{
+    return is_string($value) && trim($value) !== '' && preg_match('/[[:cntrl:]]/', $value) !== 1;
+}
+
 function checkTree(string $root): void
 {
     $rootReal = realpath($root);
@@ -229,6 +297,14 @@ function checkTree(string $root): void
         if ((fileperms($full) & 0002) !== 0) {
             problem("world-writable: $relative");
         }
+        // setuid/setgid: GNU tar preserves these bits on extraction (release_verify_artifact extracts
+        // with --same-permissions), so a bit set inside the archive's own metadata is a bit that really
+        // exists on the extracted tree afterward, not merely a number this validator computed. Nothing
+        // this build produces sets either deliberately, so any occurrence is either a tampered archive
+        // or a packaging accident — refused either way, files and directories alike.
+        if ((fileperms($full) & 06000) !== 0) {
+            problem("carries a setuid or setgid bit: $relative");
+        }
 
         if (is_dir($full)) {
             if (in_array($name, FORBIDDEN_DIRS_ANYWHERE, true)) {
@@ -273,6 +349,7 @@ function checkTree(string $root): void
 
     checkPublicSurface($root);
     checkVendorRecord($root);
+    checkStorageSkeleton($root);
 }
 
 function checkSymlink(string $rootReal, string $relative, string $full, bool $vendor): void
@@ -355,7 +432,7 @@ function checkHtaccess(string $root): void
     // and fails only for the request class nobody tried by hand.
     $denials = strpos($rules, '[F,L]');
     $maintenance = strpos($rules, '%{DOCUMENT_ROOT}/../storage/framework/down -f');
-    $api = strpos($rules, 'index.php [L]');
+    $api = strpos($rules, 'index.php [END]');
     $fallback = strpos($rules, '/index.html [L]');
     if ($denials === false || $maintenance === false || $api === false || $fallback === false) {
         return; // each absence is already reported above
@@ -426,6 +503,57 @@ function checkVendorRecord(string $root): void
     }
 }
 
+/**
+ * The persistent-storage skeleton, pinned exactly (STORAGE_SKELETON, STORAGE_SKELETON_DIRS above).
+ * Stronger than the generic per-file loop in checkTree(), which only refuses a non-`.gitignore` FILE
+ * under storage/ or bootstrap/cache/: it does not know that a DIRECTORY named `down` is exactly as
+ * dangerous as a file of the wrong content, because `cp -an` will seed either one into shared storage
+ * and neither is a mistake the generic loop is positioned to see. A symlink here is already refused by
+ * checkSymlink (anything outside vendor/ is a problem), so it is not re-checked here.
+ */
+function checkStorageSkeleton(string $root): void
+{
+    foreach (['storage', 'bootstrap/cache'] as $prefix) {
+        if (! is_dir("$root/$prefix") || is_link("$root/$prefix")) {
+            continue; // already reported: a required directory missing (or itself a symlink)
+        }
+        foreach (walk("$root/$prefix") as $rel) {
+            $relative = "$prefix/$rel";
+            $full = "$root/$relative";
+            if (is_link($full)) {
+                continue; // already reported by checkSymlink: a symlink outside vendor/ is a problem
+            }
+            if (is_dir($full)) {
+                if (! in_array($relative, STORAGE_SKELETON_DIRS, true)) {
+                    problem("unexpected directory in the persistent-storage skeleton: $relative (this tree "
+                        .'is seeded into shared/storage on first deployment, so only the documented skeleton '
+                        .'directories may exist under storage/ or bootstrap/cache/)');
+                }
+
+                continue;
+            }
+            if (! array_key_exists($relative, STORAGE_SKELETON)) {
+                problem("unexpected file in the persistent-storage skeleton: $relative (only the documented "
+                    .'.gitignore placeholders may exist under storage/ or bootstrap/cache/, because this tree '
+                    .'is seeded into shared/storage on first deployment)');
+
+                continue;
+            }
+            $content = (string) file_get_contents($full);
+            if ($content !== STORAGE_SKELETON[$relative]) {
+                problem("$relative does not carry its expected placeholder content: shipping different "
+                    .'content here makes that content PERSISTENT on the host, since the deployment runbook '
+                    .'seeds shared/storage from this tree with a copy that never overwrites an existing file');
+            }
+        }
+    }
+    foreach (array_keys(STORAGE_SKELETON) as $relative) {
+        if (! is_file("$root/$relative") || is_link("$root/$relative")) {
+            problem("missing persistent-storage skeleton placeholder: $relative");
+        }
+    }
+}
+
 /** @return array<string, mixed>|null */
 function loadManifest(string $root): ?array
 {
@@ -486,6 +614,13 @@ function checkManifest(string $root, array $m): void
     if (! is_string($m['built_at'] ?? null) || preg_match('/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/', $m['built_at']) !== 1) {
         problem('release.json: built_at must be a UTC ISO-8601 timestamp');
     }
+    $version = $m['version'] ?? null;
+    if ($version !== null && ! isCleanString($version)) {
+        problem('release.json: version must be null or a non-empty string with no control characters');
+    }
+    if (! isCleanString($source['ref'] ?? null)) {
+        problem('release.json: source.ref must be a non-empty string with no control characters');
+    }
 
     // Provenance: the ADR's "normally an annotated tag reachable from main" is enforced at build; the
     // manifest must say honestly whether it was met.
@@ -502,8 +637,16 @@ function checkManifest(string $root, array $m): void
         if (! $met && ! $override) {
             problem('release.json: provenance requirements were not met and no override is recorded');
         }
-        if ($annotated && ! is_string($source['tag'] ?? null)) {
-            problem('release.json: source.tag must name the annotated tag');
+        // Nullability matches ReleaseIdentity::nullableString() exactly, in both directions: an
+        // unannotated build that still names a tag is a false provenance claim waiting to be read by an
+        // operator, not merely a type error, so it is refused here rather than left for release:show to
+        // discover on the host.
+        $tag = $source['tag'] ?? null;
+        if ($annotated && ! isCleanString($tag)) {
+            problem('release.json: source.tag must name the annotated tag when annotated_tag is true');
+        } elseif (! $annotated && $tag !== null) {
+            problem('release.json: source.tag must be null when annotated_tag is false '
+                .'(a tag recorded here without annotated_tag is a false provenance claim)');
         }
         if ($override) {
             note('BUILT WITH --allow-untagged: this artifact does NOT meet the ADR 0027 provenance rule '
@@ -578,11 +721,37 @@ function checkMigrations(string $root, array $m): void
         problem('release.json: migrations.removed lists a migration that is present in the artifact');
     }
 
+    // ADR 0027: "modified or removed previously-applied migrations are scanner findings." A manifest
+    // naming one without the matching finding is claiming a migration comparison the build recorded no
+    // evidence for; the finding is where the WHERE and WHY (line, text) actually live, so its absence
+    // is not a formality.
+    $findingKeys = [];
+    foreach ($findings as $finding) {
+        if (is_array($finding) && is_string($finding['migration'] ?? null) && is_string($finding['kind'] ?? null)) {
+            $findingKeys[$finding['migration'].'|'.$finding['kind']] = true;
+        }
+    }
+    foreach ($modified as $name) {
+        if (! isset($findingKeys["$name|modified"])) {
+            problem("release.json: '$name' is listed in migrations.modified with no matching scanner_findings "
+                ."entry (kind 'modified')");
+        }
+    }
+    foreach ($removed as $name) {
+        if (! isset($findingKeys["$name|removed"])) {
+            problem("release.json: '$name' is listed in migrations.removed with no matching scanner_findings "
+                ."entry (kind 'removed')");
+        }
+    }
+
     $previous = $migrations['previous'] ?? null;
     if ($previous !== null) {
-        if (! is_array($previous) || ! is_string($previous['ref'] ?? null)
+        // ref must be a non-empty, clean string: ReleaseIdentity::previous() applies the same rule
+        // (via its string() helper) when release:show reads this on the host, so an empty or
+        // whitespace-only ref here would be judged valid by this validator and then refused there.
+        if (! is_array($previous) || ! isCleanString($previous['ref'] ?? null)
             || preg_match('/^[0-9a-f]{40}$/', (string) ($previous['commit'] ?? '')) !== 1) {
-            problem('release.json: migrations.previous must be null or {ref, commit} with a full sha');
+            problem('release.json: migrations.previous must be null or {ref, commit} with a full sha and a non-empty ref');
         }
     } elseif ($removed !== [] || $modified !== []) {
         problem('release.json: with no previous release nothing can be removed or modified');
@@ -597,9 +766,16 @@ function checkMigrations(string $root, array $m): void
 
         return;
     }
+    // Matches what `./flow release build` already refuses at build time (scripts/lib/release.sh,
+    // release_build): no control characters, at most 200 bytes. Checked here too, and not left to the
+    // build alone, because this validator judges the artifact as it will ship — including one a build
+    // step's own check did not produce, such as a hand-edited release.json. `classified_by` is echoed
+    // to an operator's terminal by `release:show`, so a control character in it is a display-injection
+    // risk there, not merely a cosmetic one.
     $by = $rollback['classified_by'] ?? null;
-    if (! is_string($by) || trim($by) === '' || strlen($by) > 200) {
-        problem('release.json: schema_rollback.classified_by must record who supplied the classification');
+    if (! isCleanString($by) || strlen((string) $by) > 200) {
+        problem('release.json: schema_rollback.classified_by must record who supplied the classification, '
+            .'with no control characters and at most 200 bytes');
     }
     if ($previous === null && $value !== 'restore-required') {
         problem('release.json: a first release (no previous) must be classified restore-required');

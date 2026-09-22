@@ -237,6 +237,9 @@ describe('a release that cannot identify itself', function () {
         'the rollback classification' => ['schema_rollback.value', null, true],
         'an invented rollback classification' => ['schema_rollback.value', 'probably-fine', false],
         'who classified it' => ['schema_rollback.classified_by', '', false],
+        // L2 parity: scripts/release/artifact.php refuses the same control character in the same field
+        // (isCleanString()), so a manifest that validator accepts cannot carry one here undetected.
+        'a control character in who classified it' => ['schema_rollback.classified_by', "Eve\x01", false],
         'a malformed previous release' => ['migrations.previous', ['ref' => 'v1.1.0', 'commit' => 'abc'], false],
         'the source section' => ['source', null, true],
     ];

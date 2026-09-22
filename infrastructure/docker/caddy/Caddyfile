@@ -77,11 +77,16 @@ http://commons.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
 # drives every request class against this origin, and scripts/tests/public-surface.sh fails if one
 # file gains a rule class the other does not have. Where a mechanism differs it is noted inline.
 http://prod.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
-	# .htaccess section 2 is the (prod_security_headers) snippet above. Apache states the policy ONCE for the whole
-	# document root and replaces whatever PHP already sent; Caddy cannot replace a header on a
-	# proxied response (it appends, and two identical CSP headers are not one), so the block is
-	# imported into every branch that answers WITHOUT Laravel, and the Laravel branch keeps the
-	# identical headers its own middleware sets (ADR 0026). One header per response either way.
+	# .htaccess section 2 is the (prod_security_headers) snippet above. Apache states the policy ONCE
+	# for the whole document root, and REPLACES whatever PHP already sent, but not by nature: the
+	# generated .htaccess pairs `Header onsuccess unset NAME` with `Header always set NAME` for each of
+	# the seven headers, because `always set` alone APPENDS to a header PHP already sent rather than
+	# replacing it — measured on a real Apache container, where a Laravel response carried each header
+	# twice without the unset (scripts/tests/apache-surface.sh is the regression test for exactly this).
+	# Caddy has no equivalent to reach for: it cannot replace a header on a proxied response either (it
+	# appends, and two identical CSP headers are not one), so the block is imported into every branch
+	# that answers WITHOUT Laravel, and the Laravel branch keeps the identical headers its own
+	# middleware sets (ADR 0026). One header per response either way, by two different mechanisms.
 
 	# .htaccess section 3: private paths, denied before anything else, so that neither the
 	# maintenance arm nor the SPA fallback can answer for one. Apache uses a negative lookahead for

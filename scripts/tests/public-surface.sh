@@ -93,7 +93,7 @@ check_pairs <<'CONTRACT'
 the maintenance flag is Laravel's own storage/framework/down	storage/framework/down -f	storage/framework/down
 the maintenance responder is public/maintenance.php	/maintenance.php [L]	maintenance.php
 the API is carved out of maintenance	!^/(api($|/)|up$|maintenance\.php$)	not path /api /api/* /up /maintenance.php
-the API and /up reach Laravel	"^(api($|/)|up$)" index.php [L]	path /api /api/* /up
+the API and /up reach Laravel	"^(api($|/)|up$)" index.php [END]	path /api /api/* /up
 the Console shell is the fallback for everything else	/index.html [L]	/index.html
 CONTRACT
 
@@ -111,8 +111,10 @@ PRIVATE
 
 printf 'public surface: mechanisms that must not come back\n'
 # ErrorDocument/R=503 failed on this host (ADR 0027); Commons is direct to origin and trusts no proxy
-# (trust boundaries), so nothing here purges a cache or reads a forwarding header.
-for forbidden in ErrorDocument 'R=503' maintenance.html LSCache Sucuri X-Forwarded RemoteIPHeader opcache_reset; do
+# (trust boundaries), so nothing here purges a cache or reads a forwarding header. 'index.php [L]'
+# failed on a real Apache container: [L] lets the API/up rewrite's own internal redirect re-run the
+# ruleset, and the maintenance rule then catches the rewritten /index.php on that second pass.
+for forbidden in ErrorDocument 'R=503' 'index.php [L]' maintenance.html LSCache Sucuri X-Forwarded RemoteIPHeader opcache_reset; do
     if grep -qF -- "$forbidden" "$WORK/apache-directives" || grep -qF -- "$forbidden" "$WORK/caddy-directives"; then
         fail "a deployment adapter reintroduced '$forbidden'"
     else

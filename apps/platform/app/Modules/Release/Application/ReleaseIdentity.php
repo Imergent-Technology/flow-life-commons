@@ -162,13 +162,26 @@ final readonly class ReleaseIdentity
         return $value;
     }
 
+    /**
+     * Every identity field is checked for this, not only `classified_by`: `release:show` prints all of
+     * them to an operator's terminal, and this command exists precisely to be trusted after the
+     * artifact validator (scripts/release/artifact.php) has already run — "a file that was correct when
+     * it was packaged can be truncated by a failed upload or edited by someone in a hurry" (class
+     * docblock above). A control character surviving into any of these fields is a terminal-injection
+     * risk on a command that is often run mid-incident.
+     */
+    private static function hasControlCharacter(string $value): bool
+    {
+        return preg_match('/[[:cntrl:]]/', $value) === 1;
+    }
+
     /** @param array<array-key, mixed> $source */
     private static function string(array $source, string $field): string
     {
         $key = str_contains($field, '.') ? substr($field, strrpos($field, '.') + 1) : $field;
         $value = $source[$key] ?? null;
-        if (! is_string($value) || trim($value) === '') {
-            throw ReleaseIdentityUnavailable::incomplete($field, 'it must be a non-empty string.');
+        if (! is_string($value) || trim($value) === '' || self::hasControlCharacter($value)) {
+            throw ReleaseIdentityUnavailable::incomplete($field, 'it must be a non-empty string with no control characters.');
         }
 
         return $value;
@@ -182,8 +195,8 @@ final readonly class ReleaseIdentity
         if ($value === null) {
             return null;
         }
-        if (! is_string($value) || trim($value) === '') {
-            throw ReleaseIdentityUnavailable::incomplete($field, 'it must be a string or null.');
+        if (! is_string($value) || trim($value) === '' || self::hasControlCharacter($value)) {
+            throw ReleaseIdentityUnavailable::incomplete($field, 'it must be a string with no control characters, or null.');
         }
 
         return $value;

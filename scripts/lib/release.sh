@@ -95,12 +95,30 @@ release_resolve_commit() {
 # and SRC_ON_MAIN (0|1). An annotated tag is a tag OBJECT: a lightweight tag is just a name and says
 # nothing about who tagged what or why.
 release_provenance() {
-    local ref="$1" commit="$2" main_ref=""
+    local ref="$1" commit="$2" main_ref="" tag_commit=""
     SRC_TAG=""
     SRC_ANNOTATED=0
     if [[ "$(git cat-file -t "refs/tags/$ref" 2>/dev/null || true)" == tag ]]; then
-        SRC_TAG="$ref"
-        SRC_ANNOTATED=1
+        # The tag object must peel to EXACTLY the commit this build already resolved (COMMIT, resolved
+        # by the caller before this function ever ran). Without this, a tag force-moved between that
+        # resolution and this check — a real if narrow TOCTOU window, not a hypothetical one: refs are
+        # read twice here, at two different times, because provenance is a separate git call from commit
+        # resolution — would stamp "annotated tag, reachable from main" onto a commit the tag no longer
+        # even names. A mismatch is treated as not annotated, never as the build guessing which one to
+        # trust: fails closed into requiring --allow-untagged rather than silently trusting a stale ref.
+        tag_commit="$(git rev-parse --verify --quiet "refs/tags/$ref^{commit}" 2>/dev/null || true)"
+        if [[ "$tag_commit" == "$commit" ]]; then
+            # A tag name becomes part of the artifact filename and is echoed to the operator's
+            # terminal (release_build's "Release plan"); a control character or embedded newline in it
+            # is a display-integrity risk there, not merely unusual. git itself allows names ordinary
+            # tooling would not expect (e.g. containing '/'), so this is checked explicitly rather than
+            # assumed safe because git accepted it.
+            if [[ "$ref" == *[[:cntrl:]]* ]]; then
+                die "release: the tag name '$ref' contains a control character; refusing to use it as provenance or an artifact name."
+            fi
+            SRC_TAG="$ref"
+            SRC_ANNOTATED=1
+        fi
     fi
 
     # The shared branch is the truth when there is one; a stale local main would refuse a tag that has
@@ -435,7 +453,7 @@ release_package() {
 # release_verify_artifact TARBALL: checksum, safe extraction, then the artifact.php judgement.
 # Returns non-zero (after saying why) for anything that is not a valid artifact.
 release_verify_artifact() {
-    local tarball="$1" sumfile="$1.sha256" base line entries kind tree
+    local tarball="$1" sumfile="$1.sha256" base line entries kind tree target
 
     [[ -f "$tarball" ]] || {
         bad "no such artifact: $tarball"
@@ -467,9 +485,25 @@ release_verify_artifact() {
         bad "the archive contains absolute or parent-relative paths."
         return 1
     fi
+    # Absolute symlink TARGETS are refused here explicitly, before extraction, rather than relying
+    # solely on GNU tar's own extraction-order protection against writing through one (verified
+    # separately, by hand, against crafted archives — but that protection is tar's implementation, not
+    # a contract this script controls, and this check does not need it to hold). A RELATIVE target
+    # (`../pkg/bin/tool`, exactly what Composer's own bin symlinks look like) is not checked here: it is
+    # only unsafe if it climbs higher than the symlink's own depth in the tree, which depends on where
+    # the symlink sits — that arithmetic is what artifact.php's checkSymlink() does correctly, with a
+    # real resolved path, after extraction. An absolute target needs no such arithmetic: it is unsafe
+    # unconditionally, so it is refused at the earliest possible point instead.
     while IFS= read -r kind; do
         case "${kind:0:1}" in
-            - | d | l) ;;
+            - | d) ;;
+            l)
+                target="${kind##* -> }"
+                if [[ "$target" == /* ]]; then
+                    bad "the archive contains a symlink with an absolute target (target: $target)."
+                    return 1
+                fi
+                ;;
             *)
                 bad "the archive contains an entry that is not a file, directory or symlink (${kind:0:1})."
                 return 1

@@ -61,6 +61,7 @@ check_repo() {
     run_check "Shell scripts (shellcheck)" shellcheck_scripts
     run_check "./flow CLI behaviour" bash "$FLOW_ROOT/scripts/tests/cli.sh"
     run_check "Production public surface (Apache/Caddy contract)" bash "$FLOW_ROOT/scripts/tests/public-surface.sh"
+    run_check "Production public surface under real Apache" bash "$FLOW_ROOT/scripts/tests/apache-surface.sh"
     run_check "./flow release tooling" bash "$FLOW_ROOT/scripts/tests/release.sh"
     run_check "GitHub workflows (actionlint)" actionlint_workflows
     run_check "WordPress companion PHP syntax" lint_wordpress_companion

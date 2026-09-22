@@ -77,8 +77,12 @@ describe('the composed .htaccess', function () {
             // The maintenance arm reads Laravel's own flag through the shared storage symlink.
             ->toContain('%{DOCUMENT_ROOT}/../storage/framework/down -f')
             ->toContain('/maintenance.php [L]')
-            // The API and the liveness probe reach Laravel's front controller.
-            ->toContain('index.php [L]')
+            // The API and the liveness probe reach Laravel's front controller. [END], not [L]: a
+            // rewrite to a real file re-runs the ruleset on Apache's own internal redirect, and [L]
+            // would let the maintenance rule (section 4) catch the rewritten /index.php on that second
+            // pass — measured on a real Apache container, where it sent every /api and /up request to
+            // the HTML maintenance responder instead of Laravel while the flag was raised.
+            ->toContain('index.php [END]')
             // The Console's client-side routes.
             ->toContain('/index.html [L]');
     });
@@ -111,7 +115,7 @@ describe('the composed .htaccess', function () {
 
         $denials = ruleAt($htaccess, '/RewriteRule "\(\^\|\/\)\\\\\.\(\?\!well-known\/\)"/');
         $maintenance = ruleAt($htaccess, '/RewriteCond %\{DOCUMENT_ROOT\}\/\.\.\/storage\/framework\/down -f/');
-        $api = ruleAt($htaccess, '/RewriteRule "\^\(api\(\$\|\/\)\|up\$\)" index\.php \[L\]/');
+        $api = ruleAt($htaccess, '/RewriteRule "\^\(api\(\$\|\/\)\|up\$\)" index\.php \[END\]/');
         $fallback = ruleAt($htaccess, '/RewriteRule \^ \/index\.html \[L\]/');
 
         expect($denials)->toBeLessThan($maintenance, 'private paths must be denied before the maintenance arm can answer for them')
