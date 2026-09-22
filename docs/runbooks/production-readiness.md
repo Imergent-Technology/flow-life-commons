@@ -124,6 +124,8 @@ Neither level executes the production host: LSAPI on CloudLinux is not a contain
 
 R5, R7 and R8 are load-bearing for security. The rest are correctness or operations.
 
+**Open before the SECOND deployment, not the first: the storage seeding step.** The deployment runbook seeds `shared/storage` with `cp -an` ([first deployment step 6](deployment.md#6-wire-the-shared-links)). That is safe on the first deployment, when `shared/storage` is empty. It is **not** a harmless no-op afterwards: it re-applies mode and mtime to persistent directories that already exist (measured in the 2026-09-21 re-audit). Before any later deployment, replace it with a step that creates only missing skeleton paths and leaves existing attributes alone, and confirm that behaviour with the host's own `cp`. `cp -rn` was verified locally as the likely replacement and is unconfirmed on the host.
+
 ## 5. Outbound mail — the one open item
 
 **Status: OPEN, deliberately deferred** pending an organizational decision about Flow Life's mail arrangement. This does **not** block release tooling, and it is not a defect in the platform. It blocks *inviting people*, which is the last thing first deployment does.

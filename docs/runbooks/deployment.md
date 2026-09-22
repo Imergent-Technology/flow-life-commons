@@ -125,7 +125,9 @@ ln -s ../../shared/.env "$R/.env"
 
 No `cd` in this step, deliberately: every path is absolute or built from `$R`, so there is nothing for the destructive `rm -rf` to inherit if an earlier command in the session left the shell somewhere unexpected.
 
-The **seeding line matters on the first deployment**: `shared/storage` starts empty, and `php artisan down` fails there (`file_put_contents(storage/framework/down): No such file or directory`) because `storage/framework/` does not exist. The artifact ships the directory skeleton (placeholder `.gitignore` files only, never runtime state, and pinned exactly by `scripts/release/artifact.php`); `cp -an` copies it into `shared/` once and is a harmless no-op on every later release. `cp -an` does not overwrite an existing file, but it **does** touch the directories it creates — on a first deployment `shared/storage` does not exist yet, so this is the one time this command runs against nothing, and the modes it leaves are the artifact's own (whatever `tar` extracted them as). Confirm they are what step 12's writable-directories check expects; if not, `chmod` them explicitly rather than re-running `cp -an` a second time hoping for a different result.
+The **seeding line matters on the first deployment**: `shared/storage` starts empty, and `php artisan down` fails there (`file_put_contents(storage/framework/down): No such file or directory`) because `storage/framework/` does not exist. The artifact ships the directory skeleton (placeholder `.gitignore` files only, never runtime state, and pinned exactly by `scripts/release/artifact.php`). On the first deployment `shared/storage` exists but is **empty** (step 2 created it), so `cp -an` creates the validated skeleton there, and the modes it leaves are the artifact's own (whatever `tar` extracted them as). Confirm they are what step 12's writable-directories check expects; if not, `chmod` them explicitly rather than re-running `cp -an` hoping for a different result.
+
+> **Before the SECOND deployment: do not repeat this seeding line as written.** Repeating `cp -an` is **not** a harmless no-op on a later release. It never overwrites an existing *file*, but `-a` re-applies the skeleton's mode and mtime to directories that **already exist** in `shared/storage` — persistent directories holding live runtime state. Measured in the pre-deployment re-audit (2026-09-21, GNU coreutils 9.7): an existing `2775` directory came out `700`. It is safe on the first deployment only because there is nothing there yet. Before any later deployment, change and re-verify the seeding step so it creates missing skeleton paths without changing the attributes of existing ones. The re-audit verified `cp -rn` locally as the likely correction (existing directories kept their mode and mtime, new directories were created, no file was overwritten), but that has **not** been confirmed with the host's own `cp`; confirm it there before adopting it.
 
 Confirm `storage/` and `bootstrap/cache/` are writable by the PHP user.
 
@@ -212,6 +214,8 @@ Built off-host from an annotated tag, with its gate green and its `schema_rollba
 ### 2. Upload, checksum, extract, wire
 
 As first deployment steps 5 and 6, with `R=/home/<user>/commons/releases/<new-release-id>`. The new release is on disk and serving nothing; `current` still points at the old one.
+
+**Except the storage seeding line.** Step 6's `cp -an` is only verified safe against an empty `shared/storage`; on a later release it re-applies attributes to existing persistent directories. This procedure is not ready for a second deployment until that line has been replaced and re-verified on the host — see the warning under [first deployment step 6](#6-wire-the-shared-links).
 
 ### 3. Warm the caches
 
