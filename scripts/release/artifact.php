@@ -133,6 +133,13 @@ const PUBLIC_TOP_LEVEL = [
  */
 const HTACCESS_REQUIRED = [
     'DirectoryIndex index.html index.php' => 'the Console shell must answer / ahead of the front controller',
+    'Header onsuccess unset X-Powered-By' => 'X-Powered-By must be cleared from Apache\'s onsuccess response-header '
+        .'table: the production host (Apache + CloudLinux LSAPI, 2026-09-22) was observed sending it on every PHP '
+        .'response, and expose_php is php.ini-only with no editor exposed on this hosting account, so the origin '
+        .'removing the header is the only remaining enforcement point',
+    'Header always unset X-Powered-By' => 'X-Powered-By must ALSO be cleared from Apache\'s always table, not only '
+        .'its onsuccess one: LSAPI has been observed populating either, and a response class reached by only one '
+        .'unset directive is a response class this header can still reach',
     'Content-Security-Policy' => 'the generated browser security policy (ADR 0026)',
     '%{DOCUMENT_ROOT}/../storage/framework/down -f' => 'the maintenance arm must read Laravel\'s own flag through the storage symlink',
     '/maintenance.php [L]' => 'maintenance must be an INTERNAL rewrite to the standalone responder',

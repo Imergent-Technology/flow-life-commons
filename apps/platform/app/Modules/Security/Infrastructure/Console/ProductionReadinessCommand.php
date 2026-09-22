@@ -81,10 +81,12 @@ final class ProductionReadinessCommand extends Command
             $this->line("  <fg=yellow>?</> {$item}");
         }
         // Informational, never a check: see ProductionReadiness::exposePhp() for why the CLI's own
-        // reading is not acted on here, and confirm the web-facing fact (no X-Powered-By reaching a
-        // client) is what was actually verified on the hosting account.
+        // reading is not acted on here — this ini value, on either SAPI, is not what decides whether a
+        // client sees the header any more. `public/.htaccess` strips X-Powered-By at the origin (ADR
+        // 0026), because this hosting account has no way to turn expose_php off; confirm THAT is
+        // working on the real host, not this reading.
         $this->line("  <fg=yellow>?</> This CLI process's expose_php reads '{$readiness->exposePhp()}'.");
-        $this->line('      That is not the web server\'s PHP. Confirm no X-Powered-By header reaches a real client.');
+        $this->line('      That is not the web server\'s PHP, and not what governs this any more: public/.htaccess is meant to strip X-Powered-By regardless. Confirm no X-Powered-By header reaches a real client.');
 
         $this->newLine();
         if ($failed !== []) {

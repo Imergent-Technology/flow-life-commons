@@ -20,6 +20,15 @@
 # without it, a response Laravel itself answers (which sets these same seven headers) carries each one
 # TWICE under Apache, because `Header always set` alone appends rather than replaces.
 #
+# It also regression-tests the X-Powered-By fix found on the real production host (Apache + CloudLinux
+# LSAPI, 2026-09-22): `expose_php` is php.ini-only, with no editor exposed on that hosting account, so
+# PHP itself adds `X-Powered-By: PHP/8.3.33` to every response it answers, and only the web server can
+# still remove it. `expose_php=On` is forced here (below) rather than left to whatever this image
+# happens to default to, so the test does not silently stop meaning anything if a future base image
+# ships a different default: this container adds X-Powered-By to every PHP response for the same reason
+# the real host does, deterministically, and both `public/.htaccess` and the unmodified `maintenance.php`
+# are what has to strip it back off.
+#
 # WHAT IS REAL: apps/platform/public/.htaccess and apps/platform/public/maintenance.php, unmodified,
 # under php:8.3-apache (the production PHP version, verified 2026-09-21). WHAT IS STUBBED: the Laravel
 # front controller, replaced by a small PHP script that answers with a marker distinguishing "the
@@ -98,6 +107,13 @@ ln -s ../../shared/storage "$WORK/commons/releases/A/storage"
 ln -s releases/A "$WORK/commons/current"
 chmod -R a+rX "$WORK/commons"
 
+# Forced explicitly, matching the real production host's measured value (2026-09-22), rather than
+# relying on this image's own default (which happens to already be On, but is not this test's to
+# assume): with this in place, PHP's own SAPI adds `X-Powered-By: PHP/8.3.33` to every PHP response —
+# the stub front controller AND the real, unmodified maintenance.php responder alike — deliberately
+# reproducing what only the web server can now be relied on to strip.
+printf 'expose_php=On\n' >"$WORK/expose-php.ini"
+
 cat >"$WORK/vhost.conf" <<'CONF'
 <VirtualHost *:80>
     ServerName commons.test
@@ -113,6 +129,7 @@ CONF
 # --- Start the disposable Apache -------------------------------------------------------------------
 docker run -d --rm --name "$NAME" -p 127.0.0.1:0:80 \
     -v "$WORK/commons:/srv/commons:rw" -v "$WORK/vhost.conf:/etc/apache2/sites-enabled/000-default.conf:ro" \
+    -v "$WORK/expose-php.ini:/usr/local/etc/php/conf.d/zz-expose-php.ini:ro" \
     --entrypoint bash "$APACHE_IMAGE" -c 'a2enmod rewrite headers >/dev/null && exec apache2-foreground' >/dev/null ||
     { echo "apache-surface: could not start the disposable Apache container ($APACHE_IMAGE)." >&2; exit 1; }
 
@@ -189,6 +206,13 @@ req /assets/app.css
 check "static assets are intercepted too" "status" "$STATUS" "503"
 if grep -q 'Down for maintenance' "$WORK/body"; then pass "…and answered with the maintenance page"; else fail "…but not with the maintenance page"; fi
 
+# maintenance.php is real, unmodified production code (not the stub): with expose_php=On forced above,
+# PHP's own SAPI adds X-Powered-By to its response exactly as it does to the stub's, so this is a
+# genuine exercise of the responder, not a fact assumed about it.
+req /
+n="$(header_count X-Powered-By)"
+if [[ "$n" == "0" ]]; then pass "the maintenance responder (real PHP, unmodified) carries no X-Powered-By"; else fail "the maintenance responder leaked X-Powered-By ($n time(s)): $(header_value X-Powered-By)"; fi
+
 rm "$WORK/commons/shared/storage/framework/down"
 
 printf 'apache surface: exactly one copy of each policy header (M2 regression: onsuccess unset)\n'
@@ -209,6 +233,22 @@ done
 if ((FAILURES == 0)); then
     pass "every response class carries each of the seven headers exactly once, with Apache's value"
 fi
+
+printf 'apache surface: X-Powered-By never reaches a client (production host regression, 2026-09-22)\n'
+# expose_php=On is forced above, so PHP adds X-Powered-By to every PHP response in this container just
+# as it did on the real host — this is not testing a fact that happens to be true of one base image, it
+# is exercising the exact condition observed there. The maintenance responder's own case is checked
+# above, where the flag is actually raised; these three exercise the front controller (normal 200,
+# JSON 404) and confirm an untouched static response was never a carrier in the first place.
+for path in /api/v1/health /api/v1/nope /assets/app.css; do
+    req "$path"
+    n="$(header_count X-Powered-By)"
+    if [[ "$n" == "0" ]]; then
+        pass "$path carries no X-Powered-By"
+    else
+        fail "$path leaked X-Powered-By ($n time(s)): $(header_value X-Powered-By)"
+    fi
+done
 
 if ((FAILURES > 0)); then
     printf '\n%d apache-surface check(s) failed\n' "$FAILURES" >&2

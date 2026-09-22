@@ -52,8 +52,19 @@ DirectoryIndex index.html index.php
 # 301, 302, 400, 403, 404, 500 and 503 alike — carried each header twice. The unset clears whatever PHP
 # sent regardless of that response's status, so `always set`'s value is always the one a client
 # receives, and it is sent exactly once whether Apache or Laravel answered the request.
+#
+# X-Powered-By is removed here, not stated in config/security.php: it is not a policy value this
+# application sends, it is PHP's own version banner, which the real production host (Apache +
+# CloudLinux LSAPI) was observed sending on every PHP response — `X-Powered-By: PHP/8.3.33`, measured
+# 2026-09-22 (production readiness, item 2). `expose_php` is php.ini-only; this hosting account's
+# control panel has no php.ini editor for it, so the origin removing the header is the only place left
+# to enforce "no X-Powered-By reaches a client". BOTH `onsuccess unset` and `always unset` are needed:
+# LSAPI has been observed populating either of Apache's two response-header tables, and each directive
+# only reaches one of them.
 
 <IfModule mod_headers.c>
+    Header onsuccess unset X-Powered-By
+    Header always unset X-Powered-By
     Header onsuccess unset Content-Security-Policy
     Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     Header onsuccess unset X-Content-Type-Options

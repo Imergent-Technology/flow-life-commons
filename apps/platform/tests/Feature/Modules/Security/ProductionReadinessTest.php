@@ -297,8 +297,10 @@ it('never fails on expose_php, and says why', function () {
     // Regression: the CLI process's own ini is not necessarily the web server's — cPanel commonly ships
     // separate ea-php83 (web) and ea-php83-cli packages with independent php.ini files — so failing the
     // command on THIS process's expose_php reading would block a deployment over a fact about the wrong
-    // process. Measured on the host: the ini read On and no X-Powered-By ever reached a client. This
-    // stays informational, never a `checks()` entry, regardless of what this test process's own ini says.
+    // process. It would also be blocking on the wrong FACT: the first deployment rehearsal (2026-09-22)
+    // found X-Powered-By reaching every PHP response despite this same ini reading On, so the ini value
+    // — on either SAPI — was never what decided this; public/.htaccess (ADR 0026) is. This stays
+    // informational, never a `checks()` entry, regardless of what this test process's own ini says.
     asProduction();
 
     expect(readiness())->not->toHaveKey('the version of PHP is not announced');

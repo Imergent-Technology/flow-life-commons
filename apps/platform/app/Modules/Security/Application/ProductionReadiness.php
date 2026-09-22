@@ -329,15 +329,23 @@ final readonly class ProductionReadiness
      * shared host is very often a DIFFERENT PHP build from the one answering HTTP requests: cPanel
      * commonly ships separate `ea-php83` (web, through LSAPI) and `ea-php83-cli` (interactive CLI)
      * packages with independent `php.ini` files, and this command always runs under the CLI one. A
-     * hard failure here would therefore fail or pass on a fact about the wrong process — measured
-     * directly on 2026-09-21: the ini read `On`, and no `X-Powered-By` header ever reached a client
-     * (production-readiness.md, section 4b, item 2). Making that CLI reading a release blocker would
-     * have blocked first deployment on a setting this command cannot act on and that turned out not to
-     * matter, while adding nothing the browser-facing observation had not already established.
+     * hard failure here would therefore fail or pass on a fact about the wrong process.
+     *
+     * This reading is not merely unreliable in theory: it was actively MISLEADING once. A CLI-only
+     * probe on 2026-09-21 read `On` here and (wrongly) concluded no `X-Powered-By` header reached a
+     * client; the first supervised deployment rehearsal (2026-09-22, real Apache + CloudLinux LSAPI)
+     * found every PHP response carrying `X-Powered-By: PHP/8.3.33` (production-readiness.md, section
+     * 4b, item 2). That account's control panel exposes no way to change `expose_php` at all — no
+     * `expose_php` toggle in "Select PHP Version", no MultiPHP INI Editor — so this setting, read from
+     * anywhere, is not something an operator can act on regardless. The header is now removed at the
+     * one place that CAN enforce it: `public/.htaccess` (`Header onsuccess unset X-Powered-By` and
+     * `Header always unset X-Powered-By`, ADR 0026), which makes the client-visible fact independent
+     * of whatever `expose_php` reads, on either SAPI, from here on.
      *
      * The fact that actually matters — whether `X-Powered-By` reaches a real client — cannot be
      * established by reading local configuration at all (this command connects to nothing); it is an
-     * owner verification, confirmed once on the host and re-confirmed if the account's PHP changes.
+     * owner verification, confirmed on the host and re-confirmed after any change to `public/.htaccess`
+     * or the account's PHP.
      */
     public function exposePhp(): string
     {

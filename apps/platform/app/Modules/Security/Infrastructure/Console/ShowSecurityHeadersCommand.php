@@ -71,6 +71,21 @@ final class ShowSecurityHeadersCommand extends Command
         // so the origin — not the application code answering a given request — is the single source of
         // this policy for every response, including ones Apache serves without PHP at all.
         $lines = ['<IfModule mod_headers.c>'];
+
+        // X-Powered-By is not one of the seven ADR 0026 headers above: this application states no value
+        // for it, it removes one PHP adds on its own. `expose_php` is php.ini-only (no .user.ini, no
+        // ini_set() override) and the production host's control panel exposes no php.ini editor for
+        // this account, so the only place left to enforce "no X-Powered-By reaches a client" is the web
+        // server in front of PHP — measured live on the production host (2026-09-22, real Apache +
+        // CloudLinux LSAPI): every PHP response carried `X-Powered-By: PHP/8.3.33` (production
+        // readiness, item 2). BOTH `onsuccess unset` and `always unset` are needed, not either alone:
+        // `onsuccess` reaches Apache's table for ordinary (2xx/3xx) responses, `always` reaches the
+        // table used regardless of status — the same two-table split that made `Header always set`
+        // alone duplicate a header above — and LSAPI has been observed populating either, so a response
+        // class covered by only one unset directive is a response class this header can still reach.
+        $lines[] = '    Header onsuccess unset X-Powered-By';
+        $lines[] = '    Header always unset X-Powered-By';
+
         foreach ($headers as $name => $value) {
             $lines[] = sprintf('    Header onsuccess unset %s', $name);
             $lines[] = sprintf('    Header always set %s %s', $name, self::quote($value));
