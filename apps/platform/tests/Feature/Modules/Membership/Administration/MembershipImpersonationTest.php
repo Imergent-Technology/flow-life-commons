@@ -185,17 +185,8 @@ it('D: does not authorize a signed-in Person without the capability, even when t
 });
 
 it('E: grants to a Person with no Account without making them a caller: no Account, no session, no way in', function () {
-    $subject = Identity::savedPerson('No Account');
-    Membership::savedGrant($subject->id); // already a member
-
-    // Their Person id is no credential. Checked BEFORE any operator signs in within this test: the test kernel merges
-    // cookies into the test case, so a second Console would otherwise inherit the operator's session (see Console).
-    $stranger = new Console;
-    $stranger->bootstrap();
-    $stranger->get('/api/v1/admin/members/'.$subject->id->value, ['X-Person-Id' => $subject->id->value])->assertUnauthorized();
-    $stranger->me()->assertUnauthorized();
-
     [$console] = Mfa::signedInAdmin();
+    $subject = Identity::savedPerson('No Account');
     $before = ['accounts' => DB::table('accounts')->count(), 'sessions' => DB::table('sessions')->count()];
 
     $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', openEndedTerm())->assertCreated();
@@ -203,6 +194,12 @@ it('E: grants to a Person with no Account without making them a caller: no Accou
     expect(app(AccountRepository::class)->findByPersonId($subject->id))->toBeNull()
         ->and(DB::table('accounts')->count())->toBe($before['accounts'])
         ->and(DB::table('sessions')->count())->toBe($before['sessions']);
+
+    // And their Person id is no credential: a fresh browser naming it is still nobody, while the operator is signed in.
+    $stranger = new Console;
+    $stranger->get('/api/v1/admin/members/'.$subject->id->value, ['X-Person-Id' => $subject->id->value])->assertUnauthorized();
+    $stranger->me()->assertUnauthorized();
+    $console->me()->assertOk();
 });
 
 it('F: changing the target Person changes only the subject; the recorded caller stays the same', function () {

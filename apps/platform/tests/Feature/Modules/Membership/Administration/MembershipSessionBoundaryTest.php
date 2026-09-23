@@ -91,5 +91,8 @@ it('does not apply the forgery check to reads: a read needs the session and the 
     $garbled = ['X-XSRF-TOKEN' => 'eyJpdiI6ImZvcmdlZCJ9'];
     $console->get('/api/v1/admin/members', $garbled)->assertOk();
     $console->get('/api/v1/admin/members/'.$person->id->value, $garbled)->assertOk();
-    // Without a session the same read is refused by authentication (401): MembershipImpersonationTest, scenario C.
+
+    // ...and without a session, the same read is refused by authentication (401), not by the forgery check (419).
+    $stranger = new Console;
+    $stranger->get('/api/v1/admin/members', $garbled)->assertUnauthorized();
 });

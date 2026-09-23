@@ -9,9 +9,11 @@ use Illuminate\Session\Store;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
+use Pest\TestSuite;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Cookie;
 use Symfony\Component\HttpFoundation\Response;
+use Tests\TestCase;
 
 use function Pest\Laravel\withUnencryptedCookies;
 
@@ -29,6 +31,10 @@ use function Pest\Laravel\withUnencryptedCookies;
  *
  * And it makes CSRF real. Laravel skips CSRF entirely under PHPUnit (it checks the app
  * environment is "testing"), so the environment is switched for the duration.
+ *
+ * One instance is one browser: it keeps its own cookies across its requests and sends no
+ * other instance's, so `new Console` is a fresh browser with no session, whatever other
+ * Consoles in the same test have signed in (tests/Feature/Support/ConsoleIsolationTest.php).
  */
 final class Console
 {
@@ -247,6 +253,12 @@ final class Console
         }
         $server = $this->ip === null ? [] : ['REMOTE_ADDR' => $this->ip];
 
+        // Send THIS browser's jar and nothing else. Laravel keeps request cookies on the test case, for
+        // the whole test, and withUnencryptedCookies() MERGES into them; nothing ever clears them. So
+        // without this, a Console whose jar lacks a cookie (a fresh browser has no session cookie at
+        // all) silently sends the one another Console left behind, and "a stranger" is signed in.
+        self::forgetTestCaseCookies();
+
         // withCredentials(): Laravel's json() helper sends NO cookies without it, which
         // would silently start a new session on every request.
         $response = withUnencryptedCookies($this->cookieValues())
@@ -257,6 +269,24 @@ final class Console
         $this->absorb($response);
 
         return $response;
+    }
+
+    /**
+     * Empties the cookies Laravel holds on the current test case for the next request. The framework offers
+     * no public way to do this (only flushHeaders(), for headers), so it is done from inside the test case's
+     * own scope. Only request-cookie state is touched: nothing in the application, its session or its
+     * cookie configuration.
+     */
+    private static function forgetTestCaseCookies(): void
+    {
+        // The test case Pest's own withUnencryptedCookies() forwards to (test() wraps it in a proxy).
+        $test = TestSuite::getInstance()->test;
+        assert($test instanceof TestCase);
+
+        (function (): void {
+            $this->unencryptedCookies = [];
+            $this->defaultCookies = [];
+        })->call($test);
     }
 
     /** @param  TestResponse<Response>  $response */
