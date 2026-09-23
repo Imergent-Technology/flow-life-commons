@@ -2,7 +2,7 @@
 
 The long-lived organizational platform for Flow Life Global: the authoritative system for organizational data, identity, authorization and workflows, serving members, volunteers and Guardians. WordPress is a presentation adapter; it is never the source of truth.
 
-> **Status: foundation only.** This repository currently contains the development environment, tooling, CI, architecture documentation and a health endpoint. There is no product functionality yet.
+> **Status: in active development, and live in production.** The foundation and the Identity and Access system are implemented, and the Guardian Console and Platform API run as real, deployed software: **v0.1.1** has been in production since 2026-09-22. Substantial product functionality beyond the foundation is still being built out incrementally.
 
 ## Quick start
 
