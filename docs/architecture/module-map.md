@@ -60,7 +60,7 @@ Note for module authors: a module's `Domain` may not import its own `Application
 
 ## Designed, not yet created: `Membership`
 
-The Membership Foundation design gate is complete ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md), [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). **Nothing below exists yet**: there is no `Membership` folder, no `membership_grants` table, no membership capability and no `RegisterPerson` use case. This records the boundary the module will be created with.
+The Membership Foundation design gate is complete ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md), [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). **`Membership` itself does not exist yet**: there is no `Membership` folder, no `membership_grants` table and no membership capability. One thing Membership will depend on is already built, in `Identity` (see the `RegisterPerson` bullet below); this section otherwise records the module boundary `Membership` will be created with.
 
 | Module | Owns | Direct dependencies |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ The module's own rules, which are the ordinary ones stated above applied to this
 
 - Nothing outside Membership queries `membership_grants` or uses `Membership\Domain`.
 - Membership does not query `people`, `accounts` or `role_assignments` directly, does not own Person persistence, and never names a role key.
-- `RegisterPerson` — the use case that creates a Person with no Account — belongs to **`Identity`**, not Membership, so Identity remains the only module that creates People ([ADR 0015](../adr/0015-identity-owns-person.md), [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md)).
+- `RegisterPerson` — the use case that creates a Person with no Account, **already built** — belongs to **`Identity`**, not Membership, so Identity remains the only module that creates People ([ADR 0015](../adr/0015-identity-owns-person.md), [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md)).
 - Membership may orchestrate *register a Person and grant membership* in one transaction, the way `Access\Application\BootstrapAdministrator` already calls `Identity\Application\InviteAccount` inside one.
 
 ## Candidate modules (provisional, none created)

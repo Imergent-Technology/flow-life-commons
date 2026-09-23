@@ -77,7 +77,7 @@ The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md)
 
 ## Membership Foundation (designed, not yet built)
 
-The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). **No part of it exists yet**: no `Membership` module, no `membership_grants` table, no membership capabilities, no `RegisterPerson`.
+The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). **Membership itself does not exist yet**: no `Membership` module, no `membership_grants` table, no membership capabilities. One piece Identity owns ahead of it is built: `Identity\Application\RegisterPerson`, which registers a Person with no Account.
 
 Two decisions constrain later work and belong here rather than only in the ADRs:
 
