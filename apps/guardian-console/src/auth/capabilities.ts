@@ -13,6 +13,10 @@ export const INVITATIONS_ISSUE = 'identity.invitations.issue'
 export const MFA_RECOVER = 'identity.mfa.recover'
 export const ROLES_ASSIGN = 'access.roles.assign'
 
+// Membership records (ADR 0028). Changes nothing; membership state is always derived by the server.
+export const MEMBERSHIP_VIEW = 'membership.records.view'
+export const MEMBERSHIP_MANAGE = 'membership.records.manage'
+
 export function hasCapability(current: CurrentAccount, capability: string): boolean {
   return current.capabilities.includes(capability)
 }

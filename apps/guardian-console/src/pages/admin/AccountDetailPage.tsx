@@ -9,6 +9,8 @@ import {
   ACCOUNTS_MANAGE,
   hasCapability,
   INVITATIONS_ISSUE,
+  MEMBERSHIP_MANAGE,
+  MEMBERSHIP_VIEW,
   MFA_RECOVER,
   ROLES_ASSIGN,
 } from '../../auth/capabilities.ts'
@@ -17,6 +19,7 @@ import { PageHeading } from '../../ui/PageHeading.tsx'
 import { describeFailure } from '../../ui/problem.ts'
 import { StatusBadge } from '../../ui/StatusBadge.tsx'
 import { AccessRolesSection } from './AccessRolesSection.tsx'
+import { AccountMembershipSection } from './AccountMembershipSection.tsx'
 import { AccountStatusSection } from './AccountStatusSection.tsx'
 import { InvitationSection } from './InvitationSection.tsx'
 import { MfaRecoverySection } from './MfaRecoverySection.tsx'
@@ -102,6 +105,12 @@ export function AccountDetailPage() {
         own={own}
         mayRecover={hasCapability(current, MFA_RECOVER)}
         onChanged={replace}
+      />
+
+      <AccountMembershipSection
+        account={account}
+        mayView={hasCapability(current, MEMBERSHIP_VIEW)}
+        mayManage={hasCapability(current, MEMBERSHIP_MANAGE)}
       />
 
       {hasCapability(current, ACCOUNTS_MANAGE) ? (

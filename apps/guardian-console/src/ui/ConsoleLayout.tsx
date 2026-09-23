@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from 'react-router'
 
 import { useCurrentAccount } from '../auth/auth-context.ts'
-import { ACCOUNTS_VIEW, hasCapability } from '../auth/capabilities.ts'
+import { ACCOUNTS_VIEW, hasCapability, MEMBERSHIP_VIEW } from '../auth/capabilities.ts'
 import { StepUpProvider } from '../auth/StepUpProvider.tsx'
 import { SignOutButton } from './SignOutButton.tsx'
 
@@ -24,6 +24,11 @@ export function ConsoleLayout() {
             {hasCapability(current, ACCOUNTS_VIEW) ? (
               <NavLink to="/admin/accounts" className={link}>
                 Accounts
+              </NavLink>
+            ) : null}
+            {hasCapability(current, MEMBERSHIP_VIEW) ? (
+              <NavLink to="/admin/members" className={link}>
+                Members
               </NavLink>
             ) : null}
             <NavLink to="/account/security" className={link}>

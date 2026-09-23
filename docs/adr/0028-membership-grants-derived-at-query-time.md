@@ -5,7 +5,7 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0015](0015-identity-owns-person.md)
-- **Clarified:** 2026-09-23, after the backend was built. The decision is unchanged. `membership_grants`, the `Membership` module (`Domain`, `Application`, `Infrastructure`), the temporal derivation, race-safe one-way revocation, `Identity\Application\RegisterPerson`, and the `membership.records.view`/`membership.records.manage` capabilities now exist and are covered by tests, including the MariaDB/PostgreSQL temporal matrix and a two-process concurrency proof of the conditional-update revocation. **Not built:** any HTTP/admin surface, the Guardian Console Membership UI, WordPress integration, and Zeffy/Luma automation.
+- **Clarified:** 2026-09-23, after the backend was built. The decision is unchanged. `membership_grants`, the `Membership` module (`Domain`, `Application`, `Infrastructure`), the temporal derivation, race-safe one-way revocation, `Identity\Application\RegisterPerson`, and the `membership.records.view`/`membership.records.manage` capabilities now exist and are covered by tests, including the MariaDB/PostgreSQL temporal matrix and a two-process concurrency proof of the conditional-update revocation. An operator-only `/admin/members` HTTP surface (Work Package 5) and a Guardian Console Membership administration UI on top of it (Work Package 6) are also now built. **Not built:** a member-facing API, WordPress integration, service/delegated authentication, and Zeffy/Luma automation.
 
 ## Context
 
