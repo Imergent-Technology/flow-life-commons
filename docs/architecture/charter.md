@@ -75,9 +75,9 @@ Sensitive actions and privileged access require **durable audit records** (who, 
 
 The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [identity-and-access.md](identity-and-access.md). **Identity and Access are implemented and running in production**: password login, invitations, password reset/change, sessions, TOTP MFA with recovery codes, administrator bootstrap and operator administration (role grant/revoke, account enable/disable, MFA reset), the last behind a real HTTP/admin surface. Rules 2, 6 and 16 above are encoded there.
 
-## Membership Foundation (designed, not yet built)
+## Membership Foundation (backend built, no surface yet)
 
-The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). **Membership itself does not exist yet**: no `Membership` module, no `membership_grants` table, no membership capabilities. One piece Identity owns ahead of it is built: `Identity\Application\RegisterPerson`, which registers a Person with no Account.
+The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). The `Membership` module, `membership_grants`, `Identity\Application\RegisterPerson` and the `membership.records.view`/`membership.records.manage` capabilities are built. **Not built:** any HTTP/admin surface, the Guardian Console Membership UI, WordPress integration, and Zeffy/Luma automation.
 
 Two decisions constrain later work and belong here rather than only in the ADRs:
 

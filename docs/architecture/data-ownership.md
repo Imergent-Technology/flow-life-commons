@@ -15,11 +15,12 @@ Data mirrored to other systems (for example a WordPress user display name) is a 
 
 ## Current state
 
-Platform-owned tables exist for Identity, Access and Audit ([module map](module-map.md)):
+Platform-owned tables exist for Identity, Access, Audit and Membership ([module map](module-map.md)):
 
 - **Identity**: `people`, `accounts`, `account_invitations`, `sessions`, `account_totp_factors`, `account_recovery_codes`, `password_reset_tokens`.
 - **Access**: `role_assignments`.
 - **Audit**: `security_events`.
+- **Membership**: `membership_grants`. Backend only: there is no HTTP/admin surface or UI yet.
 
 Platform aggregates use application-generated ULID primary keys, per the principle above. Framework infrastructure created by Laravel's stock migrations — `migrations`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs` — keeps Laravel's default keys because it is not platform aggregate data. There is deliberately no `users` table: Identity's `people`/`accounts` split is the human registry ([authorization model](../security/authorization-model.md)).
 
@@ -29,11 +30,9 @@ Platform aggregates use application-generated ULID primary keys, per the princip
 - **Cross-module foreign keys:** permitted, deliberately, where the reference is a fundamental invariant — with `RESTRICT`, never `CASCADE`, and never for provenance or audit references. Write ownership, code dependency and referential integrity are three independent concerns ([ADR 0021](../adr/0021-cross-module-referential-integrity.md)).
 - **Where the audit trail lives:** a small `Audit` module owning an append-only `security_events` table with no foreign keys, so it outlives its subjects and never blocks an operation ([ADR 0019](../adr/0019-security-event-auditing-seam.md)).
 
-## Decided for the next phase: Membership (not yet built)
+## Membership (ADR 0028, ADR 0029)
 
-The Membership Foundation design gate is complete ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md), [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). **No table exists yet.** What it settles about data ownership:
-
-- **`Membership` will own one table, `membership_grants`**, holding time-bounded grants of membership access. Whether a Person is a member *now* is **derived from those rows at query time**, not stored: there is no status column and no expiry job.
+- **`Membership` owns one table, `membership_grants`**, holding time-bounded grants of membership access. Whether a Person is a member *now* is **derived from those rows at query time**, not stored: there is no status column and no expiry job.
 - **Grants are a non-deleting history with one-way revocation.** Nothing but `revoked_at`/`revoked_by_account_id` is ever changed, and no row is deleted.
 - **`person_id` carries a cross-module foreign key with `RESTRICT`**; `granted_by_account_id` and `revoked_by_account_id` are provenance and carry none — the calls [ADR 0021](../adr/0021-cross-module-referential-integrity.md) already defines. Membership's migrations therefore run after Identity's.
 - **Payment facts stay out of the schema.** Amount, currency, payment method, provider status, subscription mechanics, campaign fields and receipt state belong to the commerce provider, never to `membership_grants` ([ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). Provider identity may appear only as provenance, in `source`/`source_reference`, which Membership never parses and which carry no uniqueness constraint.

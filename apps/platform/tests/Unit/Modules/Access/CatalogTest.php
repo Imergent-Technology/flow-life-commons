@@ -18,6 +18,8 @@ it('has exactly the capability catalog, so adding one is a deliberate decision',
             'console.access', 'access.roles.assign',
             // Operator administration (ADR 0024): each exists because a route checks it.
             'identity.accounts.view', 'identity.accounts.manage', 'identity.invitations.issue', 'identity.mfa.recover',
+            // Membership Foundation (ADR 0028): each exists because a Membership use case checks it.
+            'membership.records.view', 'membership.records.manage',
         ]);
 });
 
@@ -57,7 +59,7 @@ it('gives the guardian the Console and nothing more', function () {
 });
 
 it('gives the guardian NO administrative capability: being let into the Console is not being let to administer it', function () {
-    foreach ([Capability::AssignRoles, Capability::ViewAccounts, Capability::ManageAccounts, Capability::IssueInvitations, Capability::RecoverMfa] as $administrative) {
+    foreach ([Capability::AssignRoles, Capability::ViewAccounts, Capability::ManageAccounts, Capability::IssueInvitations, Capability::RecoverMfa, Capability::ViewMembershipRecords, Capability::ManageMembershipRecords] as $administrative) {
         expect(Role::Guardian->grants($administrative))->toBeFalse();
     }
 });

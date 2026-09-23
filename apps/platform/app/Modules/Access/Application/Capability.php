@@ -35,4 +35,10 @@ enum Capability: string
 
     /** May reset ANOTHER Account's second factor when its owner has lost the authenticator and every recovery code. */
     case RecoverMfa = 'identity.mfa.recover';
+
+    /** May list and inspect membership state and grant history (ADR 0028). Changes nothing. */
+    case ViewMembershipRecords = 'membership.records.view';
+
+    /** May register a Person for membership purposes and create or revoke membership access grants (ADR 0028). */
+    case ManageMembershipRecords = 'membership.records.manage';
 }

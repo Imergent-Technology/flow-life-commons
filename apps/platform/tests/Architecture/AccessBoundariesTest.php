@@ -8,7 +8,9 @@ use App\Modules\Access\Application\Role;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 
 /*
- * Access sits at the top of the frozen graph (Access -> Identity -> Audit -> Shared).
+ * Access sits at the top of the platform graph (Access -> Identity -> Audit -> Shared).
+ * Membership sits above Access (Membership -> Access, Membership -> Identity; ADR 0028) without
+ * closing a cycle or gaining a direct Audit dependency.
  * docs/architecture/identity-and-access.md, "Layer placement" and "What other modules use".
  *
  * Other modules consume Access only through Access\Application, and what they ask for is a
@@ -227,7 +229,13 @@ it('has an acyclic module graph limited to the frozen edges', function () {
     // Access -> Identity -> Audit -> Shared. Health, Security and Release are operational and stand
     // alone: each owns no table, no entity and no lifecycle, and nothing may come to depend on any of
     // them. Release in particular reads one file the build wrote and has no HTTP surface (ADR 0027).
-    $allowed = ['Access' => ['Identity', 'Audit'], 'Identity' => ['Audit'], 'Audit' => [], 'Health' => [], 'Security' => [], 'Release' => []];
+    // Membership -> Access, Identity (ADR 0028): calling a module that itself depends on Audit does
+    // not create a Membership -> Audit edge, and none is listed here.
+    $allowed = [
+        'Access' => ['Identity', 'Audit'], 'Identity' => ['Audit'], 'Audit' => [],
+        'Health' => [], 'Security' => [], 'Release' => [],
+        'Membership' => ['Access', 'Identity'],
+    ];
     foreach ($graph as $module => $edges) {
         if (! array_key_exists($module, $allowed)) {
             $problems[] = "{$module} is a module the frozen graph does not know";
@@ -264,7 +272,10 @@ it('has an acyclic module graph limited to the frozen edges', function () {
     // Positive controls: the scan sees the edges that do exist, so an empty graph cannot pass.
     expect($graph['Identity'])->toContain('Audit')
         ->and($graph['Access'])->toContain('Identity')
-        ->and($graph['Access'])->toContain('Audit'); // role mutation is audited through Audit's Application layer
+        ->and($graph['Access'])->toContain('Audit') // role mutation is audited through Audit's Application layer
+        ->and($graph['Membership'])->toContain('Access')
+        ->and($graph['Membership'])->toContain('Identity')
+        ->and($graph['Membership'])->not->toContain('Audit'); // no direct Audit dependency (ADR 0028)
 });
 
 // --- Operator administration (docs/adr/0024) -------------------------------------------------------------------

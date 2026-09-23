@@ -19,6 +19,7 @@ declare(strict_types=1);
  *   php worker.php mfa_complete '{"account":"...","marker":"...","need":"challenge","code":"..."}'  (or "recovery_code")
  *   php worker.php mfa_confirm_enrollment '{"account":"...","marker":"...","code":"..."}'
  *   php worker.php consume_code '{"account":"...","digest":"..."}'
+ *   php worker.php revoke_grant '{"actor_account":"...","actor_person":"...","grant":"..."}'
  *   php worker.php mfa_reset '{"account":"..."}'
  *   php worker.php security_verify '{"account":"...","person":"...","password":"...","code":"..."}'
  *   php worker.php replace_begin '{"account":"...","person":"...","password":"...","code":"..."}'
@@ -60,6 +61,8 @@ use App\Modules\Identity\Domain\AccountInvitationRepository;
 use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\InvitationToken;
 use App\Modules\Identity\Domain\RecoveryCodeRepository;
+use App\Modules\Membership\Application\RevokeMembershipGrant;
+use App\Modules\Membership\Domain\MembershipGrantId;
 use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
@@ -143,6 +146,11 @@ try {
         if (! $consumed) {
             throw new RuntimeException('the code was already spent');
         }
+    } elseif ($operation === 'revoke_grant') {
+        $app->make(RevokeMembershipGrant::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            MembershipGrantId::fromString($arg('grant')),
+        );
     } elseif ($operation === 'mfa_reset') {
         $app->make(ResetMultiFactor::class)->fromServer(AccountId::fromString($arg('account')));
     } elseif ($operation === 'security_verify') {
