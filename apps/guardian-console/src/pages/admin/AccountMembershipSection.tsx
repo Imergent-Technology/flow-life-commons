@@ -34,6 +34,19 @@ export function AccountMembershipSection({
   mayView: boolean
   mayManage: boolean
 }) {
+  // The membership GET lives in a child that only exists for someone who may view: a hook in THIS component would run its
+  // request before the early return, so a viewer without the capability would still issue (and be refused) the call.
+  if (!mayView) return null
+  return <AccountMembershipContent account={account} mayManage={mayManage} />
+}
+
+function AccountMembershipContent({
+  account,
+  mayManage,
+}: {
+  account: ManagedAccount
+  mayManage: boolean
+}) {
   const load = useCallback(
     (signal: AbortSignal) => getMember(account.personId, signal),
     [account.personId],
@@ -47,10 +60,10 @@ export function AccountMembershipSection({
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [problem, setProblem] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-
-  if (!mayView) return null
+  const [pending, setPending] = useState(false)
 
   async function submitGrant() {
+    if (pending) return // a second press while the first is in flight would create a second grant
     setProblem(null)
     setNotice(null)
     const resolved = resolveMembershipTerm(term)
@@ -60,14 +73,15 @@ export function AccountMembershipSection({
     }
     setFieldErrors({})
 
+    setPending(true)
     const outcome = await run(() =>
       grantMembership(account.personId, {
-        startsAt: resolved.startsAt,
-        endsAt: resolved.endsAt,
+        term: resolved.term,
         source,
         sourceReference: sourceReference.trim() === '' ? null : sourceReference.trim(),
       }),
     )
+    setPending(false)
     if (outcome.status === 'done') {
       setAdding(false)
       setNotice('Membership access was granted.')
@@ -161,11 +175,12 @@ export function AccountMembershipSection({
                     <button
                       type="button"
                       className={secondaryButton}
+                      disabled={pending}
                       onClick={() => {
                         void submitGrant()
                       }}
                     >
-                      Grant access
+                      {pending ? 'Granting…' : 'Grant access'}
                     </button>
                     <button
                       type="button"

@@ -15,8 +15,8 @@ use App\Shared\Domain\PersonId;
 use DateTimeImmutable;
 
 /**
- * One Person's membership state and complete grant history, for the future admin surface.
- * Read-only: no lock, no audit event, no state change.
+ * One Person's membership state and complete grant history, for the operator's member-detail view
+ * (`GET /admin/members/{person}`). Read-only: no lock, no audit event, no state change.
  */
 final readonly class GetMembershipRecord
 {

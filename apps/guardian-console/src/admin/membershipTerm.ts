@@ -3,6 +3,8 @@
 // browser's local time (the same convention `admin/time.ts`'s `shown()` already displays in), and `toISOString()` is then
 // unambiguous. Never hand-rolled offset arithmetic.
 
+import type { MembershipTerm } from '../api/membership.ts'
+
 export interface MembershipTermState {
   /** Raw `datetime-local` value: `''` until the person picks something. */
   startsAt: string
@@ -28,8 +30,7 @@ export function instantFromLocal(value: string): string | null {
 export type MembershipTermField = 'starts_at' | 'ends_at'
 
 export type MembershipTermResult =
-  | { ok: true; startsAt: string; endsAt: string | null }
-  | { ok: false; field: MembershipTermField; message: string }
+  { ok: true; term: MembershipTerm } | { ok: false; field: MembershipTermField; message: string }
 
 /**
  * Turns the form state into what the API expects, or says which field stopped it. Checked here, before the request: the
@@ -41,7 +42,7 @@ export function resolveMembershipTerm(term: MembershipTermState): MembershipTerm
   if (startsAt === null) {
     return { ok: false, field: 'starts_at', message: 'Enter when access starts.' }
   }
-  if (term.openEnded) return { ok: true, startsAt, endsAt: null }
+  if (term.openEnded) return { ok: true, term: { startsAt, openEnded: true, endsAt: null } }
 
   const endsAt = instantFromLocal(term.endsAt)
   if (endsAt === null) {
@@ -54,5 +55,5 @@ export function resolveMembershipTerm(term: MembershipTermState): MembershipTerm
   if (Date.parse(endsAt) <= Date.parse(startsAt)) {
     return { ok: false, field: 'ends_at', message: 'Access must end after it starts.' }
   }
-  return { ok: true, startsAt, endsAt }
+  return { ok: true, term: { startsAt, openEnded: false, endsAt } }
 }

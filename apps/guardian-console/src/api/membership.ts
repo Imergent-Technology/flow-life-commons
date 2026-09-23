@@ -202,13 +202,25 @@ export function getMember(personId: string, signal?: AbortSignal): Promise<Resul
   )
 }
 
+/**
+ * When a grant runs, with open-ended access DECLARED rather than inferred (ADR 0028). The two intents have exactly one
+ * representation each, and the type makes the invalid mixes unrepresentable: open-ended access has no end date, and a
+ * bounded term must have one. A blank end date is therefore never a way to ask for open-ended access.
+ */
+export type MembershipTerm =
+  | { startsAt: string; openEnded: true; endsAt: null }
+  | { startsAt: string; openEnded: false; endsAt: string }
+
 export interface MembershipTermInput {
-  /** An ISO instant, as produced by the Console's own datetime conversion. */
-  startsAt: string
-  /** Null is an explicit, deliberate open-ended choice; the key is always sent. */
-  endsAt: string | null
+  /** `startsAt` an ISO instant, as produced by the Console's own datetime conversion. */
+  term: MembershipTerm
   source: MembershipSource
   sourceReference: string | null
+}
+
+/** The term as the API states it: `open_ended` is always sent, and `ends_at` is `null` exactly when it is true. */
+function termBody(term: MembershipTerm) {
+  return { starts_at: term.startsAt, open_ended: term.openEnded, ends_at: term.endsAt }
 }
 
 /**
@@ -226,8 +238,7 @@ export function registerMember(
         authenticated: true,
         body: {
           display_name: input.displayName,
-          starts_at: input.startsAt,
-          ends_at: input.endsAt,
+          ...termBody(input.term),
           source: input.source,
           source_reference: input.sourceReference,
         },
@@ -252,8 +263,7 @@ export function grantMembership(
         path: `/api/v1/admin/members/${idPath(personId)}/grants`,
         authenticated: true,
         body: {
-          starts_at: input.startsAt,
-          ends_at: input.endsAt,
+          ...termBody(input.term),
           source: input.source,
           source_reference: input.sourceReference,
         },

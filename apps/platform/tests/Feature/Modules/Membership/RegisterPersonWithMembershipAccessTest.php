@@ -102,11 +102,6 @@ it('rolls back the new Person when persisting the grant fails for any reason', f
             return [];
         }
 
-        public function all(): array
-        {
-            return [];
-        }
-
         public function revoke(MembershipGrantId $id, AccountId $revokedBy, DateTimeImmutable $now): bool
         {
             return false;

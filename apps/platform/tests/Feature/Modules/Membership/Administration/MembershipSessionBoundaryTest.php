@@ -34,7 +34,7 @@ beforeEach(function () {
  */
 function membershipMutations(Console $console, string $person, string $grant, array $headers, bool $withXsrfHeader): array
 {
-    $term = ['starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator'];
+    $term = ['starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator'];
 
     return [
         'register' => $console->post('/api/v1/admin/members', ['display_name' => 'Forged Member', ...$term], $headers, $withXsrfHeader),

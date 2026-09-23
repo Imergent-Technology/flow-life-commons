@@ -23,7 +23,7 @@ it('grants an additional term to an existing Person, and returns the grant', fun
     $person = Identity::savedPerson('Mia Member');
 
     $response = $console->post('/api/v1/admin/members/'.$person->id->value.'/grants', [
-        'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
 
     expect(DB::table('membership_grants')->where('person_id', $person->id->value)->count())->toBe(1)
@@ -37,7 +37,7 @@ it('works for a Person who has no Account', function () {
     $person = Identity::savedPerson(); // no Account
 
     $console->post('/api/v1/admin/members/'.$person->id->value.'/grants', [
-        'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
 
     expect(DB::table('membership_grants')->where('person_id', $person->id->value)->count())->toBe(1);
@@ -58,11 +58,11 @@ it('answers a stable 404 problem for an unknown Person', function () {
     [$console] = Mfa::signedInAdmin();
 
     $console->post('/api/v1/admin/members/01jzzzzzzzzzzzzzzzzzzzzzzz/grants', [
-        'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertNotFound()->assertJson(['code' => 'person_not_found']);
 
     $console->post('/api/v1/admin/members/not-an-id/grants', [
-        'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertNotFound();
 
     expect(DB::table('membership_grants')->count())->toBe(0);
@@ -74,7 +74,7 @@ it('allows an overlapping grant: the derivation merges them, it does not forbid 
     Membership::savedGrant($person->id, Identity::now(), Identity::now()->modify('+6 months'));
 
     $console->post('/api/v1/admin/members/'.$person->id->value.'/grants', [
-        'starts_at' => Identity::now()->modify('+3 months')->format('c'), 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => Identity::now()->modify('+3 months')->format('c'), 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
 
     expect(DB::table('membership_grants')->where('person_id', $person->id->value)->count())->toBe(2);
@@ -87,7 +87,7 @@ it('allows a grant that exactly touches another', function () {
     Membership::savedGrant($person->id, Identity::now(), $firstEnd);
 
     $console->post('/api/v1/admin/members/'.$person->id->value.'/grants', [
-        'starts_at' => $firstEnd->format('c'), 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => $firstEnd->format('c'), 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
 
     expect(DB::table('membership_grants')->where('person_id', $person->id->value)->count())->toBe(2);
@@ -99,7 +99,7 @@ it('cannot be made to impersonate the caller through a person or account field i
     $other = Identity::savedPerson();
 
     $console->post('/api/v1/admin/members/'.$person->id->value.'/grants', [
-        'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
         'person_id' => $other->id->value, // the route parameter is the only subject that counts
         'granted_by_account_id' => '01jzzzzzzzzzzzzzzzzzzzzzzz',
     ])->assertCreated();
@@ -115,7 +115,7 @@ it('discloses exactly the approved fields for the created grant, and nothing els
     $person = Identity::savedPerson();
 
     $response = $console->post('/api/v1/admin/members/'.$person->id->value.'/grants', [
-        'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator', 'source_reference' => 'ref-1',
+        'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator', 'source_reference' => 'ref-1',
     ])->assertCreated();
 
     expect(array_keys(Api::map($response->json())))->toBe(['id', 'person_id', 'starts_at', 'ends_at', 'source', 'source_reference', 'revoked_at']);

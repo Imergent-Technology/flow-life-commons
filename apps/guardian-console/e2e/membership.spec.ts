@@ -7,6 +7,19 @@ import { signedInAs } from './support.ts'
 // (E2eSessionSeeder's `admin-read`: a real Platform Administrator, freshly verified, so this proves the real HTTP flow
 // without also re-proving the step-up prompt itself, which administration.spec.ts already covers for Accounts).
 
+/**
+ * A `datetime-local` value (browser-local wall clock, no zone) for `days` from now. The suite must stay meaningful
+ * whenever it runs, so every term is relative to the moment of the run and never names a calendar date: a grant that is
+ * genuinely current today must still be current when this executes, and must not be one that silently expired.
+ * The browser under test runs in this process's timezone, so local components are the right ones to format.
+ */
+function localInput(days: number): string {
+  const at = new Date(Date.now() + days * 86_400_000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const date = [String(at.getFullYear()), pad(at.getMonth() + 1), pad(at.getDate())].join('-')
+  return `${date}T${pad(at.getHours())}:${pad(at.getMinutes())}`
+}
+
 test.describe('membership administration', () => {
   test('an administrator adds a member, adds another grant, and revokes one, with the list and detail reflecting the server at each step', async ({
     browser,
@@ -19,18 +32,20 @@ test.describe('membership administration', () => {
     await admin.getByRole('link', { name: 'Members', exact: true }).click()
     await expect(admin.getByRole('heading', { level: 1, name: 'Members' })).toBeVisible()
 
-    // Add a new member with a bounded term.
+    // Add a new member with a bounded term that is current NOW: started a month ago, ending in two months.
     await admin.getByRole('link', { name: 'Add member' }).click()
     await expect(admin.getByRole('heading', { level: 1, name: 'Add a new member' })).toBeVisible()
     await admin.getByLabel('Display name').fill(name)
-    await admin.getByLabel('Starts at').fill('2026-01-01T00:00')
-    await admin.getByLabel('Ends at').fill('2026-12-31T00:00')
+    await admin.getByLabel('Starts at').fill(localInput(-30))
+    await admin.getByLabel('Ends at').fill(localInput(60))
     await admin.getByRole('button', { name: 'Add member' }).click()
 
     await expect(admin.getByRole('heading', { level: 1, name: 'Member added' })).toBeVisible()
     await admin.getByRole('link', { name: 'Open the member' }).click()
     await expect(admin.getByRole('heading', { level: 1, name })).toBeVisible()
-    await expect(admin.getByText('Active')).toBeVisible()
+    // Exact matches: a bare 'Active' is a substring of 'Inactive', so it could pass for the wrong state.
+    await expect(admin.getByText('Active', { exact: true })).toBeVisible()
+    await expect(admin.getByText('Inactive', { exact: true })).toHaveCount(0)
     await expect(admin.getByText(/Access through/)).toBeVisible()
 
     // It appears in the list.
@@ -40,7 +55,7 @@ test.describe('membership administration', () => {
     // Add another, open-ended, overlapping grant: the domain merges coverage, it does not refuse this.
     await admin.getByRole('link', { name }).click()
     await admin.getByRole('button', { name: 'Add grant' }).click()
-    await admin.getByLabel('Starts at').fill('2026-06-01T00:00')
+    await admin.getByLabel('Starts at').fill(localInput(-5))
     await admin.getByLabel('Open-ended access (no end date)').check()
     await admin.getByRole('button', { name: 'Review and add' }).click()
     await expect(
@@ -63,7 +78,8 @@ test.describe('membership administration', () => {
     // re-fetching, so the remaining assertions see the final state rather than a transitional one.
     await expect(admin.getByText(/^Revoked/)).toBeVisible() // the one just revoked, kept in history
     await expect(admin.getByText('Not revoked')).toBeVisible() // the surviving grant
-    await expect(admin.getByText('Active')).toBeVisible() // still covered by the open-ended grant
+    await expect(admin.getByText('Active', { exact: true })).toBeVisible() // still covered by the open-ended grant
+    await expect(admin.getByText('Inactive', { exact: true })).toHaveCount(0)
   })
 
   test('a guardian has no Members link and is refused on the page and at the API', async ({

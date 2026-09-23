@@ -165,18 +165,21 @@ it("lists a Person's grants oldest first", function () {
         ->and($ordered[1]->id->equals($second->id))->toBeTrue();
 });
 
-it('all() lists every grant, including a Person whose only grant is revoked', function () {
+it('pages distinct Persons, including one whose only grant is revoked', function () {
     $active = Identity::savedPerson();
     $lapsed = Identity::savedPerson();
     $operator = Identity::savedActiveAccount('operator@example.org');
 
     app(MembershipGrantRepository::class)->add(membershipGrant($active->id));
+    app(MembershipGrantRepository::class)->add(membershipGrant($active->id)); // two grants, still one Person
     $revokedGrant = membershipGrant($lapsed->id);
     app(MembershipGrantRepository::class)->add($revokedGrant);
     app(MembershipGrantRepository::class)->revoke($revokedGrant->id, $operator->id, Identity::now()->modify('+1 minute'));
 
-    $people = array_map(fn (MembershipGrant $g): string => $g->personId->value, app(MembershipGrantRepository::class)->all());
-    expect($people)->toContain($active->id->value)->toContain($lapsed->id->value);
+    ['personIds' => $ids, 'total' => $total] = app(MembershipGrantRepository::class)->personIdsPage(1, 25);
+
+    expect(array_map(fn (PersonId $id): string => $id->value, $ids))->toEqualCanonicalizing([$active->id->value, $lapsed->id->value])
+        ->and($total)->toBe(2);
 });
 
 // --- No delete, no generic save (structural) ----------------------------------------------

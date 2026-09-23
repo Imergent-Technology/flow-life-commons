@@ -43,7 +43,7 @@ function gateAnswers(bool $answer, string ...$abilities): void
 /** @return array<string, mixed> */
 function newMemberBody(): array
 {
-    return ['display_name' => 'Layer Test', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator'];
+    return ['display_name' => 'Layer Test', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator'];
 }
 
 it('stops a mutation at the HTTP layer alone: capability refused at the route, although the use case would allow it', function () {
@@ -54,7 +54,7 @@ it('stops a mutation at the HTTP layer alone: capability refused at the route, a
 
     $responses = [
         $console->post('/api/v1/admin/members', newMemberBody()),
-        $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', ['starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator']),
+        $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', ['starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator']),
         $console->post('/api/v1/admin/membership-grants/'.$grant->id->value.'/revoke'),
     ];
     foreach ($responses as $response) {
@@ -84,7 +84,7 @@ it('stops a read at the HTTP layer alone, and does not make reading a preconditi
 
     // No hidden manage -> view dependency: every mutation, including the one whose response is a whole record, completes.
     $console->post('/api/v1/admin/members', newMemberBody())->assertCreated();
-    $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', ['starts_at' => '2027-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator'])->assertCreated();
+    $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', ['starts_at' => '2027-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator'])->assertCreated();
 });
 
 it('stops every operation at the Application layer alone: the route lets a guardian through, the use case refuses', function () {
@@ -97,7 +97,7 @@ it('stops every operation at the Application layer alone: the route lets a guard
         'list' => $console->get('/api/v1/admin/members'),
         'show' => $console->get('/api/v1/admin/members/'.$subject->id->value),
         'register' => $console->post('/api/v1/admin/members', newMemberBody()),
-        'grant' => $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', ['starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator']),
+        'grant' => $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', ['starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator']),
         'revoke' => $console->post('/api/v1/admin/membership-grants/'.$grant->id->value.'/revoke'),
     ];
     foreach ($responses as $name => $response) {
@@ -116,5 +116,5 @@ it('lets the request through only when both layers agree (control: the overrides
     gateAnswers(true, 'membership.records.view', 'membership.records.manage'); // agreeing with the real Authorizer
 
     $console->get('/api/v1/admin/members')->assertOk();
-    $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', ['starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator'])->assertCreated();
+    $console->post('/api/v1/admin/members/'.$subject->id->value.'/grants', ['starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator'])->assertCreated();
 });

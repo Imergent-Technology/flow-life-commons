@@ -64,20 +64,6 @@ final readonly class DatabaseMembershipGrantRepository implements MembershipGran
         return $grants;
     }
 
-    public function all(): array
-    {
-        $rows = $this->database->table(self::TABLE)
-            ->orderBy('person_id')->orderBy('starts_at')->orderBy('id')
-            ->get();
-
-        $grants = [];
-        foreach ($rows as $row) {
-            $grants[] = self::toDomain($row);
-        }
-
-        return $grants;
-    }
-
     public function revoke(MembershipGrantId $id, AccountId $revokedBy, DateTimeImmutable $now): bool
     {
         return $this->database->table(self::TABLE)

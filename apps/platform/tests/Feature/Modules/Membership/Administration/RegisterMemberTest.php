@@ -23,7 +23,7 @@ it('creates a Person and an initial grant, atomically, and returns the membershi
     $response = $console->post('/api/v1/admin/members', [
         'display_name' => 'Mia Member',
         'starts_at' => '2026-09-23T12:00:00Z',
-        'ends_at' => null,
+        'open_ended' => true, 'ends_at' => null,
         'source' => 'operator',
     ])->assertCreated();
 
@@ -47,7 +47,7 @@ it('creates no Account, no invitation, no role assignment and no security event'
     ];
 
     $console->post('/api/v1/admin/members', [
-        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
 
     expect(DB::table('accounts')->count())->toBe($before['accounts'])
@@ -60,7 +60,7 @@ it('cannot be made to accept a caller-supplied provenance or identity', function
     [$console] = Mfa::signedInAdmin();
 
     $response = $console->post('/api/v1/admin/members', [
-        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
         // None of these are accepted fields; if any silently worked, provenance would not come from the Actor.
         'person_id' => '01jzzzzzzzzzzzzzzzzzzzzzzz',
         'account_id' => '01jzzzzzzzzzzzzzzzzzzzzzzz',
@@ -88,7 +88,7 @@ it('accepts an explicit ends_at of null as open-ended access', function () {
     [$console] = Mfa::signedInAdmin();
 
     $response = $console->post('/api/v1/admin/members', [
-        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
 
     expect($response->json('open_ended'))->toBeTrue()
@@ -99,7 +99,7 @@ it('rejects a bounded term where ends_at is not strictly after starts_at', funct
     [$console] = Mfa::signedInAdmin();
 
     $console->post('/api/v1/admin/members', [
-        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => '2026-09-23T12:00:00Z', 'source' => 'operator',
+        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => false, 'ends_at' => '2026-09-23T12:00:00Z', 'source' => 'operator',
     ])->assertStatus(422);
 
     expect(DB::table('membership_grants')->count())->toBe(0);
@@ -110,7 +110,7 @@ it('validates the source enum', function () {
     [$console] = Mfa::signedInAdmin();
 
     $console->post('/api/v1/admin/members', [
-        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'zeffy',
+        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'zeffy',
     ])->assertStatus(422)->assertJsonValidationErrors(['source']);
 });
 
@@ -118,12 +118,12 @@ it('bounds source_reference to 191 characters', function () {
     [$console] = Mfa::signedInAdmin();
 
     $console->post('/api/v1/admin/members', [
-        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
         'source_reference' => str_repeat('x', 192),
     ])->assertStatus(422)->assertJsonValidationErrors(['source_reference']);
 
     $console->post('/api/v1/admin/members', [
-        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
         'source_reference' => str_repeat('x', 191),
     ])->assertCreated();
 });
@@ -132,7 +132,7 @@ it('discloses exactly the approved fields, and nothing else', function () {
     [$console] = Mfa::signedInAdmin();
 
     $response = $console->post('/api/v1/admin/members', [
-        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'display_name' => 'Mia Member', 'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
         'source_reference' => 'ref-1',
     ])->assertCreated();
 
@@ -145,6 +145,6 @@ it('rejects a missing display_name', function () {
     [$console] = Mfa::signedInAdmin();
 
     $console->post('/api/v1/admin/members', [
-        'starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertStatus(422)->assertJsonValidationErrors(['display_name']);
 });

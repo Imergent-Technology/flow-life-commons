@@ -39,14 +39,14 @@ function membershipJourney(): array
     $responses = [];
 
     $responses['register'] = $console->post('/api/v1/admin/members', [
-        'display_name' => 'Journey Member', 'starts_at' => '2026-01-01T00:00:00Z', 'ends_at' => '2026-12-31T00:00:00Z',
+        'display_name' => 'Journey Member', 'starts_at' => '2026-01-01T00:00:00Z', 'open_ended' => false, 'ends_at' => '2026-12-31T00:00:00Z',
         'source' => 'luma_legacy', 'source_reference' => 'luma-4821',
     ])->assertCreated();
     $person = Api::string($responses['register']->json('person.id'));
     $first = Api::string($responses['register']->json('grants.0.id'));
 
     $responses['grant'] = $console->post("/api/v1/admin/members/{$person}/grants", [
-        'starts_at' => '2026-06-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2026-06-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
     $responses['revoke'] = $console->post("/api/v1/admin/membership-grants/{$first}/revoke")->assertNoContent();
     $responses['list'] = $console->get('/api/v1/admin/members')->assertOk();
@@ -126,10 +126,10 @@ it('changes no role assignment and records no security event, anywhere in the jo
     $events = DB::table('security_events')->count();
 
     $person = Api::string($console->post('/api/v1/admin/members', [
-        'display_name' => 'Journey Member', 'starts_at' => '2026-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'display_name' => 'Journey Member', 'starts_at' => '2026-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated()->json('person.id'));
     $grant = Api::string($console->post("/api/v1/admin/members/{$person}/grants", [
-        'starts_at' => '2027-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2027-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated()->json('id'));
     $console->post("/api/v1/admin/membership-grants/{$grant}/revoke")->assertNoContent();
 
@@ -162,7 +162,7 @@ it('carries a source reference opaquely and calls no provider while doing so (AD
     $reference = 'https://lu.ma/event/evt-XYZ?member=4821&token=not-a-token';
 
     $response = $console->post('/api/v1/admin/members', [
-        'display_name' => 'Legacy Member', 'starts_at' => '2025-01-01T00:00:00Z', 'ends_at' => null,
+        'display_name' => 'Legacy Member', 'starts_at' => '2025-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null,
         'source' => 'luma_legacy', 'source_reference' => $reference,
     ])->assertCreated();
 
@@ -179,9 +179,10 @@ it('documents Membership schemas with exactly their approved fields, so no payme
 
     expect($fields('Member'))->toBe(['person', 'active', 'current_access_ends_at', 'open_ended', 'grants'])
         ->and($fields('MembershipGrant'))->toBe(['id', 'person_id', 'starts_at', 'ends_at', 'source', 'source_reference', 'revoked_at'])
+        ->and($fields('MembershipGrantHistoryEntry'))->toBe(['id', 'starts_at', 'ends_at', 'source', 'source_reference', 'revoked_at'])
         ->and($fields('MemberPage'))->toBe(['data', 'meta'])
-        ->and($fields('RegisterMemberRequest'))->toBe(['display_name', 'starts_at', 'ends_at', 'source', 'source_reference'])
-        ->and($fields('GrantMembershipRequest'))->toBe(['starts_at', 'ends_at', 'source', 'source_reference']);
+        ->and($fields('RegisterMemberRequest'))->toBe(['display_name', 'starts_at', 'open_ended', 'ends_at', 'source', 'source_reference'])
+        ->and($fields('GrantMembershipRequest'))->toBe(['starts_at', 'open_ended', 'ends_at', 'source', 'source_reference']);
 
     // The only accepted sources are provenance, and they are the two Phase-1 ones.
     expect(Api::map(Api::map(Api::map($schemas['MembershipGrant'])['properties'])['source'])['enum'])->toBe(['operator', 'luma_legacy']);

@@ -29,15 +29,6 @@ interface MembershipGrantRepository
     public function forPerson(PersonId $personId): array;
 
     /**
-     * Every grant that exists, ordered by person then `startsAt` then `id`. For the future
-     * admin listing: a Person whose only grants are now expired or revoked is not omitted,
-     * because this reads the rows, not a derived "currently active" projection of them.
-     *
-     * @return list<MembershipGrant>
-     */
-    public function all(): array;
-
-    /**
      * Race-safe one-way revocation: one `UPDATE ... SET revoked_at = ?, revoked_by_account_id = ?
      * WHERE id = ? AND revoked_at IS NULL` (ADR 0025's conditional-update precedent). Returns
      * true iff THIS call performed the revocation; false means a revocation was already
@@ -48,9 +39,10 @@ interface MembershipGrantRepository
 
     /**
      * A page of distinct Persons who hold at least one grant, ordered by PersonId, plus the total
-     * distinct count — the admin list's own pagination (Package 5), layered on top of `all()`
-     * without changing its semantics: a Person whose only grants are expired or revoked is still
-     * counted and still paged in.
+     * distinct count: the admin list's pagination. The unit is a Person, not a grant row, and it is
+     * every Person who has EVER held a grant — one whose only grants are expired or revoked is still
+     * counted and still paged in. There is deliberately no unbounded "every grant" read: the list is
+     * always a bounded page.
      *
      * @return array{personIds: list<PersonId>, total: int}
      */

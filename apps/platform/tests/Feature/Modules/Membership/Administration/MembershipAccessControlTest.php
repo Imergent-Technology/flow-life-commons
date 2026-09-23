@@ -42,8 +42,8 @@ function membershipOperations(): array
     return [
         ['GET', '/api/v1/admin/members', []],
         ['GET', '/api/v1/admin/members/{p}', []],
-        ['POST', '/api/v1/admin/members', ['display_name' => 'New Member', 'starts_at' => '2026-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator']],
-        ['POST', '/api/v1/admin/members/{p}/grants', ['starts_at' => '2026-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator']],
+        ['POST', '/api/v1/admin/members', ['display_name' => 'New Member', 'starts_at' => '2026-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator']],
+        ['POST', '/api/v1/admin/members/{p}/grants', ['starts_at' => '2026-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator']],
         ['POST', '/api/v1/admin/membership-grants/{g}/revoke', []],
     ];
 }
@@ -96,10 +96,10 @@ it('lets an ADMINISTRATOR read, and mutate while freshly verified', function () 
     $console->get('/api/v1/admin/members')->assertOk();
     $console->get('/api/v1/admin/members/'.$target->id->value)->assertOk();
     $console->post('/api/v1/admin/members', [
-        'display_name' => 'New Member', 'starts_at' => '2026-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'display_name' => 'New Member', 'starts_at' => '2026-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
     $console->post('/api/v1/admin/members/'.$target->id->value.'/grants', [
-        'starts_at' => '2027-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2027-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
     $console->post('/api/v1/admin/membership-grants/'.$grant->id->value.'/revoke')->assertNoContent();
 });
@@ -148,11 +148,11 @@ it('respects the 15-minute boundary exactly', function () {
     Console::advance(15 * 60 - 1);
     // Verified one second before the edge: reaches the use case (a duplicate grant is allowed, not refused).
     $console->post('/api/v1/admin/members/'.$target->id->value.'/grants', [
-        'starts_at' => '2027-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2027-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
     Console::advance(1);
     $console->post('/api/v1/admin/members/'.$target->id->value.'/grants', [
-        'starts_at' => '2028-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2028-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertForbidden()->assertJson(['verification_required' => true]);
 });
 
@@ -224,7 +224,7 @@ it('treats a route PersonId and GrantId as subjects only: they never become the 
     // The route parameter names the SUBJECT of the grant, never the caller: provenance is still the
     // signed-in admin's own account, not the person named in the URL.
     $response = $console->post('/api/v1/admin/members/'.$target->id->value.'/grants', [
-        'starts_at' => '2026-01-01T00:00:00Z', 'ends_at' => null, 'source' => 'operator',
+        'starts_at' => '2026-01-01T00:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator',
     ])->assertCreated();
 
     $grantId = $response->json('id');

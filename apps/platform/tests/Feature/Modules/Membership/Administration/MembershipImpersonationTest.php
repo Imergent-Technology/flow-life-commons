@@ -65,10 +65,10 @@ function forgedIdentityBody(Account $as): array
     ];
 }
 
-/** @return array{starts_at: string, ends_at: null, source: string} */
+/** @return array{starts_at: string, open_ended: true, ends_at: null, source: string} */
 function openEndedTerm(): array
 {
-    return ['starts_at' => '2026-09-23T12:00:00Z', 'ends_at' => null, 'source' => 'operator'];
+    return ['starts_at' => '2026-09-23T12:00:00Z', 'open_ended' => true, 'ends_at' => null, 'source' => 'operator'];
 }
 
 function grantedBy(string $grantId): mixed

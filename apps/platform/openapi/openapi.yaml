@@ -1649,13 +1649,15 @@ paths:
                 $ref: '#/components/schemas/Message'
         '422':
           description: >-
-            A malformed `display_name`, a missing `ends_at` key, a bounded term where `ends_at` is
-            not strictly after `starts_at` (`invalid_membership_term`), an unknown `source`, or a
-            `source_reference` over 191 characters.
+            A malformed `display_name`, a missing or non-boolean `open_ended`, a missing `ends_at`
+            key, `open_ended` and `ends_at` that disagree (an open-ended grant with an end date, or a
+            bounded one with none or a blank one), an `ends_at` not strictly after `starts_at`, an
+            unknown `source`, or a `source_reference` over 191 characters. Ordinary request
+            validation: per-field messages under `errors`, no `code`.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CodedValidationError'
+                $ref: '#/components/schemas/ValidationError'
   /admin/members/{person}:
     get:
       operationId: getMember
@@ -1756,13 +1758,15 @@ paths:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
           description: >-
-            A missing `ends_at` key, a bounded term where `ends_at` is not strictly after
-            `starts_at` (`invalid_membership_term`), an unknown `source`, or a `source_reference`
-            over 191 characters.
+            A missing or non-boolean `open_ended`, a missing `ends_at` key, `open_ended` and
+            `ends_at` that disagree (an open-ended grant with an end date, or a bounded one with
+            none or a blank one), an `ends_at` not strictly after `starts_at`, an unknown `source`,
+            or a `source_reference` over 191 characters. Ordinary request validation: per-field
+            messages under `errors`, no `code`.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CodedValidationError'
+                $ref: '#/components/schemas/ValidationError'
   /admin/membership-grants/{grant}/revoke:
     post:
       operationId: revokeMembershipGrant
@@ -2056,6 +2060,30 @@ components:
           type: [string, 'null']
           format: date-time
           description: Null unless this grant was revoked. One-way; never becomes null again.
+    MembershipGrantHistoryEntry:
+      type: object
+      description: >-
+        A grant as it appears inside a Person's history (`Member.grants`): the same facts as
+        `MembershipGrant`, without `person_id`, which the enclosing record already states.
+      required: [id, starts_at, ends_at, source, source_reference, revoked_at]
+      properties:
+        id: {type: string}
+        starts_at: {type: string, format: date-time}
+        ends_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null is an explicit, approved open-ended grant, never "no end date entered yet".
+        source:
+          type: string
+          enum: [operator, luma_legacy]
+        source_reference:
+          type: [string, 'null']
+          maxLength: 191
+          description: An opaque provenance handle for a human investigating a grant. Never parsed, never identity.
+        revoked_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null unless this grant was revoked. One-way; never becomes null again.
     Member:
       type: object
       description: >-
@@ -2078,9 +2106,11 @@ components:
         open_ended: {type: boolean}
         grants:
           type: array
-          description: The complete history, oldest first, including revoked, expired and future grants.
+          description: >-
+            The complete history, oldest first, including revoked, expired and future grants. Each entry
+            omits `person_id`: the record it is nested in already names the one Person.
           items:
-            $ref: '#/components/schemas/MembershipGrant'
+            $ref: '#/components/schemas/MembershipGrantHistoryEntry'
     MemberPage:
       type: object
       required: [data, meta]
@@ -2099,7 +2129,7 @@ components:
             last_page: {type: integer}
     RegisterMemberRequest:
       type: object
-      required: [display_name, starts_at, ends_at, source]
+      required: [display_name, starts_at, open_ended, ends_at, source]
       properties:
         display_name:
           type: string
@@ -2107,10 +2137,18 @@ components:
         starts_at:
           type: string
           format: date-time
+        open_ended:
+          type: boolean
+          description: >-
+            Required. `true` declares open-ended access and requires `ends_at: null`; `false` declares a
+            bounded term and requires an `ends_at` after `starts_at`. Open-ended access is never inferred
+            from a blank or absent end date.
         ends_at:
           type: [string, 'null']
           format: date-time
-          description: Required key. Explicit `null` means open-ended access; the key must not be omitted.
+          description: >-
+            Required key. `null` only with `open_ended: true`; a datetime only with `open_ended: false`.
+            A blank string is not a datetime and is refused.
         source:
           type: string
           enum: [operator, luma_legacy]
@@ -2119,15 +2157,23 @@ components:
           maxLength: 191
     GrantMembershipRequest:
       type: object
-      required: [starts_at, ends_at, source]
+      required: [starts_at, open_ended, ends_at, source]
       properties:
         starts_at:
           type: string
           format: date-time
+        open_ended:
+          type: boolean
+          description: >-
+            Required. `true` declares open-ended access and requires `ends_at: null`; `false` declares a
+            bounded term and requires an `ends_at` after `starts_at`. Open-ended access is never inferred
+            from a blank or absent end date.
         ends_at:
           type: [string, 'null']
           format: date-time
-          description: Required key. Explicit `null` means open-ended access; the key must not be omitted.
+          description: >-
+            Required key. `null` only with `open_ended: true`; a datetime only with `open_ended: false`.
+            A blank string is not a datetime and is refused.
         source:
           type: string
           enum: [operator, luma_legacy]

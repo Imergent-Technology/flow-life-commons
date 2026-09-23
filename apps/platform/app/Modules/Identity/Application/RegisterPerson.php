@@ -42,14 +42,18 @@ final readonly class RegisterPerson
     public function __construct(private PersonRepository $people) {}
 
     /**
+     * Returns an Application-layer `PersonSummary`, never the `Identity\Domain\Person` it persisted: this is a
+     * public port other modules call, and a Domain object here would be a runtime cross-module Domain dependency
+     * that no import scan could see (the caller would use it without ever naming its class).
+     *
      * @throws \InvalidArgumentException the display name is empty or too long (Person's own rule)
      */
-    public function __invoke(string $displayName): Person
+    public function __invoke(string $displayName): PersonSummary
     {
         $person = Person::create(PersonId::generate(), $displayName, DateTimeImmutable::createFromInterface(now()));
 
         $this->people->save($person);
 
-        return $person;
+        return new PersonSummary($person->id, $person->displayName);
     }
 }

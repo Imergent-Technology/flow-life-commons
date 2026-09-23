@@ -47,8 +47,7 @@ export function RegisterMemberPage() {
     const outcome = await run(() =>
       registerMember({
         displayName,
-        startsAt: resolved.startsAt,
-        endsAt: resolved.endsAt,
+        term: resolved.term,
         source,
         sourceReference: sourceReference.trim() === '' ? null : sourceReference.trim(),
       }),

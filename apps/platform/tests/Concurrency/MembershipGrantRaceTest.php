@@ -32,23 +32,31 @@ afterEach(function () {
     Race::clean();
 });
 
-it('revokes a grant atomically even with no lock of its own: the conditional update alone is enough', function () {
-    $operator = Access::admin('operator@example.org');
+it('revokes a grant atomically even with no lock of its own: the conditional update alone is enough, and the first writer\'s provenance survives', function () {
+    $winner = Access::admin('winner@example.org', 'First Operator');
+    $loser = Access::admin('loser@example.org', 'Second Operator'); // a DIFFERENT operator, so an overwrite is visible
     $person = Identity::savedPerson();
     $grant = Membership::savedGrant($person->id, Identity::now(), null);
+    $winnersInstant = new DateTimeImmutable('2026-01-01 00:00:00', new DateTimeZone('UTC')); // unlike anything the worker's clock can produce
 
     $race = Race::against(
-        fn (Closure $pause) => DB::transaction(function () use ($grant, $operator, $pause): void {
-            expect(app(MembershipGrantRepository::class)->revoke($grant->id, $operator->id, new DateTimeImmutable('now')))->toBeTrue();
+        fn (Closure $pause) => DB::transaction(function () use ($grant, $winner, $winnersInstant, $pause): void {
+            expect(app(MembershipGrantRepository::class)->revoke($grant->id, $winner->id, $winnersInstant))->toBeTrue();
             $pause();
         }),
-        null, 'revoke_grant', ['actor_account' => $operator->id->value, 'actor_person' => $operator->personId->value, 'grant' => $grant->id->value],
+        null, 'revoke_grant', ['actor_account' => $loser->id->value, 'actor_person' => $loser->personId->value, 'grant' => $grant->id->value],
     );
 
+    $row = DB::table('membership_grants')->where('id', $grant->id->value)->first(['revoked_at', 'revoked_by_account_id']);
+
+    // Exactly one succeeded (this process's update, asserted above); the worker was blocked on the row, then refused...
     expect($race['blocked'])->toBeTrue('a second revoke of the same grant did not wait on the row')
         ->and($race['exit'])->toBe(2)
         ->and($race['class'])->toBe(GrantAlreadyRevoked::class)
-        ->and(DB::table('membership_grants')->whereNotNull('revoked_at')->count())->toBe(1);
+        ->and(DB::table('membership_grants')->whereNotNull('revoked_at')->count())->toBe(1)
+        // ...and it could not overwrite EITHER half of the first writer's revocation.
+        ->and($row?->revoked_by_account_id)->toBe($winner->id->value)
+        ->and($row?->revoked_at)->toBe('2026-01-01 00:00:00');
 });
 
 it('does not make revoking DIFFERENT grants wait on each other', function () {

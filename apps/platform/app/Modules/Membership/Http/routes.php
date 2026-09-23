@@ -26,8 +26,11 @@ use Illuminate\Support\Facades\Route;
  * not the Person, since membership itself is derived and has no "end membership" mutation of its own.
  */
 Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin')->group(function (): void {
-    $person = '[0-9a-z]{26}';
-    $grant = '[0-9a-z]{26}';
+    // Exactly what `Str::isUlid` accepts, in the lowercase form ids are held in: the first character 0-7 and no i, l, o
+    // or u. A looser `[0-9a-z]{26}` lets a malformed id through to the value object, which throws (a 500) instead of
+    // the route simply not matching (a 404).
+    $person = '[0-7][0-9a-hjkmnp-tv-z]{25}';
+    $grant = '[0-7][0-9a-hjkmnp-tv-z]{25}';
 
     Route::middleware('can:membership.records.view')->group(function () use ($person): void {
         Route::get('members', ListMembersController::class)->name('api.v1.admin.members.index');

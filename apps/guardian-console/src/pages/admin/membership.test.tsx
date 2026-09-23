@@ -211,7 +211,13 @@ describe('add member', () => {
 
     await screen.findByRole('heading', { level: 1, name: 'Member added' })
     const call = api.callsTo('POST /api/v1/admin/members')[0]
-    expect(call?.body).toMatchObject({ display_name: 'Mia Member', source: 'operator' })
+    // A bounded term is DECLARED bounded and carries its end: `open_ended: false`, a real instant.
+    expect(call?.body).toMatchObject({
+      display_name: 'Mia Member',
+      source: 'operator',
+      open_ended: false,
+      ends_at: new Date('2026-12-01T10:00').toISOString(),
+    })
     expect(call?.body).not.toHaveProperty('email')
   })
 
@@ -245,6 +251,28 @@ describe('add member', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('resolves each intent to exactly one term shape', () => {
+    const start = '2026-06-01T10:00'
+    expect(resolveMembershipTerm({ startsAt: start, openEnded: true, endsAt: '' })).toEqual({
+      ok: true,
+      term: { startsAt: new Date(start).toISOString(), openEnded: true, endsAt: null },
+    })
+    // A stale end date left in the form is ignored, not sent alongside `open_ended: true`.
+    expect(
+      resolveMembershipTerm({ startsAt: start, openEnded: true, endsAt: '2026-12-01T10:00' }),
+    ).toMatchObject({ ok: true, term: { openEnded: true, endsAt: null } })
+    expect(
+      resolveMembershipTerm({ startsAt: start, openEnded: false, endsAt: '2026-12-01T10:00' }),
+    ).toEqual({
+      ok: true,
+      term: {
+        startsAt: new Date(start).toISOString(),
+        openEnded: false,
+        endsAt: new Date('2026-12-01T10:00').toISOString(),
+      },
+    })
+  })
+
   it('refuses an unresolved term client-side too, so a blank end never silently becomes open-ended', () => {
     const blank = { startsAt: '2026-06-01T10:00', openEnded: false, endsAt: '' }
     expect(resolveMembershipTerm(blank)).toEqual({
@@ -254,7 +282,7 @@ describe('add member', () => {
     })
   })
 
-  it('sends an explicit ends_at of null when open-ended is checked', async () => {
+  it('declares open-ended access explicitly: open_ended true with ends_at null, only when the box is checked', async () => {
     const user = userEvent.setup()
     const api = serveOperator(operator(MANAGE))
     api.on('POST /api/v1/admin/members', () => json(wireMember(), 201))
@@ -269,7 +297,10 @@ describe('add member', () => {
     await user.click(screen.getByRole('button', { name: 'Add member' }))
 
     await screen.findByRole('heading', { level: 1, name: 'Member added' })
-    expect(api.callsTo('POST /api/v1/admin/members')[0]?.body).toMatchObject({ ends_at: null })
+    expect(api.callsTo('POST /api/v1/admin/members')[0]?.body).toMatchObject({
+      open_ended: true,
+      ends_at: null,
+    })
   })
 
   it('defaults the source to operator, and luma_legacy is selectable', async () => {
@@ -606,29 +637,31 @@ describe('privacy and scope', () => {
   })
 })
 
+const TARGET_ID = '01J0000000000000000TARGET'
+const TARGET_ACCOUNT_WIRE = {
+  id: TARGET_ID,
+  person_id: PERSON_ID,
+  display_name: 'Tara Target',
+  email: 'tara@example.org',
+  email_verified_at: null,
+  status: 'active',
+  created_at: '2026-01-01T00:00:00Z',
+  last_login_at: null,
+  disabled_at: null,
+  mfa: { enrolled: false, recovery_codes_remaining: 0 },
+  invitation: null,
+  assignments: [],
+}
+
 describe('existing-Person grant entry point (from an Account)', () => {
   it('offers "Grant membership access" from an Account with no membership record', async () => {
     const user = userEvent.setup()
     const api = serveOperator(operator([...MANAGE, 'identity.accounts.view']))
-    const accountWire = {
-      id: '01J0000000000000000TARGET',
-      person_id: PERSON_ID,
-      display_name: 'Tara Target',
-      email: 'tara@example.org',
-      email_verified_at: null,
-      status: 'active',
-      created_at: '2026-01-01T00:00:00Z',
-      last_login_at: null,
-      disabled_at: null,
-      mfa: { enrolled: false, recovery_codes_remaining: 0 },
-      invitation: null,
-      assignments: [],
-    }
-    api.on('GET /api/v1/admin/accounts/01J0000000000000000TARGET', () => json(accountWire))
+    api.on(`GET /api/v1/admin/accounts/${TARGET_ID}`, () => json(TARGET_ACCOUNT_WIRE))
     api.on(MEMBER, membershipRecordNotFound)
     api.on(`POST /api/v1/admin/members/${PERSON_ID}/grants`, () => json(wireGrant(), 201))
 
-    renderApp('/admin/accounts/01J0000000000000000TARGET')
+    renderApp(`/admin/accounts/${TARGET_ID}`)
     await screen.findByRole('heading', { level: 1, name: 'Tara Target' })
     expect(await screen.findByText('They hold no membership record.')).toBeInTheDocument()
 
@@ -640,6 +673,63 @@ describe('existing-Person grant entry point (from an Account)', () => {
     await waitFor(() => {
       expect(api.callsTo(`POST /api/v1/admin/members/${PERSON_ID}/grants`)).toHaveLength(1)
     })
+    expect(api.callsTo(`POST /api/v1/admin/members/${PERSON_ID}/grants`)[0]?.body).toMatchObject({
+      open_ended: true,
+      ends_at: null,
+    })
+  })
+
+  it('sends one grant, not two, when "Grant access" is pressed twice while the first is in flight', async () => {
+    const user = userEvent.setup()
+    const api = serveOperator(operator([...MANAGE, 'identity.accounts.view']))
+    api.on(`GET /api/v1/admin/accounts/${TARGET_ID}`, () => json(TARGET_ACCOUNT_WIRE))
+    api.on(MEMBER, membershipRecordNotFound)
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    api.on(`POST /api/v1/admin/members/${PERSON_ID}/grants`, async () => {
+      await held // the server has not answered yet
+      return json(wireGrant(), 201)
+    })
+
+    renderApp(`/admin/accounts/${TARGET_ID}`)
+    await screen.findByText('They hold no membership record.')
+    await user.click(screen.getByRole('button', { name: 'Grant membership access' }))
+    fireEvent.change(screen.getByLabelText('Starts at'), { target: { value: '2026-06-01T00:00' } })
+    await user.click(screen.getByLabelText('Open-ended access (no end date)'))
+
+    const grant = screen.getByRole('button', { name: 'Grant access' })
+    fireEvent.click(grant)
+    fireEvent.click(grant)
+    await user.click(grant)
+
+    // While it is in flight the button is disabled and says so, and only one request has been made.
+    const inFlight = await screen.findByRole('button', { name: 'Granting…' })
+    expect(inFlight).toBeDisabled()
+    expect(api.callsTo(`POST /api/v1/admin/members/${PERSON_ID}/grants`)).toHaveLength(1)
+
+    release()
+    await waitFor(() => {
+      expect(screen.getByText('Membership access was granted.')).toBeInTheDocument()
+    })
+    expect(api.callsTo(`POST /api/v1/admin/members/${PERSON_ID}/grants`)).toHaveLength(1)
+  })
+
+  it('does not request the membership record at all for an operator who may not view it', async () => {
+    const api = serveOperator(
+      operator(['console.access', 'identity.accounts.view', 'membership.records.manage']),
+    )
+    api.on(`GET /api/v1/admin/accounts/${TARGET_ID}`, () => json(TARGET_ACCOUNT_WIRE))
+
+    renderApp(`/admin/accounts/${TARGET_ID}`)
+    await screen.findByRole('heading', { level: 1, name: 'Tara Target' })
+
+    expect(screen.queryByRole('heading', { name: 'Membership' })).not.toBeInTheDocument()
+    // No membership GET was even attempted (an unhandled request would have failed the test, but say it outright).
+    expect(api.calls.filter((call) => call.path.startsWith('/api/v1/admin/members'))).toHaveLength(
+      0,
+    )
   })
 })
 
@@ -691,6 +781,7 @@ describe('trust boundary', () => {
     const grant = api.callsTo(`POST /api/v1/admin/members/${PERSON_ID}/grants`)[0]
     expect(Object.keys(grant?.body as object).sort()).toEqual([
       'ends_at',
+      'open_ended',
       'source',
       'source_reference',
       'starts_at',

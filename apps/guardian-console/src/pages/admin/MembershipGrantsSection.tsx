@@ -15,6 +15,7 @@ import {
   type Member,
   type MembershipGrant,
   type MembershipSource,
+  type MembershipTerm,
 } from '../../api/membership.ts'
 import { Alert } from '../../ui/Alert.tsx'
 import { dangerButton, secondaryButton } from '../../ui/classes.ts'
@@ -79,10 +80,7 @@ export function MembershipGrantsSection({
   const [source, setSource] = useState<MembershipSource>('operator')
   const [sourceReference, setSourceReference] = useState('')
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
-  const [confirmingGrant, setConfirmingGrant] = useState<{
-    startsAt: string
-    endsAt: string | null
-  } | null>(null)
+  const [confirmingGrant, setConfirmingGrant] = useState<MembershipTerm | null>(null)
   const [revoking, setRevoking] = useState<MembershipGrant | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -93,15 +91,14 @@ export function MembershipGrantsSection({
       return
     }
     setFieldErrors({})
-    setConfirmingGrant({ startsAt: resolved.startsAt, endsAt: resolved.endsAt })
+    setConfirmingGrant(resolved.term)
   }
 
   async function confirmGrant(): Promise<ConfirmResult> {
     if (confirmingGrant === null) return { kind: 'stay', tone: 'error', message: 'Nothing to add.' }
     const outcome = await run(() =>
       grantMembership(member.person.id, {
-        startsAt: confirmingGrant.startsAt,
-        endsAt: confirmingGrant.endsAt,
+        term: confirmingGrant,
         source,
         sourceReference: sourceReference.trim() === '' ? null : sourceReference.trim(),
       }),

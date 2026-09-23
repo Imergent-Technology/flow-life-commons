@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 use App\Modules\Audit\Application\RecordSecurityEvent;
 use App\Modules\Identity\Application\FindPeople;
+use App\Modules\Identity\Application\InviteAccount;
 use App\Modules\Identity\Application\RegisterPerson;
 use App\Modules\Identity\Application\ResolveActor;
+use App\Modules\Identity\Domain\Person;
 use App\Modules\Membership\Application\MembershipRecord;
 use App\Modules\Membership\Application\RegisterPersonWithMembershipAccess;
 use App\Modules\Membership\Domain\MembershipGrant;
@@ -158,6 +160,32 @@ arch('Membership creates a Person only through Identity\'s own use case', functi
     expect(RegisterPersonWithMembershipAccess::class)->toUse(RegisterPerson::class);
     // ...and nothing but that orchestration may: RegisterPerson does not authorize its caller.
     expect(RegisterPerson::class)->toOnlyBeUsedIn([RegisterPersonWithMembershipAccess::class, 'App\\Modules\\Identity']);
+});
+
+it('keeps what Identity\'s public Person-creating ports RETURN inside Identity\'s Application layer, never a Domain object', function () {
+    // An import scan cannot see this: a caller that receives a Domain object and reads `->id` never names the class. So the
+    // public result type is checked directly. Narrow on purpose: it constrains what these ports hand OUT, not what Identity's
+    // own internals use.
+    $inApplicationLayer = function (string $class, string $method): bool {
+        $type = (new ReflectionMethod($class, $method))->getReturnType();
+
+        return $type instanceof ReflectionNamedType
+            && ! $type->isBuiltin()
+            && str_starts_with($type->getName(), 'App\\Modules\\Identity\\Application\\');
+    };
+
+    expect($inApplicationLayer(RegisterPerson::class, '__invoke'))->toBeTrue('RegisterPerson must return an Identity\\Application type')
+        ->and($inApplicationLayer(InviteAccount::class, '__invoke'))->toBeTrue(); // the precedent it follows
+
+    // Positive control: the same predicate REJECTS a method that returns the Domain Person.
+    $leaky = new class
+    {
+        public function make(): Person
+        {
+            throw new LogicException;
+        }
+    };
+    expect($inApplicationLayer($leaky::class, 'make'))->toBeFalse();
 });
 
 arch('Membership composes a display name only through Identity\'s Application read port', function () {

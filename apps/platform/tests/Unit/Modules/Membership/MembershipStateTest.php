@@ -224,3 +224,69 @@ it('does not merge two grants that are close but do not touch', function () {
 
     expect($state->active)->toBeFalse();
 });
+
+// --- Regression cases from the final branch audit. The algorithm already handled each; these pin it. -----------------
+
+// A revoked grant sitting between two others is not a bridge: it neither joins them nor extends the run before it.
+it('does not let a revoked grant bridge the grants on either side of it', function () {
+    $a = grantAt('2026-01-01 00:00:00', '2026-02-01 00:00:00');
+    $bridge = grantAt('2026-02-01 00:00:00', '2026-03-01 00:00:00', revokedAt: '2026-01-05 00:00:00');
+    $c = grantAt('2026-03-01 00:00:00', '2026-04-01 00:00:00');
+
+    $first = MembershipState::at([$a, $bridge, $c], at('2026-01-15 00:00:00'));
+    $inTheHole = MembershipState::at([$a, $bridge, $c], at('2026-02-15 00:00:00'));
+    $third = MembershipState::at([$a, $bridge, $c], at('2026-03-15 00:00:00'));
+
+    expect($first->active)->toBeTrue()->and($first->currentAccessEndsAt)->toEqual(at('2026-02-01 00:00:00')) // NOT carried on through c
+        ->and($inTheHole->active)->toBeFalse()
+        ->and($third->active)->toBeTrue()->and($third->currentAccessEndsAt)->toEqual(at('2026-04-01 00:00:00'));
+});
+
+it('does not let a revoked open-ended grant extend, or open-end, the run it overlaps', function () {
+    $a = grantAt('2026-01-01 00:00:00', '2026-02-01 00:00:00');
+    $revokedOpen = grantAt('2026-01-15 00:00:00', null, revokedAt: '2026-01-16 00:00:00');
+    $later = grantAt('2026-05-01 00:00:00', '2026-06-01 00:00:00');
+
+    $state = MembershipState::at([$a, $revokedOpen, $later], at('2026-01-20 00:00:00'));
+
+    expect($state->active)->toBeTrue()->and($state->openEnded)->toBeFalse()->and($state->currentAccessEndsAt)->toEqual(at('2026-02-01 00:00:00'));
+});
+
+// Only a run that is reached by touching or overlapping can be open-ended; an open-ended grant after a gap is a different run.
+it('keeps an earlier run bounded when the open-ended grant is in a later, disjoint run', function () {
+    $a = grantAt('2026-01-01 00:00:00', '2026-02-01 00:00:00');
+    $later = grantAt('2026-04-01 00:00:00', null);
+
+    $early = MembershipState::at([$a, $later], at('2026-01-15 00:00:00'));
+    $inGap = MembershipState::at([$a, $later], at('2026-03-01 00:00:00'));
+    $inLater = MembershipState::at([$a, $later], at('2026-04-15 00:00:00'));
+
+    expect($early->active)->toBeTrue()->and($early->openEnded)->toBeFalse()->and($early->currentAccessEndsAt)->toEqual(at('2026-02-01 00:00:00'))
+        ->and($inGap->active)->toBeFalse()
+        ->and($inLater->active)->toBeTrue()->and($inLater->openEnded)->toBeTrue()->and($inLater->currentAccessEndsAt)->toBeNull();
+});
+
+// The instant a term ends is the instant its successor starts: exactly there, access is continuous and belongs to the successor.
+it('is active, through the successor\'s end, at the exact instant two touching grants meet', function () {
+    $a = grantAt('2026-01-01 00:00:00', '2026-02-01 00:00:00');
+    $b = grantAt('2026-02-01 00:00:00', '2026-03-01 00:00:00');
+
+    $atBoundary = MembershipState::at([$a, $b], at('2026-02-01 00:00:00'));
+    $justBefore = MembershipState::at([$a, $b], at('2026-01-31 23:59:59'));
+
+    expect($atBoundary->active)->toBeTrue()->and($atBoundary->currentAccessEndsAt)->toEqual(at('2026-03-01 00:00:00'))
+        ->and($justBefore->active)->toBeTrue()->and($justBefore->currentAccessEndsAt)->toEqual(at('2026-03-01 00:00:00')); // one continuous run either side
+});
+
+// The domain compares instants, not wall-clock strings: an offset on a grant or on T changes nothing about which instant it is.
+it('compares instants, so grants and an instant expressed in different UTC offsets still touch and merge', function () {
+    $a = grantAt('2026-01-01T02:00:00+02:00', '2026-02-01T02:00:00+02:00');   // = 00:00Z .. 2026-02-01T00:00Z
+    $b = grantAt('2026-01-31T19:00:00-05:00', '2026-03-01T00:00:00+00:00');   // starts 2026-02-01T00:00Z exactly: touches a
+    $instant = at('2026-02-01T05:30:00+05:30');                              // = 2026-02-01T00:00Z exactly
+
+    $state = MembershipState::at([$b, $a], $instant);
+
+    expect($state->active)->toBeTrue()
+        ->and($state->currentAccessEndsAt?->getTimestamp())->toBe(at('2026-03-01 00:00:00')->getTimestamp())
+        ->and(MembershipState::at([$a, $b], at('2026-01-15 12:00:00'))->currentAccessEndsAt?->getTimestamp())->toBe(at('2026-03-01 00:00:00')->getTimestamp());
+});

@@ -1,6 +1,6 @@
 # ADR 0029: Commerce providers own payment facts; Commons owns organizational entitlement
 
-- **Status:** Accepted (design; not yet implemented)
+- **Status:** Accepted. The provenance boundary is implemented (`source`, an opaque `source_reference` with no uniqueness constraint, and no payment field anywhere in Membership); provider automation, event ingestion and Person matching are design only and not built
 - **Date:** 2026-09-23
 - **Supersedes:** none
 - **Superseded by:** none

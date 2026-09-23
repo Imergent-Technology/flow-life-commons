@@ -13,11 +13,11 @@ use App\Shared\Domain\Actor;
 use DateTimeImmutable;
 
 /**
- * A modest, bounded page of the admin membership list (Package 5), layered on top of the same
- * "one record per distinct Person who has ever held a grant" rule `ListMembershipRecords` already
- * established: pagination narrows how many Persons come back, never which ones exist. There is
- * deliberately no search filter yet (Package 5 deferred it rather than reach into Identity's
- * `people` table for a `display_name` fragment match).
+ * A modest, bounded page of the admin membership list: one record per distinct Person who has EVER
+ * held a grant, whether or not any grant is currently active, so a Person whose only grants are now
+ * expired or revoked is not omitted. Pagination narrows how many Persons come back, never which ones
+ * exist. There is no "member since", and no search filter yet (Package 5 deferred it rather than reach
+ * into Identity's `people` table for a `display_name` fragment match).
  */
 final readonly class PageMembershipRecords
 {

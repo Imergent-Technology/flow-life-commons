@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Identity\Application\PersonSummary;
 use App\Modules\Identity\Application\RegisterPerson;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\Person;
@@ -10,7 +11,7 @@ use App\Shared\Domain\PersonId;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
-function registerPerson(string $displayName = 'Mia Member'): Person
+function registerPerson(string $displayName = 'Mia Member'): PersonSummary
 {
     return app(RegisterPerson::class)($displayName);
 }
@@ -26,6 +27,13 @@ it('creates a Person with the given display name', function () {
         ->and(DB::table('people')->where('id', $person->id->value)->value('display_name'))->toBe('Mia Member');
 });
 
+it('returns an Application PersonSummary, not the Identity Domain Person it persisted', function () {
+    $result = registerPerson('Mia Member');
+
+    expect($result)->toBeInstanceOf(PersonSummary::class)
+        ->and($result)->not->toBeInstanceOf(Person::class);
+});
+
 it('generates a ULID identity the same way every other aggregate does', function () {
     $person = registerPerson();
 
@@ -39,7 +47,7 @@ it('is found through the normal Identity repository path', function () {
 
     $found = app(PersonRepository::class)->find($person->id);
 
-    expect($found)->toEqual($person)
+    expect($found?->id)->toEqual($person->id)
         ->and($found?->displayName)->toBe('Mia Member');
 });
 
@@ -89,7 +97,7 @@ it('participates in an outer transaction and commits with it', function () {
     DB::transaction(function () use (&$person) {
         $person = registerPerson('Mia Member');
     });
-    assert($person instanceof Person);
+    assert($person instanceof PersonSummary);
 
     expect(app(PersonRepository::class)->find($person->id))->not->toBeNull();
 });
@@ -116,6 +124,7 @@ it('rolls back with an outer transaction that fails after it succeeds', function
 it('stores the created instant in UTC, from the frozen clock', function () {
     $person = registerPerson();
 
-    expect($person->createdAt)->toEqual(new DateTimeImmutable('2026-09-23 12:00:00', new DateTimeZone('UTC')))
+    // The result is an Application summary with no timestamps; the stored Person carries them.
+    expect(app(PersonRepository::class)->find($person->id)?->createdAt)->toEqual(new DateTimeImmutable('2026-09-23 12:00:00', new DateTimeZone('UTC')))
         ->and(DB::table('people')->where('id', $person->id->value)->value('created_at'))->toBe('2026-09-23 12:00:00');
 });
