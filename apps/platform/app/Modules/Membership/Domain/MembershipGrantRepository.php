@@ -45,4 +45,23 @@ interface MembershipGrantRepository
      * "no such grant" itself, with find(), since this method alone cannot tell them apart.
      */
     public function revoke(MembershipGrantId $id, AccountId $revokedBy, DateTimeImmutable $now): bool;
+
+    /**
+     * A page of distinct Persons who hold at least one grant, ordered by PersonId, plus the total
+     * distinct count — the admin list's own pagination (Package 5), layered on top of `all()`
+     * without changing its semantics: a Person whose only grants are expired or revoked is still
+     * counted and still paged in.
+     *
+     * @return array{personIds: list<PersonId>, total: int}
+     */
+    public function personIdsPage(int $page, int $perPage): array;
+
+    /**
+     * The complete grant history of each of these Persons, oldest first, in one query rather than
+     * one per Person.
+     *
+     * @param  list<PersonId>  $personIds
+     * @return array<string, list<MembershipGrant>> keyed by PersonId value
+     */
+    public function forPeople(array $personIds): array;
 }

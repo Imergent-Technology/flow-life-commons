@@ -172,13 +172,16 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    expect($checked)->toBe(10);
+    expect($checked)->toBe(15);
 });
 
 it('never lets an administration schema name a secret', function () {
     $components = openApiSpec()['components'];
     assert(is_array($components) && is_array($components['schemas']));
-    $names = ['ManagedAccount', 'ManagedAccountPage', 'RoleCatalog', 'InvitationResult', 'InviteOperatorRequest', 'GrantRoleRequest'];
+    $names = [
+        'ManagedAccount', 'ManagedAccountPage', 'RoleCatalog', 'InvitationResult', 'InviteOperatorRequest', 'GrantRoleRequest',
+        'Member', 'MemberPage', 'MembershipGrant', 'RegisterMemberRequest', 'GrantMembershipRequest',
+    ];
     $text = strtolower(json_encode(array_intersect_key($components['schemas'], array_flip($names)), JSON_THROW_ON_ERROR));
     $text = str_replace('never a password', '', $text); // the description says what is NOT there
 

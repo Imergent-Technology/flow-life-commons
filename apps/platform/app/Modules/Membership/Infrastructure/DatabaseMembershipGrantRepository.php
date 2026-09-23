@@ -89,6 +89,46 @@ final readonly class DatabaseMembershipGrantRepository implements MembershipGran
             ]) === 1;
     }
 
+    public function personIdsPage(int $page, int $perPage): array
+    {
+        $ids = $this->database->table(self::TABLE)
+            ->select('person_id')->distinct()
+            ->orderBy('person_id')
+            ->forPage($page, $perPage)
+            ->pluck('person_id');
+
+        $total = $this->database->table(self::TABLE)->distinct()->count('person_id');
+
+        $personIds = [];
+        foreach ($ids as $id) {
+            assert(is_string($id));
+            $personIds[] = PersonId::fromString($id);
+        }
+
+        return ['personIds' => $personIds, 'total' => $total];
+    }
+
+    public function forPeople(array $personIds): array
+    {
+        if ($personIds === []) {
+            return [];
+        }
+
+        $values = array_map(static fn (PersonId $id): string => $id->value, $personIds);
+        $rows = $this->database->table(self::TABLE)
+            ->whereIn('person_id', $values)
+            ->orderBy('person_id')->orderBy('starts_at')->orderBy('id')
+            ->get();
+
+        $byPerson = [];
+        foreach ($rows as $row) {
+            $grant = self::toDomain($row);
+            $byPerson[$grant->personId->value][] = $grant;
+        }
+
+        return $byPerson;
+    }
+
     private static function toDomain(stdClass $row): MembershipGrant
     {
         assert(is_string($row->id) && is_string($row->person_id) && is_string($row->starts_at));

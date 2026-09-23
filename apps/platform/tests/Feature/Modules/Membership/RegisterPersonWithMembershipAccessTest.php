@@ -111,6 +111,16 @@ it('rolls back the new Person when persisting the grant fails for any reason', f
         {
             return false;
         }
+
+        public function personIdsPage(int $page, int $perPage): array
+        {
+            return ['personIds' => [], 'total' => 0];
+        }
+
+        public function forPeople(array $personIds): array
+        {
+            return [];
+        }
     });
 
     expect(fn () => app(RegisterPersonWithMembershipAccess::class)(Access::actorFor($admin), 'Mia Member', Identity::now(), null, MembershipGrantSource::Operator))

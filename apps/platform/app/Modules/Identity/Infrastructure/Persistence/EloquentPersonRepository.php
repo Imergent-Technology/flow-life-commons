@@ -28,6 +28,18 @@ final class EloquentPersonRepository implements PersonRepository
         return $record === null ? null : $this->toDomain($record);
     }
 
+    public function findMany(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $values = array_map(static fn (PersonId $id): string => $id->value, $ids);
+
+        return array_values(PersonRecord::query()->whereIn('id', $values)->get()
+            ->map($this->toDomain(...))->all());
+    }
+
     private function toDomain(PersonRecord $record): Person
     {
         return Person::reconstitute(

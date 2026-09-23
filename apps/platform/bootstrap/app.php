@@ -28,6 +28,12 @@ use App\Modules\Identity\Http\EnforceSecondFactorWhereDue;
 use App\Modules\Identity\Http\EnforceSecurityGeneration;
 use App\Modules\Identity\Http\MfaProblems;
 use App\Modules\Identity\Http\RequireRecentSecurityVerification;
+use App\Modules\Membership\Application\GrantAlreadyRevoked;
+use App\Modules\Membership\Application\GrantNotFound;
+use App\Modules\Membership\Application\UnknownPerson as UnknownMembershipPerson;
+use App\Modules\Membership\Domain\InvalidMembershipTerm as InvalidMembershipGrantTerm;
+use App\Modules\Membership\Http\MembershipProblems;
+use App\Modules\Membership\Http\MembershipRecordNotFound;
 use App\Modules\Security\Http\ApplyBrowserSecurityHeaders;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -188,6 +194,12 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (SecondFactorRejected $e) => MfaProblems::rejected($e));
         $exceptions->render(fn (NoLongerAuthenticated $e) => response()->json(['message' => 'Unauthenticated.'], 401));
         $exceptions->render(fn (TooManyAttempts $e) => CredentialProblems::tooManyAttempts($e));
+        // Operator administration of membership records (ADR 0028, Work Package 5).
+        $exceptions->render(fn (UnknownMembershipPerson $e) => MembershipProblems::personNotFound());
+        $exceptions->render(fn (MembershipRecordNotFound $e) => MembershipProblems::recordNotFound());
+        $exceptions->render(fn (GrantNotFound $e) => MembershipProblems::grantNotFound());
+        $exceptions->render(fn (GrantAlreadyRevoked $e) => MembershipProblems::grantAlreadyRevoked());
+        $exceptions->render(fn (InvalidMembershipGrantTerm $e) => MembershipProblems::invalidMembershipTerm($e));
 
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),

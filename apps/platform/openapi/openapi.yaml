@@ -19,7 +19,9 @@ info:
     recovery and password change), multi-factor authentication (authenticator
     enrolment, the sign-in challenge, recovery codes and recent-verification
     step-up), and **operator administration** (`/admin/...`: Accounts, invitations, role
-    assignments, disable and re-enable, and recovery of a lost second factor).
+    assignments, disable and re-enable, recovery of a lost second factor, and membership records —
+    listing, inspecting, registering a Person with an initial grant, granting an additional term,
+    and revoking a grant; ADR 0028).
 
 
     ## Authorization
@@ -1554,6 +1556,262 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedValidationError'
+  /admin/members:
+    get:
+      operationId: listMembers
+      summary: List membership records
+      description: >-
+        Needs `membership.records.view`. One record per distinct Person who has EVER held a
+        membership grant (ADR 0028), a modest bounded page (25 by default, at most 100), ordered
+        by Person id. A Person whose only grants are expired, future or revoked is not omitted:
+        this is a history list, not "currently active only". There is no search yet. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: membership.records.view
+      x-requires-recent-verification: false
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1}
+        - name: per_page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: A page of membership records.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemberPage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: A malformed `page` or `per_page`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+    post:
+      operationId: registerMember
+      summary: Register a Person and grant membership access
+      description: >-
+        Needs `membership.records.manage` **and recent verification**. In one transaction, creates
+        a Person with no Account (ADR 0015) and their first membership grant; if either fails,
+        neither is committed. No Account, invitation, role assignment or security event is created.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: membership.records.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterMemberRequest'
+      responses:
+        '201':
+          description: The new Person's membership record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: >-
+            A malformed `display_name`, a missing `ends_at` key, a bounded term where `ends_at` is
+            not strictly after `starts_at` (`invalid_membership_term`), an unknown `source`, or a
+            `source_reference` over 191 characters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedValidationError'
+  /admin/members/{person}:
+    get:
+      operationId: getMember
+      summary: Inspect a membership record
+      description: >-
+        Needs `membership.records.view`. The complete grant history, including revoked, expired
+        and future grants, and the membership state derived from it right now. Read-only.
+
+
+        **`404`** for a Person that does not exist at all (`person_not_found`), and also for a
+        Person who exists but has never held a grant (`membership_record_not_found`): a bare
+        Person is not yet a membership record.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: membership.records.view
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+      responses:
+        '200':
+          description: The membership record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`), or the Person has never held a grant (`membership_record_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/members/{person}/grants:
+    post:
+      operationId: grantMembership
+      summary: Grant an additional membership term
+      description: >-
+        Needs `membership.records.manage` **and recent verification**. Adds a grant to an
+        EXISTING Person's history. Valid even when a current grant already exists, or the new term
+        overlaps or exactly touches another: the derivation merges them, so this never forbids it.
+        Returns the grant just created, not the Person's whole history.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: membership.records.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantMembershipRequest'
+      responses:
+        '201':
+          description: The grant just created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MembershipGrant'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: >-
+            A missing `ends_at` key, a bounded term where `ends_at` is not strictly after
+            `starts_at` (`invalid_membership_term`), an unknown `source`, or a `source_reference`
+            over 191 characters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedValidationError'
+  /admin/membership-grants/{grant}/revoke:
+    post:
+      operationId: revokeMembershipGrant
+      summary: Revoke a membership grant
+      description: >-
+        Needs `membership.records.manage` **and recent verification**. One-way (ADR 0028): a
+        revoked grant can never become unrevoked. Revoking an already-revoked grant is refused,
+        not treated as a no-op, so the caller always knows whether ITS call changed anything.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: membership.records.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/MembershipGrantId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '204':
+          description: The grant is now revoked.
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such membership grant (`grant_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: This grant was already revoked (`grant_already_revoked`). Nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
 components:
   securitySchemes:
     sessionCookie:
@@ -1569,6 +1827,22 @@ components:
       in: path
       required: true
       description: An Account's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    PersonId:
+      name: person
+      in: path
+      required: true
+      description: A Person's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    MembershipGrantId:
+      name: grant
+      in: path
+      required: true
+      description: A membership grant's identifier (a 26-character ULID).
       schema:
         type: string
         pattern: '^[0-9a-z]{26}$'
@@ -1757,6 +2031,109 @@ components:
           type: string
           maxLength: 64
           description: A role key from `GET /admin/roles`. A capability cannot be named here.
+    MembershipGrant:
+      type: object
+      description: >-
+        One time-bounded grant of membership access (ADR 0028). Never a payment fact: Commons
+        owns organizational entitlement, not billing state (ADR 0029).
+      required: [id, person_id, starts_at, ends_at, source, source_reference, revoked_at]
+      properties:
+        id: {type: string}
+        person_id: {type: string}
+        starts_at: {type: string, format: date-time}
+        ends_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null is an explicit, approved open-ended grant, never "no end date entered yet".
+        source:
+          type: string
+          enum: [operator, luma_legacy]
+        source_reference:
+          type: [string, 'null']
+          maxLength: 191
+          description: An opaque provenance handle for a human investigating a grant. Never parsed, never identity.
+        revoked_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null unless this grant was revoked. One-way; never becomes null again.
+    Member:
+      type: object
+      description: >-
+        A Person's membership state, derived at the instant it was read, and their complete grant
+        history. The Console concept is "Member"; the backend truth is a Person plus grant history —
+        there is no stored Member row.
+      required: [person, active, current_access_ends_at, open_ended, grants]
+      properties:
+        person:
+          type: object
+          required: [id, display_name]
+          properties:
+            id: {type: string}
+            display_name: {type: string}
+        active: {type: boolean}
+        current_access_ends_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null when access is not currently active, or when the current access run is open-ended.
+        open_ended: {type: boolean}
+        grants:
+          type: array
+          description: The complete history, oldest first, including revoked, expired and future grants.
+          items:
+            $ref: '#/components/schemas/MembershipGrant'
+    MemberPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Member'
+        meta:
+          type: object
+          required: [page, per_page, total, last_page]
+          properties:
+            page: {type: integer}
+            per_page: {type: integer}
+            total: {type: integer}
+            last_page: {type: integer}
+    RegisterMemberRequest:
+      type: object
+      required: [display_name, starts_at, ends_at, source]
+      properties:
+        display_name:
+          type: string
+          maxLength: 255
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: [string, 'null']
+          format: date-time
+          description: Required key. Explicit `null` means open-ended access; the key must not be omitted.
+        source:
+          type: string
+          enum: [operator, luma_legacy]
+        source_reference:
+          type: [string, 'null']
+          maxLength: 191
+    GrantMembershipRequest:
+      type: object
+      required: [starts_at, ends_at, source]
+      properties:
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: [string, 'null']
+          format: date-time
+          description: Required key. Explicit `null` means open-ended access; the key must not be omitted.
+        source:
+          type: string
+          enum: [operator, luma_legacy]
+        source_reference:
+          type: [string, 'null']
+          maxLength: 191
     InvitationResult:
       type: object
       required: [account, delivery]

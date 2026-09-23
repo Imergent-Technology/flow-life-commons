@@ -20,7 +20,7 @@ Platform-owned tables exist for Identity, Access, Audit and Membership ([module 
 - **Identity**: `people`, `accounts`, `account_invitations`, `sessions`, `account_totp_factors`, `account_recovery_codes`, `password_reset_tokens`.
 - **Access**: `role_assignments`.
 - **Audit**: `security_events`.
-- **Membership**: `membership_grants`. Backend only: there is no HTTP/admin surface or UI yet.
+- **Membership**: `membership_grants`. Backend plus an operator-only `/admin/members` HTTP surface (Work Package 5); no Console UI yet.
 
 Platform aggregates use application-generated ULID primary keys, per the principle above. Framework infrastructure created by Laravel's stock migrations — `migrations`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs` — keeps Laravel's default keys because it is not platform aggregate data. There is deliberately no `users` table: Identity's `people`/`accounts` split is the human registry ([authorization model](../security/authorization-model.md)).
 
