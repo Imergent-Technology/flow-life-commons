@@ -4,7 +4,7 @@
 
 **When to use.** The key is suspected leaked; a person who had access to it has left; or a periodic rotation is due. **Not** routinely — this key has no expiry and rotating it has a cost.
 
-**Owner.** Whoever holds production access. **Last tested:** the mechanism is covered by `tests/Feature/Modules/Identity/Mfa/KeyRotationTest.php` on both engines. The *procedure* below has not been run against the production host, because production is not deployed.
+**Owner.** Whoever holds production access. **Last tested:** the mechanism is covered by `tests/Feature/Modules/Identity/Mfa/KeyRotationTest.php` on both engines. **The *procedure* below has not been run against the production host.** Production is live (v0.1.1, since 2026-09-22) with `APP_KEY` set once at first deployment; a rotation has not yet been performed there.
 
 ---
 

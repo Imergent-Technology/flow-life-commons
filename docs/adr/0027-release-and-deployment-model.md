@@ -6,6 +6,7 @@
 - **Superseded by:** none
 - **Refines:** [ADR 0011](0011-docker-compose-development-environment.md), [ADR 0016](0016-guardian-console-same-origin-session-authentication.md), [ADR 0023](0023-multi-factor-authentication.md), [ADR 0026](0026-production-browser-security-policy.md)
 - **Clarified:** 2026-09-21, after the production host was probed. The decisions are unchanged and were validated rather than reopened. Two pieces of *wording* were corrected by measurement: the release switch is no longer provisional, and the static-half maintenance response is served by a standalone PHP responder rather than `ErrorDocument`. See [Verified on the production host](#verified-on-the-production-host-2026-09-21).
+- **Clarified again:** 2026-09-22, after the first production deployment. The decisions are unchanged; the release/deployment model this ADR designs has now been **exercised once, successfully, manually, end to end** — v0.1.0 installed and held under maintenance, the `X-Powered-By` finding fixed and released as v0.1.1, which was brought out of maintenance and is the release actually live. Host-side deployment **remains manual**: this clarification does not reopen the *Production operations boundary* decision below, which is revisited only after more operational experience. See [Verified on the production host, 2026-09-22](#verified-on-the-production-host-2026-09-22-first-deployment).
 
 ## Context
 
@@ -203,9 +204,26 @@ Everything in this ADR that depended on host behaviour was probed directly on th
 
 Separately, `scripts/tests/apache-surface.sh` runs the actual `.htaccess` and `maintenance.php` under a real, disposable Apache container. This is the level that caught what the composed-but-not-Apache-tested file got wrong: the API/`/up` rewrite used `[L]`, which ends only the current per-directory pass, and Apache's own internal redirect to `index.php` re-ran the whole ruleset as a second pass that the maintenance rule's exclusion did not anticipate — so every `/api` and `/up` request received the HTML maintenance page instead of Laravel while the flag was raised, undetected by the Caddy-driven browser suite because Caddy does not re-run its rules this way. Fixed with `[END]`; a paired header-duplication defect (Apache's `Header always set` appending to, rather than replacing, a header Laravel's own middleware had already sent) was found and fixed the same way. Both are now standing regression tests, not one-off observations.
 
-**Even a real Apache container is not the production host.** The host runs Apache on CloudLinux through LSAPI, with its own module set and version; the `.htaccess` file is still evidenced by the 2026-09-21 per-rule host probes, the Caddy contract test, the Apache-container test, and those structural pins — and first executed by the host itself at the first real deployment.
+**Even a real Apache container is not the production host.** The host runs Apache on CloudLinux through LSAPI, with its own module set and version; the `.htaccess` file was evidenced by the 2026-09-21 per-rule host probes, the Caddy contract test, the Apache-container test, and those structural pins — and has since been executed by the host itself, at the first real deployment on 2026-09-22 (below).
 
 **One item is open and deferred:** outbound mail authentication. SPF and DMARC records exist; a local PHP `mail()` test delivered but was unsigned and not DMARC-aligned, so `mail()` is **not approved** as the production transport. The mail topology is an organizational decision and is deliberately unmade here. It does not block release tooling; it blocks inviting people.
+
+## Verified on the production host, 2026-09-22 (first deployment)
+
+The design above was carried out for the first time, in full, manually, on the real host. This is the "first real deployment" the 2026-09-21 section repeatedly named as still outstanding; it is no longer outstanding.
+
+| Decision | Outcome |
+| --- | --- |
+| The `.htaccess` composed file, as Apache itself reads it | **Executed on the real host.** LSAPI on CloudLinux served it exactly as the Caddy contract and the Apache-container test predicted: maintenance routing, the `/api`/`/up` carve-out, private-path denials, and the security-header block all matched |
+| The atomic release switch, in anger | v0.1.0 installed, then replaced by v0.1.1 the same day after a real finding required a fix — the swap and its no-opcache-step behaviour held for a real, motivated release, not only the A/B probe |
+| The maintenance model | Verified with the actual application: `/` served the responder, `/api/v1/health` and `/up` stayed JSON/plain-text 503 and were never intercepted, private paths stayed 403 |
+| Migrations against a live account | All 14 migrations ran as batch 1 against a database confirmed empty beforehand; `migrate:status` showed every one `Ran` |
+| The three approved caches | `config:cache`, `event:cache`, `route:cache` all succeeded on the release; `security:production-check` stayed green after caching |
+| Administrator bootstrap and MFA | Executed for real: invitation issued, accepted, TOTP enrolled, recovery codes stored |
+| Scheduler cron | Installed, confirmed firing every minute against the verified `/usr/local/bin/php` |
+| A finding this ADR's design did **not** anticipate | `X-Powered-By` reaching clients under real LSAPI, despite the 2026-09-21 probe's CLI-only `expose_php` reading. Fixed at the Apache layer (`.htaccess`), not php.ini, and reverified absent after the fix shipped — see [ADR 0026](0026-production-browser-security-policy.md) |
+
+**What this does not change:** the *Production operations boundary* decision below is untouched. One successful manual run is the reason a future automation design is now worth doing, not a reason to do it yet — `./flow deploy production` still does not exist, and this ADR still does not authorize building it. Outbound mail remains open, and the `restore-required` rollback path remains unrehearsed (below and [backup and restore](../runbooks/backup-and-restore.md)).
 
 ## Consequences
 
@@ -216,7 +234,7 @@ Separately, `scripts/tests/apache-surface.sh` runs the actual `.htaccess` and `m
 - **`php artisan optimize` must not appear in any deployment script for this repository**, and the reason is a property of the repository that a check now pins.
 - **Backup acquires a security contract.** A backup without its keyring is not a backup of the authenticators, and the restore procedure refuses rather than discovering this afterwards.
 - **The `.htaccess` in source control is the file this design requires.** It carries the generated security headers, the private-path denials, the maintenance arm, the API and `/up` carve-out and the SPA fallback, in an order a test pins. The production-equivalent development gateway mirrors the same contract, so the browser suite keeps proving the routing semantics production will serve.
-- **The host is verified; the procedure is not.** Every host behaviour this design depends on was probed on the real account on 2026-09-21 (above). What remains unexercised is the deployment procedure itself, end to end, and with it the `.htaccess` as Apache reads it.
+- **The host is verified, and the procedure has now been exercised once.** Every host behaviour this design depends on was probed on the real account on 2026-09-21, and the deployment procedure itself, including the `.htaccess` as Apache reads it, was run end to end on 2026-09-22 (above). One run is evidence, not a guarantee of repeatability — the procedure remains manual, and the `restore-required` rollback path remains unexercised.
 
 ## Alternatives considered
 

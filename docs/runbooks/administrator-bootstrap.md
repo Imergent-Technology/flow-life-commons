@@ -2,8 +2,8 @@
 
 - **Purpose:** create a platform administrator when none exists, or when every administrator is locked out ([ADR 0020](../adr/0020-administrator-bootstrap-and-last-administrator-invariant.md)).
 - **Owner:** whoever holds server access to the platform.
-- **Last tested:** 2026-09-20, against the development stack (MariaDB): the command, then acceptance over the API with `curl` exactly as below, then sign-in (the new administrator held `access.roles.assign` and `console.access`); and by the automated tests.
-- **Status:** the command issues the invitation, and the administrator accepts it over the API (see *Accepting the invitation*) to set their password and become able to sign in. There is no Console UI for this yet.
+- **Last tested:** 2026-09-20, against the development stack (MariaDB): the command, then acceptance over the API with `curl` exactly as below, then sign-in (the new administrator held `access.roles.assign` and `console.access`); and by the automated tests. **VERIFIED again on production, 2026-09-22**, during the first live deployment (v0.1.1): the command issued the first production invitation, acceptance returned `204`, and the administrator signed in, enrolled TOTP and stored the ten recovery codes. That account is the operator's normal primary administrator identity, not a disposable bootstrap account.
+- **Status:** the command issues the invitation, and the administrator accepts it over the API (see *Accepting the invitation*) to set their password and become able to sign in. There is no Console UI for this yet. **Production currently runs with one administrator**, a deliberate operational choice with credentials, MFA material and recovery codes safely backed up and server/SSH bootstrap recovery available — not evidence of an incomplete bootstrap. A second administrator, for redundancy against the last-administrator invariant ([ADR 0020](../adr/0020-administrator-bootstrap-and-last-administrator-invariant.md)), remains recommended and is intentionally deferred rather than created merely to satisfy a checklist.
 
 ## Why this is a command
 

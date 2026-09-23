@@ -2,7 +2,7 @@
 
 How the platform is intended to be served in production, and what the hosting account must therefore be able to do.
 
-> **Status: the host capabilities this topology needs were probed on the real account on 2026-09-21 and confirmed** ([Owner verification](#owner-verification) below). The *procedure* that produces the topology is decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md). The routing rules this page describes **are** now in the committed `public/.htaccess` and are proved as a composed whole against the production-equivalent development origin. **Nothing on the host is automated**: the developer-side artifact build (`./flow release`) is all the tooling there is, and the procedure has never been run end to end.
+> **Status: VERIFIED on production.** The host capabilities this topology needs were probed on the real account on 2026-09-21 ([Owner verification](#owner-verification) below), and the topology itself has since been served live: the first production deployment (2026-09-22) put this exact routing arrangement — Console, API, maintenance arm, private-path denials and security headers, on the composed `public/.htaccess` — in front of real traffic as v0.1.1. The *procedure* that produces the topology is decided — [ADR 0027](../adr/0027-release-and-deployment-model.md) and the [deployment runbook](../runbooks/deployment.md#10-first-production-deployment-closure-2026-09-22). **Nothing on the host is automated**: the developer-side artifact build (`./flow release`) is all the tooling there is, and the procedure has been run end to end exactly once, manually.
 
 ## The production host, measured
 
@@ -89,13 +89,13 @@ The routing rules are now in it too, in one ordered file: private-path denials, 
 
 ## The scheduler: one cron entry
 
-Production needs exactly one, and everything it runs is in source control (`routes/console.php`):
+Production needs exactly one, and everything it runs is in source control (`routes/console.php`). The installed production entry, confirmed with `crontab -l`:
 
 ```
-* * * * *   cd <app> && php artisan schedule:run >> /dev/null 2>&1
+* * * * *   cd /home/<user>/commons/current && /usr/local/bin/php artisan schedule:run >> /home/<user>/commons/shared/storage/logs/schedule.log 2>&1
 ```
 
-Per-task cron entries are deliberately avoided: they are invisible to review, drift between environments and are lost on a host migration. The same application schedule works on cPanel now and on a VPS later. Full contract and verification: [production readiness](../runbooks/production-readiness.md).
+Output goes to a shared log, not `/dev/null`, so a silent failure is discoverable; the PHP binary is the verified absolute `/usr/local/bin/php`, not bare `php` (cron's bare `php` on this host is a different SAPI entirely). It fires every minute, confirmed on production, and logs `No scheduled commands are ready to run.` on every minute nothing is due — that repeated log entry is itself the evidence cPanel is invoking Laravel's scheduler as expected. Per-task cron entries are deliberately avoided: they are invisible to review, drift between environments and are lost on a host migration. The same application schedule works on cPanel now and on a VPS later. Full contract and verification: [production readiness](../runbooks/production-readiness.md), [deployment runbook §6](../runbooks/deployment.md#6-scheduler).
 
 ## Production constraints inherited from the foundation
 
