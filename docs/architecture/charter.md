@@ -75,6 +75,15 @@ Sensitive actions and privileged access require **durable audit records** (who, 
 
 The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [identity-and-access.md](identity-and-access.md). **Identity and Access are implemented and running in production**: password login, invitations, password reset/change, sessions, TOTP MFA with recovery codes, administrator bootstrap and operator administration (role grant/revoke, account enable/disable, MFA reset), the last behind a real HTTP/admin surface. Rules 2, 6 and 16 above are encoded there.
 
+## Membership Foundation (designed, not yet built)
+
+The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). **No part of it exists yet**: no `Membership` module, no `membership_grants` table, no membership capabilities, no `RegisterPerson`.
+
+Two decisions constrain later work and belong here rather than only in the ADRs:
+
+- **Membership access is time-bounded grants, derived at query time** — no stored status, no expiry job. In particular, **temporal membership eligibility is never represented solely by a durable role assignment**, because a role assignment does not expire and would outlive the term silently. This does not bar member, volunteer or partner roles later; it bars a non-expiring row being the sole source of truth for access that lapses with time.
+- **Commerce providers own payment facts; Commons owns organizational entitlement.** Amounts, payment status, receipts and subscription mechanics stay with the provider and out of the Membership schema; Commons decides what a payment entitles someone to.
+
 ## Out of scope for the foundation
 
-CRM, membership, volunteer management, Guardian roles/permissions, events, publishing, workflows and AI features. The foundation exists so those can be built on solid ground, not so they can be started early.
+CRM, volunteer management, events, publishing, workflows and AI features. The foundation exists so those can be built on solid ground, not so they can be started early. Membership has now passed its design gate (above) and is the next phase rather than a foundation concern.

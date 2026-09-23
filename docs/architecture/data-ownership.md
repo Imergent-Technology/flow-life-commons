@@ -29,7 +29,18 @@ Platform aggregates use application-generated ULID primary keys, per the princip
 - **Cross-module foreign keys:** permitted, deliberately, where the reference is a fundamental invariant — with `RESTRICT`, never `CASCADE`, and never for provenance or audit references. Write ownership, code dependency and referential integrity are three independent concerns ([ADR 0021](../adr/0021-cross-module-referential-integrity.md)).
 - **Where the audit trail lives:** a small `Audit` module owning an append-only `security_events` table with no foreign keys, so it outlives its subjects and never blocks an operation ([ADR 0019](../adr/0019-security-event-auditing-seam.md)).
 
+## Decided for the next phase: Membership (not yet built)
+
+The Membership Foundation design gate is complete ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md), [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). **No table exists yet.** What it settles about data ownership:
+
+- **`Membership` will own one table, `membership_grants`**, holding time-bounded grants of membership access. Whether a Person is a member *now* is **derived from those rows at query time**, not stored: there is no status column and no expiry job.
+- **Grants are a non-deleting history with one-way revocation.** Nothing but `revoked_at`/`revoked_by_account_id` is ever changed, and no row is deleted.
+- **`person_id` carries a cross-module foreign key with `RESTRICT`**; `granted_by_account_id` and `revoked_by_account_id` are provenance and carry none — the calls [ADR 0021](../adr/0021-cross-module-referential-integrity.md) already defines. Membership's migrations therefore run after Identity's.
+- **Payment facts stay out of the schema.** Amount, currency, payment method, provider status, subscription mechanics, campaign fields and receipt state belong to the commerce provider, never to `membership_grants` ([ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). Provider identity may appear only as provenance, in `source`/`source_reference`, which Membership never parses and which carry no uniqueness constraint.
+- **Membership access is never represented solely by a role assignment**, because a role assignment does not expire and membership lapses by the passage of time ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md)).
+
 ## Still open
 
 - Soft deletes, retention and anonymisation policy for personal data. Anonymisation is designed as acting on the Person while preserving referential history, but the policy itself is undecided.
 - How the audit trail is protected from tampering by the modules it audits; append-only is currently a code convention, since triggers are barred by the portability rule.
+- Contact data for People without an Account. Person is deliberately thin and carries no email ([ADR 0015](../adr/0015-identity-owns-person.md)), so an account-less member cannot be matched by email from an external system. A future CRM/contact-data decision, triggered when integration volume justifies it ([ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)).

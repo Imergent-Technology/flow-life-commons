@@ -20,6 +20,21 @@ How the platform talks to other systems (WordPress, mail, later partners and ser
 
 This is the intended shape, not an implementation. It is **deliberately not built** until a real consumer exists to shape it. The relay must run within production constraints: driven by the scheduler/cron on shared hosting, not a resident daemon.
 
+## Commerce providers (direction)
+
+Membership is largely paid for through an external commerce provider. The authority split is decided ([ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)) and **no integration is built**: the provider is authoritative for money received, amounts, payment status, recurring mechanics and receipts; Commons is authoritative for what that payment *means* — who has membership access, for how long, and why.
+
+The intended shape, when there is a reason to build it:
+
+```
+provider payment/event → verified, idempotent ingestion → explicit Commons policy → membership grant/revocation
+```
+
+- Webhooks give low-latency signals; provider read APIs give reconciliation. Inbound stays untrusted (rule 5).
+- **Ingestion owns idempotency**, most likely keyed by the provider's own event id. Provenance columns on a grant are not an idempotency mechanism.
+- Offering-to-entitlement interpretation is **explicit code with tests**, not a rules engine and not configuration.
+- **Person matching fails closed**: no guessing, no grant on an ambiguous match, no provider id used as Person identity, and no Person created automatically because a payment arrived. Today a Person has no email unless an Account exists, so account-less members cannot be matched by email at all — a known limit, recorded rather than worked around.
+
 ## Queues
 
 Database-backed queue initially ([ADR 0010](../adr/0010-database-queue-redis-ready.md)). In development a worker container runs continuously; in production the scheduler tick drains the queue. Application code uses Laravel's queue abstraction and must not reach for Redis-specific features.

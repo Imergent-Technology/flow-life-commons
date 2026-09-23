@@ -58,13 +58,31 @@ The direction is **Access → Identity → Audit → Shared** and stays acyclic.
 
 Note for module authors: a module's `Domain` may not import its own `Application`, so anything other modules must name — `Capability`, for instance — belongs in `Application`, and so does everything that consumes it. This is enforced by `tests/Architecture/ModuleBoundariesTest.php`.
 
+## Designed, not yet created: `Membership`
+
+The Membership Foundation design gate is complete ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md), [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). **Nothing below exists yet**: there is no `Membership` folder, no `membership_grants` table, no membership capability and no `RegisterPerson` use case. This records the boundary the module will be created with.
+
+| Module | Owns | Direct dependencies |
+| --- | --- | --- |
+| `Membership` | `membership_grants`: time-bounded membership access grants, the temporal derivation, and the grant/revoke/query use cases | `Access\Application` (authorization), `Identity\Application` (Person operations and existence), `Shared` |
+
+**Membership has no direct `Audit` dependency.** Access and Identity each depend on Audit, but that is *their* dependency: calling a module does not make you depend on what it calls. The chain must not be written as `Membership → Access → Identity → Audit → Shared`, which reads as though it did.
+
+The module's own rules, which are the ordinary ones stated above applied to this case:
+
+- Nothing outside Membership queries `membership_grants` or uses `Membership\Domain`.
+- Membership does not query `people`, `accounts` or `role_assignments` directly, does not own Person persistence, and never names a role key.
+- `RegisterPerson` — the use case that creates a Person with no Account — belongs to **`Identity`**, not Membership, so Identity remains the only module that creates People ([ADR 0015](../adr/0015-identity-owns-person.md), [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md)).
+- Membership may orchestrate *register a Person and grant membership* in one transaction, the way `Access\Application\BootstrapAdministrator` already calls `Identity\Application\InviteAccount` inside one.
+
 ## Candidate modules (provisional, none created)
 
 Working titles to frame discussion. **They are not commitments and no folders exist for them.** Each is created when its epic starts, and its boundaries are decided then.
 
 | Candidate | Likely concern |
 | --- | --- |
-| Membership, Volunteering | Member and volunteer records and lifecycles |
+| Volunteering | Volunteer records and lifecycles |
+| CRM | Rich contact data keyed by `person_id`, which Person deliberately does not carry ([ADR 0015](../adr/0015-identity-owns-person.md)) |
 | Events, Publishing | Later product domains |
 | Workflow | Approval/workflow, separate from authorization ([ADR 0009](../adr/0009-authorization-separate-from-approval.md)) |
 
