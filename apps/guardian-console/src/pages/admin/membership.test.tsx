@@ -642,3 +642,85 @@ describe('existing-Person grant entry point (from an Account)', () => {
     })
   })
 })
+
+/*
+ * The Console is not a security authority (Work Package 7). What it hides is a courtesy; the server decides every request.
+ * These pin the trust-relevant behaviour only: capabilities are read as given (no inference between them), the Console
+ * never sends who is acting, and what it shows about membership state is the server's answer, not its own calculation.
+ */
+describe('trust boundary', () => {
+  it('does not infer view from manage: an operator who may only manage sees no Members section', async () => {
+    serveOperator(operator(['console.access', 'membership.records.manage']))
+    renderApp('/admin/members')
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Not permitted' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
+  })
+
+  it('never sends who is acting: requests carry the subject and the term, and no identity or provenance', async () => {
+    const user = userEvent.setup()
+    const api = await openDetail()
+    api.on(`POST /api/v1/admin/members/${PERSON_ID}/grants`, () => json(wireGrant(), 201))
+    api.on(
+      `POST /api/v1/admin/membership-grants/${GRANT_ID}/revoke`,
+      () => new Response(null, { status: 204 }),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Add grant' }))
+    fireEvent.change(screen.getByLabelText('Starts at'), { target: { value: '2026-06-01T10:00' } })
+    await user.click(screen.getByLabelText('Open-ended access (no end date)'))
+    await user.click(screen.getByRole('button', { name: 'Review and add' }))
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Add grant' }),
+    )
+    await waitFor(() => {
+      expect(api.callsTo(`POST /api/v1/admin/members/${PERSON_ID}/grants`)).toHaveLength(1)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Revoke this grant' }))
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Revoke grant' }),
+    )
+    await waitFor(() => {
+      expect(api.callsTo(`POST /api/v1/admin/membership-grants/${GRANT_ID}/revoke`)).toHaveLength(1)
+    })
+
+    // The subject is in the URL; the body is the term alone. The revoke names the grant and sends nothing else.
+    const grant = api.callsTo(`POST /api/v1/admin/members/${PERSON_ID}/grants`)[0]
+    expect(Object.keys(grant?.body as object).sort()).toEqual([
+      'ends_at',
+      'source',
+      'source_reference',
+      'starts_at',
+    ])
+    expect(
+      api.callsTo(`POST /api/v1/admin/membership-grants/${GRANT_ID}/revoke`)[0]?.body,
+    ).toBeNull()
+    for (const call of api.calls) {
+      for (const header of Object.keys(call.headers)) {
+        expect(header.toLowerCase()).not.toMatch(
+          /^x-(?:person|account|user|actor|wordpress)|^authorization$/,
+        )
+      }
+    }
+  })
+
+  it('shows the state the server derived, even when the history alone would suggest otherwise', async () => {
+    // An unrevoked, open-ended grant that started long ago — and the server says inactive (for whatever reason it knows).
+    // The Console renders the server's answer; it does not recalculate membership on its own.
+    await openDetail(
+      wireMember({
+        active: false,
+        open_ended: false,
+        current_access_ends_at: null,
+        grants: [wireGrantEntry({ starts_at: '2020-01-01T00:00:00Z', ends_at: null })],
+      }),
+    )
+
+    expect(screen.getByText('Inactive')).toBeInTheDocument()
+    expect(screen.queryByText('Active')).not.toBeInTheDocument()
+    expect(screen.queryByText('Open-ended')).not.toBeInTheDocument()
+  })
+})

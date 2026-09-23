@@ -45,6 +45,18 @@ The Identity and Access design gate resolved most of what this page previously d
 - **Auditing** of authentication and authorization changes, written synchronously inside the same transaction as the change ([ADR 0019](../adr/0019-security-event-auditing-seam.md)).
 - **Operator administration.** Role grant/revoke, account enable/disable and MFA reset are real HTTP endpoints, each requiring both a capability and `security.verified` ([ADR 0024](../adr/0024-privileged-operator-administration.md)).
 
+### Verified at the Membership Foundation boundary
+
+The Membership Foundation (ADR 0028, 0029) did not widen who can act. Proven by tests, not asserted (Work Package 7):
+
+- **The caller is the Commons session, never the request.** Every Membership route runs behind `stateful`, `auth:web` (the platform's only guard) and a Membership capability; the Actor is resolved from the authenticated session in one place. Forged body fields, query parameters and headers naming another Account, Person or WordPress user change nothing, and a Person or grant id in the URL is only ever the *subject* — the recorded `granted_by`/`revoked_by` is always the signed-in operator (`tests/Feature/Modules/Membership/Administration/MembershipImpersonationTest.php`).
+- **Capability is enforced at both layers, each on its own**: the route refuses what the use case would allow, and the use case refuses what the route lets through (`MembershipCapabilityLayersTest.php`). `manage` does not imply `view`, anywhere.
+- **The surface is closed**: exactly the five operator routes, matched by the OpenAPI contract; nothing member-facing, WordPress-facing, public or client-authenticated (`tests/Feature/Modules/Membership/MembershipRouteSurfaceTest.php`).
+- **Membership is not an identity authority, a role, an audit writer or a payment record**: it mints no Actor, authenticates nothing, creates People only through `Identity\Application`, adds no role assignment and no security event, discloses no Account id or provenance actor, and carries no payment fact (`tests/Architecture/MembershipTrustBoundariesTest.php`, `MembershipDisclosureTest.php`).
+- **WordPress holds no Commons authority**: no credential, no API call, no forwarded WordPress user, no signing (`scripts/tests/wordpress-boundary.php`, run by `./flow check repo`).
+
+Several of these pin an **absence** that is a phase boundary, not a rule: one Actor shape, one guard, no client or token store, a skeleton companion. They are expected to fail when service or delegated-person authentication is implemented under ADR 0018, and must then be revised deliberately in the same change, naming the new mechanism. What they must keep asserting afterwards is the durable rule: WordPress never becomes identity authority, and no client-asserted identity is ever proof of who is acting.
+
 ## Decided but not yet built
 
 - **Client vs person.** A request proving *which application* is calling, separately from *which person* it acts for, so a client-asserted `person_id` is never accepted as identity on its own ([ADR 0018](../adr/0018-client-and-delegated-authentication.md)). No service-client identity or delegated-person flow exists yet; the WordPress companion remains a skeleton.

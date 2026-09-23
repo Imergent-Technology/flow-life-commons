@@ -65,6 +65,7 @@ check_repo() {
     run_check "./flow release tooling" bash "$FLOW_ROOT/scripts/tests/release.sh"
     run_check "GitHub workflows (actionlint)" actionlint_workflows
     run_check "WordPress companion PHP syntax" lint_wordpress_companion
+    run_check "WordPress companion holds no Commons authority (Phase 1)" wordpress_companion_boundary
 }
 
 check_backend() {
@@ -106,4 +107,10 @@ actionlint_workflows() {
 lint_wordpress_companion() {
     dcq run --rm --no-deps -T -v "$FLOW_ROOT/apps/wordpress-companion:/plugin:ro" platform \
         sh -c 'find /plugin -name "*.php" -print0 | xargs -0 -r -n1 php -l'
+}
+
+# The platform image, with the repository read-only: the platform container itself mounts apps/platform only and cannot
+# see the companion. See the header of scripts/tests/wordpress-boundary.php for why this is a phase boundary.
+wordpress_companion_boundary() {
+    dcq run --rm --no-deps -T -v "$FLOW_ROOT:/repo:ro" platform php /repo/scripts/tests/wordpress-boundary.php /repo
 }
