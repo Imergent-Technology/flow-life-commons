@@ -15,7 +15,13 @@ Data mirrored to other systems (for example a WordPress user display name) is a 
 
 ## Current state
 
-The only tables are framework infrastructure created by Laravel's stock migrations: `migrations`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`. They keep Laravel's default keys because they are not platform aggregates. There is deliberately no `users` table: identity is designed in its own epic ([authorization model](../security/authorization-model.md)).
+Platform-owned tables exist for Identity, Access and Audit ([module map](module-map.md)):
+
+- **Identity**: `people`, `accounts`, `account_invitations`, `sessions`, `account_totp_factors`, `account_recovery_codes`, `password_reset_tokens`.
+- **Access**: `role_assignments`.
+- **Audit**: `security_events`.
+
+Platform aggregates use application-generated ULID primary keys, per the principle above. Framework infrastructure created by Laravel's stock migrations — `migrations`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs` — keeps Laravel's default keys because it is not platform aggregate data. There is deliberately no `users` table: Identity's `people`/`accounts` split is the human registry ([authorization model](../security/authorization-model.md)).
 
 ## Answered by the Identity and Access design gate
 

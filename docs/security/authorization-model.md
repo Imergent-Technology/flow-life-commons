@@ -1,6 +1,6 @@
 # Authorization model
 
-**Status: designed; implementation in progress.** The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [architecture/identity-and-access.md](../architecture/identity-and-access.md). Identity persistence, the Audit seam, Guardian Console session authentication and the **authorization mechanism** exist: a code-owned capability catalog, persisted role assignments, and an `Authorizer` that decides from current state. Role grant and revoke exist as Application use cases guarded by the last-administrator invariant, and the administrator bootstrap is a console command; **none has an HTTP surface yet**. What is not built: invitation acceptance (so no administrator can sign in yet), the role-administration endpoints, and any business capability, because no business module exists to check one. This page keeps the principles that design must continue to satisfy.
+**Status: implemented and running in production.** The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [architecture/identity-and-access.md](../architecture/identity-and-access.md). Identity persistence, the Audit seam, Guardian Console session authentication, TOTP MFA, and the **authorization mechanism** all exist: a code-owned capability catalog, persisted role assignments, and an `Authorizer` that decides from current state. Role grant/revoke, account enable/disable, MFA reset and operator invitations exist as Application use cases guarded by the last-administrator invariant, exposed through the operator-administration HTTP surface under `/api/v1/admin` (see [Operator administration](#operator-administration-phase-8) below). Invitation acceptance, password reset/change and the administrator bootstrap are also built. What is not built: any business capability, because no business module beyond Identity/Access exists yet to check one. This page keeps the principles that design must continue to satisfy.
 
 ## Principles
 
@@ -12,9 +12,9 @@
 6. **Least privilege for Guardians.** Guardian operational capability is granted through the same model, not a bypass; the Console is a client.
 7. **Acting person vs calling client.** A request from WordPress carries both the client's identity and the person on whose behalf it acts; the platform authorizes the person.
 
-## Auditing (future requirement)
+## Auditing
 
-Sensitive actions and privileged access will require **durable auditing**: who did what, to what, when, from where, under which authority, and with what outcome. Audit records must be append-only from the audited modules' point of view, survive deployments, and be reviewable by Guardians. Likely a dedicated module fed by the events/outbox direction ([integration model](../architecture/integration-model.md)). Designed in the Identity/Access epic; no auditing exists yet.
+Sensitive actions and privileged access require **durable auditing**: who did what, to what, when, from where, under which authority, and with what outcome. Audit records are append-only from the audited modules' point of view, written synchronously in the same transaction as the change they record, through the dedicated `Audit` module and its `security_events` table ([ADR 0019](../adr/0019-security-event-auditing-seam.md)). Authentication, MFA, invitations, password lifecycle, role grant/revoke and operator administration are audited today. Tamper-evidence, retention and Guardian-facing review tooling remain undesigned; an events/outbox mechanism for other consumers remains future work ([integration model](../architecture/integration-model.md)).
 
 ## Decided in the design gate
 
@@ -46,4 +46,4 @@ Neither replaces the other, and neither is a role check. The capability is check
 - **Scoped access** (for example Guardian *of a particular programme*).
 - **Anonymisation and deletion** of identity data.
 
-Until the epic ships: **do not add accounts, roles, guards or permission checks ad hoc.** After it ships, add them the way the design says, or amend the design by ADR.
+The Identity/Access epic has shipped; the items above remain genuinely undesigned. **Do not add accounts, roles, guards or permission checks ad hoc.** Add them the way the design says, or amend the design by ADR.

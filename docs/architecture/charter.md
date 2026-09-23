@@ -31,7 +31,7 @@ Flow Life Global is building a long-lived organizational platform for **members,
 
 Production initially runs on **shared cPanel hosting** ([deployment topology](deployment-topology.md)). Production must not depend on permanent worker processes, Redis, Docker, Node.js or long-running daemons. Queues are therefore intended to be drained from the scheduler tick (cron) rather than by a resident worker, the Guardian Console ships as static files, and Docker exists for development only. Development may provide richer infrastructure than production, but nothing may be built that *only* works with it.
 
-How a release reaches that host — immutable release directories behind a `current` symlink, artifacts built off-host from an exact tag, migrations inside a short maintenance window — is decided in [ADR 0027](../adr/0027-release-and-deployment-model.md). It is **designed and validated against the real hosting account but not yet built**: the host capabilities it depends on were probed on 2026-09-21 and confirmed, with outbound mail authentication left open ([production readiness](../runbooks/production-readiness.md)).
+How a release reaches that host — immutable release directories behind a `current` symlink, artifacts built off-host from an exact tag, migrations inside a short maintenance window — is decided in [ADR 0027](../adr/0027-release-and-deployment-model.md). The procedure has been **exercised once, successfully, manually, end to end**: production is live at v0.1.1 ([production readiness](../runbooks/production-readiness.md)). Host-side deployment stays a manual, explicit operator procedure — there is no automatic deploy and no `./flow` command holding production credentials — until the manual procedure has run several more times; outbound mail authentication remains open.
 
 ## Foundational rules
 
@@ -44,7 +44,7 @@ Status: **Encoded** = a test, config or tool fails when broken; **Partial** = en
 | 3 | The application is a modular monolith. | Encoded | `tests/Architecture/ModuleBoundariesTest.php` |
 | 4 | Modules own their business rules and writes. | Partial | Modules cannot use each other's Domain/Infrastructure/Http (architecture test); "writes only via the owner" needs review discipline |
 | 5 | No cross-module direct model/table mutation. | Partial | As above |
-| 6 | Authorization happens server-side; UI visibility is never security. | Documented | No authorization exists yet. See [authorization model](../security/authorization-model.md) |
+| 6 | Authorization happens server-side; UI visibility is never security. | Encoded | `Authorizer`, capability route middleware (`can:`) and tests. See [authorization model](../security/authorization-model.md) |
 | 7 | Authorization and approval/workflow are separate concepts. | Documented | ADR 0009 |
 | 8 | External integrations live behind explicit application/infrastructure boundaries. | Partial | HTTP clients (`Http` facade, `Illuminate\Http\Client`, Guzzle) are forbidden outside a module's `Infrastructure` (architecture test) |
 | 9 | No external network calls inside database transactions. | Documented | [Integration model](integration-model.md) |
@@ -54,14 +54,14 @@ Status: **Encoded** = a test, config or tool fails when broken; **Partial** = en
 | 13 | MariaDB/PostgreSQL portability is actively protected; no DB-specific enums, triggers, procedures, proprietary SQL or generated columns without an ADR. | Encoded | Portability scan (`DatabasePortabilityTest`), tests refuse non-MariaDB/PostgreSQL drivers, PostgreSQL run of the suite in `./flow check --pgsql` and CI |
 | 14 | Persisted timestamps are UTC. | Encoded | `config/app.php`, MariaDB and PostgreSQL connection time zones, dev MariaDB `--default-time-zone=+00:00`, config test |
 | 15 | Secrets are never committed. | Partial | `.gitignore` excludes `.env*` (except `*.example`); examples hold placeholders only. No secret scanner yet. See [secrets](../security/secrets.md) |
-| 16 | Sensitive actions eventually require durable auditing. | Documented | [Authorization model](../security/authorization-model.md) |
+| 16 | Sensitive actions require durable auditing. | Encoded | `RecordSecurityEvent`, written synchronously in the same transaction as the change. See [authorization model](../security/authorization-model.md) |
 | 17 | No speculative shared abstractions or frameworks before real consumers exist. | Documented | Review discipline; `Shared` is empty on purpose |
 
 Other rules that *are* encoded: no `env()` outside config, no debug or dangerous functions, `declare(strict_types=1)` throughout `app/`, and Larastan at level `max`.
 
 ## Identifiers
 
-Platform aggregate identifiers are **application-generated ULIDs** unless a future ADR establishes a reason otherwise ([ADR 0006](../adr/0006-ulid-identifiers.md)). No aggregates exist yet, so nothing demonstrates this in code; framework-owned infrastructure tables (cache, jobs) keep Laravel's defaults.
+Platform aggregate identifiers are **application-generated ULIDs** unless a future ADR establishes a reason otherwise ([ADR 0006](../adr/0006-ulid-identifiers.md)). `Person`, `Account`, `AccountInvitation`, `RoleAssignment`, `SecurityEvent` and the other Identity/Access/Audit aggregates all demonstrate this in code; framework-owned infrastructure tables (cache, jobs) keep Laravel's defaults.
 
 ## Domain events and transactional outbox (direction)
 
@@ -69,11 +69,11 @@ Meaningful domain/application events and a **transactional outbox** are expected
 
 ## Auditing
 
-Sensitive actions and privileged access require **durable audit records** (who, what, when, from where, on whose authority). The seam is designed: a small `Audit` module with an append-only `security_events` table, written synchronously inside the same transaction as the change ([ADR 0019](../adr/0019-security-event-auditing-seam.md)). Identity and access events are auditable from the first Identity epic. Tamper-evidence, retention and review tooling remain undesigned.
+Sensitive actions and privileged access require **durable audit records** (who, what, when, from where, on whose authority). The seam is built: a small `Audit` module owning an append-only `security_events` table, written synchronously inside the same transaction as the change it records ([ADR 0019](../adr/0019-security-event-auditing-seam.md)). Identity and Access events are audited today — authentication, MFA, invitations, password lifecycle, role grant/revoke and operator administration. Tamper-evidence, retention and review tooling remain undesigned.
 
 ## Identity and Access
 
-The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [identity-and-access.md](identity-and-access.md). **Nothing is implemented yet.** Rules 2, 6 and 16 above gain their design there; their status stays *Documented* until the first Identity epic encodes them.
+The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md), with the operative reference in [identity-and-access.md](identity-and-access.md). **Identity and Access are implemented and running in production**: password login, invitations, password reset/change, sessions, TOTP MFA with recovery codes, administrator bootstrap and operator administration (role grant/revoke, account enable/disable, MFA reset), the last behind a real HTTP/admin surface. Rules 2, 6 and 16 above are encoded there.
 
 ## Out of scope for the foundation
 
