@@ -8,7 +8,7 @@ import { AuthLayout } from '../ui/AuthLayout.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { RecoveryCodes } from '../ui/RecoveryCodes.tsx'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
-import { TextField } from '../ui/TextField.tsx'
+import { TotpCodeField } from '../ui/TotpCodeField.tsx'
 
 type Phase =
   | { kind: 'intro' }
@@ -115,12 +115,9 @@ export function MfaEnrollment() {
           className="flex flex-col gap-4"
         >
           <AuthenticatorSetupDetails setup={phase.setup} />
-          <TextField
+          <TotpCodeField
             ref={codeRef}
             label="Authentication code"
-            name="code"
-            autoComplete="one-time-code"
-            inputMode="numeric"
             value={code}
             onChange={setCode}
             errors={problem?.fields.code}

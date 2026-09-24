@@ -15,7 +15,7 @@ import { ProofForm } from '../ui/ProofForm.tsx'
 import { RecoveryCodes } from '../ui/RecoveryCodes.tsx'
 import { proofFrom, type FactorMode } from '../ui/factor.ts'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
-import { TextField } from '../ui/TextField.tsx'
+import { TotpCodeField } from '../ui/TotpCodeField.tsx'
 
 type Panel =
   | { kind: 'closed' }
@@ -35,6 +35,10 @@ const button =
  *
  * Nothing about the authenticator itself is shown: not its secret, not a code. A new secret and new recovery
  * codes are shown once, when generated, and held only in this component's state.
+ *
+ * There is no "not set up" state here, on purpose: this page is behind Console access, Console access needs a
+ * second factor, and a sign-in (or a session that never proved one) cannot get past that without enrolling
+ * first (ADR 0023). First-time enrolment is part of signing in (MfaEnrollment), not of this page.
  */
 export function MfaSection() {
   const current = useCurrentAccount()
@@ -50,7 +54,7 @@ export function MfaSection() {
   const factorRef = useRef<HTMLInputElement>(null)
   const newCodeRef = useRef<HTMLInputElement>(null)
 
-  const { enrolled, recovery_codes_remaining: remaining } = current.mfa
+  const { recovery_codes_remaining: remaining } = current.mfa
 
   function open(next: Panel) {
     setPanel(next)
@@ -101,6 +105,18 @@ export function MfaSection() {
     setPending(false)
     if (!result.ok) {
       if (result.failure.kind === 'unauthenticated') return
+      if (result.failure.kind === 'invalid' && result.failure.errors.authenticator !== undefined) {
+        // The server says there is no pending setup to prove any more (it expired, or was replaced). The dead
+        // QR code and key must not stay up: back to the proof step, which is how a new one is asked for.
+        open({ kind: 'replace' })
+        setProblem((previous) => ({
+          message:
+            'That setup is no longer valid, so the key and QR code have been removed. Confirm it is you to get a new one.',
+          fields: {},
+          attempt: (previous?.attempt ?? 0) + 1,
+        }))
+        return
+      }
       setNewCode('')
       const next = describeFailure(result.failure)
       setProblem((previous) => ({ ...next, attempt: (previous?.attempt ?? 0) + 1 }))
@@ -133,35 +149,31 @@ export function MfaSection() {
         Two-step verification
       </h2>
 
-      {!enrolled ? (
-        <p className="text-sm text-slate-600">
-          Two-step verification is not set up on this account.
-        </p>
-      ) : (
-        <>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-            <dt className="text-slate-500">Authenticator app</dt>
-            <dd>On</dd>
-            <dt className="text-slate-500">Recovery codes left</dt>
-            <dd>{remaining}</dd>
-          </dl>
-          {remaining <= 3 ? (
-            <Alert tone="info">
-              {remaining === 0
-                ? 'You have no recovery codes left. Generate new ones so you can get in if you lose your authenticator.'
-                : 'You are running low on recovery codes. Consider generating a new set.'}
-            </Alert>
-          ) : null}
-        </>
-      )}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+        <dt className="text-slate-500">Authenticator app</dt>
+        <dd>On</dd>
+        <dt className="text-slate-500">Recovery codes left</dt>
+        <dd>{remaining}</dd>
+      </dl>
+      {remaining <= 3 ? (
+        <Alert tone="info">
+          {remaining === 0
+            ? 'You have no recovery codes left. Generate new ones so you can get in if you lose your authenticator.'
+            : 'You are running low on recovery codes. Consider generating a new set.'}
+        </Alert>
+      ) : null}
 
-      {problem && panel.kind !== 'regenerate' && panel.kind !== 'replace' ? (
+      {/* The three panels with a form of their own show their error beside it, so it is announced once. */}
+      {problem &&
+      panel.kind !== 'regenerate' &&
+      panel.kind !== 'replace' &&
+      panel.kind !== 'replace-confirm' ? (
         <Alert key={problem.attempt} tone="error" focusOnMount={problem.fields.code === undefined}>
           {problem.message}
         </Alert>
       ) : null}
 
-      {enrolled && panel.kind === 'closed' ? (
+      {panel.kind === 'closed' ? (
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -264,12 +276,9 @@ export function MfaSection() {
             </Alert>
           ) : null}
           <AuthenticatorSetupDetails setup={panel.setup} />
-          <TextField
+          <TotpCodeField
             ref={newCodeRef}
             label="Code from the new authenticator"
-            name="code"
-            autoComplete="one-time-code"
-            inputMode="numeric"
             value={newCode}
             onChange={setNewCode}
             errors={problem?.fields.code}

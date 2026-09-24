@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Modules\Identity\Domain\RecoveryCode;
+use App\Modules\Identity\Domain\TotpFactor;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
@@ -173,6 +174,48 @@ it('replaces the authenticator: proof to start, a new secret pending, and only a
     $row = Mfa::factorRow($account);
     expect(Crypt::decryptString((string) $row?->secret_ciphertext))->toBe($new)
         ->and($row?->pending_secret_ciphertext)->toBeNull();
+});
+
+it('says when a pending replacement stops being confirmable, from the real pending-secret lifetime', function () {
+    [$console, , $factor] = Mfa::signedIn();
+
+    $body = proof($factor['secret']);   // (finding the next unused code moves the frozen clock, so read it after)
+    $startedAt = Carbon::now();
+    $begun = $console->post('/api/v1/mfa/authenticator', $body)->assertOk();
+
+    // A pending secret may wait 900 seconds from the moment it was made: the server says so, in one place.
+    expect(TotpFactor::PENDING_LIFETIME_SECONDS)->toBe(900)
+        ->and($begun->json('expires_at'))->toBe($startedAt->copy()->addSeconds(900)->toIso8601ZuluString());
+    // The response is exactly what a person needs and nothing that names a Domain object.
+    expect(array_keys((array) $begun->json()))->toEqualCanonicalizing(['secret', 'otpauth_uri', 'expires_at']);
+
+    // Asking again restarts the clock: the answer follows the NEW pending secret, not the first.
+    Console::advance(120);
+    $body = proof($factor['secret']);
+    $restartedAt = Carbon::now();
+    $again = $console->post('/api/v1/mfa/authenticator', $body)->assertOk();
+    expect($again->json('expires_at'))->toBe($restartedAt->copy()->addSeconds(900)->toIso8601ZuluString())
+        ->and($again->json('expires_at'))->not->toBe($begun->json('expires_at'));
+});
+
+it('confirms a replacement up to the very second it says, and not after', function () {
+    [$console, , $factor] = Mfa::signedIn();
+    $begun = $console->post('/api/v1/mfa/authenticator', proof($factor['secret']))->assertOk();
+    $new = Mfa::text($begun->json('secret'));
+    $expiresAt = Carbon::parse(Mfa::text($begun->json('expires_at')));
+
+    Carbon::setTestNow($expiresAt->copy()->addSecond());   // one second past what the server said
+    $console->post('/api/v1/mfa/authenticator/confirm', ['code' => Totp::code($new)])
+        ->assertUnprocessable()->assertJsonPath('errors.authenticator.0', 'There is no authenticator setup in progress. Start again.');
+});
+
+it('still confirms at the last second the server named', function () {
+    [$console, , $factor] = Mfa::signedIn();
+    $begun = $console->post('/api/v1/mfa/authenticator', proof($factor['secret']))->assertOk();
+    $new = Mfa::text($begun->json('secret'));
+
+    Carbon::setTestNow(Carbon::parse(Mfa::text($begun->json('expires_at'))));   // exactly at expires_at
+    $console->post('/api/v1/mfa/authenticator/confirm', ['code' => Totp::code($new)])->assertNoContent();
 });
 
 it('keeps the old authenticator working until the new one is proved, so a failed replacement strands no one', function () {

@@ -147,6 +147,43 @@ describe('the second step of signing in', () => {
     expect(api.callsTo('POST /api/v1/mfa/challenge')[0]?.body).toEqual({ recovery_code: CODES[0] })
   })
 
+  it('takes the authenticator code as six digits however it is pasted, and sends it only on Sign in', async () => {
+    twoStepServer('challenge').on('POST /api/v1/mfa/challenge', () => {
+      api.signedIn = true
+      return empty()
+    })
+    api.install()
+    const user = userEvent.setup()
+    renderApp('/login')
+    await passwordStep(user)
+    const field = await screen.findByLabelText('Authentication code')
+
+    await user.click(field)
+    await user.paste('123 456')
+    await user.type(field, '789')
+
+    expect(field).toHaveValue('123456')
+    expect(field).toHaveAttribute('inputmode', 'numeric')
+    expect(api.callsTo('POST /api/v1/mfa/challenge')).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    await vi.waitFor(() => {
+      expect(api.callsTo('POST /api/v1/mfa/challenge')[0]?.body).toEqual({ code: '123456' })
+    })
+  })
+
+  it('does not narrow a recovery code: it is not six digits', async () => {
+    twoStepServer('challenge').install()
+    const user = userEvent.setup()
+    renderApp('/login')
+    await passwordStep(user)
+    await user.click(await screen.findByRole('button', { name: 'Use a recovery code instead' }))
+
+    const field = screen.getByLabelText('Recovery code')
+    await user.type(field, 'abcd-efgh-jkm0-pqrs')
+
+    expect(field).toHaveValue('abcd-efgh-jkm0-pqrs')
+  })
+
   it('answers a wrong code in one sentence on the field, clears it, and stays on this step', async () => {
     twoStepServer('challenge').on(
       'POST /api/v1/mfa/challenge',
@@ -289,6 +326,57 @@ describe('enrolling an authenticator on first sign-in', () => {
     )
   })
 
+  it('offers the key to copy, copies exactly the ungrouped secret, and sends nothing', async () => {
+    enrolmentServer().install()
+    const user = userEvent.setup()
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    renderApp('/login')
+    await passwordStep(user)
+    await user.click(await screen.findByRole('button', { name: 'Set up authenticator' }))
+    await screen.findByText('JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP')
+    const calls = api.calls.length
+
+    await user.click(screen.getByRole('button', { name: 'Copy setup key' }))
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(SECRET)
+    expect(screen.getByRole('status')).toHaveTextContent('Setup key copied.')
+    expect(api.calls).toHaveLength(calls)
+    expect(localStorage).toHaveLength(0)
+    expect(sessionStorage).toHaveLength(0)
+  })
+
+  it('shows when the setup expires, from the server’s answer', async () => {
+    enrolmentServer().install()
+    const user = userEvent.setup()
+    renderApp('/login')
+    await passwordStep(user)
+    await user.click(await screen.findByRole('button', { name: 'Set up authenticator' }))
+
+    const time = new Date('2026-09-20T09:10:00Z').toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+    expect(await screen.findByText(new RegExp(`expires at ${time}`))).toBeVisible()
+  })
+
+  it('sends the code as six digits when it is pasted the way the app shows it, and only on Verify', async () => {
+    enrolmentServer().install()
+    const user = userEvent.setup()
+    renderApp('/login')
+    await passwordStep(user)
+    await user.click(await screen.findByRole('button', { name: 'Set up authenticator' }))
+    const field = await screen.findByLabelText('Authentication code')
+
+    await user.click(field)
+    await user.paste(' 123 456 ')
+
+    expect(field).toHaveValue('123456')
+    expect(api.callsTo('POST /api/v1/mfa/enrollment/confirm')).toHaveLength(0)
+    await user.click(screen.getByRole('button', { name: 'Verify and continue' }))
+    expect(api.callsTo('POST /api/v1/mfa/enrollment/confirm')[0]?.body).toEqual({ code: '123456' })
+  })
+
   it('does not enrol on a wrong code: the setup stays for another try', async () => {
     enrolmentServer().on(
       'POST /api/v1/mfa/enrollment/confirm',
@@ -382,7 +470,11 @@ describe('enrolling an authenticator on first sign-in', () => {
   it('lets an abandoned setup be restarted with a new key', async () => {
     let n = 0
     enrolmentServer().on('POST /api/v1/mfa/enrollment', () =>
-      json({ secret: n++ === 0 ? SECRET : 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U', otpauth_uri: URI }),
+      json({
+        secret: n++ === 0 ? SECRET : 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U',
+        otpauth_uri: URI,
+        expires_at: '2026-09-20T09:10:00Z',
+      }),
     )
     api.install()
     const user = userEvent.setup()

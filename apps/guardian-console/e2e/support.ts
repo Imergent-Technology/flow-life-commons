@@ -162,6 +162,16 @@ export function recoveryCodesFor(tag: string): string[] {
   return Array.from({ length: 10 }, (_, n) => `E2E${tag}-RC00-0000-000${String(n)}`)
 }
 
+/**
+ * What is on the clipboard, read by the page itself (the context must have been granted `clipboard-read`). Typed
+ * structurally because the e2e project has no DOM types.
+ */
+export async function clipboardText(page: Page): Promise<string> {
+  return page.evaluate(() =>
+    (navigator as unknown as { clipboard: { readText(): Promise<string> } }).clipboard.readText(),
+  )
+}
+
 /** A same-origin fetch from the page, exactly as the Console makes one (the XSRF-TOKEN cookie echoed in a header). */
 export async function apiFrom(
   page: Page,

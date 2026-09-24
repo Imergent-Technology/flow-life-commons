@@ -876,7 +876,7 @@ paths:
               $ref: '#/components/schemas/SecurityProofRequest'
       responses:
         '200':
-          description: The new secret and provisioning URI. Shown once; the old authenticator still works.
+          description: The new secret, provisioning URI and `expires_at`. Shown once; the old authenticator still works.
           content:
             application/json:
               schema:
@@ -2349,7 +2349,7 @@ components:
       description: >-
         What is needed to add an authenticator. Shown **once**, and never retrievable again: the server
         keeps only the encrypted secret. Secret.
-      required: [secret, otpauth_uri]
+      required: [secret, otpauth_uri, expires_at]
       properties:
         secret:
           type: string
@@ -2362,7 +2362,13 @@ components:
         expires_at:
           type: string
           format: date-time
-          description: For a sign-in enrolment, when the pending sign-in ends.
+          readOnly: true
+          description: >-
+            The last moment this setup can still be confirmed, decided by the server (the Console shows
+            it and never works it out). For an authenticator **replacement** it is when the pending
+            secret expires (15 minutes after it was made). For a sign-in **enrolment** it is when the
+            pending sign-in ends, which is sooner. After it, confirming answers `422` with
+            `errors.authenticator` and the setup must be started again.
     RecoveryCodes:
       type: object
       description: New recovery codes, shown **once** and stored only as digests. Secret.

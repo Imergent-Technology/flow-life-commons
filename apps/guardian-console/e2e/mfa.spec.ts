@@ -3,6 +3,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test'
 import {
   apiFrom,
   captureConsole,
+  clipboardText,
   meStatus,
   nextCode,
   recoveryCodesFor,
@@ -164,6 +165,7 @@ test.describe('managing two-step verification', () => {
   }) => {
     test.setTimeout(90_000)
     const page = await freshPage(browser, baseURL ?? '')
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']) // to READ back what "Copy setup key" wrote
     const logged = captureConsole(page)
     const oldCodes = recoveryCodesFor(MANAGE.tag)
 
@@ -205,7 +207,13 @@ test.describe('managing two-step verification', () => {
     const replace = page.getByRole('form', { name: 'Replace authenticator' })
     await replace.getByLabel('Current password').fill(MANAGE.password)
     await replace.getByLabel('Authentication code').fill(await nextCode(MANAGE.secret))
+    const issuing = page.waitForResponse(
+      (r) =>
+        r.request().method() === 'POST' &&
+        new URL(r.url()).pathname === '/api/v1/mfa/authenticator',
+    )
     await replace.getByRole('button', { name: 'Continue' }).click()
+    const issued = (await (await issuing).json()) as { secret: string; expires_at: string }
     await expect(
       page.getByRole('img', { name: 'QR code for your authenticator app' }),
     ).toBeVisible()
@@ -215,14 +223,34 @@ test.describe('managing two-step verification', () => {
     )
     expect(replacement).toMatch(/^[A-Z2-7]{32}$/)
     expect(replacement).not.toBe(MANAGE.secret)
+    expect(replacement).toBe(issued.secret) // the key on the page is the one the server issued
 
-    // Nothing has changed until the NEW one is proved: a wrong code leaves the setup open.
-    await page.getByLabel('Code from the new authenticator').fill('000000')
+    // The server names the deadline, from the real pending-secret lifetime (15 minutes), and the page shows it.
+    const left = Date.parse(issued.expires_at) - Date.now()
+    expect(left).toBeGreaterThan(14 * 60_000)
+    expect(left).toBeLessThanOrEqual(15 * 60_000 + 5_000)
+    await expect(page.getByText(/This setup key expires at/)).toBeVisible()
+
+    // Copy setup key: the canonical key (no display spaces) reaches the clipboard, and nothing else happens.
+    const seen: string[] = []
+    page.on('request', (request) => seen.push(request.url()))
+    await page.getByRole('button', { name: 'Copy setup key' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Setup key copied.' })).toBeVisible()
+    expect(await clipboardText(page)).toBe(issued.secret)
+    expect(seen).toEqual([])
+
+    // Nothing has changed until the NEW one is proved: a wrong code leaves the setup open. (The field keeps digits only.)
+    await page.getByLabel('Code from the new authenticator').fill('000 000')
+    await expect(page.getByLabel('Code from the new authenticator')).toHaveValue('000000')
     await page.getByRole('button', { name: 'Switch to the new authenticator' }).click()
     await expect(page.getByLabel('Code from the new authenticator')).toHaveAccessibleDescription(
       /The code is not valid/,
     )
-    await page.getByLabel('Code from the new authenticator').fill(await nextCode(replacement))
+    const good = await nextCode(replacement)
+    await page
+      .getByLabel('Code from the new authenticator')
+      .fill(`${good.slice(0, 3)} ${good.slice(3)}`)
+    await expect(page.getByLabel('Code from the new authenticator')).toHaveValue(good)
     await page.getByRole('button', { name: 'Switch to the new authenticator' }).click()
     await expect(page.getByText('Your authenticator has been replaced')).toBeVisible()
     await expect(page.locator('body')).not.toContainText(replacement)

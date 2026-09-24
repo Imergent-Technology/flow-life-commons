@@ -2,11 +2,12 @@ import { expect, test, type Browser, type Page } from '@playwright/test'
 
 import {
   captureConsole,
+  clipboardText,
   locationOf,
-  messageIdsTo,
-  nextCode,
   mailpit,
+  messageIdsTo,
   meStatus,
+  nextCode,
   replayedStatus,
   scriptVisibleCookies,
   sessionCookie,
@@ -259,6 +260,7 @@ test.describe('accepting an invitation', () => {
   }) => {
     const password = unique('invitee')
     const logged = captureConsole(page)
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']) // to READ back what "Copy setup key" wrote
     await page.goto('/accept-invitation')
 
     await page.getByLabel('Invitation token').fill(INVITEE.token)
@@ -291,7 +293,12 @@ test.describe('accepting an invitation', () => {
     ).toBeVisible()
     expect(await meStatus(page)).toBe(401)
     await expect(consoleHeading(page)).toHaveCount(0)
+    const issuing = page.waitForResponse(
+      (r) =>
+        r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/v1/mfa/enrollment',
+    )
     await page.getByRole('button', { name: 'Set up authenticator' }).click()
+    const issued = (await (await issuing).json()) as { secret: string }
 
     // The QR code is drawn in the page, and the same secret is offered as a manual key.
     await expect(
@@ -299,9 +306,21 @@ test.describe('accepting an invitation', () => {
     ).toBeVisible()
     const secret = ((await page.locator('code').first().textContent()) ?? '').replace(/\s/g, '')
     expect(secret).toMatch(/^[A-Z2-7]{32}$/)
+    expect(secret).toBe(issued.secret) // the key on the page is the one the server issued
+    await expect(page.getByText(/This setup key expires at/)).toBeVisible()
 
-    // Generating a secret enrolled nothing: a wrong code does not, and leaves the setup to try again.
-    await page.getByLabel('Authentication code').fill('000000')
+    // Copy setup key: the canonical key (no display spaces) reaches the clipboard, and nothing else happens.
+    const seen: string[] = []
+    page.on('request', (request) => seen.push(request.url()))
+    await page.getByRole('button', { name: 'Copy setup key' }).click()
+    await expect(page.getByRole('status').filter({ hasText: 'Setup key copied.' })).toBeVisible()
+    expect(await clipboardText(page)).toBe(issued.secret)
+    expect(seen).toEqual([]) // no request at all, let alone one carrying the key
+
+    // Generating a secret enrolled nothing: a wrong code does not, and leaves the setup to try again. Typed with a
+    // space, as an app shows it: the field keeps the six digits.
+    await page.getByLabel('Authentication code').fill('000 000')
+    await expect(page.getByLabel('Authentication code')).toHaveValue('000000')
     await page.getByRole('button', { name: 'Verify and continue' }).click()
     await expect(page.getByLabel('Authentication code')).toHaveAccessibleDescription(
       /The code is not valid/,
@@ -309,7 +328,9 @@ test.describe('accepting an invitation', () => {
     expect(await meStatus(page)).toBe(401)
 
     // A valid code from the secret enrols it, and the recovery codes appear ONCE.
-    await page.getByLabel('Authentication code').fill(await nextCode(secret))
+    const valid = await nextCode(secret)
+    await page.getByLabel('Authentication code').fill(`${valid.slice(0, 3)} ${valid.slice(3)}`)
+    await expect(page.getByLabel('Authentication code')).toHaveValue(valid)
     await page.getByRole('button', { name: 'Verify and continue' }).click()
     const list = page.getByRole('list', { name: 'Recovery codes' })
     await expect(list).toBeVisible()

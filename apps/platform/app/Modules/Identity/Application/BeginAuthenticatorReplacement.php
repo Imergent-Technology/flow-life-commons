@@ -42,7 +42,7 @@ final readonly class BeginAuthenticatorReplacement
             $secret = $this->totp->generateSecret();
             $this->factors->save($factor->withPending($this->cipher->encrypt($secret), $now));
 
-            return new TotpSetup($secret, $this->totp->provisioningUri($secret, $account->email->value));
+            return TotpSetup::pending($secret, $this->totp->provisioningUri($secret, $account->email->value), $now);
         });
     }
 }

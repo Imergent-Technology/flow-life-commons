@@ -3,6 +3,7 @@ import type { Ref } from 'react'
 import type { FieldErrors } from '../api/http.ts'
 import type { FactorMode } from './factor.ts'
 import { TextField } from './TextField.tsx'
+import { TotpCodeField } from './TotpCodeField.tsx'
 
 /**
  * The second-factor input: a code from the authenticator app, or (by a deliberate switch) a recovery code.
@@ -29,16 +30,12 @@ export function SecondFactorFields({
   return (
     <div className="flex flex-col gap-2">
       {mode === 'code' ? (
-        <TextField
+        <TotpCodeField
           ref={inputRef}
           label="Authentication code"
-          name="code"
-          autoComplete="one-time-code"
-          inputMode="numeric"
           value={value}
           onChange={onValueChange}
           errors={errors.code}
-          hint="The 6-digit code from your authenticator app."
           disabled={disabled}
         />
       ) : (

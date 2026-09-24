@@ -54,7 +54,7 @@ final readonly class BeginTotpEnrollment
                 ? TotpFactor::begin(TotpFactorId::generate(), $account->id, $ciphertext, $now)
                 : $factor->withPending($ciphertext, $now));
 
-            return new TotpSetup($secret, $this->totp->provisioningUri($secret, $account->email->value));
+            return TotpSetup::pending($secret, $this->totp->provisioningUri($secret, $account->email->value), $now);
         });
     }
 

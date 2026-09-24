@@ -101,6 +101,18 @@ it('generates a secret and shows it once, storing it only encrypted and as PENDI
         ->and(Mfa::isEnrolled($account))->toBeFalse();
 });
 
+it('reports the SIGN-IN expiry when enrolling at login, which ends before the secret does', function () {
+    Mfa::guardian();
+    $console = pendingEnrollment();
+
+    $response = $console->post('/api/v1/mfa/enrollment')->assertOk();
+
+    // 10 minutes from the password (the pending sign-in), not the 15 the pending secret alone could wait:
+    // a person enrolling at login is bound by the tighter of the two, and is told that one.
+    expect($response->json('expires_at'))->toBe('2026-09-19T12:10:00Z')
+        ->and(array_keys((array) $response->json()))->toEqualCanonicalizing(['secret', 'otpauth_uri', 'expires_at']);
+});
+
 it('does not enrol anything by generating a secret: the Account is exactly as it was', function () {
     $account = Mfa::guardian();
     setup(pendingEnrollment());

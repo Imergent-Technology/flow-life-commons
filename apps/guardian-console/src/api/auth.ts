@@ -169,23 +169,41 @@ export function completeChallenge(proof: SecondFactorProof): Promise<Result<null
 
 /**
  * A new authenticator secret, shown ONCE. `secret` is the manual key; `otpauthUri` contains it and is drawn as a
- * QR code IN THE BROWSER, never sent anywhere. Held in component memory only.
+ * QR code IN THE BROWSER, never sent anywhere. `expiresAt` is the server's answer to "until when can this be
+ * confirmed" (ISO 8601): the Console shows it and never works it out. Held in component memory only.
  */
 export interface AuthenticatorSetup {
   secret: string
   otpauthUri: string
+  expiresAt: string
 }
 
-function isSetup(body: unknown): body is { secret: string; otpauth_uri: string } {
-  return isRecord(body) && isString(body.secret) && isString(body.otpauth_uri)
+interface WireSetup {
+  secret: string
+  otpauth_uri: string
+  expires_at: string
 }
 
-async function setupOf(
-  request: Promise<Result<{ secret: string; otpauth_uri: string }>>,
-): Promise<Result<AuthenticatorSetup>> {
+function isSetup(body: unknown): body is WireSetup {
+  return (
+    isRecord(body) &&
+    isString(body.secret) &&
+    isString(body.otpauth_uri) &&
+    isString(body.expires_at)
+  )
+}
+
+async function setupOf(request: Promise<Result<WireSetup>>): Promise<Result<AuthenticatorSetup>> {
   const result = await request
   return result.ok
-    ? { ok: true, value: { secret: result.value.secret, otpauthUri: result.value.otpauth_uri } }
+    ? {
+        ok: true,
+        value: {
+          secret: result.value.secret,
+          otpauthUri: result.value.otpauth_uri,
+          expiresAt: result.value.expires_at,
+        },
+      }
     : result
 }
 

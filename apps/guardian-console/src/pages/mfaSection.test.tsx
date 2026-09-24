@@ -9,6 +9,7 @@ const EMAIL = 'guardian@example.org'
 const PASSWORD = 'correct horse battery staple'
 const NEW_SECRET = 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U'
 const NEW_URI = `otpauth://totp/Flow%20Life:${EMAIL}?secret=${NEW_SECRET}&issuer=Flow%20Life`
+const EXPIRES_AT = '2026-09-20T16:12:00Z'
 const NEW_CODES = Array.from({ length: 10 }, (_, i) => `WXYZ-ABCD-EFG${String(i)}-HJKM`)
 
 let api: FakeApi
@@ -78,22 +79,20 @@ describe('two-step verification on Account security', () => {
     expect(document.body.textContent).not.toMatch(/disable|turn off two/i)
   })
 
-  it('does not offer management to an Account with no authenticator', async () => {
-    api = new FakeApi()
-    api.on(
-      'GET /api/v1/me',
-      json(
-        accountFor({
-          mfa: { enrolled: false, recovery_codes_remaining: 0, security_verified_until: null },
-        }),
-      ),
-    )
-    api.on('GET /api/v1/health', json({ status: 'ok', service: 's', api_version: 's', checks: {} }))
-    api.install()
+  it('manages an authenticator that exists and never offers first-time setup: that is part of signing in', async () => {
+    serve()
     await openSecurity()
 
-    expect(screen.getByText(/not set up/)).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Replace authenticator' })).not.toBeInTheDocument()
+    // Exactly the two things that can be done to an existing authenticator...
+    expect(screen.getByRole('button', { name: 'Generate new recovery codes' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Replace authenticator' })).toBeVisible()
+    // ...and no way to start from nothing, from here.
+    expect(
+      screen.queryByRole('button', { name: /set up|enrol|enroll|add an authenticator/i }),
+    ).not.toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/not set up/i)
+    expect(api.callsTo('POST /api/v1/mfa/enrollment')).toHaveLength(0)
+    expect(api.callsTo('POST /api/v1/mfa/enrollment/confirm')).toHaveLength(0)
   })
 })
 
@@ -217,7 +216,7 @@ describe('regenerating recovery codes', () => {
 })
 
 describe('replacing the authenticator', () => {
-  const begin = () => json({ secret: NEW_SECRET, otpauth_uri: NEW_URI })
+  const begin = () => json({ secret: NEW_SECRET, otpauth_uri: NEW_URI, expires_at: EXPIRES_AT })
 
   async function startReplacement(user: ReturnType<typeof userEvent.setup>) {
     await user.click(screen.getByRole('button', { name: 'Replace authenticator' }))
@@ -295,6 +294,151 @@ describe('replacing the authenticator', () => {
     expect(field).toHaveAccessibleDescription(expect.stringContaining('The code is not valid.'))
     expect(field).toHaveFocus()
     expect(screen.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible()
+  })
+
+  it('shows the setup key with a copy button, and when the server says it expires', async () => {
+    serve((a) => a.on('POST /api/v1/mfa/authenticator', begin()))
+    const user = userEvent.setup()
+    await openSecurity()
+
+    await startReplacement(user)
+
+    expect(await screen.findByRole('button', { name: 'Copy setup key' })).toBeVisible()
+    const time = new Date(EXPIRES_AT).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    expect(screen.getByText(new RegExp(`This setup key expires at ${time}`))).toBeVisible()
+  })
+
+  it('copies the new key without a request, and the copied key is the one on the screen', async () => {
+    serve((a) => a.on('POST /api/v1/mfa/authenticator', begin()))
+    const user = userEvent.setup()
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await openSecurity()
+    await startReplacement(user)
+    const calls = api.calls.length
+
+    await user.click(await screen.findByRole('button', { name: 'Copy setup key' }))
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(NEW_SECRET)
+    expect(api.calls).toHaveLength(calls) // the copy asked the server nothing
+    expect(screen.getByText('MFRG GZDF MZTW Q2LK NNWG 23TP OBYX E43U')).toBeVisible()
+  })
+
+  it('takes the new authenticator code as digits only, and does not submit by itself', async () => {
+    serve((a) => a.on('POST /api/v1/mfa/authenticator', begin()))
+    const user = userEvent.setup()
+    await openSecurity()
+    await startReplacement(user)
+
+    const field = await screen.findByLabelText('Code from the new authenticator')
+    await user.click(field)
+    await user.paste('654 321')
+
+    expect(field).toHaveValue('654321')
+    await user.type(field, '9')
+    expect(field).toHaveValue('654321')
+    expect(api.callsTo('POST /api/v1/mfa/authenticator/confirm')).toHaveLength(0) // only the button sends it
+  })
+
+  describe('when the server says there is no pending setup to prove', () => {
+    const gone = () =>
+      json(
+        {
+          message: 'There is no authenticator setup in progress. Start again.',
+          errors: { authenticator: ['There is no authenticator setup in progress. Start again.'] },
+        },
+        422,
+      )
+
+    it('takes the dead QR code and key off the page, and says what to do', async () => {
+      serve((a) =>
+        a
+          .on('POST /api/v1/mfa/authenticator', begin())
+          .on('POST /api/v1/mfa/authenticator/confirm', gone()),
+      )
+      const user = userEvent.setup()
+      await openSecurity()
+      await startReplacement(user)
+      await user.type(await screen.findByLabelText('Code from the new authenticator'), '654321')
+
+      await user.click(screen.getByRole('button', { name: 'Switch to the new authenticator' }))
+
+      const alert = await screen.findByRole('alert')
+      expect(alert).toHaveTextContent('That setup is no longer valid')
+      expect(alert).toHaveFocus()
+      // Nothing of the expired setup is left to scan, read or copy.
+      expect(
+        screen.queryByRole('img', { name: 'QR code for your authenticator app' }),
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Copy setup key' })).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Code from the new authenticator')).not.toBeInTheDocument()
+      expect(document.body.textContent).not.toContain(NEW_SECRET)
+      expect(document.body.textContent).not.toContain('MFRG GZDF')
+      // And the way to begin again is right there: the proof step, not a dead end.
+      expect(screen.getByRole('form', { name: 'Replace authenticator' })).toBeVisible()
+    })
+
+    it('lets the person begin again and get a fresh setup', async () => {
+      const second = 'KRSXG5CTMVRXEZLUKN2XGZLSMVZG65DI'
+      let starts = 0
+      serve((a) =>
+        a
+          .on('POST /api/v1/mfa/authenticator', () =>
+            starts++ === 0
+              ? begin()
+              : json({
+                  secret: second,
+                  otpauth_uri: `otpauth://totp/Flow%20Life:${EMAIL}?secret=${second}&issuer=Flow%20Life`,
+                  expires_at: '2026-09-20T16:40:00Z',
+                }),
+          )
+          .on('POST /api/v1/mfa/authenticator/confirm', gone()),
+      )
+      const user = userEvent.setup()
+      await openSecurity()
+      await startReplacement(user)
+      await user.type(await screen.findByLabelText('Code from the new authenticator'), '654321')
+      await user.click(screen.getByRole('button', { name: 'Switch to the new authenticator' }))
+      await screen.findByRole('alert')
+
+      // The proof fields start empty (nothing is kept), and asking again works as it did the first time.
+      const form = screen.getByRole('form', { name: 'Replace authenticator' })
+      expect(within(form).getByLabelText('Current password')).toHaveValue('')
+      await user.type(within(form).getByLabelText('Current password'), PASSWORD)
+      await user.type(within(form).getByLabelText('Authentication code'), '123456')
+      await user.click(within(form).getByRole('button', { name: 'Continue' }))
+
+      expect(await screen.findByText('KRSX G5CT MVRX EZLU KN2X GZLS MVZG 65DI')).toBeVisible()
+      expect(screen.queryByText('MFRG GZDF MZTW Q2LK NNWG 23TP OBYX E43U')).not.toBeInTheDocument()
+      expect(api.callsTo('POST /api/v1/mfa/authenticator')).toHaveLength(2)
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('does not treat a wrong code as an expired setup: that keeps the setup open', async () => {
+      serve((a) =>
+        a
+          .on('POST /api/v1/mfa/authenticator', begin())
+          .on(
+            'POST /api/v1/mfa/authenticator/confirm',
+            json(
+              { message: 'The code is not valid.', errors: { code: ['The code is not valid.'] } },
+              422,
+            ),
+          ),
+      )
+      const user = userEvent.setup()
+      await openSecurity()
+      await startReplacement(user)
+      await user.type(await screen.findByLabelText('Code from the new authenticator'), '000000')
+
+      await user.click(screen.getByRole('button', { name: 'Switch to the new authenticator' }))
+
+      // One error, announced once (not one above the form and another inside it).
+      expect(await screen.findByRole('alert')).toHaveTextContent('The code is not valid.')
+      expect(screen.getAllByRole('alert')).toHaveLength(1)
+      expect(screen.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible()
+      expect(screen.getByText('MFRG GZDF MZTW Q2LK NNWG 23TP OBYX E43U')).toBeVisible()
+    })
   })
 
   it('lets the person cancel, leaving everything as it was', async () => {

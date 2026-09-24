@@ -88,12 +88,21 @@ const rules: Rule[] = [
     fine: 'const mode = process',
   },
   {
-    name: 'writing a file or the clipboard outside the recovery-code panel',
+    name: 'writing a file outside the recovery-code panel',
     because:
-      'recovery codes are shown once and leave the page only by an intentional click in one place; nothing else may hand data to a file or the clipboard',
-    pattern: /createObjectURL|navigator\.clipboard|\.download\s*=/,
+      'recovery codes are shown once and leave the page as a file only by an intentional click in one place; nothing else may hand data to a file',
+    pattern: /createObjectURL|\.download\s*=/,
     allowedIn: /(^|\/)ui\/RecoveryCodes\.tsx$/,
     offends: 'const url = URL.createObjectURL(new Blob([secret]))',
+    fine: 'const text = codes.join(newline)',
+  },
+  {
+    name: 'writing the clipboard outside the two panels that show a secret once',
+    because:
+      'recovery codes and a new authenticator setup key are shown once and may be copied by an intentional click, in those two components only; nothing else may hand data to the clipboard',
+    pattern: /navigator\.clipboard/,
+    allowedIn: /(^|\/)ui\/(RecoveryCodes|AuthenticatorSetup)\.tsx$/,
+    offends: 'await navigator.clipboard.writeText(secret)',
     fine: 'const text = codes.join(newline)',
   },
   {
