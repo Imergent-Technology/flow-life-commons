@@ -1,0 +1,435 @@
+/*
+ * Guardian Console visual system: design tokens
+ * Flow Life Commons · Guardian Console
+ * Companion to guardian-console-visual-system.md; see ADR 0030 for the architecture.
+ *
+ * THIS FILE IS A DESIGN REFERENCE, NOT APPLICATION CODE.
+ * Nothing builds or imports it while it lives under docs/design/. WP1 copies it to
+ * apps/guardian-console/src/theme/tokens.css, and from that point the copy is the
+ * one that ships. Values here are expected to move during implementation and browser
+ * QA; when they do, they move in this file and in the specification beside it.
+ *
+ * Target location: apps/guardian-console/src/theme/tokens.css
+ * Import order in src/index.css (which today contains only the Tailwind import):
+ *
+ *   @import 'tailwindcss';
+ *   @import './theme/fonts.css';    // @font-face for the self-hosted faces (WP1)
+ *   @import './theme/tokens.css';   // this file
+ *
+ * Themes
+ *   Light: Garden     (:root, the default)
+ *   Dark:  Deep Tide  ([data-theme="dark"], plus a prefers-color-scheme fallback)
+ *
+ * The ThemeProvider always stamps the RESOLVED theme on <html data-theme="light|dark">.
+ * The media-query block paints the right theme before any script runs.
+ * Components must use the semantic utilities below, and never raw palette classes
+ * or dark: variants. A guardrail enforces this from WP6.
+ *
+ * Note on WP1's acceptance: the @layer base block at the foot of this file sets the
+ * page ground, the atmospheric wash, the horizon line and the base typography. So the
+ * package that lands this file DOES change how the application looks. What it does not
+ * change is any page's structure, markup or behaviour.
+ */
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* ------------------------------------------------------------------ */
+/* Garden (light): complete set                                        */
+/* ------------------------------------------------------------------ */
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --background: #f3f5f3;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --muted: #eaeeeb;
+  --scrim: rgb(29 26 38 / 0.4);
+
+  /* content */
+  --foreground: #1d1a26;
+  --muted-foreground: #5a6460;
+  --subtle-foreground: #848e89; /* placeholders and separators only */
+
+  /* lines */
+  --border: #dde3df;
+  --border-strong: #cad2cd;
+  --input: #8c968f; /* 3:1 or better against --field */
+  --field: #ffffff;
+  --ring: #7456e3;
+
+  /* action */
+  --primary: #6140d6;
+  --primary-hover: #5232c0;
+  --primary-foreground: #ffffff;
+  --accent: #ede7fd;
+  --accent-foreground: #4529b0;
+
+  /* status: the strong tone is the text and icon colour on the soft tone */
+  --success: #1b714a;
+  --success-soft: #e2f2ea;
+  --warning: #8e4f00;
+  --warning-soft: #fbeedb;
+  --danger: #b0261c;
+  --danger-soft: #fceae8;
+  --danger-foreground: #ffffff;
+  --neutral-soft: #e8ece9;
+  --neutral-foreground: #46504b;
+
+  /* navigation: rail, pinned drawer, mobile sheet */
+  --nav: rgb(255 255 255 / 0.5);
+  --nav-foreground: #38433e;
+  --nav-strong: #1d1a26;
+  --nav-muted: #7e8984;
+  --nav-active: #e6dffc;
+  --nav-active-foreground: #3b22a0;
+  --nav-active-icon: #6140d6;
+  --nav-border: rgb(202 210 205 / 0.85);
+
+  /* atmosphere */
+  --wash: linear-gradient(180deg, #dae9e1 0%, #e5eee9 30%, rgb(243 245 243 / 0) 100%);
+  --wash-height: 340px;
+  /* Meadow line */
+  --horizon: linear-gradient(90deg, #8fc3a6 0%, #d9c27e 45%, #eda283 75%, #d98aa4 100%);
+  --horizon-height: 3px;
+
+  /* elevation */
+  --elevation-panel: 0 1px 2px rgb(29 26 38 / 0.04);
+  --elevation-pop: 0 20px 48px -12px rgb(29 26 38 / 0.28), 0 2px 8px rgb(29 26 38 / 0.08);
+}
+
+/* ------------------------------------------------------------------ */
+/* Deep Tide (dark): complete set                                      */
+/* Keep the two dark blocks identical.                                 */
+/* ------------------------------------------------------------------ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --background: #0e1417;
+  --surface: #151c20;
+  --surface-raised: #1c252a;
+  --muted: #192126;
+  --scrim: rgb(4 3 10 / 0.62);
+
+  --foreground: #eeebf4;
+  --muted-foreground: #9eafb4;
+  --subtle-foreground: #71838a;
+
+  --border: #233036;
+  --border-strong: #303e45;
+  --input: #6c7f87;
+  --field: #121a1d;
+  --ring: #b09cff;
+
+  --primary: #a790ff;
+  --primary-hover: #b8a6ff;
+  --primary-foreground: #170f30;
+  --accent: #2a2342;
+  --accent-foreground: #d3c8ff;
+
+  --success: #68c996;
+  --success-soft: #14261d;
+  --warning: #e9b55e;
+  --warning-soft: #2a2215;
+  --danger: #f47e73;
+  --danger-soft: #2e1717;
+  --danger-foreground: #2a0c09;
+  --neutral-soft: #1c262b;
+  --neutral-foreground: #b4c3c8;
+
+  --nav: rgb(3 10 12 / 0.38);
+  --nav-foreground: #c2d0d4;
+  --nav-strong: #f2eff7;
+  --nav-muted: #6f848b;
+  --nav-active: rgb(167 144 255 / 0.16);
+  --nav-active-foreground: #ffffff;
+  --nav-active-icon: #b8a6ff;
+  --nav-border: rgb(48 62 69 / 0.75);
+
+  --wash: linear-gradient(180deg, #11313a 0%, #16243a 34%, rgb(14 20 23 / 0) 100%);
+  /* Violet line */
+  --horizon: linear-gradient(
+    90deg,
+    rgb(167 144 255 / 0) 0%,
+    #a790ff 28%,
+    #a790ff 72%,
+    rgb(167 144 255 / 0) 100%
+  );
+  --horizon-height: 2px;
+
+  --elevation-panel: none;
+  --elevation-pop: 0 20px 48px -10px rgb(0 0 0 / 0.7), 0 0 0 1px #303e45;
+}
+
+/* Before the ThemeProvider runs, or when a System preference resolves to dark. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --background: #0e1417;
+    --surface: #151c20;
+    --surface-raised: #1c252a;
+    --muted: #192126;
+    --scrim: rgb(4 3 10 / 0.62);
+
+    --foreground: #eeebf4;
+    --muted-foreground: #9eafb4;
+    --subtle-foreground: #71838a;
+
+    --border: #233036;
+    --border-strong: #303e45;
+    --input: #6c7f87;
+    --field: #121a1d;
+    --ring: #b09cff;
+
+    --primary: #a790ff;
+    --primary-hover: #b8a6ff;
+    --primary-foreground: #170f30;
+    --accent: #2a2342;
+    --accent-foreground: #d3c8ff;
+
+    --success: #68c996;
+    --success-soft: #14261d;
+    --warning: #e9b55e;
+    --warning-soft: #2a2215;
+    --danger: #f47e73;
+    --danger-soft: #2e1717;
+    --danger-foreground: #2a0c09;
+    --neutral-soft: #1c262b;
+    --neutral-foreground: #b4c3c8;
+
+    --nav: rgb(3 10 12 / 0.38);
+    --nav-foreground: #c2d0d4;
+    --nav-strong: #f2eff7;
+    --nav-muted: #6f848b;
+    --nav-active: rgb(167 144 255 / 0.16);
+    --nav-active-foreground: #ffffff;
+    --nav-active-icon: #b8a6ff;
+    --nav-border: rgb(48 62 69 / 0.75);
+
+    --wash: linear-gradient(180deg, #11313a 0%, #16243a 34%, rgb(14 20 23 / 0) 100%);
+    --horizon: linear-gradient(
+      90deg,
+      rgb(167 144 255 / 0) 0%,
+      #a790ff 28%,
+      #a790ff 72%,
+      rgb(167 144 255 / 0) 100%
+    );
+    --horizon-height: 2px;
+
+    --elevation-panel: none;
+    --elevation-pop: 0 20px 48px -10px rgb(0 0 0 / 0.7), 0 0 0 1px #303e45;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Tailwind mapping: theme-dependent values (inline, so they follow   */
+/* data-theme at runtime)                                              */
+/* ------------------------------------------------------------------ */
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-muted: var(--muted);
+  --color-scrim: var(--scrim);
+
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-field: var(--field);
+  --color-ring: var(--ring);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-neutral-soft: var(--neutral-soft);
+  --color-neutral-foreground: var(--neutral-foreground);
+
+  --color-nav: var(--nav);
+  --color-nav-foreground: var(--nav-foreground);
+  --color-nav-strong: var(--nav-strong);
+  --color-nav-muted: var(--nav-muted);
+  --color-nav-active: var(--nav-active);
+  --color-nav-active-foreground: var(--nav-active-foreground);
+  --color-nav-active-icon: var(--nav-active-icon);
+  --color-nav-border: var(--nav-border);
+
+  /* shadcn-compatible aliases, so copied primitives work without renaming */
+  --color-card: var(--surface);
+  --color-card-foreground: var(--foreground);
+  --color-popover: var(--surface-raised);
+  --color-popover-foreground: var(--foreground);
+  --color-secondary: var(--muted);
+  --color-secondary-foreground: var(--foreground);
+  --color-destructive: var(--danger);
+
+  --shadow-panel: var(--elevation-panel);
+  --shadow-pop: var(--elevation-pop);
+}
+
+/* ------------------------------------------------------------------ */
+/* Tailwind mapping: theme-independent scales                          */
+/* ------------------------------------------------------------------ */
+@theme {
+  /* type: self-hosted faces from fonts.css. Confirm the family names the packages register. */
+  --font-sans: 'Hanken Grotesk Variable', ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  --font-display: 'Newsreader Variable', Georgia, 'Times New Roman', serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  /* type roles (size / line-height); weights and tracking are listed in spec section 4 */
+  --text-title: 1.9375rem; /* 31px, 27px below 768px */
+  --text-title--line-height: 1.12;
+  --text-title--letter-spacing: -0.012em;
+  --text-dialog-title: 1.3125rem; /* 21px */
+  --text-dialog-title--line-height: 1.15;
+  --text-section: 0.96875rem; /* 15.5px */
+  --text-section--line-height: 1.35;
+  --text-body: 0.875rem; /* 14px */
+  --text-body--line-height: 1.45;
+  --text-label: 0.8125rem; /* 13px */
+  --text-label--line-height: 1.4;
+  --text-meta: 0.78125rem; /* 12.5px, also identifiers */
+  --text-meta--line-height: 1.4;
+
+  /* radius */
+  --radius-sm: 7px; /* controls, nav items */
+  --radius-md: 9px; /* menus, wells, alerts */
+  --radius-lg: 14px; /* panels, dialogs, drawer */
+  --radius-pill: 9999px; /* badges, rail pill, avatar */
+
+  /* page widths: max-w-page-prose, max-w-page-form … */
+  --container-page-prose: 42rem;
+  --container-page-form: 36rem;
+  --container-page-detail: 74rem;
+  --container-page-wide: 92rem;
+
+  /* motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Values used by component classes rather than generated utilities */
+:root {
+  --control-sm: 28px;
+  --control-md: 34px;
+  --control-lg: 40px;
+  --row-height: 42px;
+  --table-header-height: 36px;
+
+  /*
+   * Form-control text size. 14px keeps the compact operational density on desktop.
+   * The coarse/narrow override below raises it to 16px, because mobile browsers zoom
+   * the viewport when a control smaller than that takes focus, and do not zoom back.
+   * Every text-accepting control reads this token; none sets its own size.
+   */
+  --text-control: var(--text-body);
+
+  /*
+   * Shell breakpoints. The principle is: pin only when enough workspace remains.
+   *   below --bp-rail : mobile top bar + modal navigation sheet
+   *   --bp-rail       : desktop rail; secondary drawer defaults to OVERLAY
+   *   --bp-pin        : secondary drawer defaults to PINNED
+   * --bp-pin is the tunable one. WP4/WP6 browser QA may move it; nothing else needs
+   * to change when it does. These are declarative records of the media queries the
+   * shell uses — CSS cannot interpolate a variable into a media query, so the shell's
+   * own @media rules and the useNavPreference matchMedia query must be kept in step
+   * with these values by hand.
+   */
+  --bp-rail: 1024px;
+  --bp-pin: 1200px;
+
+  --shell-rail: 76px;
+  --shell-drawer: 236px; /* pinned */
+  --shell-drawer-overlay: 256px;
+  --shell-topbar: 56px;
+  --shell-sheet: 300px; /* mobile navigation sheet */
+
+  --logo-rail: 50px;
+  --logo-wordmark: 38px;
+  --logo-mobile: 40px;
+  --logo-auth: 156px;
+
+  --duration-fast: 120ms; /* hover, press */
+  --duration-base: 160ms; /* menus */
+  --duration-slow: 180ms; /* drawer, dialogs */
+}
+
+@media (pointer: coarse) {
+  :root {
+    --control-sm: 34px;
+    --control-md: 40px;
+    --control-lg: 44px;
+  }
+}
+
+/*
+ * The form-control floor. A system rule, not a per-field exception: below the rail
+ * breakpoint, or wherever the pointer is coarse, every control steps up to 16px so
+ * that focusing a field never zooms the viewport. Heights step up with it, above.
+ * 767.98px rather than 768px so it cannot overlap the min-width side of a pair.
+ */
+@media (max-width: 767.98px), (pointer: coarse) {
+  :root {
+    --text-control: 1rem; /* 16px: the minimum that suppresses zoom-on-focus */
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Base: ground, wash, horizon line                                    */
+/* ------------------------------------------------------------------ */
+@layer base {
+  body {
+    background-color: var(--background);
+    background-image: var(--wash);
+    background-repeat: no-repeat;
+    background-size: 100% var(--wash-height);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* The horizon line: decorative, along the window's top edge, above the rail. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto 0;
+    height: var(--horizon-height);
+    background: var(--horizon);
+    z-index: 50;
+    pointer-events: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  table,
+  time,
+  dd {
+    font-variant-numeric: tabular-nums;
+  }
+}

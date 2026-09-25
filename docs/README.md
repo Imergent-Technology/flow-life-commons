@@ -4,6 +4,7 @@
 | --- | --- |
 | [architecture/](architecture/) | Charter and guardrails, system context, module map, data ownership, trust boundaries, integration model, the Identity and Access design, deployment topology |
 | [adr/](adr/) | Architecture Decision Records: the *why* behind decisions, with alternatives considered |
+| [design/](design/) | Interface design specifications: the mutable visual values an ADR deliberately leaves out |
 | [development/](development/) | Getting started, Docker environment, testing, coding standards, Git workflow |
 | [security/](security/) | Authorization model (direction) and secrets handling |
 | [integrations/](integrations/) | How external systems connect; WordPress first |

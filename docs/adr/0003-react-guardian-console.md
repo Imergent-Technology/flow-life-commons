@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0026](0026-production-browser-security-policy.md), which states the browser security policy the Console is served under; [ADR 0030](0030-guardian-console-visual-system.md), which decides how the Console is styled and themed
 
 ## Context
 

@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0030](0030-guardian-console-visual-system.md), which puts the CSS-first `@theme` customisation this ADR chose to work as a semantic token system, and answers the component-library question deferred below
 
 ## Context
 
