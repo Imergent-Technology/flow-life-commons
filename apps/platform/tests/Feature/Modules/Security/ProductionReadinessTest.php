@@ -62,6 +62,7 @@ function asProduction(): void
         'identity.password.compromised_check.driver' => 'pwned_passwords',
         'hashing.bcrypt.rounds' => 12,
         'identity.login_throttle.max_attempts_per_ip' => 30,
+        'identity.credential_throttle.mfa_challenge.per_ip' => 30,
         'identity.password_reset.response_floor_ms' => 1500,
         'cors.allowed_origins' => [],
         'database.default' => 'mariadb',
@@ -170,6 +171,20 @@ describe('each dangerous value is refused', function () {
         // The browser suite needs 200 attempts per address; production keeps 30.
         config(['identity.login_throttle.max_attempts_per_ip' => 200]);
         expect(readiness()['the login rate limit is not the raised development one'])->toBeFalse();
+    });
+
+    it('refuses the raised development MFA challenge limit', function () {
+        // The browser suite presents many second-factor codes from one address and raises this to 200;
+        // production keeps 30, so a stolen password is never paired with unlimited guesses at the code.
+        config(['identity.credential_throttle.mfa_challenge.per_ip' => 200]);
+        expect(readiness()['the MFA challenge rate limit is not the raised development one'])->toBeFalse();
+    });
+
+    it('accepts the ordinary production MFA challenge limit, and refuses one just above it', function () {
+        expect(readiness()['the MFA challenge rate limit is not the raised development one'])->toBeTrue();
+
+        config(['identity.credential_throttle.mfa_challenge.per_ip' => 31]);
+        expect(readiness()['the MFA challenge rate limit is not the raised development one'])->toBeFalse();
     });
 
     it('refuses an http:// application URL', function () {

@@ -188,12 +188,18 @@ final readonly class ProductionReadiness
     private function limits(): array
     {
         $perIp = $this->config->integer('identity.login_throttle.max_attempts_per_ip');
+        $mfaPerIp = $this->config->integer('identity.credential_throttle.mfa_challenge.per_ip');
 
         return [
             ReadinessCheck::assert(
                 'the login rate limit is not the raised development one',
                 $perIp <= 30,
                 'IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP is '.$perIp.'. The browser suite raises it to 200 and the development example file sets it; production must keep the default of 30.',
+            ),
+            ReadinessCheck::assert(
+                'the MFA challenge rate limit is not the raised development one',
+                $mfaPerIp <= 30,
+                'IDENTITY_MFA_MAX_PER_IP is '.$mfaPerIp.'. The browser suite raises it to 200 and the development example file sets it; production must keep the default of 30, or a stolen password could be paired with unlimited guesses at the second factor.',
             ),
             ReadinessCheck::assert(
                 'failed sign-ins are limited per identifier',

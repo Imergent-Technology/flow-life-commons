@@ -86,6 +86,13 @@ test_e2e() {
     if ! [[ "$attempts" =~ ^[0-9]+$ ]] || ((attempts < 100)); then
         die "e2e signs in many times from one address, but the platform allows only '${attempts:-unset}' attempts per address per window. Set IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP=200 in apps/platform/.env (see .env.example) and retry."
     fi
+    # The same journeys present second-factor codes from that one address, against a separate per-address limit (also
+    # 30 per 15 minutes by default) that a full run comes within one attempt of. Raised the same way.
+    local codes
+    codes="$(php_run php artisan tinker --execute='echo config("identity.credential_throttle.mfa_challenge.per_ip");' 2>/dev/null | tail -n1 | tr -d '[:space:]')"
+    if ! [[ "$codes" =~ ^[0-9]+$ ]] || ((codes < 100)); then
+        die "e2e presents many second-factor codes from one address, but the platform allows only '${codes:-unset}' per address per window. Set IDENTITY_MFA_MAX_PER_IP=200 in apps/platform/.env (see .env.example) and retry."
+    fi
     # The browser security journeys (e2e/security.spec.ts) run against the gateway's
     # production-equivalent site, which serves the Console's real production BUILD under the production
     # security headers. Building it here is what makes that surface the thing being tested rather than

@@ -108,6 +108,13 @@ final class E2eAccountSeeder extends Seeder
 
     public const string MFA_MANAGE_SECRET = 'MZXW6YTBOI4TQOJQGEZDGNBVGY3TQOJQ';
 
+    /** A Console user whose replacement is finished from a second tab, leaving the first tab's setup stale. */
+    public const string MFA_STALE_EMAIL = 'e2e.mfa.stale@example.org';
+
+    public const string MFA_STALE_PASSWORD = 'e2e-mfa-stale-password-not-a-secret';
+
+    public const string MFA_STALE_SECRET = 'ON2GC3DFFVZWK5DVOAWWKMTFFVTGS6BB';
+
     public const string MFA_PENDING_EMAIL = 'e2e.mfa.pending@example.org';
 
     public const string MFA_PENDING_PASSWORD = 'e2e-mfa-pending-password-not-a-secret';
@@ -279,6 +286,7 @@ final class E2eAccountSeeder extends Seeder
             [self::MFA_RECOVERY_EMAIL, 'E2E MFA Recovery', self::MFA_RECOVERY_PASSWORD, self::MFA_RECOVERY_SECRET, 'K'],
             [self::MFA_MANAGE_EMAIL, 'E2E MFA Manage', self::MFA_MANAGE_PASSWORD, self::MFA_MANAGE_SECRET, 'M'],
             [self::MFA_PENDING_EMAIL, 'E2E MFA Pending', self::MFA_PENDING_PASSWORD, self::MFA_PENDING_SECRET, 'P'],
+            [self::MFA_STALE_EMAIL, 'E2E MFA Stale', self::MFA_STALE_PASSWORD, self::MFA_STALE_SECRET, 'V'],
             [self::CONSOLE_A_EMAIL, 'E2E Console A', self::CONSOLE_A_PASSWORD, self::CONSOLE_A_SECRET, 'A'],
             [self::CONSOLE_B_EMAIL, 'E2E Console B', self::CONSOLE_B_PASSWORD, self::CONSOLE_B_SECRET, 'B'],
         ] as [$email, $name, $password, $secret, $tag]) {

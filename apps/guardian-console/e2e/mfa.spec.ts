@@ -46,6 +46,12 @@ const MANAGE: Fixture = {
   secret: 'MZXW6YTBOI4TQOJQGEZDGNBVGY3TQOJQ',
   tag: 'M',
 }
+const STALE: Fixture = {
+  email: 'e2e.mfa.stale@example.org',
+  password: 'e2e-mfa-stale-password-not-a-secret',
+  secret: 'ON2GC3DFFVZWK5DVOAWWKMTFFVTGS6BB',
+  tag: 'V',
+}
 const PENDING: Fixture = {
   email: 'e2e.mfa.pending@example.org',
   password: 'e2e-mfa-pending-password-not-a-secret',
@@ -285,6 +291,101 @@ test.describe('managing two-step verification', () => {
     await expect(consoleHeading(page)).toBeVisible()
 
     await page.context().close()
+  })
+})
+
+test.describe('a replacement setup the server no longer holds', () => {
+  test('is taken off the page, and the person is returned to the proof step to begin again', async ({
+    browser,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000)
+    const codes = recoveryCodesFor(STALE.tag)
+    const tab = await freshPage(browser, baseURL ?? '')
+    const context = tab.context()
+    const logged = captureConsole(tab)
+
+    // Signed in, with a recovery code as the second step (each works once, and there is no TOTP time step to wait for).
+    await passwordStep(tab, STALE)
+    await tab.getByRole('button', { name: 'Use a recovery code instead' }).click()
+    await tab.getByLabel('Recovery code').fill(codes[0] ?? '')
+    await tab.getByRole('button', { name: 'Sign in' }).click()
+    await expect(consoleHeading(tab)).toBeVisible()
+
+    /** Starts a replacement on Account security, on fresh proof (the password and one recovery code). */
+    async function beginReplacement(page: Page, recoveryCode: string): Promise<string> {
+      const form = page.getByRole('form', { name: 'Replace authenticator' })
+      await form.getByLabel('Current password').fill(STALE.password)
+      await form.getByRole('button', { name: 'Use a recovery code instead' }).click()
+      await form.getByLabel('Recovery code').fill(recoveryCode)
+      await form.getByRole('button', { name: 'Continue' }).click()
+      await expect(
+        page.getByRole('img', { name: 'QR code for your authenticator app' }),
+      ).toBeVisible()
+      return ((await page.locator('code').first().textContent()) ?? '').replace(/\s/g, '')
+    }
+
+    // 1. This tab begins a replacement normally, and is left showing its QR code, key and copy button.
+    await tab.goto('/account/security')
+    await tab.getByRole('button', { name: 'Replace authenticator' }).click()
+    const abandoned = await beginReplacement(tab, codes[1] ?? '')
+    expect(abandoned).toMatch(/^[A-Z2-7]{32}$/)
+    await expect(tab.getByRole('button', { name: 'Copy setup key' })).toBeVisible()
+
+    // 2. A second tab of the same session starts another replacement (the server keeps only the latest pending secret)
+    //    and FINISHES it, so the first tab's pending secret no longer exists. The server's answer to the first tab's
+    //    confirmation is the same as for one that had timed out: there is no pending setup to prove.
+    const other = await context.newPage()
+    await other.goto('/account/security')
+    await other.getByRole('button', { name: 'Replace authenticator' }).click()
+    const finished = await beginReplacement(other, codes[2] ?? '')
+    expect(finished).not.toBe(abandoned)
+    await other.getByLabel('Code from the new authenticator').fill(await nextCode(finished))
+    await other.getByRole('button', { name: 'Switch to the new authenticator' }).click()
+    await expect(other.getByText('Your authenticator has been replaced')).toBeVisible()
+    await other.close()
+
+    // 3. The first tab does not know. It proves its own, now dead, setup and receives the server's real refusal.
+    const refused = tab.waitForResponse(
+      (r) =>
+        r.request().method() === 'POST' &&
+        new URL(r.url()).pathname === '/api/v1/mfa/authenticator/confirm',
+    )
+    await tab.getByLabel('Code from the new authenticator').fill(await nextCode(abandoned))
+    await tab.getByRole('button', { name: 'Switch to the new authenticator' }).click()
+    const answer = await refused
+    expect(answer.status()).toBe(422)
+    expect(await answer.json()).toMatchObject({ errors: { authenticator: [expect.any(String)] } })
+
+    // 4. The dead setup is off the page: nothing left to scan, read or copy.
+    await expect(tab.getByRole('img', { name: 'QR code for your authenticator app' })).toHaveCount(
+      0,
+    )
+    await expect(tab.getByRole('button', { name: 'Copy setup key' })).toHaveCount(0)
+    await expect(tab.getByLabel('Code from the new authenticator')).toHaveCount(0)
+    await expect(tab.locator('body')).not.toContainText(abandoned)
+
+    // 5. The person is told why, and is back at the proof step: the way to start again is right there.
+    await expect(tab.getByRole('alert')).toContainText('That setup is no longer valid')
+    await expect(tab.getByRole('alert')).toBeFocused()
+    await expect(tab.getByRole('form', { name: 'Replace authenticator' })).toBeVisible()
+    expect(await meStatus(tab)).toBe(200) // a stale setup is not a logout
+
+    // 6. Beginning again works, and gives a NEW setup that can be copied.
+    const again = await beginReplacement(tab, codes[3] ?? '')
+    expect(again).toMatch(/^[A-Z2-7]{32}$/)
+    expect(new Set([abandoned, finished, again]).size).toBe(3)
+    await expect(tab.getByRole('button', { name: 'Copy setup key' })).toBeVisible()
+    await expect(tab.getByText(/This setup key expires at/)).toBeVisible()
+
+    // None of the three secrets, the password or the codes reached storage or the console.
+    expect(await storageSizes(tab)).toEqual({ local: 0, session: 0 })
+    const output = logged.join('\n')
+    for (const forbidden of [abandoned, finished, again, STALE.password, ...codes]) {
+      expect(output).not.toContain(forbidden)
+    }
+
+    await context.close()
   })
 })
 

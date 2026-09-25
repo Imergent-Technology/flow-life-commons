@@ -73,12 +73,13 @@ final readonly class ProductionEnvironment
     /**
      * Keys that must NOT appear in a production environment file.
      *
-     * The first two are the development example's dangerous values, and copying that file is exactly
-     * how they reach production (docs/security/secrets.md). Both have safe defaults in config, so the
+     * The first three are the development example's dangerous values, and copying that file is exactly
+     * how they reach production (docs/security/secrets.md). Each has a safe default in config, so the
      * correct production file is the one that stays silent about them: `pwned_passwords` and 30
-     * attempts are what the application chooses when nothing overrides it.
+     * attempts (of a password, and of a second-factor code) are what the application chooses when
+     * nothing overrides it.
      *
-     * The third is different, and is listed to prevent a misunderstanding rather than a mistake. This
+     * The last is different, and is listed to prevent a misunderstanding rather than a mistake. This
      * application trusts no reverse proxy, and that is a decision expressed in `bootstrap/app.php`,
      * not a setting: Commons is direct to origin (trust boundaries), and every per-address rate limit
      * and audit row depends on the client address being the real one. Setting `TRUSTED_PROXIES` in an
@@ -88,6 +89,7 @@ final readonly class ProductionEnvironment
     public const array FORBIDDEN_KEYS = [
         'IDENTITY_COMPROMISED_PASSWORD_CHECK',
         'IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP',
+        'IDENTITY_MFA_MAX_PER_IP',
         'TRUSTED_PROXIES',
     ];
 

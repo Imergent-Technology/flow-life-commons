@@ -51,10 +51,11 @@ Start the production file from **`apps/platform/.env.production.example`**, not 
 
 Deferred decisions are reported in their own section, **Deliberately open**, and never fail the command: a check that always fails on a correct deployment is one people stop reading. Today the only item there is outbound mail (section 5).
 
-Two of those deserve naming, because both come from copying `apps/platform/.env.example`:
+Three of those deserve naming, because all come from copying `apps/platform/.env.example`:
 
 - **`IDENTITY_COMPROMISED_PASSWORD_CHECK=none`** — development and CI set it so the gate needs no network. In production it means known-breached passwords are accepted. The container refuses `none` outside `local` and `testing`, so this fails loudly rather than silently; the check catches it earlier.
 - **`IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP=200`** — the browser suite needs it. Production keeps 30.
+- **`IDENTITY_MFA_MAX_PER_IP=200`** — the same, for second-factor code attempts per address. Production keeps 30, and the check refuses anything higher.
 
 The command ends by printing what it cannot see. That list is section 4.
 

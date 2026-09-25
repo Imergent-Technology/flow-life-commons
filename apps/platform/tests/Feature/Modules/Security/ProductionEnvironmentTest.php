@@ -239,6 +239,35 @@ describe('the template', function () {
     });
 });
 
+describe('the raised limits the development file sets for the browser suite', function () {
+    /** @var list<string> */
+    $limits = ['IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP', 'IDENTITY_MFA_MAX_PER_IP'];
+
+    it('are raised in the development file, pinned to the production default for the tests, and forbidden in production', function () use ($limits) {
+        $development = filledIn(base_path('.env.example'));
+        $phpunit = (string) file_get_contents(base_path('phpunit.xml'));
+
+        foreach ($limits as $key) {
+            // Raised for the browser suite (`./flow test e2e` refuses to run below 100)...
+            expect((int) ($development[$key] ?? 0))->toBeGreaterThanOrEqual(100, "{$key} is not raised in .env.example");
+            // ...but the tests assert the production default, so phpunit pins it back...
+            expect($phpunit)->toMatch('/<env name="'.$key.'" value="30"\/>/');
+            // ...and a production file may not carry it at all (the readiness check then refuses the value too).
+            expect(ProductionEnvironment::FORBIDDEN_KEYS)->toContain($key);
+        }
+    });
+
+    it('leave the application default at the production value when the environment says nothing', function () {
+        // The production template is silent about them, so this is what production runs with.
+        $values = underEnvironment(filledIn(ProductionEnvironment::templatePath()), fn (): array => [
+            config('identity.login_throttle.max_attempts_per_ip'),
+            config('identity.credential_throttle.mfa_challenge.per_ip'),
+        ]);
+
+        expect($values)->toBe([30, 30]);
+    });
+});
+
 describe('the template against the real check', function () {
     it('passes security:production-check with nothing added but the four operator values', function () {
         /** @var list<string> $failed */
@@ -278,7 +307,8 @@ describe('the template against the real check', function () {
             ->toContain('APP_ENV is production')
             ->toContain('APP_DEBUG is off')
             ->toContain('the breached-password check is the real one')
-            ->toContain('the login rate limit is not the raised development one');
+            ->toContain('the login rate limit is not the raised development one')
+            ->toContain('the MFA challenge rate limit is not the raised development one');
     });
 
     it('restores the test environment afterwards, whatever happened inside', function () {

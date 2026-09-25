@@ -28,7 +28,9 @@ import {
 // One address makes every sign-in, and the platform counts each attempt, refused or not, against a per-address
 // limit (identity.login_throttle; 30 per 15 minutes by default). The development stack raises it (.env.example:
 // IDENTITY_LOGIN_MAX_ATTEMPTS_PER_IP) and `./flow test e2e` refuses to run without that, and clears the counters
-// first. A whole run makes about 40 sign-in attempts. A Console user's second step (a code) is a separate limit.
+// first. A whole run makes about 40 sign-in attempts. A Console user's second step (a code) is a separate per-address limit
+// (identity.credential_throttle.mfa_challenge, 30 by default), raised the same way (IDENTITY_MFA_MAX_PER_IP): a full run
+// used 29 of the 30, which left no room for another journey.
 
 // Console users are ENROLLED fixtures with a known authenticator secret (ADR 0023), so signing in is two steps.
 // One secret per test that signs in with it: the platform accepts each time step once, and parallel workers
