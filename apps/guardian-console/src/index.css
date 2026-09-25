@@ -1,3 +1,20 @@
 @import 'tailwindcss';
 @import './theme/fonts.css';
 @import './theme/tokens.css';
+
+/* The drawer and the mobile sheet slide in from the left (design spec S5, S6). The duration token is 0 under
+   prefers-reduced-motion, and the shell applies the utility with `motion-safe:` besides. */
+@theme {
+  --animate-drawer-in: drawer-in var(--duration-slow) var(--ease-out);
+
+  @keyframes drawer-in {
+    from {
+      opacity: 0;
+      transform: translateX(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}

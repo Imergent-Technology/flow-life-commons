@@ -14,6 +14,7 @@ import {
   MFA_RECOVER,
   ROLES_ASSIGN,
 } from '../../auth/capabilities.ts'
+import { useBreadcrumbLeaf } from '../../shell/breadcrumb-leaf.ts'
 import { Alert } from '../../ui/Alert.tsx'
 import { PageHeading } from '../../ui/PageHeading.tsx'
 import { describeFailure } from '../../ui/problem.ts'
@@ -33,6 +34,7 @@ export function AccountDetailPage() {
   const { id = '' } = useParams()
   const load = useCallback((signal: AbortSignal) => getAccount(id, signal), [id])
   const [loaded, replace] = useLoad(load)
+  useBreadcrumbLeaf(loaded.status === 'loaded' ? loaded.value.displayName : undefined)
 
   if (loaded.status === 'loading') {
     return (

@@ -167,26 +167,28 @@ One typed definition drives the rail, the drawer, the mobile sheet and the bread
 
 ```ts
 // src/shell/navigation.ts
-type NavItem    = { label: string; to: string; capability?: Capability; end?: boolean }
+type NavItem    = { label: string; to: string; capability?: Capability; detail?: { pattern: string; label: string } }
 type NavGroup   = { label: string; items: NavItem[] }
-type NavSection = { id: string; label: string; icon: IconName; to?: string; groups?: NavGroup[] }
+type NavSection = { id: string; label: string; drawerTitle?: string; icon: IconName; to?: string; groups?: NavGroup[] }
 
 export const sections: NavSection[] = [
   { id: 'overview', label: 'Overview', icon: 'home', to: '/' },
   { id: 'admin', label: 'Admin', icon: 'people', groups: [
     { label: 'Accounts', items: [
-      { label: 'All accounts',       to: '/admin/accounts',        capability: ACCOUNTS_VIEW },
-      { label: 'Invite an operator', to: '/admin/accounts/invite', capability: INVITATIONS_ISSUE, end: true } ] },
+      { label: 'All accounts',       to: '/admin/accounts',        capability: ACCOUNTS_VIEW,
+        detail: { pattern: '/admin/accounts/:id', label: 'Account' } },
+      { label: 'Invite an operator', to: '/admin/accounts/invite', capability: INVITATIONS_ISSUE } ] },
     { label: 'Members', items: [
-      { label: 'All members',  to: '/admin/members',     capability: MEMBERSHIP_VIEW },
-      { label: 'Add a member', to: '/admin/members/new', capability: MEMBERSHIP_MANAGE, end: true } ] } ] },
+      { label: 'All members',  to: '/admin/members',     capability: MEMBERSHIP_VIEW,
+        detail: { pattern: '/admin/members/:personId', label: 'Member' } },
+      { label: 'Add a member', to: '/admin/members/new', capability: MEMBERSHIP_MANAGE } ] } ] },
 ]
 ```
 
 - **Capabilities:** items are filtered by `hasCapability` as today. A group with no visible items is dropped, and so is a section with no visible groups. The drawer title reads "Administration" and the rail label "Admin".
 - **Current state:**
   - The item for the current route gets `aria-current="page"`.
-  - Detail routes such as `/admin/accounts/:id` mark "All accounts" as current, while `/invite` and `/new` are exact matches.
+  - An item is current on an exact match of its own `to`; a page beneath it (its `detail` pattern, such as `/admin/accounts/:id`) keeps it current. Exact pages win over detail patterns, so `/invite` and `/new` are never mistaken for a detail page. Matching uses the router's `matchPath`, and the same model yields the breadcrumbs (a group's first page is its list and has none; a detail page is named by what it has loaded).
   - The section's rail button gets `aria-current="true"`.
 - **Sections without children:** Overview navigates directly. When the current section has no groups, the pinned drawer column is omitted and the content takes the width. The pin preference is kept.
 - **Account security:** in the account menu only, so no rail section is current on that page.
@@ -252,7 +254,7 @@ Guardian Console       ← descriptor, Hanken Grotesk, meta size, muted-foregrou
   - A 36px pill with an initials avatar, the display name and a chevron. Mobile shows the avatar only, with `aria-label="Account menu"`.
   - It carries `aria-haspopup="menu"`, `aria-expanded` and `aria-controls`.
 - **Contents, in order:**
-  1. A header with name, email, and the first assignment name from `/me` as a chip.
+  1. A header with name and email. The first assignment name is omitted: `/me` does not carry assignments, and the menu makes no request of its own. It can be added when `/me` does.
   2. Account security.
   3. Theme: a Light, Dark, System segmented group of `menuitemradio`.
   4. Sign out.
@@ -262,7 +264,7 @@ Guardian Console       ← descriptor, Hanken Grotesk, meta size, muted-foregrou
   - Escape closes and refocuses the trigger. Tab closes and moves on. A click outside closes without taking focus.
 - **Theme choice:** applies at once, saves the preference, and keeps the menu open.
 - **Sign out:** absorbs `SignOutButton`. While pending it reads "Signing out…" and is disabled. On failure the menu closes and today's error alert appears at the top of `main`, so the "does not pretend to be signed out" behaviour is kept.
-- **Build:** the native `popover` attribute (top layer, light dismiss, no inline style) plus a small roving-focus hook, positioned with CSS under the trigger. It must pass the existing production-CSP browser journey.
+- **Build:** a disclosure menu on plain elements: an always-mounted popup positioned by CSS under the trigger, a small roving-focus handler, and its own outside-press dismissal. It does not use the `popover` attribute, which needs anchor positioning or a positioning script to sit under the trigger, has no implementation in the jsdom test environment, and would add a second dismissal path to keep in step with the drawer and sheet. It passes the production-CSP browser journey (`e2e/shell.spec.ts`).
 
 ## 8. Components
 
@@ -393,6 +395,7 @@ From WP3 on, the existing behaviour tests should pass **unchanged**. That is the
 - **Done when:** the keyboard e2e journeys for the menu, drawer and sheet pass; the drawer default is proved at all three viewport bands; capability filtering is proved by tests; and existing page tests pass.
 
 ### WP5 — Page migration and refinement
+- The `DataTable` sticky header lands here with the stacked rows. Measured in WP4: inside the primitive's `overflow-x-auto` wrapper a sticky header scrolls away with the page, and `overflow-x: clip` makes it stick but leaves overflowing columns unreachable. It is only safe once tables stack below 768px and no longer need to scroll sideways.
 - Accounts and Members lists (wide), account and member detail (detail grid, danger zone last), invite and add-member forms (form width), Account security, and Home renamed to Overview (session and API health only: no new figures or APIs).
 - The sign-in, MFA, reset and invitation pages move to a restyled `AuthLayout`: a centred panel over the wash, with the logo and horizon line. `StatusScreen` and `ServiceUnavailable` are restyled too.
 - **Done when:** all behaviour tests pass unchanged, and axe passes on every page in both themes.
@@ -410,7 +413,7 @@ Checked against the repository at the time of writing. Each item below is a plac
 
 | Item | State of the repository | Resolution |
 |---|---|---|
-| **Badge asset** | No image asset exists anywhere in `apps/guardian-console`, and there is no `public/` directory. The spec's Logo row describes the badge as though it were already shipped. | The badge is **added in WP4**, not assumed. `img-src 'self'` already permits it, so no CSP directive is needed — but see the next row. |
+| **Badge asset** | No image asset existed anywhere in `apps/guardian-console`, and there is no `public/` directory. The spec's Logo row described the badge as though it were already shipped. | Supplied and added in WP4 as `src/assets/brand/FlowLife-Logo.png`, imported through `src/shell/brand.ts`, so Vite emits it as a hashed same-origin file (never a `data:` URI). `img-src 'self'` already permits it, so no CSP directive was needed. It is a 1022px PNG: a smaller export can replace it by changing that one import. `FlowLife-Logo-WithAddress.png` sits beside it for customer-facing use and is not imported by the Console. |
 | **ADR 0026 build shape** | ADR 0026 asserts the build loads "no fonts, **no images**, no `data:` URIs" as a deliberate, checkable property, and separately explains why there is no `font-src` line. | Both clauses are broken by this design, not just the font one. The **WP1 amendment to ADR 0026 must cover the badge as well as the fonts**, with the reason: same-origin interface type and one same-origin brand image, no third-party origin either way. |
 | **Product name in `index.html`** | `<title>` reads "Flow Life Guardian Console" — a third name, matching neither the product nor the descriptor. | Corrected in WP4 to "Flow Life Commons · Guardian Console". |
 | **`index.css`** | Contains exactly one line, `@import 'tailwindcss'`. | WP1 adds the `fonts.css` and `tokens.css` imports and the `@theme inline` block in the documented order. |

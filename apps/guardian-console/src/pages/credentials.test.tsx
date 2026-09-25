@@ -657,7 +657,7 @@ describe('change password', () => {
         startedBefore,
       )
     })
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible()
+    expect(screen.getByRole('button', { name: /account menu/i })).toBeVisible()
     // What was typed does not linger.
     expect(screen.getByLabelText('Current password')).toHaveValue('')
     expect(screen.getByLabelText('New password')).toHaveValue('')
@@ -690,7 +690,7 @@ describe('change password', () => {
     const field = await screen.findByLabelText('Current password')
     expect(field).toHaveAccessibleDescription('The current password is incorrect.')
     expect(field).toHaveFocus()
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible()
+    expect(screen.getByRole('button', { name: /account menu/i })).toBeVisible()
     expect(where()).toBe('/account/security')
   })
 

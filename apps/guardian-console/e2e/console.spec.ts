@@ -4,6 +4,7 @@ import {
   captureConsole,
   clipboardText,
   expectOnlyUiPreferences,
+  goToAccountSecurity,
   locationOf,
   mailpit,
   messageIdsTo,
@@ -12,6 +13,7 @@ import {
   replayedStatus,
   scriptVisibleCookies,
   sessionCookie,
+  signOut,
   unique,
 } from './support.ts'
 
@@ -164,14 +166,14 @@ test.describe('signing in and out of the Console', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Account security' })).toBeVisible()
 
     // The signed-in landing page, and the API health it shows, over the same origin.
-    await page.getByRole('link', { name: 'Home' }).click()
+    await page.getByRole('link', { name: 'Overview' }).click()
     await expect(consoleHeading(page)).toBeVisible()
     await expect(page.getByText('API ok')).toBeVisible()
     await expect(page.getByText('database: ok')).toBeVisible()
     await expect(page.getByText('Session started')).toBeVisible()
 
     // Sign out.
-    await page.getByRole('button', { name: 'Sign out' }).click()
+    await signOut(page)
     await expect(loginHeading(page)).toBeVisible()
     await expect(page.getByText('You have been signed out.')).toBeVisible()
     expect(await meStatus(page)).toBe(401)
@@ -215,7 +217,7 @@ test.describe('signing in and out of the Console', () => {
     context,
   }) => {
     await signInThroughUi(page, SECOND.email, SECOND.password, SECOND.secret)
-    await page.getByRole('link', { name: 'Account security' }).click()
+    await goToAccountSecurity(page)
     await expect(page.getByRole('heading', { level: 1, name: 'Account security' })).toBeVisible()
 
     // The platform no longer knows this session (as after 30 idle minutes or 12 hours): remove the cookie.
@@ -249,6 +251,7 @@ test.describe('signing in and out of the Console', () => {
     await page.goto('/account/security')
     await expect(page.getByRole('heading', { level: 1, name: 'Access denied' })).toBeVisible()
 
+    // This screen has no account menu (there is no Console to put it in): its own Sign out button.
     await page.getByRole('button', { name: 'Sign out' }).click()
     await expect(loginHeading(page)).toBeVisible()
     expect(await meStatus(page)).toBe(401)
@@ -358,7 +361,7 @@ test.describe('accepting an invitation', () => {
     await page.reload()
     await expect(consoleHeading(page)).toBeVisible()
     await expect(page.locator('body')).not.toContainText(codes[0] ?? 'x')
-    await page.getByRole('link', { name: 'Account security' }).click()
+    await goToAccountSecurity(page)
     await expect(
       page.getByText('Recovery codes left').locator('xpath=following-sibling::dd[1]'),
     ).toHaveText('10')
@@ -544,7 +547,7 @@ test.describe('changing a password while signed in', () => {
     const startedBefore = await authenticatedAt(page)
     await page.waitForTimeout(1100) // instants are whole seconds
 
-    await page.getByRole('link', { name: 'Account security' }).click()
+    await goToAccountSecurity(page)
     await expect(page.getByRole('heading', { level: 1, name: 'Account security' })).toBeVisible()
 
     // A wrong current password changes nothing, and says which field.
@@ -566,7 +569,7 @@ test.describe('changing a password while signed in', () => {
       page.getByText('Your password has been changed. Other devices have been signed out.'),
     ).toBeVisible()
     expect(new URL(page.url()).pathname).toBe('/account/security')
-    await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
+    await expect(page.getByRole('button', { name: /account menu/i })).toBeVisible()
     expect(await meStatus(page)).toBe(200)
 
     // The platform rotated the session: re-dated, and the id that was copied before is dead.
@@ -579,7 +582,7 @@ test.describe('changing a password while signed in', () => {
     await expect(page.getByLabel('New password', { exact: true })).toHaveValue('')
 
     // Sign out. The old password is dead; the new one signs in.
-    await page.getByRole('button', { name: 'Sign out' }).click()
+    await signOut(page)
     await expect(loginHeading(page)).toBeVisible()
     await fillLogin(page, CHANGER.email, CHANGER.password)
     await page.getByRole('button', { name: 'Sign in' }).click()

@@ -52,7 +52,8 @@ describe('navigation', () => {
   it('shows the Members link with membership.records.view', async () => {
     serveOperator(operator(VIEW_ONLY))
     renderApp('/')
-    expect(await screen.findByRole('link', { name: 'Members' })).toHaveAttribute(
+    // With no accounts capability, the first page Admin leads to is the member list.
+    expect(await screen.findByRole('link', { name: 'Admin' })).toHaveAttribute(
       'href',
       '/admin/members',
     )
@@ -62,7 +63,7 @@ describe('navigation', () => {
     serveOperator(operator(['console.access']))
     renderApp('/')
     await screen.findByRole('heading', { level: 1, name: 'Flow Life Guardian Console' })
-    expect(screen.queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
   })
 
   it('refuses the list route on the page for someone without the capability', async () => {
@@ -746,7 +747,12 @@ describe('trust boundary', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Not permitted' }),
     ).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Members' })).not.toBeInTheDocument()
+    // Manage alone offers only the manage page. Nothing leads to the list, so nothing was inferred.
+    expect(screen.getByRole('link', { name: 'Admin' })).toHaveAttribute(
+      'href',
+      '/admin/members/new',
+    )
+    expect(document.querySelector('a[href="/admin/members"]')).toBeNull()
   })
 
   it('never sends who is acting: requests carry the subject and the term, and no identity or provenance', async () => {

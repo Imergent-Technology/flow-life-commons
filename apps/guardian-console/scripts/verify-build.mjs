@@ -109,6 +109,28 @@ if (css.includes('data:font')) {
   )
 }
 
+// The brand image (ADR 0030 S6; ADR 0026 amended for it): one same-origin file under img-src 'self'. Like a
+// font, it must not become a data: URI, which that directive does not cover and no source authorizes.
+const images = readdirSync(assets).filter((f) => /\.(png|svg|webp|jpe?g)$/.test(f))
+if (images.length === 0) {
+  throw new Error('verify:build: expected the hashed brand image in dist/assets')
+}
+// The formats Vite inlines for an imported image. (The `qr` library carries a GIF data-URI helper the
+// Console never calls, its code renders SVG, so a bare `data:image` match would be a false alarm.)
+const inlinedImage = /data:image\/(?:png|svg\+xml|webp|jpe?g|avif)/
+const scripts = readdirSync(assets)
+  .filter((f) => f.endsWith('.js'))
+  .map((f) => readFileSync(join(assets, f), 'utf8'))
+  .join('\n')
+if (inlinedImage.test(css) || inlinedImage.test(scripts)) {
+  throw new Error(
+    "verify:build: an image was inlined as a data: URI; img-src 'self' does not cover it (see vite.config.ts assetsInlineLimit)",
+  )
+}
+if (!images.some((file) => scripts.includes(file))) {
+  throw new Error('verify:build: the brand image is emitted but nothing in the build refers to it')
+}
+
 console.log(
-  `verify:build: OK (${String(cssFiles.length)} CSS file, ${String(woffFiles.length)} font files, Tailwind utilities and design tokens present)`,
+  `verify:build: OK (${String(cssFiles.length)} CSS file, ${String(woffFiles.length)} font files, ${String(images.length)} image, Tailwind utilities and design tokens present)`,
 )

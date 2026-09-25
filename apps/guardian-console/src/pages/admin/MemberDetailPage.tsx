@@ -6,6 +6,7 @@ import { useLoad } from '../../admin/useLoad.ts'
 import { accessThroughLabel, describeMembershipFailure } from '../../admin/wording.ts'
 import { useCurrentAccount } from '../../auth/auth-context.ts'
 import { hasCapability, MEMBERSHIP_MANAGE } from '../../auth/capabilities.ts'
+import { useBreadcrumbLeaf } from '../../shell/breadcrumb-leaf.ts'
 import { Alert } from '../../ui/Alert.tsx'
 import { PageHeading } from '../../ui/PageHeading.tsx'
 import { MembershipStateBadge } from './MembershipStateBadge.tsx'
@@ -21,6 +22,7 @@ export function MemberDetailPage() {
   const { personId = '' } = useParams()
   const load = useCallback((signal: AbortSignal) => getMember(personId, signal), [personId])
   const [loaded, replace] = useLoad(load)
+  useBreadcrumbLeaf(loaded.status === 'loaded' ? loaded.value.person.displayName : undefined)
 
   const refresh = useCallback(async () => {
     const result = await getMember(personId)

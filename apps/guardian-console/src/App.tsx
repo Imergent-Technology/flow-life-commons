@@ -23,7 +23,7 @@ import { HomePage } from './pages/HomePage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { ResetPasswordPage } from './pages/ResetPasswordPage.tsx'
-import { ConsoleLayout } from './ui/ConsoleLayout.tsx'
+import { ConsoleShell } from './shell/ConsoleShell.tsx'
 import { ThemeProvider } from './ui/ThemeProvider.tsx'
 
 /**
@@ -46,7 +46,7 @@ function App() {
 
           <Route element={<RequireAuthentication />}>
             <Route element={<RequireConsoleAccess />}>
-              <Route element={<ConsoleLayout />}>
+              <Route element={<ConsoleShell />}>
                 <Route index element={<HomePage />} />
                 <Route path="account/security" element={<AccountSecurityPage />} />
                 <Route

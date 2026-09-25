@@ -306,3 +306,49 @@ export async function invitationEmailedTo(
   }
   throw new Error(`No invitation email arrived for ${email}.`)
 }
+
+/** Opens the account menu from its button and returns the menu. */
+export async function openAccountMenu(page: Page) {
+  await page.getByRole('button', { name: /account menu/i }).click()
+  const menu = page.getByRole('menu', { name: 'Account' })
+  await expect(menu).toBeVisible()
+  return menu
+}
+
+/** Signs out the way an operator does: through the account menu. */
+export async function signOut(page: Page): Promise<void> {
+  const menu = await openAccountMenu(page)
+  await menu.getByRole('menuitem', { name: 'Sign out' }).click()
+}
+
+/** Goes to Account security through the account menu, which is where it lives. */
+export async function goToAccountSecurity(page: Page): Promise<void> {
+  const menu = await openAccountMenu(page)
+  await menu.getByRole('menuitem', { name: 'Account security' }).click()
+}
+
+/**
+ * Fails if any single piece of visible text looks like a 43-character token. Checked per text node, because a
+ * token is one string: joining every element's text with no separator (as `toContainText` on the body does)
+ * would invent long runs out of adjacent labels such as navigation links.
+ */
+export async function expectNoTokenShapedText(page: Page): Promise<void> {
+  const found = await page.evaluate(() => {
+    const g = globalThis as unknown as {
+      document: {
+        body: unknown
+        createTreeWalker: (
+          root: unknown,
+          whatToShow: number,
+        ) => { nextNode: () => { textContent: string | null } | null }
+      }
+    }
+    const walker = g.document.createTreeWalker(g.document.body, 4) // NodeFilter.SHOW_TEXT
+    const hits: string[] = []
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      if (/[A-Za-z0-9_-]{43}/.test(node.textContent ?? '')) hits.push(node.textContent ?? '')
+    }
+    return hits
+  })
+  expect(found, 'token-shaped text on the page').toEqual([])
+}

@@ -1,18 +1,9 @@
-import { useState } from 'react'
-
-import { useAuth } from '../auth/auth-context.ts'
 import { Alert } from './Alert.tsx'
-import { describeFailure } from './problem.ts'
+import { useSignOut } from './useSignOut.ts'
 
-/**
- * Ends the session. Success clears the Console's state and the router sends the person to the login
- * page. If the server could not be reached the session may still be alive, so the Console does NOT pretend
- * to be signed out: it says so.
- */
+/** A sign-out button for the screens that have no account menu (an unavailable service, a missing capability). */
 export function SignOutButton({ className = '' }: { className?: string }) {
-  const { signOut } = useAuth()
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<{ message: string; attempt: number } | null>(null)
+  const { pending, error, run } = useSignOut()
 
   return (
     <>
@@ -20,15 +11,7 @@ export function SignOutButton({ className = '' }: { className?: string }) {
         type="button"
         disabled={pending}
         onClick={() => {
-          setPending(true)
-          void signOut().then((result) => {
-            if (result.ok) return // this component is about to unmount
-            setPending(false)
-            setError((previous) => ({
-              message: `You could not be signed out. ${describeFailure(result.failure).message}`,
-              attempt: (previous?.attempt ?? 0) + 1,
-            }))
-          })
+          run()
         }}
         className={`rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:text-slate-500 ${className}`}
       >

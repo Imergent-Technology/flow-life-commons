@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 import { signedInAs } from './support.ts'
 
@@ -20,6 +20,27 @@ function localInput(days: number): string {
   return `${date}T${pad(at.getHours())}:${pad(at.getMinutes())}`
 }
 
+/**
+ * The member list shows 25 a page, and the development database keeps every earlier run's members, so a new
+ * member may be on a later page. Looks through the pages, in order, until the link is found.
+ */
+async function memberLink(page: Page, name: string) {
+  const table = page.getByRole('table', { name: 'Members' })
+  await expect(table).toBeVisible()
+  for (let step = 0; step < 20; step += 1) {
+    const link = table.getByRole('link', { name })
+    if ((await link.count()) > 0) return link
+    const next = page.getByRole('button', { name: 'Next' })
+    if (await next.isDisabled()) break
+    const status = page.getByRole('status')
+    const before = (await status.textContent()) ?? ''
+    await next.click()
+    await expect(status).not.toHaveText(before)
+    await expect(table).toBeVisible()
+  }
+  throw new Error(`No link for ${name} on any page of the member list.`)
+}
+
 test.describe('membership administration', () => {
   test('an administrator adds a member, adds another grant, and revokes one, with the list and detail reflecting the server at each step', async ({
     browser,
@@ -29,7 +50,8 @@ test.describe('membership administration', () => {
     const name = `E2E Member ${crypto.randomUUID().slice(0, 8)}`
 
     await admin.goto('/')
-    await admin.getByRole('link', { name: 'Members', exact: true }).click()
+    await admin.getByRole('link', { name: 'Admin', exact: true }).click()
+    await admin.getByRole('link', { name: 'All members' }).click()
     await expect(admin.getByRole('heading', { level: 1, name: 'Members' })).toBeVisible()
 
     // Add a new member with a bounded term that is current NOW: started a month ago, ending in two months.
@@ -49,11 +71,12 @@ test.describe('membership administration', () => {
     await expect(admin.getByText(/Access through/)).toBeVisible()
 
     // It appears in the list.
-    await admin.getByRole('link', { name: 'Members', exact: true }).click()
-    await expect(admin.getByRole('link', { name })).toBeVisible()
+    await admin.getByRole('link', { name: 'All members' }).click()
+    const listed = await memberLink(admin, name)
+    await expect(listed).toBeVisible()
 
     // Add another, open-ended, overlapping grant: the domain merges coverage, it does not refuse this.
-    await admin.getByRole('link', { name }).click()
+    await listed.click()
     await admin.getByRole('button', { name: 'Add grant' }).click()
     await admin.getByLabel('Starts at').fill(localInput(-5))
     await admin.getByLabel('Open-ended access (no end date)').check()
@@ -67,7 +90,7 @@ test.describe('membership administration', () => {
     await expect(admin.locator('header').getByText('Open-ended', { exact: true })).toBeVisible()
 
     // Revoke the ORIGINAL (bounded) grant; the record stays active because the open-ended one still covers it.
-    const rows = admin.getByRole('listitem').filter({ hasText: 'Operator' })
+    const rows = admin.getByRole('main').getByRole('listitem').filter({ hasText: 'Operator' })
     await rows.first().getByRole('button', { name: 'Revoke this grant' }).click()
     await expect(
       admin.getByRole('dialog', { name: `Revoke this grant for ${name}?` }),
@@ -89,7 +112,7 @@ test.describe('membership administration', () => {
     const guardian = await signedInAs(browser, baseURL ?? '', 'plain-guardian')
 
     await guardian.goto('/')
-    await expect(guardian.getByRole('link', { name: 'Members', exact: true })).toHaveCount(0)
+    await expect(guardian.getByRole('link', { name: 'Admin', exact: true })).toHaveCount(0)
 
     await guardian.goto('/admin/members')
     await expect(guardian.getByRole('heading', { level: 1, name: 'Not permitted' })).toBeVisible()

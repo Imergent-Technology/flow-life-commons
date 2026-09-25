@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { accountFor, FakeApi, json } from '../test/fakeApi.ts'
+import { openAccountMenu, signOutViaMenu } from '../test/shell.ts'
 import { renderApp } from '../test/renderApp.tsx'
 
 const EMAIL = 'guardian@example.org'
@@ -66,8 +67,9 @@ describe('resolving who is signed in', () => {
     ).toBeVisible()
     expect(screen.getByText(new RegExp(EMAIL))).toBeVisible()
     expect(screen.getByText('Session started')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible()
-    expect(screen.getByRole('link', { name: 'Account security' })).toHaveAttribute(
+    await openAccountMenu(userEvent.setup())
+    expect(screen.getByRole('menuitem', { name: 'Sign out' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: 'Account security' })).toHaveAttribute(
       'href',
       '/account/security',
     )
@@ -365,7 +367,7 @@ describe('signing out', () => {
     api.signedIn = true
     api.install()
     const view = renderApp(path)
-    await screen.findByRole('button', { name: 'Sign out' })
+    await screen.findByRole('button', { name: /account menu/i })
     return view
   }
 
@@ -373,7 +375,7 @@ describe('signing out', () => {
     const user = userEvent.setup()
     await signedInAt('/account/security')
 
-    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    await signOutViaMenu(user)
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible()
     expect(screen.getByRole('status')).toHaveTextContent('You have been signed out.')
@@ -387,7 +389,7 @@ describe('signing out', () => {
   it('does not send the next person to the page the last one left', async () => {
     const user = userEvent.setup()
     await signedInAt('/account/security')
-    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    await signOutViaMenu(user)
     await screen.findByRole('heading', { name: 'Sign in' })
 
     await signInThroughTheForm(user)
@@ -403,7 +405,7 @@ describe('signing out', () => {
     api.on('POST /api/v1/logout', json({ message: 'CSRF token mismatch.' }, 419))
     api.signedIn = false
 
-    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    await signOutViaMenu(user)
 
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible()
     expect(screen.queryByText(account.person.display_name)).not.toBeInTheDocument()
@@ -414,11 +416,13 @@ describe('signing out', () => {
     await signedInAt()
     api.on('POST /api/v1/logout', json({ message: 'down' }, 503))
 
-    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    await signOutViaMenu(user)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('You could not be signed out')
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled()
     expect(screen.getByRole('navigation', { name: 'Console' })).toBeVisible()
+    // The menu closed on the failure; opened again, Sign out is offered again rather than stuck pending.
+    await openAccountMenu(user)
+    expect(screen.getByRole('menuitem', { name: 'Sign out' })).not.toHaveAttribute('aria-disabled')
   })
 })
 
@@ -468,7 +472,7 @@ describe('what the Console keeps', () => {
 
     await signInThroughTheForm(user)
     await screen.findByRole('navigation', { name: 'Console' })
-    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    await signOutViaMenu(user)
     await screen.findByRole('heading', { name: 'Sign in' })
 
     expect(localStorage).toHaveLength(0)
@@ -504,7 +508,7 @@ describe('what the Console keeps', () => {
     renderApp('/login')
     await signInThroughTheForm(user)
     await screen.findByRole('navigation', { name: 'Console' })
-    await user.click(screen.getByRole('button', { name: 'Sign out' }))
+    await signOutViaMenu(user)
     await screen.findByRole('heading', { name: 'Sign in' })
 
     expect(api.calls.length).toBeGreaterThan(3)

@@ -5,10 +5,12 @@ import {
   captureConsole,
   clipboardText,
   expectOnlyUiPreferences,
+  goToAccountSecurity,
   meStatus,
   nextCode,
   recoveryCodesFor,
   sessionCookie,
+  signOut,
   totpForStep,
 } from './support.ts'
 
@@ -119,7 +121,7 @@ test.describe('signing in with an authenticator', () => {
     // A refresh keeps the session, and nothing about the factor is on the page.
     await page.reload()
     await expect(consoleHeading(page)).toBeVisible()
-    await page.getByRole('link', { name: 'Account security' }).click()
+    await goToAccountSecurity(page)
     await expect(page.getByText('Authenticator app')).toBeVisible()
     await expect(page.locator('body')).not.toContainText(LATER.secret)
     await expectOnlyUiPreferences(page)
@@ -140,12 +142,12 @@ test.describe('signing in with an authenticator', () => {
     await expect(consoleHeading(page)).toBeVisible()
 
     // It says how many are left, and never which.
-    await page.getByRole('link', { name: 'Account security' }).click()
+    await goToAccountSecurity(page)
     expect(await recoveryLeft(page)).toBe('9')
     await expect(page.locator('body')).not.toContainText(codes[1] ?? 'x')
 
     // Sign out, and try the SAME code again: refused, as any wrong code is, with nobody signed in.
-    await page.getByRole('button', { name: 'Sign out' }).click()
+    await signOut(page)
     await passwordStep(page, RECOVERY)
     await page.getByRole('button', { name: 'Use a recovery code instead' }).click()
     await page.getByLabel('Recovery code').fill(codes[0] ?? '')
@@ -159,7 +161,7 @@ test.describe('signing in with an authenticator', () => {
     await page.getByLabel('Recovery code').fill(codes[1] ?? '')
     await page.getByRole('button', { name: 'Sign in' }).click()
     await expect(consoleHeading(page)).toBeVisible()
-    await page.getByRole('link', { name: 'Account security' }).click()
+    await goToAccountSecurity(page)
     expect(await recoveryLeft(page)).toBe('8')
   })
 })
@@ -178,7 +180,7 @@ test.describe('managing two-step verification', () => {
     await passwordStep(page, MANAGE)
     await submitCode(page, MANAGE.secret)
     await expect(consoleHeading(page)).toBeVisible()
-    await page.getByRole('link', { name: 'Account security' }).click()
+    await goToAccountSecurity(page)
     expect(await recoveryLeft(page)).toBe('10')
     // There is no way to switch it off.
     await expect(page.getByRole('button', { name: /disable|turn off|remove/i })).toHaveCount(0)
@@ -270,7 +272,7 @@ test.describe('managing two-step verification', () => {
     }
 
     // The OLD authenticator stops working, an OLD recovery code is dead, and the NEW authenticator signs in.
-    await page.getByRole('button', { name: 'Sign out' }).click()
+    await signOut(page)
     await passwordStep(page, MANAGE)
     await page
       .getByLabel('Authentication code')

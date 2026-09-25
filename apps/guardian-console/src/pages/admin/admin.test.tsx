@@ -123,14 +123,15 @@ describe('the account list', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Not permitted' }),
     ).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Accounts' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
   })
 
   it('links to Accounts from the navigation for someone who may view them', async () => {
     const api = serveOperator()
     api.on('GET /api/v1/admin/accounts', json(page([wire()])))
     renderApp('/')
-    expect(await screen.findByRole('link', { name: 'Accounts' })).toHaveAttribute(
+    // The rail's Admin control leads to the first page the operator may use.
+    expect(await screen.findByRole('link', { name: 'Admin' })).toHaveAttribute(
       'href',
       '/admin/accounts',
     )
@@ -545,7 +546,12 @@ describe('inviting an operator', () => {
       display_name: 'New Person',
       initial_assignments: ['custom_key_two'],
     })
-    expect(document.body.textContent).not.toMatch(/[A-Za-z0-9_-]{43}/) // no token-shaped text anywhere
+    // No token-shaped text anywhere. Checked per text node: a token is one string, and joining every element's
+    // text with no separator would invent long runs out of adjacent labels.
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+      expect(node.textContent).not.toMatch(/[A-Za-z0-9_-]{43}/)
+    }
   })
 
   it('says plainly when the account was created but the email could not be sent, and points at the remedy', async () => {

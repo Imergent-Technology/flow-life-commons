@@ -3,6 +3,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test'
 import {
   apiFrom,
   captureConsole,
+  expectNoTokenShapedText,
   expectOnlyUiPreferences,
   invitationEmailedTo,
   meStatus,
@@ -78,7 +79,7 @@ test.describe('who may administer', () => {
 
     await admin.goto('/')
     await expect(consoleHeading(admin)).toBeVisible()
-    await admin.getByRole('link', { name: 'Accounts', exact: true }).click()
+    await admin.getByRole('link', { name: 'Admin', exact: true }).click() // leads to All accounts
     await expect(admin.getByRole('heading', { level: 1, name: 'Accounts' })).toBeVisible()
     const table = admin.getByRole('table', { name: 'Accounts' })
     await expect(table.getByRole('link', { name: 'E2E Admin Read' })).toBeVisible()
@@ -99,7 +100,7 @@ test.describe('who may administer', () => {
     const guardian = await signedInAs(browser, url, 'plain-guardian')
     await guardian.goto('/')
     await expect(consoleHeading(guardian)).toBeVisible() // they may use the Console...
-    await expect(guardian.getByRole('link', { name: 'Accounts', exact: true })).toHaveCount(0)
+    await expect(guardian.getByRole('link', { name: 'Admin', exact: true })).toHaveCount(0)
     await guardian.goto('/admin/accounts')
     await expect(guardian.getByRole('heading', { level: 1, name: 'Not permitted' })).toBeVisible()
     await expect(guardian.getByRole('table')).toHaveCount(0)
@@ -203,7 +204,8 @@ test.describe.serial('inviting, changing access, disabling and re-enabling someo
     request,
   }) => {
     await admin.goto('/admin/accounts')
-    await admin.getByRole('link', { name: 'Invite an operator' }).click()
+    // The page's own button; the drawer has a link of the same name.
+    await admin.getByRole('main').getByRole('link', { name: 'Invite an operator' }).click()
     await expect(admin.getByRole('heading', { level: 1, name: 'Invite an operator' })).toBeVisible()
 
     await admin.getByLabel('Display name').fill(invitee.name)
@@ -213,7 +215,7 @@ test.describe.serial('inviting, changing access, disabling and re-enabling someo
     await admin.getByRole('button', { name: 'Send invitation' }).click()
 
     await expect(admin.getByRole('heading', { level: 1, name: 'Invitation sent' })).toBeVisible()
-    await expect(admin.locator('body')).not.toContainText(/[A-Za-z0-9_-]{43}/) // the secret is nowhere on the page
+    await expectNoTokenShapedText(admin) // the secret is nowhere on the page
 
     const mail = await invitationEmailedTo(request, baseURL ?? '', invitee.email)
     expect(mail.link).toContain('/accept-invitation#token=') // in the FRAGMENT, out of access logs

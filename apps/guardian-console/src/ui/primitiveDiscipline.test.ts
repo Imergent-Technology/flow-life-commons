@@ -31,7 +31,7 @@ const primitives = [
 ].map((name) => `./${name}.tsx`)
 const supporting = ['./cn.ts', './button-variants.ts', './control-styles.ts', './usePageHeading.ts']
 
-const sources = import.meta.glob<string>('./*.{ts,tsx}', {
+const sources = import.meta.glob<string>(['./*.{ts,tsx}', '../shell/*.{ts,tsx}'], {
   query: '?raw',
   import: 'default',
   eager: true,
@@ -45,6 +45,8 @@ const colourUtility =
 interface Rule {
   name: string
   pattern: RegExp
+  /** Files that may legitimately do this: the one control that is the theme selector. */
+  allowedIn?: RegExp
   offends: string
   fine: string
 }
@@ -76,7 +78,9 @@ const rules: Rule[] = [
   },
   {
     name: 'reading the theme',
-    pattern: /useTheme|resolvedTheme|data-theme|prefers-color-scheme|matchMedia/,
+    pattern: /useTheme|resolvedTheme|data-theme|prefers-color-scheme/,
+    // The account menu IS the theme selector: it reads the preference to show which choice is checked.
+    allowedIn: /(^|\/)AccountMenu\.tsx$/,
     offends: "const { resolvedTheme } = useTheme(); if (resolvedTheme === 'dark') …",
     fine: 'className="bg-surface"',
   },
@@ -88,13 +92,21 @@ const sizeUtility = /\btext-(?:xs|sm|base|lg|xl|\dxl|title|dialog-title|section|
 function scan(files: Record<string, string>, only: readonly Rule[] = rules) {
   const found: { file: string; rule: string }[] = []
   for (const [file, source] of Object.entries(files)) {
-    for (const rule of only) if (rule.pattern.test(source)) found.push({ file, rule: rule.name })
+    for (const rule of only) {
+      if (rule.allowedIn?.test(file) === true) continue
+      if (rule.pattern.test(source)) found.push({ file, rule: rule.name })
+    }
   }
   return found
 }
 
+// The application shell (WP4) is written in the same vocabulary, so it is held to the same rule.
+const shell = Object.keys(sources).filter(
+  (path) => path.startsWith('../shell/') && !/\.test\.tsx?$/.test(path),
+)
+
 const scanned = Object.fromEntries(
-  [...primitives, ...supporting].map((path) => [path, sources[path] ?? '']),
+  [...primitives, ...supporting, ...shell].map((path) => [path, sources[path] ?? '']),
 )
 
 describe('the new primitives keep to the semantic visual system', () => {
@@ -102,6 +114,17 @@ describe('the new primitives keep to the semantic visual system', () => {
     for (const path of [...primitives, ...supporting]) {
       expect(sources[path], `${path} exists`).toBeTypeOf('string')
       expect((sources[path] ?? '').length, `${path} is not empty`).toBeGreaterThan(50)
+    }
+  })
+
+  it('includes the shell, not an empty set', () => {
+    expect(shell.length).toBeGreaterThanOrEqual(12)
+    for (const expected of [
+      '../shell/ConsoleShell.tsx',
+      '../shell/AccountMenu.tsx',
+      '../shell/Rail.tsx',
+    ]) {
+      expect(shell).toContain(expected)
     }
   })
 
@@ -117,6 +140,15 @@ describe('the new primitives keep to the semantic visual system', () => {
     it('does not flag what is fine', () => {
       expect(scan({ './Fine.tsx': rule.fine }).map((v) => v.rule)).not.toContain(rule.name)
     })
+
+    if (rule.allowedIn !== undefined) {
+      it('allows only the named file', () => {
+        const allowed = Object.keys(scanned).filter((path) => rule.allowedIn?.test(path))
+        expect(allowed).toEqual(['../shell/AccountMenu.tsx'])
+        expect(scan({ './Elsewhere.tsx': rule.offends }).map((v) => v.rule)).toContain(rule.name)
+        expect(scan({ '../shell/AccountMenu.tsx': rule.offends })).toEqual([])
+      })
+    }
   })
 })
 
