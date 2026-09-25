@@ -29,7 +29,7 @@ const PROD = `http://prod.flowlife.localhost:${PORT}`
 const OTHER_ORIGIN = `http://mail.flowlife.localhost:${PORT}`
 
 const POLICY =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; " +
+  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; " +
   "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 
 /*
@@ -57,6 +57,10 @@ interface Element {
   addEventListener: (type: string, listener: () => void) => void
 }
 
+interface FontFaceLike {
+  load: () => Promise<FontFaceLike>
+}
+
 interface Dom {
   document: {
     createElement: (tag: string) => Element
@@ -64,6 +68,7 @@ interface Dom {
     body: { append: (node: Element) => void }
   }
   Image: new () => Element
+  FontFace: new (family: string, source: string) => FontFaceLike
   location: { hash: string }
   setTimeout: (fn: () => void, ms: number) => void
   __cspViolations: string[]
@@ -187,15 +192,21 @@ test.describe('the production security policy', () => {
     // effect). Either being blocked would leave a blank or unstyled page, so this is what proves
     // `script-src 'self'` and `style-src 'self'` are wide enough for the real build.
     await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible()
-    const weight = await page
-      .getByRole('heading', { level: 1 })
-      .evaluate(
-        (node) =>
-          (
-            globalThis as unknown as { getComputedStyle: (n: unknown) => { fontWeight: string } }
-          ).getComputedStyle(node).fontWeight,
-      )
-    expect(Number(weight)).toBeGreaterThanOrEqual(600)
+    const style = await page.getByRole('heading', { level: 1 }).evaluate((node) =>
+      (
+        globalThis as unknown as {
+          getComputedStyle: (n: unknown) => { fontWeight: string; fontFamily: string }
+        }
+      ).getComputedStyle(node),
+    )
+    expect(Number(style.fontWeight)).toBeGreaterThanOrEqual(600)
+
+    // The self-hosted interface face (ADR 0030 §6): `body`'s font-family is Hanken Grotesk Variable,
+    // inherited onto every heading until a later work package gives titles their own display face.
+    // Rendering this very heading is what makes the browser actually FETCH the woff2 under font-src
+    // 'self' rather than just parsing a rule that names it — a policy without that directive would
+    // fail this test with a real securitypolicyviolation below, not with an assertion here.
+    expect(style.fontFamily).toContain('Hanken Grotesk Variable')
 
     expect(logged).toEqual([])
     expect(await reported(page)).toEqual([])
@@ -243,7 +254,7 @@ test.describe('the production security policy', () => {
     // and the inline-script case above shows the same directive really is enforced on this page.
   })
 
-  test('blocks an image and a fetch from another origin', async ({ page }) => {
+  test('blocks an image, a font and a fetch from another origin', async ({ page }) => {
     await page.goto(`${PROD}/login`)
 
     const image = await page.evaluate(async (src) => {
@@ -261,6 +272,22 @@ test.describe('the production security policy', () => {
       return outcome
     }, OTHER_ORIGIN)
     expect(image).toBe('blocked')
+
+    // font-src 'self': the one directive this policy gained for the visual system (ADR 0030). The
+    // FontFace constructor's load() rejects if the fetch it triggers is refused, same as the Image
+    // and fetch probes above being refused for their own directives; the target need not really be a
+    // font; CSP blocks the request before any response body is inspected.
+    const font = await page.evaluate(async (src) => {
+      const d = globalThis as unknown as Dom
+      const face = new d.FontFace('Blocked Test Face', `url(${src}/favicon.ico)`)
+      try {
+        await face.load()
+        return 'loaded'
+      } catch {
+        return 'blocked'
+      }
+    }, OTHER_ORIGIN)
+    expect(font).toBe('blocked')
 
     // connect-src 'self': the Console could not send anything to another origin even if something in
     // it tried to. On a page that handles credentials this is the directive that matters most.

@@ -49,7 +49,7 @@ http://commons.flowlife.localhost:{$FLOW_GATEWAY_PORT} {
 # HSTS is absent deliberately: this origin is plain HTTP, and Apache emits it conditionally on HTTPS.
 (prod_security_headers) {
 	header {
-		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+		Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "same-origin"
 		X-Frame-Options "DENY"

@@ -24,18 +24,25 @@ return [
      *
      *   index.html   one external <script type="module">, one external <link rel="stylesheet">
      *                and NO inline script or style of any kind
-     *   assets/      one .js, one .css, no fonts, no images, no data: URIs, no source maps
+     *   assets/      one .js, one .css, hashed same-origin font files (ADR 0030), no images yet
+     *                (the Console's brand badge is planned but not shipped — Work Package 4), no
+     *                data: URIs, no source maps
      *   favicon.ico  a real file on the origin
      *   at runtime   fetch() to relative /api/v1/... only; the QR code is inline SVG drawn in the
      *                browser from the module matrix (never an <img>, never a QR service)
      *
-     * So the narrowest policy that works is 'self' for the three things that are loaded and 'none'
-     * for everything else. In particular:
+     * So the narrowest policy that works is 'self' for the things that are loaded and 'none' for
+     * everything else. In particular:
      *
      * - NO 'unsafe-inline' and NO 'unsafe-eval'. The production build needs neither. (Vite's dev
      *   server does; development gets its own, weaker policy and production is not bent to match it.)
-     * - NO `data:` in img-src. Nothing in the build uses a data: URI, and allowing them would widen
-     *   the surface for an injected image-shaped payload for no benefit.
+     * - `font-src 'self'`, and nothing wider: the interface's three faces are bundled by Vite and
+     *   served as hashed woff2 files from this origin, same as the script and the stylesheet. No CDN,
+     *   no third-party font service, no `data:` URI — the build is verified to inline no font as one
+     *   (`assetsInlineLimit: 0` in vite.config.ts; Vite's default 4KB threshold would otherwise
+     *   base64-inline the smallest subset files, which font-src 'self' does not cover).
+     * - NO `data:` anywhere in this policy. Nothing in the build uses a data: URI, in an image or a
+     *   font, and allowing them would widen the surface for an injected payload for no benefit.
      * - NO object-src line: `default-src 'none'` already covers it, and a redundant directive is one
      *   more thing to keep true. `frame-ancestors`, `base-uri` and `form-action` DO need stating,
      *   because default-src does not cover them.
@@ -46,6 +53,7 @@ return [
         "script-src 'self'",
         "style-src 'self'",
         "img-src 'self'",
+        "font-src 'self'",
         "connect-src 'self'",
         "form-action 'self'",
         "base-uri 'none'",

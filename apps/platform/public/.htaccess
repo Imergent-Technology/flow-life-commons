@@ -66,7 +66,7 @@ DirectoryIndex index.html index.php
     Header onsuccess unset X-Powered-By
     Header always unset X-Powered-By
     Header onsuccess unset Content-Security-Policy
-    Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    Header always set Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     Header onsuccess unset X-Content-Type-Options
     Header always set X-Content-Type-Options "nosniff"
     Header onsuccess unset Referrer-Policy

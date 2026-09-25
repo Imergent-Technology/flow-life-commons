@@ -55,7 +55,7 @@ const FLAG_PAYLOAD = JSON.stringify({
 /** Every header ADR 0026 requires on this origin. HSTS is HTTPS-only and absent here by design. */
 const POLICY_HEADERS = {
   'content-security-policy':
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; " +
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; " +
     "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'same-origin',

@@ -1,0 +1,29 @@
+/*
+ * Guardian Console self-hosted faces (ADR 0030, docs/design/guardian-console-visual-system.md §4).
+ *
+ * Newsreader (display/titles), Hanken Grotesk (interface/body) and JetBrains Mono (identifiers),
+ * bundled by Vite from @fontsource-variable and served as hashed woff2 files from the Console's own
+ * origin. No CDN, no third-party font service, no `data:` URI — this is what makes `font-src 'self'`
+ * (and nothing wider) the whole policy change fonts need.
+ *
+ * Each `@import` pulls in the package's single `wght` axis, which is the only axis these three
+ * packages publish (Fontsource ships one CSS file per axis, not per script subset). That file's
+ * `unicode-range` declarations cover more scripts than the Console needs — the design calls for latin
+ * and latin-ext only — but a browser fetches a subset's woff2 only when the page actually renders a
+ * character in that subset's range, so the extra declarations cost nothing at runtime for the Latin
+ * text (plus the diacritics latin-ext exists for) this interface actually shows. Fontsource does not
+ * publish a latin/latin-ext-only build to import instead, and hand-copying its unicode-range values
+ * into a second, hand-maintained file would duplicate generated output for no measurable benefit, so
+ * the package's own file is used as shipped.
+ *
+ * All three load with `font-display: swap`, matching what Fontsource ships. The design's plan for
+ * Hanken Grotesk — `font-display: optional` with a size-adjusted local fallback, so a table never
+ * reflows once the real face arrives — needs metric overrides (size-adjust, ascent/descent-override)
+ * measured against a specific local fallback face, which is real per-font measurement work, not a
+ * value to guess at. It is left for a follow-up rather than implemented with invented numbers; `swap`
+ * is the honest interim, and it is what every face here already uses.
+ */
+
+@import '@fontsource-variable/newsreader/wght.css';
+@import '@fontsource-variable/hanken-grotesk/wght.css';
+@import '@fontsource-variable/jetbrains-mono/wght.css';

@@ -5,9 +5,11 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0016](0016-guardian-console-same-origin-session-authentication.md), [ADR 0003](0003-react-guardian-console.md)
+- **Amended by:** [ADR 0030](0030-guardian-console-visual-system.md), which adds `font-src 'self'` for the visual system's self-hosted fonts and corrects the build-shape statement that no fonts or images are loaded, without changing the rest of the policy
 - **Clarified:** 2026-09-21, after the production host was probed. The policy is unchanged. `mod_headers` is confirmed present and the generated block effective; the `expose_php = Off` wording is corrected to match what was measured (see *HSTS, deliberately narrow* and the note on `X-Powered-By`).
 - **Clarified again:** 2026-09-22, during the first supervised deployment rehearsal. The 2026-09-21 probe's "no `X-Powered-By` header reaches clients" finding did **not** hold on the real Apache + CloudLinux LSAPI host under v0.1.0: every PHP response — the maintenance responder and Laravel's own JSON/HTML alike — carried `X-Powered-By: PHP/8.3.33`. The policy is unchanged; `public/.htaccess` now strips the header itself (see the note on `X-Powered-By`, below), because the host's control panel exposes no way to turn `expose_php` off.
 - **Clarified a third time:** 2026-09-22, same day, after the fix was released as v0.1.1 and deployed. **Re-verified absent on the real production host**: `X-Powered-By` did not reach `/`, `/api/v1/health` or `/up`, under maintenance and again after `artisan up`. The enforcement point named below — Apache stripping the header via `Header onsuccess unset` and `Header always unset` — is therefore confirmed effective on production itself, not only on the Apache-container test.
+- **Amended:** 2026-09-25, for the Guardian Console visual system ([ADR 0030](0030-guardian-console-visual-system.md), Work Package 1). `font-src 'self'` is added: the interface's three faces are now bundled by Vite and served as hashed woff2 files from this origin, same as the script and the stylesheet. The "no fonts, no images" build-shape statement below is corrected to say what is separately true of each: fonts are now a real, measured build asset with their own directive; the Console's brand image is still not shipped (it is planned for Work Package 4) and `img-src 'self'` continues to cover it without change, because it was already stated for reasons unrelated to fonts. The policy's shape — narrowest 'self' for what is actually loaded, 'none' for the rest, no `data:` anywhere — is unchanged.
 
 ## Context
 
@@ -15,7 +17,7 @@ The Guardian Console is a privileged administrative surface: from it an operator
 
 Three facts about this application decide almost everything below, and each was **measured from the actual production build** rather than assumed:
 
-- **The build loads three things and nothing else.** `./flow build`, then reading `dist/`: `index.html` with one external `<script type="module">` and one external `<link rel="stylesheet">`, **no inline script or style of any kind**, one `.js`, one `.css`, no fonts, no images, no `data:` URIs, no source maps. The QR code is drawn in the browser as inline SVG from the module matrix ([ADR 0023](0023-multi-factor-authentication.md)), so even that needs no external origin.
+- **The build loads what it says and nothing else.** `./flow build`, then reading `dist/`: `index.html` with one external `<script type="module">` and one external `<link rel="stylesheet">`, **no inline script or style of any kind**, one `.js`, one `.css`, no `data:` URIs, no source maps. As of the visual system (2026-09-25 amendment), `assets/` also carries same-origin, hashed woff2 font files — deliberately built with no inlining threshold that could turn a small one into a `data:` URI (`vite.config.ts`) — and still carries no image: the Console's brand badge is planned, not shipped (Work Package 4). The QR code is drawn in the browser as inline SVG from the module matrix ([ADR 0023](0023-multi-factor-authentication.md)), so even that needs no external origin and no `<img>`.
 - **The Console talks to one origin, its own.** The HTTP client is relative-path-only by type and by runtime check, `credentials: 'same-origin'`, no CORS, no configurable base ([ADR 0016](0016-guardian-console-same-origin-session-authentication.md)).
 - **The production origin is served by two different things.** Apache serves `index.html` and `assets/` straight from the document root; Laravel serves `/api/*` and `/up`. A policy expressed only in Laravel middleware would leave the Console's own HTML — the document the policy is actually about — with no policy at all.
 
@@ -35,15 +37,16 @@ Stating the policy twice is how the two halves of one origin come to disagree, s
 ### The content security policy
 
 ```
-default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self';
+default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self';
 connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'
 ```
 
-Derived from the three things the build loads, and no wider:
+Derived from what the build loads, and no wider:
 
 - **No `'unsafe-inline'`, no `'unsafe-eval'`.** The production build needs neither. This is the whole value of the policy: with them, a CSP on an administrative console is decoration.
-- **No `data:` in `img-src`.** Nothing uses a data: URI. Allowing them would widen the surface for an injected image-shaped payload in exchange for nothing.
-- **No `font-src`, no `object-src` line.** No fonts are loaded, and `default-src 'none'` already covers both. A redundant directive is one more thing that has to stay true. `frame-ancestors`, `base-uri` and `form-action` *are* stated, because `default-src` does not cover them.
+- **No `data:` anywhere in the policy** — not in `img-src`, not in `font-src`. Nothing in the build uses a data: URI, in an image or a font. Allowing one would widen the surface for an injected payload in exchange for nothing.
+- **`font-src 'self'`, added 2026-09-25.** The interface's three faces (Newsreader, Hanken Grotesk, JetBrains Mono; [ADR 0030](0030-guardian-console-visual-system.md)) are bundled by Vite and served as hashed woff2 files from this origin. No CDN, no third-party font service. This is the one directive the visual system's Work Package 1 added; nothing else in this policy moved to make room for it.
+- **No `object-src` line.** `default-src 'none'` already covers it, and a redundant directive is one more thing that has to stay true. `frame-ancestors`, `base-uri` and `form-action` *are* stated, because `default-src` does not cover them.
 - **`frame-ancestors 'none'`**: the Console is never framed, by anyone, including itself.
 
 Alongside it: `X-Content-Type-Options: nosniff`; `Referrer-Policy: same-origin`; `X-Frame-Options: DENY` (defence in depth for anything that does not honour CSP 2); a `Permissions-Policy` denying the device features the Console does not use; `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Resource-Policy: same-origin`; and `Cache-Control: no-store` on API responses, which carry the signed-in person's name, address, capabilities and factor state.
@@ -66,8 +69,8 @@ The development gateway serves the Console from Vite under a policy that allows 
 
 A second gateway site, `prod.flowlife.localhost`, serves the **actual Vite build** as static files beside the API under the **exact production headers** — the same arrangement Apache will serve. `e2e/security.spec.ts` drives real Chromium against it and shows both halves:
 
-- the Console **starts, styles, signs in, challenges a second factor, renders the QR code, administers accounts, calls the API, copies and downloads recovery codes and scrubs a secret-bearing fragment**, with **zero** `securitypolicyviolation` events; and
-- the policy **actually blocks**: a script from another origin, an inline script, `eval`, an image from another origin, a `fetch` to another origin, and being framed.
+- the Console **starts, styles, signs in, challenges a second factor, renders the QR code, administers accounts, calls the API, copies and downloads recovery codes and scrubs a secret-bearing fragment**, with **zero** `securitypolicyviolation` events — since 2026-09-25 this includes the sign-in page's own heading actually rendering in the self-hosted interface face, which is what makes the browser fetch the font under `font-src 'self'` rather than merely parse a rule naming it; and
+- the policy **actually blocks**: a script from another origin, an inline script, `eval`, an image from another origin, a font from another origin, a `fetch` to another origin, and being framed.
 
 The second half is the point. A header that is present but not enforced is indistinguishable from an enforced one in a snapshot test.
 
@@ -75,7 +78,7 @@ The second half is the point. A header that is present but not enforced is indis
 
 - The Console's own HTML carries the policy in production, which a Laravel-only middleware could never have achieved.
 - **The policy depends on `mod_headers` on the production host.** Without it, the static half of the origin ships with no security headers while the API keeps them. That is an owner verification item rather than something this repository can prove — and it was **verified on the real host on 2026-09-21**: a `Header always set` inside `<IfModule mod_headers.c>` reached the client, so the generated block is effective. Recorded in the [production readiness runbook](../runbooks/production-readiness.md).
-- Any future dependency that needs an inline script, `eval`, a web font, a CDN or a third-party image **will break loudly** in the browser journeys before it reaches production. That is the intended cost.
+- Any future dependency that needs an inline script, `eval`, a CDN-hosted or third-party font, or a third-party image **will break loudly** in the browser journeys before it reaches production. That is the intended cost. A same-origin font is no longer in that list; a same-origin image (the badge, planned for Work Package 4) needed no change to reach it, because `img-src 'self'` was already there.
 - Passkeys would require revisiting `publickey-credentials-get=()` in the Permissions-Policy. They are explicitly out of scope, and the line is a deliberate tripwire.
 - The e2e suite now builds the Console before it runs, so the production-equivalent site tests the current build rather than whatever was in `dist/` from another day.
 - **All seven headers were confirmed on real production responses during the first deployment (2026-09-22):** the maintenance HTML response, Laravel's API maintenance response, and normal application/static responses each carried the full policy. One narrow exception was found and is not a weakening of it: `GET /.env` is denied by the **host** before Apache reaches the application's own `.htaccess` header rules, so that specific 403 carries no application header block, while every private path the application itself denies (`/release.json`, `/vendor/autoload.php`, `/storage/logs/laravel.log`) returns 403 with the full policy. See [production readiness](../runbooks/production-readiness.md).
