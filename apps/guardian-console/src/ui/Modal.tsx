@@ -50,14 +50,14 @@ export function Modal({
         event.preventDefault() // the browser would close it; the owner decides
         onClose()
       }}
-      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-slate-300 bg-white p-0 text-slate-900 shadow-xl backdrop:bg-slate-900/50"
+      className="m-auto w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface-raised p-0 text-foreground shadow-pop backdrop:bg-scrim"
     >
       <div className="flex flex-col gap-4 p-5">
         <h2
           id={titleId}
           ref={heading}
           tabIndex={-1}
-          className="text-lg font-semibold tracking-tight outline-none"
+          className="font-display text-dialog-title font-medium text-foreground outline-none"
         >
           {title}
         </h2>

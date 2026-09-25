@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react'
 
+import { Button } from './Button.tsx'
+
+/** The primary submit button of a form: a `Button` that swaps its label while the request runs. */
 export function SubmitButton({
   pending,
   pendingLabel,
@@ -10,12 +13,8 @@ export function SubmitButton({
   children: ReactNode
 }) {
   return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="rounded-md bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-not-allowed disabled:bg-slate-500"
-    >
-      {pending ? pendingLabel : children}
-    </button>
+    <Button type="submit" variant="primary" pending={pending} pendingLabel={pendingLabel}>
+      {children}
+    </Button>
   )
 }

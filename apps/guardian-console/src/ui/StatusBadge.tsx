@@ -1,17 +1,17 @@
 import type { AccountStatus } from '../api/admin.ts'
+import { Badge } from './Badge.tsx'
 
-const wording: Record<AccountStatus, { label: string; style: string }> = {
-  invited: { label: 'Invited', style: 'border-amber-300 bg-amber-50 text-amber-900' },
-  active: { label: 'Active', style: 'border-emerald-300 bg-emerald-50 text-emerald-900' },
-  disabled: { label: 'Disabled', style: 'border-slate-400 bg-slate-100 text-slate-800' },
+const wording: Record<
+  AccountStatus,
+  { label: string; variant: 'warning' | 'success' | 'neutral' }
+> = {
+  invited: { label: 'Invited', variant: 'warning' },
+  active: { label: 'Active', variant: 'success' },
+  disabled: { label: 'Disabled', variant: 'neutral' },
 }
 
-/** An Account's status, in words (never colour alone). */
+/** An Account's status, in words and a shape (never colour alone). */
 export function StatusBadge({ status }: { status: AccountStatus }) {
-  const { label, style } = wording[status]
-  return (
-    <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${style}`}>
-      {label}
-    </span>
-  )
+  const { label, variant } = wording[status]
+  return <Badge variant={variant}>{label}</Badge>
 }

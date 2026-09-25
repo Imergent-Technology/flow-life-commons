@@ -29,13 +29,10 @@ if (css.includes('@import "tailwindcss"') || css.includes("@import 'tailwindcss'
 
 // The visual system's token foundation (ADR 0030, docs/design/guardian-console-visual-system.md).
 //
-// A `bg-surface`-style needle would prove nothing yet, for the same tree-shaking reason the utilities
-// above are chosen with care: `@theme inline` (the design's own choice, so a theme swap follows
-// `data-theme` at runtime instead of baking in build-time values) only emits a role's CSS variable and
-// utility once something actually renders it, and no page or primitive references any role token until
-// WP3. What WP1 changes and can prove today is the base layer and the theme-independent scales, which
-// are emitted regardless of usage because they are either hand-written CSS or already-consumed Tailwind
-// keys:
+// WP1 could only prove the base layer and the theme-independent scales, because `@theme inline` emits a
+// role's utility only once something in the source uses it. WP3's primitives now do, so the role
+// utilities are asserted below (needles built at run time, for the reason given above). What WP1 proved
+// stays proved:
 //
 // - `--radius-md` is redefined by the design from Tailwind's stock value to 9px, and `rounded-md` is
 //   already used in the Console (TextField and others) — so this single assertion proves the token
@@ -63,6 +60,30 @@ if (!css.includes('input,select,textarea{font-size:var(--text-control)}')) {
   throw new Error(
     'verify:build: expected the form-control floor rule (design spec §4.1) in built CSS',
   )
+}
+
+// The semantic role utilities the shared primitives are written in. If Tailwind stops resolving the
+// `@theme inline` mapping, the primitives would still build and render, unstyled.
+const roleUtilities = [
+  ['bg', 'surface'],
+  ['bg', 'primary'],
+  ['bg', 'danger-soft'],
+  ['text', 'muted-foreground'],
+  ['border', 'input'],
+  ['border', 'border-strong'],
+  ['max', 'w', 'page-wide'],
+  ['font', 'display'],
+].map((parts) => `.${parts.join('-')}`)
+for (const needle of roleUtilities) {
+  if (!css.includes(needle)) {
+    throw new Error(`verify:build: expected the semantic utility ${needle} in built CSS (ADR 0030)`)
+  }
+}
+if (
+  !css.includes('--color-surface:var(--surface)') &&
+  !css.includes('background-color:var(--surface)')
+) {
+  throw new Error('verify:build: expected role utilities to resolve through the theme variables')
 }
 
 // Fonts: self-hosted, same-origin, wired to their roles (ADR 0030 §6; no CDN, no data: URI).

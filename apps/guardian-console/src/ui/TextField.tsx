@@ -1,4 +1,7 @@
-import { useId, type HTMLInputAutoCompleteAttribute, type ReactNode, type Ref } from 'react'
+import type { HTMLInputAutoCompleteAttribute, ReactNode, Ref } from 'react'
+
+import { Field } from './Field.tsx'
+import { Input } from './Input.tsx'
 
 interface TextFieldProps {
   label: string
@@ -18,6 +21,7 @@ interface TextFieldProps {
   ref?: Ref<HTMLInputElement> | undefined
 }
 
+/** A labelled text input for the credential flows: a `Field` around an `Input`, with the credential attributes fixed. */
 export function TextField({
   label,
   name,
@@ -33,49 +37,31 @@ export function TextField({
   maxLength,
   ref,
 }: TextFieldProps) {
-  const id = useId()
-  const hintId = `${id}-hint`
-  const errorId = `${id}-error`
-  const invalid = errors !== undefined && errors.length > 0
-  const describedBy = [hint ? hintId : null, invalid ? errorId : null].filter(Boolean).join(' ')
+  const error = errors !== undefined && errors.length > 0 ? errors.join(' ') : undefined
 
   return (
-    <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-sm font-medium text-slate-800">
-        {label}
-      </label>
-      {hint ? (
-        <div id={hintId} className="text-sm text-slate-600">
-          {hint}
-        </div>
-      ) : null}
-      <input
-        ref={ref}
-        id={id}
-        name={name}
-        type={type}
-        autoComplete={autoComplete}
-        value={value}
-        onChange={(event) => {
-          onChange(event.target.value)
-        }}
-        required={required}
-        disabled={disabled}
-        inputMode={inputMode}
-        maxLength={maxLength}
-        aria-invalid={invalid}
-        aria-describedby={describedBy === '' ? undefined : describedBy}
-        // Text a person types into a credential field is theirs: never corrected, capitalised or trimmed.
-        autoCapitalize="none"
-        autoCorrect="off"
-        spellCheck={false}
-        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900 disabled:bg-slate-100 aria-invalid:border-red-600"
-      />
-      {invalid ? (
-        <p id={errorId} className="text-sm text-red-700">
-          {errors.join(' ')}
-        </p>
-      ) : null}
-    </div>
+    <Field label={label} hint={hint} error={error}>
+      {(control) => (
+        <Input
+          {...control}
+          ref={ref}
+          name={name}
+          type={type}
+          autoComplete={autoComplete}
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value)
+          }}
+          required={required}
+          disabled={disabled}
+          inputMode={inputMode}
+          maxLength={maxLength}
+          // Text a person types into a credential field is theirs: never corrected, capitalised or trimmed.
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+        />
+      )}
+    </Field>
   )
 }

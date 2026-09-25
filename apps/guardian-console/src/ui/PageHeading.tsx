@@ -1,16 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { usePageHeading } from './usePageHeading.ts'
 
 /**
- * The page's h1. It names the document and takes focus when the page appears, so a keyboard or
- * screen-reader user is told where they are after a client-side navigation (which the browser does not
- * announce on its own).
+ * The page's h1, as the pages use it today. Kept until they move to `PageHeader` (WP5); both share
+ * `usePageHeading`, so the focus and document-title behaviour is the same.
  */
 export function PageHeading({ title, className = '' }: { title: string; className?: string }) {
-  const ref = useRef<HTMLHeadingElement>(null)
-  useEffect(() => {
-    document.title = `${title} · Flow Life Guardian Console`
-    ref.current?.focus()
-  }, [title])
+  const ref = usePageHeading(title)
 
   return (
     <h1
