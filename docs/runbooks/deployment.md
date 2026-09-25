@@ -3,9 +3,9 @@
 - **Purpose:** put a release of the Commons platform onto the production host, and get it off again when it is wrong.
 - **Owner:** whoever holds the hosting account and server access.
 - **Design:** [ADR 0027](../adr/0027-release-and-deployment-model.md). Read it once before the first deployment; this runbook assumes its decisions rather than re-arguing them.
-- **Last tested:** the **host capabilities** this procedure depends on were probed directly on 2026-09-21 and are recorded in [production readiness](production-readiness.md), section 4. **The procedure itself was executed end to end for the first time on 2026-09-22**, first deployment through administrator bootstrap, bringing v0.1.1 fully live.
+- **Last tested:** the **host capabilities** this procedure depends on were probed directly on 2026-09-21 and are recorded in [production readiness](production-readiness.md), section 4. **The procedure itself was executed end to end for the first time on 2026-09-22**, first deployment through administrator bootstrap, bringing v0.1.1 fully live. It has been repeated since; most recently for v0.2.1 ([§11](#11-later-deployments)).
 
-> **Status: VERIFIED once manually on production, 2026-09-22.** The full procedure — first deployment, maintenance mode, migrations, caches, administrator bootstrap, scheduler cron, and normal-traffic verification — has now been executed end to end on the real host, for v0.1.1. This is one observed run, not an automated or repeated one; see [the deployment closure record](#10-first-production-deployment-closure-2026-09-22) below.
+> **Status: VERIFIED manually on production.** The full procedure — first deployment, maintenance mode, migrations, caches, administrator bootstrap, scheduler cron, and normal-traffic verification — was first executed end to end on the real host on 2026-09-22, for v0.1.1, and has been repeated since for v0.2.0 and v0.2.1. It is still entirely manual and nothing on the host is automated; see [the first-deployment closure record](#10-first-production-deployment-closure-2026-09-22) and [later deployments](#11-later-deployments) below.
 >
 > The `current` symlink swap **is** observed immediately by both PHP and static requests, and **no opcache reset, restart or wait is required** — measured on 2026-09-21 and again across the real release swap on 2026-09-22. The maintenance mechanism is verified end to end on production, including the rewrite condition reading the flag through the storage symlink, and including the `/api` and `/up` carve-out under real Apache + LSAPI.
 >
@@ -18,6 +18,34 @@
 > **A second, real-host finding followed on 2026-09-22 and was fixed the same way: `X-Powered-By: PHP/8.3.33` reached clients under v0.1.0**, even though the 2026-09-21 probe had read `expose_php=On` and wrongly inferred no header reached clients. This hosting account exposes no `expose_php` toggle, so the fix strips the header at the origin instead (`Header onsuccess unset X-Powered-By` and `Header always unset X-Powered-By`, both — LSAPI was observed populating either of Apache's two response-header tables). Released as v0.1.1 and **reverified absent on the real host** on `/`, `/api/v1/health` and `/up`, under maintenance and live. See [ADR 0026](../adr/0026-production-browser-security-policy.md) and [production readiness](production-readiness.md), item 2.
 
 **Host environment, measured 2026-09-21 and confirmed again during the 2026-09-22 deployment:** Apache on CloudLinux, PHP 8.3.33 via LSAPI/`mod_lsapi` (so `PHP_SAPI` reads `litespeed` — this is **not** LiteSpeed Web Server), MariaDB `10.11.18-MariaDB-cll-lve`, direct to origin with no proxy or CDN in front.
+
+---
+
+## Release is not deployment
+
+A **release** is a tagged, built, validated artifact ([§8](#8-flow-release-the-developer-side-tooling)). A **deployment** is this runbook's procedure, run by hand against the production host. They are separate events: releases keep being made as development checkpoints, and production is deployed only when there is a reason ([ADR 0027](../adr/0027-release-and-deployment-model.md#release-is-not-deployment)). A release is a checkpoint; installing it is a decision.
+
+**Deploy when one or more of these holds:**
+
+1. The release is a **meaningful product milestone**, such as a significant minor version like v0.3.0.
+2. A change **materially benefits from validation on the real host** — for example Apache/LSAPI behaviour, maintenance mode, production security headers or configuration, deployment or rollback mechanics, the scheduler or a future queue, filesystem or public-storage behaviour, outbound integrations or other host-sensitive services, or a schema migration where a real-host rehearsal has value.
+3. There is **another concrete reason** to expose the release on the real host.
+
+Ordinary application, frontend and visual changes do not need a deployment merely because a release exists. Deploy periodically anyway, so that this procedure does not rot. As of 2026-09-25 production has no live end users and serves mainly as a deployment and host-validation environment, and v0.3.0 is the likely next milestone deployment unless a host-sensitive change gives a reason sooner.
+
+### `--previous` is the release on the host, not the previous tag
+
+`./flow release build --previous` names the release **currently deployed on the production host**. It does **not** mean the previous tag, the previous version or the preceding artifact, because releases may exist that were never deployed. Migration scanning and the rollback classification compare against what the host actually runs, so they see the whole change, not one step of it.
+
+```
+production is running:      v0.2.1
+built, NOT deployed:        v0.2.2   v0.2.3   v0.2.4
+
+./flow release build --ref v0.2.4 --previous v0.2.1 --schema-rollback <value>   # correct: the host runs v0.2.1
+./flow release build --ref v0.2.4 --previous v0.2.3 --schema-rollback <value>   # WRONG: v0.2.3 was never on the host
+```
+
+The wrong form compares only v0.2.3 with v0.2.4. A migration added in v0.2.2 or v0.2.3 — which the host has never run — would not be listed, `not-applicable` could be accepted for a release that does change the schema, and the manifest would name a "previous" that `current` will never point back to. After a deployment, the release just deployed becomes the next `--previous`. Do not work it out from memory: read what the host is serving with `release:show` ([§7](#7-health-and-release-verification)).
 
 ---
 
@@ -212,6 +240,8 @@ Steps 4 to 10 are the maintenance window. Everything before it is reversible by 
 ### 1. Have a built, gated artifact
 
 Built off-host from an annotated tag, with its gate green and its `schema_rollback` classification set ([§8](#8-flow-release-the-developer-side-tooling)). Know that classification **before** you start; it is what you will act on if step 11 fails.
+
+That classification is only meaningful relative to what the host is running, so the artifact must have been built with `--previous` naming the release **currently serving** — not the previous tag, which may never have been deployed ([above](#--previous-is-the-release-on-the-host-not-the-previous-tag)). If several releases have been built since the last deployment and the artifact was judged against a different one, rebuild it rather than deploy a classification made against something the host is not running.
 
 ### 2. Upload, checksum, extract, wire
 
@@ -438,7 +468,7 @@ Separately, `scripts/tests/apache-surface.sh` runs the *actual* `.htaccess` and 
 
 ## 5. Taking a backup
 
-Taken inside the maintenance window before every release, before any key rotation, and on demand.
+Taken inside the maintenance window before every production deployment, before any key rotation, and on demand.
 
 ### Two-pass dump
 
@@ -471,9 +501,12 @@ sha256sum "$B/dump.sql.gz"
 | `people`, `accounts`, `role_assignments` | `sessions` |
 | `account_totp_factors`, `account_recovery_codes` | `cache`, `cache_locks` |
 | `account_invitations` | `jobs`, `job_batches`, `failed_jobs` |
-| `security_events`, `migrations` | `password_reset_tokens` |
+| `membership_grants` | `password_reset_tokens` |
+| `security_events`, `migrations` | |
 
 `migrations` keeps its rows, or the application believes nothing has ever migrated. `password_reset_tokens` is excluded because a restored token is a live credential; the cost is that anyone mid-reset requests a new link.
+
+`membership_grants` is durable business data ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md)), so it carries rows and is **not** in any `--ignore-table`. The ignore list is exactly the transient tables above, which is why pass 2 needed no change when Membership arrived. The rule for a future table is the same one: a new durable table needs no change to the command and belongs in the left column; a new transient one must be added to the ignore list *and* the right column before the next backup.
 
 ### The manifest
 
@@ -494,8 +527,13 @@ sha256sum "$B/dump.sql.gz"
     "keyring_fingerprint": "0011223344556677",
     "previous_keys_configured": true
   },
-  "tables_with_data": ["people", "accounts", "…"],
-  "tables_schema_only": ["sessions", "cache", "…"]
+  "tables_with_data": [
+    "people", "accounts", "role_assignments", "account_totp_factors", "account_recovery_codes",
+    "account_invitations", "membership_grants", "security_events", "migrations"
+  ],
+  "tables_schema_only": [
+    "sessions", "cache", "cache_locks", "jobs", "job_batches", "failed_jobs", "password_reset_tokens"
+  ]
 }
 ```
 
@@ -601,7 +639,7 @@ Output goes to `dist/releases/` (gitignored) unless `--out` says otherwise. An e
 
 **What a person supplies, and the build refuses to guess:**
 
-- **`--previous <ref>|none`** is the release **currently on the host**, named by you. It is never inferred from tags, because a tag may never have been deployed. `none` means a first release. It is resolved to a commit and recorded.
+- **`--previous <ref>|none`** is the release **currently on the host**, named by you. It is never inferred from tags, because a tag may never have been deployed: with production on v0.2.1 and v0.2.2–v0.2.4 built but undeployed, the v0.2.4 candidate is still `--previous v0.2.1` ([worked example](#--previous-is-the-release-on-the-host-not-the-previous-tag)). `none` means a first release. It is resolved to a commit and recorded.
 - **`--schema-rollback`** is always supplied by a person ([classification](#3-rollback)). The build only refuses inconsistent choices: `not-applicable` exactly when no migration is new; on a first release (`--previous none`) always `restore-required`, because there is no earlier code to switch back to and recovery is the pre-release backup.
 - **`--acknowledge-scanner-findings`** is required only when the migration scanner reports findings *and* you chose something less conservative than `restore-required`. Choosing `restore-required` never needs it. The findings, your classification, who supplied it (`--classified-by`, default your git identity) and whether acknowledgement was required and given are all recorded in `release.json`. The scanner is a red-flag generator: a clean scan proves nothing.
 
@@ -618,14 +656,30 @@ Output goes to `dist/releases/` (gitignored) unless `--out` says otherwise. An e
 This runbook describes the approved design. These parts of it do not exist in the repository, and the implementation phase adds them:
 
 - **The cache-command check on every commit.** `./flow release build` runs it (and refuses if `resources/views` has appeared), so it gates a release; the ordinary `./flow check` does not yet, so a Blade view would only be caught when a release is built.
-- **Deployment automation.** `./flow release build`, `inspect` and `migrations` remain developer-side artifact operations; there is still no `./flow deploy production` or equivalent, deliberately ([ADR 0027](../adr/0027-release-and-deployment-model.md), *Production operations boundary*). One successful manual deployment (below) is not "enough times" to reconsider that boundary; it is the first data point.
+- **Deployment automation.** `./flow release build`, `inspect` and `migrations` remain developer-side artifact operations; there is still no `./flow deploy production` or equivalent, deliberately ([ADR 0027](../adr/0027-release-and-deployment-model.md), *Production operations boundary*). Automation is now a reasonable **future project** ([below](#future-direction-guided-deployment-not-authorized)), and nothing here authorizes it.
 - **Restore, rehearsed.** The `restore-required` rollback path and general backup restore have still never been exercised end to end, on this host or any other — see [backup and restore](backup-and-restore.md) and [§3](#3-rollback).
 
+### Future direction: guided deployment (not authorized)
+
+The manual procedure has now been performed on the real host enough times ([§10](#10-first-production-deployment-closure-2026-09-22), [§11](#11-later-deployments)) that a deployment tool is a reasonable future project. The intended direction is a **guided** tool — one that checks what it is about to do and stops with operator guidance when an invariant fails — rather than a blind shell script.
+
+Conceptually it might one day offer something like `./flow deploy plan <artifact>` and `./flow deploy production <artifact>`, taking over some of the following. **The names and this list are illustrative, not a frozen design:**
+
+- artifact and checksum validation;
+- validating the currently deployed release, and that it is the one the artifact expects as its `--previous`;
+- safe extraction and staging, storage seeding, shared-link wiring and cache warming;
+- entering maintenance, then taking and validating the backup and its manifest;
+- migrations, and the atomic `current` swap;
+- CLI production verification, then HTTP and security verification;
+- rollback guidance based on `schema_rollback`;
+- retention, and the deployment log.
+
+**Nothing here is authorized or designed.** ADR 0027's manual production boundary — no `./flow` command holds production credentials or touches the host — remains in force until a dedicated deployment-automation design package changes it explicitly. That package would also decide what the tool may never do unattended (a `restore-required` rollback is the obvious candidate).
 ---
 
 ## 10. First production deployment: closure (2026-09-22)
 
-The design in [ADR 0027](../adr/0027-release-and-deployment-model.md) has now been carried out once, manually, start to finish, on the real host. This section is the closing record; the numbered procedure above is unchanged by it and remains what the *next* deployment follows.
+The design in [ADR 0027](../adr/0027-release-and-deployment-model.md) had, by 2026-09-22, been carried out once, manually, start to finish, on the real host. This section is the closing record of that first run (later deployments are in [§11](#11-later-deployments)); the numbered procedure above is unchanged by it and remains what the *next* deployment follows.
 
 **v0.1.0 → v0.1.1.** The first artifact built and installed was **v0.1.0** (commit `21175fe`). It was extracted behind `current`, migrated, cached and exercised entirely under maintenance mode — it was **never opened to normal traffic** — because that maintenance-mode exercise caught `X-Powered-By: PHP/8.3.33` reaching clients (above). The fix was made in source and shipped as **v0.1.1** (commit `98cf1a1`, release id `20260922T223512-98cf1a1`), which was verified clean of the header, brought out of maintenance, and is the release actually live. **v0.1.1 is therefore the first production release opened to normal traffic**, not v0.1.0.
 
@@ -642,6 +696,17 @@ The design in [ADR 0027](../adr/0027-release-and-deployment-model.md) has now be
 **Outbound mail.** Unchanged and still **OPEN, intentionally deferred** ([production readiness](production-readiness.md), section 5). Do not read anything above as mail being production-ready.
 
 **Deployment automation.** Still future work, and still deliberately unautomated ([ADR 0027](../adr/0027-release-and-deployment-model.md)). One successful manual run is the reason a future automation design pass is now worth having, not a reason to skip it.
+
+## 11. Later deployments
+
+The record of each deployment is its entry in `shared/deploy.log` on the host (steps 17 and 14). This section keeps only what is worth having in the repository: a short note for a deployment that confirmed something about the procedure or the host. It is not a release-notes log; the architecture documents stay free of chronology on purpose.
+
+### v0.2.1 — release id `20260925T020248-78d4868`
+
+- **What:** v0.2.1 (commit `78d48687a6777174b1d42f4d119287fd29144251`) was deployed after v0.2.0. It contained **no new migrations**, so its `schema_rollback` was `not-applicable`: a rollback would have been switching `current` back to v0.2.0.
+- **Verified on the real host:** release identity, application boot, migration status, `security:production-check`, scheduler registration, HTTP health, the Console shell and SPA fallback, private-path denials, absence of `X-Powered-By`, the security headers, and a real MFA user-experience smoke test.
+- **Production readiness:** this release added a check that refuses the raised development/e2e MFA-challenge limit under production configuration ([production readiness](production-readiness.md)). Production's own limit is unchanged at 30 per address.
+- **Context:** there was no live-user rollout. Production has no real end users yet and currently serves mainly as a deployment and host-validation environment, which is why [not every release is deployed](#release-is-not-deployment).
 
 ## Related
 

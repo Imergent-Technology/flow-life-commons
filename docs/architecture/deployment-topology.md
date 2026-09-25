@@ -59,7 +59,7 @@ Exercised on Apache 2.4 with PHP 8.3 against a live database, using Laravel's st
 
 **Consequence:** the Console and the platform stay separately built and separately tested, but become **one web-server deployment unit**. Releasing the Console means writing its build output into the platform's document root — which is why the Console's production build is assembled into the artifact rather than shipped separately ([ADR 0027](../adr/0027-release-and-deployment-model.md)), so the two halves of the origin cannot drift.
 
-In production the document root is not a release directory but `current/public`, where `current` is a symlink swapped atomically at each release. The serving arrangement above is unchanged by that indirection, and **the host was measured doing it**: the first request after an atomic swap served the new release for both PHP and static content, with no cache clear, restart or wait.
+In production the document root is not a release directory but `current/public`, where `current` is a symlink swapped atomically at each deployment. The serving arrangement above is unchanged by that indirection, and **the host was measured doing it**: the first request after an atomic swap served the new release for both PHP and static content, with no cache clear, restart or wait.
 
 ## Owner verification
 

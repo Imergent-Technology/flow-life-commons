@@ -7,6 +7,7 @@
 - **Refines:** [ADR 0011](0011-docker-compose-development-environment.md), [ADR 0016](0016-guardian-console-same-origin-session-authentication.md), [ADR 0023](0023-multi-factor-authentication.md), [ADR 0026](0026-production-browser-security-policy.md)
 - **Clarified:** 2026-09-21, after the production host was probed. The decisions are unchanged and were validated rather than reopened. Two pieces of *wording* were corrected by measurement: the release switch is no longer provisional, and the static-half maintenance response is served by a standalone PHP responder rather than `ErrorDocument`. See [Verified on the production host](#verified-on-the-production-host-2026-09-21).
 - **Clarified again:** 2026-09-22, after the first production deployment. The decisions are unchanged; the release/deployment model this ADR designs has now been **exercised once, successfully, manually, end to end** — v0.1.0 installed and held under maintenance, the `X-Powered-By` finding fixed and released as v0.1.1, which was brought out of maintenance and is the release actually live. Host-side deployment **remains manual**: this clarification does not reopen the *Production operations boundary* decision below, which is revisited only after more operational experience. See [Verified on the production host, 2026-09-22](#verified-on-the-production-host-2026-09-22-first-deployment).
+- **Clarified again:** 2026-09-25, after v0.2.1. The decisions are unchanged. Three things were made explicit: a **release is not a deployment** (new subsection [Release is not deployment](#release-is-not-deployment), including what `--previous` means when releases go undeployed); the *restored with data* list gained `membership_grants`, which post-dates it; and deployment automation is now **a reasonable future project that this ADR still does not authorize** (see the end of *Production operations boundary*). Nothing else here was reopened.
 
 ## Context
 
@@ -48,6 +49,20 @@ The build happens in an **isolated checkout** — a temporary git worktree at an
 Production artifacts are normally built from an **annotated tag reachable from `main`**. The tag names the code. It makes no claim about a deployment having succeeded; that claim lives in the deploy log on the host.
 
 The Console's production build is assembled into the Laravel public surface as part of the artifact, so the two halves of the origin are versioned and shipped together and cannot drift.
+
+### Release is not deployment
+
+A **release** is a tagged, built, validated artifact: an immutable object that can be inspected. A **production deployment** is the separate, manual act of installing one on the host. Making a release does not oblige anyone to deploy it, and deploying one is not evidence that it was good: the tag names the code, and the host's deploy log records what was done.
+
+While production has no live end users, releases are made as development checkpoints and deployed when there is a reason. Deploy when one or more of these holds:
+
+- the release is a **meaningful product milestone**, such as a significant minor version (v0.3.0 is the likely next);
+- a change **benefits from validation on the real host**: Apache/LSAPI behaviour, maintenance mode, production security headers or configuration, deployment or rollback mechanics, the scheduler or a future queue, filesystem or public-storage behaviour, outbound integrations or other host-sensitive services, or a schema migration where a rehearsal on the real host has value;
+- there is **another concrete reason** to expose the release on the host.
+
+Ordinary application, frontend and visual changes are not such a reason. The procedure is still deployed periodically, so that it does not rot.
+
+**`--previous` follows the host, not the tags.** Because a release can go undeployed, `./flow release build --previous` always names the release **currently deployed on the production host**. It does not mean the previous tag, the previous version or the preceding artifact. If production stays on v0.2.1 while v0.2.2, v0.2.3 and v0.2.4 are built but not deployed, a production-candidate build of v0.2.4 is still `--previous v0.2.1`. Migration scanning and the `schema_rollback` classification must consider the whole change from what the host actually runs, or a migration in v0.2.2 that the host has never seen would be missed. The worked example is in the [deployment runbook](../runbooks/deployment.md#release-is-not-deployment).
 
 ### Optimization model: three commands, named explicitly
 
@@ -149,7 +164,7 @@ Transient state does not regain runtime authority merely because a database was 
 
 This is enforced **by how the dump is produced**, not by an instruction a rushed operator is expected to follow at the worst possible moment. The dump is produced in two passes so that every table is recreated but only durable tables carry rows:
 
-- **Restored with data**: `people`, `accounts`, `role_assignments`, `account_totp_factors`, `account_recovery_codes`, `account_invitations`, `security_events`, `migrations` — the durable Identity, Access and Audit record.
+- **Restored with data**: `people`, `accounts`, `role_assignments`, `account_totp_factors`, `account_recovery_codes`, `account_invitations`, `security_events`, `membership_grants`, `migrations` — the durable Identity, Access, Membership and Audit record. (`membership_grants` was added by [ADR 0028](0028-membership-grants-derived-at-query-time.md), after this list was first written.)
 - **Restored as structure only**: `sessions`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`, `password_reset_tokens`.
 
 Restoring the dump verbatim is therefore the *correct* action, which is the point: a full dump paired with a written warning is a trap.
@@ -165,6 +180,8 @@ This is a **restore policy, not a retention framework**. Retention and archival 
 **Production actions remain explicit operator actions, executed from a runbook.** In particular there is no automatic deploy, no automatic restore, no automatic rollback, and no `./flow` command that holds production credentials. `./flow release deploy` does not exist, deliberately, and its absence is a decision rather than an omission.
 
 This may be reconsidered only after the manual procedure has been performed successfully on the real host several times. Automating a procedure nobody has executed produces a fast, confident, wrong deployment.
+
+**Clarified 2026-09-25.** The manual procedure has since been carried out on the real host repeatedly (the first deployment on 2026-09-22, then v0.2.0 and v0.2.1), which is enough experience to say that a **guided deployment tool is a reasonable future project**: one that validates and guides an operator and stops with guidance when an invariant fails, rather than a blind script. **This ADR does not authorize building it.** The boundary above stands, unchanged, until a dedicated deployment-automation design package changes it explicitly. The illustrative scope is recorded as future work in the [deployment runbook](../runbooks/deployment.md#future-direction-guided-deployment-not-authorized); it is not a design.
 
 ### Queue: no worker, and a defined trigger to revisit
 
@@ -229,12 +246,12 @@ The design above was carried out for the first time, in full, manually, on the r
 
 - **A release becomes a reviewable object.** A checksummed artifact with a manifest naming its commit, its tag, its lockfile digests, its migrations and its human rollback classification can be inspected before it is deployed and identified after.
 - **Rollback is two mechanisms, not one**, and the manifest says which applies. This is the most important consequence: the failure mode this design exists to prevent is an operator switching `current` back and assuming a `restore-required` release is recovered.
-- **Every release has downtime**, deliberately, measured in tens of seconds. This is a trade against migration complexity that is correct at the current scale and should be revisited if the platform ever serves people who notice.
+- **Every production deployment has downtime**, deliberately, measured in tens of seconds. This is a trade against migration complexity that is correct at the current scale and should be revisited if the platform ever serves people who notice.
 - **The host has hard requirements it did not have**: symlink-following with a changing target and `mysqldump`. Both are now verified on the real account, and the third — an opcache-clearing operation — turned out not to be needed at all.
 - **`php artisan optimize` must not appear in any deployment script for this repository**, and the reason is a property of the repository that a check now pins.
 - **Backup acquires a security contract.** A backup without its keyring is not a backup of the authenticators, and the restore procedure refuses rather than discovering this afterwards.
 - **The `.htaccess` in source control is the file this design requires.** It carries the generated security headers, the private-path denials, the maintenance arm, the API and `/up` carve-out and the SPA fallback, in an order a test pins. The production-equivalent development gateway mirrors the same contract, so the browser suite keeps proving the routing semantics production will serve.
-- **The host is verified, and the procedure has now been exercised once.** Every host behaviour this design depends on was probed on the real account on 2026-09-21, and the deployment procedure itself, including the `.htaccess` as Apache reads it, was run end to end on 2026-09-22 (above). One run is evidence, not a guarantee of repeatability — the procedure remains manual, and the `restore-required` rollback path remains unexercised.
+- **The host is verified, and the procedure has been exercised on it.** Every host behaviour this design depends on was probed on the real account on 2026-09-21, and the deployment procedure itself, including the `.htaccess` as Apache reads it, was run end to end on 2026-09-22 (above). One run is evidence, not a guarantee of repeatability. It has since been repeated for v0.2.0 and v0.2.1 ([later deployments](../runbooks/deployment.md#11-later-deployments)); the procedure remains manual, and the `restore-required` rollback path remains unexercised.
 
 ## Alternatives considered
 
