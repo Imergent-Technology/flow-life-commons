@@ -36,7 +36,19 @@ const rules: Rule[] = [
     name: 'browser storage',
     because:
       'credentials, tokens and account state must not be readable by script or persist (ADR 0016); the HttpOnly session is the only authority',
-    pattern: /\b(?:localStorage|sessionStorage|indexedDB|openDatabase)\b/,
+    // localStorage is narrowed, not banned, by the next rule: only non-sensitive UI preferences may
+    // persist, through one audited module (ADR 0030). sessionStorage, indexedDB and openDatabase stay
+    // banned everywhere, with no exception.
+    pattern: /\b(?:sessionStorage|indexedDB|openDatabase)\b/,
+    offends: "sessionStorage.setItem('token', value)",
+    fine: 'const stored = useState(null)',
+  },
+  {
+    name: 'localStorage outside the UI-preferences module',
+    because:
+      'only non-sensitive display preferences may persist, through one audited module (ADR 0030); identity, session and business data still have no browser-storage authority',
+    pattern: /\blocalStorage\b/,
+    allowedIn: /(^|\/)ui\/preferences\.ts$/,
     offends: "localStorage.setItem('token', value)",
     fine: 'const stored = useState(null)',
   },

@@ -3,6 +3,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test'
 import {
   captureConsole,
   clipboardText,
+  expectOnlyUiPreferences,
   locationOf,
   mailpit,
   messageIdsTo,
@@ -11,7 +12,6 @@ import {
   replayedStatus,
   scriptVisibleCookies,
   sessionCookie,
-  storageSizes,
   unique,
 } from './support.ts'
 
@@ -157,7 +157,7 @@ test.describe('signing in and out of the Console', () => {
     const session = await sessionCookie(context)
     expect(session).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Lax' })
     expect(await scriptVisibleCookies(page)).not.toContain('flowlife-session')
-    expect(await storageSizes(page)).toEqual({ local: 0, session: 0 })
+    await expectOnlyUiPreferences(page)
 
     // A refresh keeps the session: the Console re-asks the platform, it does not remember.
     await page.reload()
@@ -366,7 +366,7 @@ test.describe('accepting an invitation', () => {
 
     // The session is the HttpOnly cookie, and none of it (secret, codes, password) touched storage or the console.
     expect((await sessionCookie(context))?.httpOnly).toBe(true)
-    expect(await storageSizes(page)).toEqual({ local: 0, session: 0 })
+    await expectOnlyUiPreferences(page)
     const output = logged.join('\n')
     for (const forbidden of [secret, password, ...codes]) expect(output).not.toContain(forbidden)
   })
@@ -403,7 +403,7 @@ test.describe('accepting an invitation', () => {
 
     expect(logged.join('\n')).not.toContain(LINK_INVITEE.token)
     expect(logged.join('\n')).not.toContain(password)
-    expect(await storageSizes(page)).toEqual({ local: 0, session: 0 })
+    await expectOnlyUiPreferences(page)
   })
 })
 
@@ -521,7 +521,7 @@ test.describe('a forgotten password', () => {
     const output = logged.join('\n')
     for (const secret of [token, newPassword, RECOVERY.password])
       expect(output).not.toContain(secret)
-    expect(await storageSizes(anonymous)).toEqual({ local: 0, session: 0 })
+    await expectOnlyUiPreferences(anonymous)
 
     for (const page of [owner, anonymous]) await page.context().close()
   })

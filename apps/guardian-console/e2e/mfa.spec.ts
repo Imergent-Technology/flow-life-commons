@@ -4,11 +4,11 @@ import {
   apiFrom,
   captureConsole,
   clipboardText,
+  expectOnlyUiPreferences,
   meStatus,
   nextCode,
   recoveryCodesFor,
   sessionCookie,
-  storageSizes,
   totpForStep,
 } from './support.ts'
 
@@ -122,7 +122,7 @@ test.describe('signing in with an authenticator', () => {
     await page.getByRole('link', { name: 'Account security' }).click()
     await expect(page.getByText('Authenticator app')).toBeVisible()
     await expect(page.locator('body')).not.toContainText(LATER.secret)
-    expect(await storageSizes(page)).toEqual({ local: 0, session: 0 })
+    await expectOnlyUiPreferences(page)
     const output = logged.join('\n')
     for (const forbidden of [LATER.password, LATER.secret, totpForStep(LATER.secret, 1)]) {
       expect(output).not.toContain(forbidden)
@@ -263,7 +263,7 @@ test.describe('managing two-step verification', () => {
 
     // The session survived, rotated; the secret is nowhere in storage or the console.
     expect(await meStatus(page)).toBe(200)
-    expect(await storageSizes(page)).toEqual({ local: 0, session: 0 })
+    await expectOnlyUiPreferences(page)
     const output = logged.join('\n')
     for (const forbidden of [MANAGE.secret, replacement, MANAGE.password, ...fresh]) {
       expect(output).not.toContain(forbidden)
@@ -379,7 +379,7 @@ test.describe('a replacement setup the server no longer holds', () => {
     await expect(tab.getByText(/This setup key expires at/)).toBeVisible()
 
     // None of the three secrets, the password or the codes reached storage or the console.
-    expect(await storageSizes(tab)).toEqual({ local: 0, session: 0 })
+    await expectOnlyUiPreferences(tab)
     const output = logged.join('\n')
     for (const forbidden of [abandoned, finished, again, STALE.password, ...codes]) {
       expect(output).not.toContain(forbidden)

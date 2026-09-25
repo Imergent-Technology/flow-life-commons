@@ -45,13 +45,52 @@ export async function locationOf(
   })
 }
 
-/** What browser storage holds: the Console must never put anything there. */
-export async function storageSizes(page: Page): Promise<{ local: number; session: number }> {
-  return page.evaluate(() => ({
-    local: (globalThis as unknown as { localStorage: { length: number } }).localStorage.length,
-    session: (globalThis as unknown as { sessionStorage: { length: number } }).sessionStorage
-      .length,
-  }))
+/**
+ * What browser storage holds. `sessionStorage` must be empty, always: the Console never puts anything
+ * there. `localStorage` may hold at most the one UI-preferences key (ADR 0030), and if it exists its
+ * shape is checked exactly — this is a security assertion, not a count. A malicious or accidental
+ * extra field such as `token`, `email`, `secret` or `account_id` fails it even though storage still
+ * holds only the one key, because the check is on the parsed object's fields, not on how many keys
+ * exist.
+ */
+export async function expectOnlyUiPreferences(page: Page): Promise<void> {
+  const result = await page.evaluate(() => {
+    const g = globalThis as unknown as { localStorage: Storage; sessionStorage: Storage }
+    return {
+      localKeys: Object.keys(g.localStorage),
+      sessionLength: g.sessionStorage.length,
+      raw: g.localStorage.getItem('flowlife.console.ui'),
+    }
+  })
+
+  expect(result.sessionLength, 'sessionStorage must be empty').toBe(0)
+  expect(
+    result.localKeys.length,
+    `localStorage must hold at most the UI-preferences key; found ${result.localKeys.join(', ')}`,
+  ).toBeLessThanOrEqual(1)
+  if (result.localKeys.length === 1) {
+    expect(result.localKeys[0], 'the one key localStorage may hold').toBe('flowlife.console.ui')
+  }
+
+  const raw = result.raw
+  if (raw === null) return
+
+  let parsed: unknown
+  expect(() => {
+    parsed = JSON.parse(raw)
+  }, 'the UI-preferences key must hold valid JSON').not.toThrow()
+  expect(typeof parsed === 'object' && parsed !== null, 'must be a JSON object').toBe(true)
+
+  const record = parsed as Record<string, unknown>
+  const allowed = new Set(['v', 'theme', 'nav'])
+  const unexpected = Object.keys(record).filter((key) => !allowed.has(key))
+  expect(
+    unexpected,
+    `unexpected field(s) in the UI-preferences key: ${unexpected.join(', ')}`,
+  ).toEqual([])
+  expect(record.v, 'schema version').toBe(1)
+  expect(['system', 'light', 'dark'], 'theme').toContain(record.theme)
+  if ('nav' in record) expect(['pinned', 'overlay'], 'nav').toContain(record.nav)
 }
 
 /** Collects what the page writes to the browser console, so a journey can prove no secret was logged. */

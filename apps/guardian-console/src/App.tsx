@@ -24,80 +24,86 @@ import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { ResetPasswordPage } from './pages/ResetPasswordPage.tsx'
 import { ConsoleLayout } from './ui/ConsoleLayout.tsx'
+import { ThemeProvider } from './ui/ThemeProvider.tsx'
 
 /**
  * The Console's routes. Public pages need no session; everything else sits behind the authentication
  * boundary and then the Console-access boundary. Console routes must never start with /api or be /up:
  * the gateway sends those to the platform, not to this app.
+ *
+ * ThemeProvider wraps everything, including the public pages: the theme is a device/interface fact
+ * (ADR 0030), not an account one, so it applies whether or not anyone is signed in.
  */
 function App() {
   return (
-    <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
-        <Route path="/accept-invitation" element={<AcceptInvitationPage />} />
+    <ThemeProvider>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/accept-invitation" element={<AcceptInvitationPage />} />
 
-        <Route element={<RequireAuthentication />}>
-          <Route element={<RequireConsoleAccess />}>
-            <Route element={<ConsoleLayout />}>
-              <Route index element={<HomePage />} />
-              <Route path="account/security" element={<AccountSecurityPage />} />
-              <Route
-                path="admin/accounts"
-                element={
-                  <RequireCapability capability={ACCOUNTS_VIEW}>
-                    <AccountsPage />
-                  </RequireCapability>
-                }
-              />
-              <Route
-                path="admin/accounts/invite"
-                element={
-                  <RequireCapability capability={INVITATIONS_ISSUE}>
-                    <InviteOperatorPage />
-                  </RequireCapability>
-                }
-              />
-              <Route
-                path="admin/accounts/:id"
-                element={
-                  <RequireCapability capability={ACCOUNTS_VIEW}>
-                    <AccountDetailPage />
-                  </RequireCapability>
-                }
-              />
-              <Route
-                path="admin/members"
-                element={
-                  <RequireCapability capability={MEMBERSHIP_VIEW}>
-                    <MembersPage />
-                  </RequireCapability>
-                }
-              />
-              <Route
-                path="admin/members/new"
-                element={
-                  <RequireCapability capability={MEMBERSHIP_MANAGE}>
-                    <RegisterMemberPage />
-                  </RequireCapability>
-                }
-              />
-              <Route
-                path="admin/members/:personId"
-                element={
-                  <RequireCapability capability={MEMBERSHIP_VIEW}>
-                    <MemberDetailPage />
-                  </RequireCapability>
-                }
-              />
-              <Route path="*" element={<NotFoundPage />} />
+          <Route element={<RequireAuthentication />}>
+            <Route element={<RequireConsoleAccess />}>
+              <Route element={<ConsoleLayout />}>
+                <Route index element={<HomePage />} />
+                <Route path="account/security" element={<AccountSecurityPage />} />
+                <Route
+                  path="admin/accounts"
+                  element={
+                    <RequireCapability capability={ACCOUNTS_VIEW}>
+                      <AccountsPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="admin/accounts/invite"
+                  element={
+                    <RequireCapability capability={INVITATIONS_ISSUE}>
+                      <InviteOperatorPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="admin/accounts/:id"
+                  element={
+                    <RequireCapability capability={ACCOUNTS_VIEW}>
+                      <AccountDetailPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="admin/members"
+                  element={
+                    <RequireCapability capability={MEMBERSHIP_VIEW}>
+                      <MembersPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="admin/members/new"
+                  element={
+                    <RequireCapability capability={MEMBERSHIP_MANAGE}>
+                      <RegisterMemberPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="admin/members/:personId"
+                  element={
+                    <RequireCapability capability={MEMBERSHIP_VIEW}>
+                      <MemberDetailPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route path="*" element={<NotFoundPage />} />
+              </Route>
             </Route>
           </Route>
-        </Route>
-      </Routes>
-    </AuthProvider>
+        </Routes>
+      </AuthProvider>
+    </ThemeProvider>
   )
 }
 

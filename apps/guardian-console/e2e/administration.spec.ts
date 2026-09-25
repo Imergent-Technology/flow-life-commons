@@ -3,12 +3,12 @@ import { expect, test, type Browser, type Page } from '@playwright/test'
 import {
   apiFrom,
   captureConsole,
+  expectOnlyUiPreferences,
   invitationEmailedTo,
   meStatus,
   nextCode,
   recoveryCodesFor,
   signedInAs,
-  storageSizes,
   unique,
 } from './support.ts'
 
@@ -179,7 +179,7 @@ test.describe('recent verification', () => {
 
     // The proof, the password and the code were never logged and never put in browser storage.
     expect(logged.join('\n')).not.toContain(STALE_ADMIN.password)
-    expect(await storageSizes(admin)).toEqual({ local: 0, session: 0 })
+    await expectOnlyUiPreferences(admin)
   })
 })
 
