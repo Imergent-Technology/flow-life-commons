@@ -7,11 +7,15 @@ import { describeMembershipFailure } from '../../admin/wording.ts'
 import { registerMember, type Member, type MembershipSource } from '../../api/membership.ts'
 import type { FieldErrors } from '../../api/http.ts'
 import { Alert } from '../../ui/Alert.tsx'
-import { secondaryButton } from '../../ui/classes.ts'
-import { PageHeading } from '../../ui/PageHeading.tsx'
+import { buttonVariants } from '../../ui/button-variants.ts'
+import { Button } from '../../ui/Button.tsx'
+import { Page } from '../../ui/Page.tsx'
+import { PageHeader } from '../../ui/PageHeader.tsx'
+import { Panel } from '../../ui/Panel.tsx'
 import { type Problem } from '../../ui/problem.ts'
 import { SubmitButton } from '../../ui/SubmitButton.tsx'
 import { TextField } from '../../ui/TextField.tsx'
+import { MembershipSourceField } from './MembershipSourceField.tsx'
 import { MembershipTermFields } from './MembershipTermFields.tsx'
 
 /**
@@ -74,18 +78,19 @@ export function RegisterMemberPage() {
 
   if (result !== null) {
     return (
-      <div className="flex max-w-lg flex-col gap-4">
-        <PageHeading title="Member added" />
+      <Page width="form">
+        <PageHeader title="Member added" />
         <Alert tone="success" focusOnMount>
           {result.person.displayName} was added as a new Person, with an initial membership grant.
         </Alert>
         <div className="flex flex-wrap gap-3">
-          <Link to={`/admin/members/${result.person.id}`} className={secondaryButton}>
+          <Link
+            to={`/admin/members/${result.person.id}`}
+            className={buttonVariants({ variant: 'secondary' })}
+          >
             Open the member
           </Link>
-          <button
-            type="button"
-            className={secondaryButton}
+          <Button
             onClick={() => {
               setResult(null)
               setDisplayName('')
@@ -95,19 +100,18 @@ export function RegisterMemberPage() {
             }}
           >
             Add another member
-          </button>
+          </Button>
         </div>
-      </div>
+      </Page>
     )
   }
 
   return (
-    <div className="flex max-w-lg flex-col gap-4">
-      <PageHeading title="Add a new member" />
-      <p className="text-sm text-slate-600">
-        This creates a new Person record and grants them membership access. It does not create a
-        Console account, an invitation or any way to sign in.
-      </p>
+    <Page width="form">
+      <PageHeader
+        title="Add a new member"
+        description="This creates a new Person record and grants them membership access. It does not create a Console account, an invitation or any way to sign in."
+      />
       {notice ? (
         <Alert key={notice} tone="info" focusOnMount>
           {notice}
@@ -118,60 +122,47 @@ export function RegisterMemberPage() {
           {problem.message}
         </Alert>
       ) : null}
-      <form
-        aria-label="Add a new member"
-        onSubmit={(event: SyntheticEvent) => {
-          event.preventDefault()
-          void submit()
-        }}
-        className="flex flex-col gap-4"
-      >
-        <TextField
-          label="Display name"
-          name="display_name"
-          autoComplete="off"
-          value={displayName}
-          onChange={setDisplayName}
-          errors={problem?.fields.display_name}
-          maxLength={255}
-        />
-        <MembershipTermFields value={term} onChange={setTerm} errors={problem?.fields} />
-        <div className="flex flex-col gap-1">
-          <label htmlFor="source" className="text-sm font-medium text-slate-800">
-            Source
-          </label>
-          <select
-            id="source"
-            value={source}
-            onChange={(event) => {
-              setSource(event.target.value as MembershipSource)
-            }}
-            className="w-fit rounded-md border border-slate-300 bg-white px-3 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900"
-          >
-            <option value="operator">Operator</option>
-            <option value="luma_legacy">Luma legacy</option>
-          </select>
-        </div>
-        <TextField
-          label="Source reference"
-          name="source_reference"
-          autoComplete="off"
-          value={sourceReference}
-          onChange={setSourceReference}
-          errors={problem?.fields.source_reference}
-          hint="Optional. For Luma legacy reconciliation, an opaque reference you recognise. Never checked against anything."
-          required={false}
-          maxLength={191}
-        />
-        <div className="flex gap-3">
-          <SubmitButton pending={pending} pendingLabel="Adding…">
-            Add member
-          </SubmitButton>
-          <Link to="/admin/members" className={secondaryButton}>
-            Cancel
-          </Link>
-        </div>
-      </form>
-    </div>
+      <Panel>
+        <form
+          aria-label="Add a new member"
+          onSubmit={(event: SyntheticEvent) => {
+            event.preventDefault()
+            void submit()
+          }}
+          className="flex flex-col gap-4"
+        >
+          <TextField
+            label="Display name"
+            name="display_name"
+            autoComplete="off"
+            value={displayName}
+            onChange={setDisplayName}
+            errors={problem?.fields.display_name}
+            maxLength={255}
+          />
+          <MembershipTermFields value={term} onChange={setTerm} errors={problem?.fields} />
+          <MembershipSourceField value={source} onChange={setSource} />
+          <TextField
+            label="Source reference"
+            name="source_reference"
+            autoComplete="off"
+            value={sourceReference}
+            onChange={setSourceReference}
+            errors={problem?.fields.source_reference}
+            hint="Optional. For Luma legacy reconciliation, an opaque reference you recognise. Never checked against anything."
+            required={false}
+            maxLength={191}
+          />
+          <div className="flex flex-wrap gap-3">
+            <SubmitButton pending={pending} pendingLabel="Adding…">
+              Add member
+            </SubmitButton>
+            <Link to="/admin/members" className={buttonVariants({ variant: 'secondary' })}>
+              Cancel
+            </Link>
+          </div>
+        </form>
+      </Panel>
+    </Page>
   )
 }

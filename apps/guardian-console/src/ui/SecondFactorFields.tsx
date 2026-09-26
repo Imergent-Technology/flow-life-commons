@@ -1,6 +1,7 @@
 import type { Ref } from 'react'
 
 import type { FieldErrors } from '../api/http.ts'
+import { Button } from './Button.tsx'
 import type { FactorMode } from './factor.ts'
 import { TextField } from './TextField.tsx'
 import { TotpCodeField } from './TotpCodeField.tsx'
@@ -51,16 +52,17 @@ export function SecondFactorFields({
           disabled={disabled}
         />
       )}
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => {
           onValueChange('')
           onModeChange(other)
         }}
-        className="self-start text-sm text-slate-700 underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
+        className="self-start"
       >
         {mode === 'code' ? 'Use a recovery code instead' : 'Use an authenticator code instead'}
-      </button>
+      </Button>
     </div>
   )
 }

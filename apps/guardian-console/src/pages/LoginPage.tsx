@@ -1,5 +1,5 @@
 import { useRef, useState, type SyntheticEvent } from 'react'
-import { Link, Navigate, useLocation } from 'react-router'
+import { Navigate, useLocation } from 'react-router'
 
 import { useAuth } from '../auth/auth-context.ts'
 import { returnPathFrom } from '../auth/returnPath.ts'
@@ -12,6 +12,7 @@ import { ServiceUnavailable } from '../ui/ServiceUnavailable.tsx'
 import { StatusScreen } from '../ui/StatusScreen.tsx'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
 import { TextField } from '../ui/TextField.tsx'
+import { TextLink } from '../ui/TextLink.tsx'
 
 // One sentence for EVERY refused sign-in (unknown address, wrong password, invited Account, disabled
 // Account). The server answers them identically on purpose; the screen must not undo that.
@@ -98,17 +99,20 @@ export function LoginPage() {
           value={password}
           onChange={setPassword}
         />
-        <SubmitButton pending={pending} pendingLabel="Signing in…">
+        <SubmitButton size="lg" fullWidth pending={pending} pendingLabel="Signing in…">
           Sign in
         </SubmitButton>
       </form>
-      <nav aria-label="Account help" className="flex flex-col gap-1 text-sm">
-        <Link to="/forgot-password" className="text-slate-700 underline">
+      <nav
+        aria-label="Account help"
+        className="flex flex-col gap-1.5 border-t border-border pt-4 text-label"
+      >
+        <TextLink to="/forgot-password" className="self-start">
           Forgot your password?
-        </Link>
-        <Link to="/accept-invitation" className="text-slate-700 underline">
+        </TextLink>
+        <TextLink to="/accept-invitation" className="self-start">
           I have an invitation
-        </Link>
+        </TextLink>
       </nav>
     </AuthLayout>
   )

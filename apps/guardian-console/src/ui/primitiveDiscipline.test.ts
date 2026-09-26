@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-// The smallest check that the WP3 primitives keep to the semantic visual system (ADR 0030): no raw
-// palette utility, no arbitrary colour, no `dark:` variant, no reading of the theme. It scans a named
-// list, not every file in src/ui: the legacy pages and components that have not migrated yet are WP5's,
-// and the permanent repository-wide rule is WP6's (with its own positive controls).
+// The smallest check that the primitives, the shell and (since WP5) every page and auth file keep to the
+// semantic visual system (ADR 0030): no raw palette utility, no arbitrary colour, no `dark:` variant, no
+// reading of the theme. The permanent repository-wide rule is WP6's (with its own positive controls).
 
 const primitives = [
   'Alert',
@@ -31,11 +30,14 @@ const primitives = [
 ].map((name) => `./${name}.tsx`)
 const supporting = ['./cn.ts', './button-variants.ts', './control-styles.ts', './usePageHeading.ts']
 
-const sources = import.meta.glob<string>(['./*.{ts,tsx}', '../shell/*.{ts,tsx}'], {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-})
+const sources = import.meta.glob<string>(
+  ['./*.{ts,tsx}', '../shell/*.{ts,tsx}', '../pages/**/*.{ts,tsx}', '../auth/*.{ts,tsx}'],
+  {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  },
+)
 
 const palette =
   'slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose'
@@ -105,8 +107,27 @@ const shell = Object.keys(sources).filter(
   (path) => path.startsWith('../shell/') && !/\.test\.tsx?$/.test(path),
 )
 
+// The theme machinery itself is the one thing allowed to read the theme.
+const themeInfrastructure = new Set([
+  './ThemeProvider.tsx',
+  './preferences.ts',
+  './theme-context.ts',
+])
+
+// Every page, credential flow and boundary component, and every non-test file in src/ui: migrated in WP5.
+const migrated = Object.keys(sources).filter(
+  (path) =>
+    (path.startsWith('../pages/') ||
+      path.startsWith('../auth/') ||
+      (path.startsWith('./') && !themeInfrastructure.has(path))) &&
+    !/\.test\.tsx?$/.test(path),
+)
+
 const scanned = Object.fromEntries(
-  [...primitives, ...supporting, ...shell].map((path) => [path, sources[path] ?? '']),
+  [...new Set([...primitives, ...supporting, ...shell, ...migrated])].map((path) => [
+    path,
+    sources[path] ?? '',
+  ]),
 )
 
 describe('the new primitives keep to the semantic visual system', () => {
@@ -125,6 +146,22 @@ describe('the new primitives keep to the semantic visual system', () => {
       '../shell/Rail.tsx',
     ]) {
       expect(shell).toContain(expected)
+    }
+  })
+
+  it('includes every page, not an empty set', () => {
+    expect(migrated.length).toBeGreaterThanOrEqual(60)
+    for (const expected of [
+      '../pages/OverviewPage.tsx',
+      '../pages/LoginPage.tsx',
+      '../pages/AccountSecurityPage.tsx',
+      '../pages/admin/AccountsPage.tsx',
+      '../pages/admin/MembersPage.tsx',
+      '../pages/admin/AccountDetailPage.tsx',
+      '../auth/RequireCapability.tsx',
+      './AuthLayout.tsx',
+    ]) {
+      expect(migrated).toContain(expected)
     }
   })
 

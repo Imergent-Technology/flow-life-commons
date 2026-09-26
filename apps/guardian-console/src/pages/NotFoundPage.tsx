@@ -1,15 +1,14 @@
-import { Link } from 'react-router'
-
-import { PageHeading } from '../ui/PageHeading.tsx'
+import { Page } from '../ui/Page.tsx'
+import { PageHeader } from '../ui/PageHeader.tsx'
+import { TextLink } from '../ui/TextLink.tsx'
 
 export function NotFoundPage() {
   return (
-    <div className="flex flex-col gap-3">
-      <PageHeading title="Page not found" />
-      <p className="text-slate-600">There is nothing at this address.</p>
-      <Link to="/" className="self-start text-slate-700 underline">
+    <Page width="prose">
+      <PageHeader title="Page not found" description="There is nothing at this address." />
+      <TextLink to="/" className="self-start">
         Back to the Console
-      </Link>
-    </div>
+      </TextLink>
+    </Page>
   )
 }

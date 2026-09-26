@@ -51,9 +51,7 @@ describe('resolving who is signed in', () => {
       await Promise.resolve()
     })
 
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Flow Life Guardian Console' }),
-    ).toBeVisible()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
   })
 
   it('shows the signed-in Account: name, address, session times, sign out, and the way to Account security', async () => {
@@ -394,7 +392,7 @@ describe('signing out', () => {
 
     await signInThroughTheForm(user)
 
-    expect(await screen.findByRole('heading', { name: 'Flow Life Guardian Console' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeVisible()
     expect(where()).toBe('/')
   })
 

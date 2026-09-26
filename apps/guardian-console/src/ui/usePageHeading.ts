@@ -8,7 +8,7 @@ import { useEffect, useRef } from 'react'
 export function usePageHeading(title: string) {
   const ref = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
-    document.title = `${title} · Flow Life Guardian Console`
+    document.title = `${title} · Flow Life Commons`
     ref.current?.focus()
   }, [title])
   return ref

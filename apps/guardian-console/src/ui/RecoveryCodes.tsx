@@ -1,6 +1,8 @@
 import { useState } from 'react'
 
 import { Alert } from './Alert.tsx'
+import { Button } from './Button.tsx'
+import { Checkbox } from './Checkbox.tsx'
 
 /**
  * Recovery codes, shown ONCE. They are single-use, the server keeps only digests and cannot show them
@@ -36,7 +38,7 @@ export function RecoveryCodes({
 
   function download() {
     const file = new Blob(
-      [`Flow Life Guardian Console recovery codes\nEach code works once.\n\n${codes.join('\n')}\n`],
+      [`Flow Life Commons recovery codes\nEach code works once.\n\n${codes.join('\n')}\n`],
       { type: 'text/plain' },
     )
     const url = URL.createObjectURL(file)
@@ -56,52 +58,31 @@ export function RecoveryCodes({
       </Alert>
       <ol
         aria-label="Recovery codes"
-        className="grid grid-cols-1 gap-1 rounded-md border border-slate-200 bg-slate-50 p-3 font-mono text-sm sm:grid-cols-2"
+        className="grid grid-cols-1 gap-1 rounded-md border border-border bg-muted p-3 font-mono text-meta text-foreground sm:grid-cols-2"
       >
         {codes.map((code) => (
           <li key={code}>{code}</li>
         ))}
       </ol>
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={copy}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
-        >
-          Copy codes
-        </button>
-        <button
-          type="button"
-          onClick={download}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
-        >
-          Download as a file
-        </button>
+        <Button onClick={copy}>Copy codes</Button>
+        <Button onClick={download}>Download as a file</Button>
       </div>
       {note ? (
-        <p role="status" className="text-sm text-slate-600">
+        <p role="status" className="text-label text-muted-foreground">
           {note}
         </p>
       ) : null}
-      <label className="flex items-start gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={saved}
-          onChange={(event) => {
-            setSaved(event.target.checked)
-          }}
-          className="mt-1"
-        />
-        <span>I have saved these recovery codes somewhere safe.</span>
-      </label>
-      <button
-        type="button"
-        disabled={!saved}
-        onClick={onDone}
-        className="self-start rounded-md bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:cursor-not-allowed disabled:bg-slate-500"
-      >
+      <Checkbox
+        label="I have saved these recovery codes somewhere safe."
+        checked={saved}
+        onChange={(event) => {
+          setSaved(event.target.checked)
+        }}
+      />
+      <Button variant="primary" disabled={!saved} onClick={onDone} className="self-start">
         {doneLabel}
-      </button>
+      </Button>
     </div>
   )
 }

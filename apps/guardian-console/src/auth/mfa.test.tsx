@@ -317,8 +317,13 @@ describe('enrolling an authenticator on first sign-in', () => {
     expect(qr.querySelector('path')?.getAttribute('d')?.length).toBeGreaterThan(100)
     // The manual key, in groups of four, for people who cannot scan.
     expect(screen.getByText('JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP')).toBeVisible()
-    // No image, no request for one: every request the Console made went to the platform API.
-    expect(document.querySelector('img')).toBeNull()
+    // The QR code is not an image file: the only <img> on the page is the decorative same-origin brand badge, so
+    // nothing fetched an image built from the secret. Every request the Console made went to the platform API.
+    for (const image of document.querySelectorAll('img')) {
+      expect(image).toHaveAttribute('alt', '')
+      expect(image.getAttribute('src')).toMatch(/^\/[^/]/)
+      expect(image.getAttribute('src')).not.toContain('otpauth')
+    }
     for (const call of api.calls) expect(call.path).toMatch(/^\/api\/v1\//)
     expect(screen.getByLabelText('Authentication code')).toHaveAttribute(
       'autocomplete',

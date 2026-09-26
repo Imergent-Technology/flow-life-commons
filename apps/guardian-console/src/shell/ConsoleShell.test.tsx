@@ -561,7 +561,7 @@ describe('focus after navigation, from every origin', () => {
     const user = userEvent.setup()
     await open('/account/security', 1400)
     await user.click(within(railNav()).getByRole('link', { name: 'Overview' }))
-    expect(await heading('Flow Life Guardian Console')).toHaveFocus()
+    expect(await heading('Overview')).toHaveFocus()
   })
 
   it('pinned drawer', async () => {

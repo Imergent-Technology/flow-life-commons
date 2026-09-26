@@ -61,8 +61,7 @@ const PENDING: Fixture = {
   tag: 'P',
 }
 
-const consoleHeading = (page: Page) =>
-  page.getByRole('heading', { level: 1, name: 'Flow Life Guardian Console' })
+const consoleHeading = (page: Page) => page.getByRole('heading', { level: 1, name: 'Overview' })
 const codeStep = (page: Page) => page.getByRole('heading', { level: 1, name: 'Enter your code' })
 const loginHeading = (page: Page) => page.getByRole('heading', { level: 1, name: 'Sign in' })
 

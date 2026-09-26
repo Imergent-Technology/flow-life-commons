@@ -1,12 +1,11 @@
 import { useState, type SyntheticEvent } from 'react'
-import { Link } from 'react-router'
-
 import { requestPasswordReset } from '../api/auth.ts'
 import { Alert } from '../ui/Alert.tsx'
 import { AuthLayout } from '../ui/AuthLayout.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
 import { TextField } from '../ui/TextField.tsx'
+import { TextLink } from '../ui/TextLink.tsx'
 
 // The same words whether or not an Account exists for the address, is invited, or is disabled. The
 // server answers all of those identically (and takes the same time), and the screen must too: this is
@@ -69,15 +68,15 @@ export function ForgotPasswordPage() {
               onChange={setEmail}
               errors={problem?.fields.email}
             />
-            <SubmitButton pending={pending} pendingLabel="Sending…">
+            <SubmitButton size="lg" fullWidth pending={pending} pendingLabel="Sending…">
               Send reset link
             </SubmitButton>
           </form>
         </>
       )}
-      <Link to="/login" className="text-sm text-slate-700 underline">
+      <TextLink to="/login" className="self-start text-label">
         Back to sign in
-      </Link>
+      </TextLink>
     </AuthLayout>
   )
 }

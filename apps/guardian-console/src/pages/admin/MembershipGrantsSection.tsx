@@ -18,10 +18,12 @@ import {
   type MembershipTerm,
 } from '../../api/membership.ts'
 import { Alert } from '../../ui/Alert.tsx'
-import { dangerButton, secondaryButton } from '../../ui/classes.ts'
+import { Button } from '../../ui/Button.tsx'
 import type { ConfirmResult } from '../../ui/ConfirmDialog.tsx'
 import { ConfirmDialog } from '../../ui/ConfirmDialog.tsx'
+import { Panel } from '../../ui/Panel.tsx'
 import { TextField } from '../../ui/TextField.tsx'
+import { MembershipSourceField } from './MembershipSourceField.tsx'
 import { MembershipTermFields } from './MembershipTermFields.tsx'
 
 /** A grant's own facts: what it means for the OVERALL record is derived server-side and shown above this section. */
@@ -36,25 +38,28 @@ function GrantRow({
 }) {
   const revoked = grant.revokedAt !== null
   return (
-    <li className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-slate-200 p-3">
-      <div className="text-sm">
-        <p className="font-medium">
-          {shown(grant.startsAt)} – {grant.endsAt === null ? 'open-ended' : shown(grant.endsAt)}
-        </p>
-        <p className="text-slate-600">
-          {membershipSourceLabel(grant.source)}
-          {grant.sourceReference !== null && grant.sourceReference !== ''
-            ? ` · Reference: ${grant.sourceReference}`
-            : ''}
-        </p>
-        <p className={revoked ? 'font-medium text-red-800' : 'text-slate-500'}>
-          {revoked ? `Revoked ${shown(grant.revokedAt)}` : 'Not revoked'}
-        </p>
-      </div>
+    <li className="grid items-center gap-x-4 gap-y-1 p-3 text-body md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_9.5rem]">
+      <p className="font-medium text-foreground">
+        {shown(grant.startsAt)} – {grant.endsAt === null ? 'open-ended' : shown(grant.endsAt)}
+      </p>
+      <p className="wrap-anywhere text-muted-foreground">
+        {membershipSourceLabel(grant.source)}
+        {grant.sourceReference !== null && grant.sourceReference !== ''
+          ? ` · Reference: ${grant.sourceReference}`
+          : ''}
+      </p>
+      <p className={revoked ? 'font-medium text-danger' : 'text-muted-foreground'}>
+        {revoked ? `Revoked ${shown(grant.revokedAt)}` : 'Not revoked'}
+      </p>
       {mayManage && !revoked ? (
-        <button type="button" className={dangerButton} onClick={onRevoke}>
+        <Button
+          variant="danger"
+          size="sm"
+          onClick={onRevoke}
+          className="justify-self-start md:justify-self-end"
+        >
           Revoke this grant
-        </button>
+        </Button>
       ) : null}
     </li>
   )
@@ -158,97 +163,77 @@ export function MembershipGrantsSection({
   }
 
   return (
-    <section aria-labelledby="grants-heading" className="flex flex-col gap-3">
-      <h2 id="grants-heading" className="text-lg font-medium">
-        Grant history
-      </h2>
-      {notice ? (
-        <Alert key={notice} tone="success">
-          {notice}
-        </Alert>
-      ) : null}
+    <Panel title="Grant history">
+      <div className="flex flex-col gap-3">
+        {notice ? (
+          <Alert key={notice} tone="success">
+            {notice}
+          </Alert>
+        ) : null}
 
-      {member.grants.length === 0 ? (
-        <p className="text-sm text-slate-600">No grants recorded.</p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {member.grants.map((grant) => (
-            <GrantRow
-              key={grant.id}
-              grant={grant}
-              mayManage={mayManage}
-              onRevoke={() => {
-                setNotice(null)
-                setRevoking(grant)
-              }}
-            />
-          ))}
-        </ul>
-      )}
-
-      {mayManage ? (
-        <div>
-          {!adding ? (
-            <button
-              type="button"
-              className={secondaryButton}
-              onClick={() => {
-                setNotice(null)
-                setAdding(true)
-              }}
-            >
-              Add grant
-            </button>
-          ) : (
-            <div className="flex flex-col gap-3 rounded-md border border-slate-200 p-3">
-              <MembershipTermFields value={term} onChange={setTerm} errors={fieldErrors} />
-              <div className="flex flex-col gap-1">
-                <label htmlFor="grant-source" className="text-sm font-medium text-slate-800">
-                  Source
-                </label>
-                <select
-                  id="grant-source"
-                  value={source}
-                  onChange={(event) => {
-                    setSource(event.target.value as MembershipSource)
-                  }}
-                  className="w-fit rounded-md border border-slate-300 bg-white px-3 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900"
-                >
-                  <option value="operator">Operator</option>
-                  <option value="luma_legacy">Luma legacy</option>
-                </select>
-              </div>
-              <TextField
-                label="Source reference"
-                name="source_reference"
-                autoComplete="off"
-                value={sourceReference}
-                onChange={setSourceReference}
-                errors={fieldErrors.source_reference}
-                hint="Optional, and never checked against anything."
-                required={false}
-                maxLength={191}
+        {member.grants.length === 0 ? (
+          <p className="text-body text-muted-foreground">No grants recorded.</p>
+        ) : (
+          <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
+            {member.grants.map((grant) => (
+              <GrantRow
+                key={grant.id}
+                grant={grant}
+                mayManage={mayManage}
+                onRevoke={() => {
+                  setNotice(null)
+                  setRevoking(grant)
+                }}
               />
-              <div className="flex gap-3">
-                <button type="button" className={secondaryButton} onClick={review}>
-                  Review and add
-                </button>
-                <button
-                  type="button"
-                  className={secondaryButton}
-                  onClick={() => {
-                    setAdding(false)
-                    setTerm(initialMembershipTerm)
-                    setFieldErrors({})
-                  }}
-                >
-                  Cancel
-                </button>
+            ))}
+          </ul>
+        )}
+
+        {mayManage ? (
+          <div>
+            {!adding ? (
+              <Button
+                onClick={() => {
+                  setNotice(null)
+                  setAdding(true)
+                }}
+              >
+                Add grant
+              </Button>
+            ) : (
+              <div className="flex flex-col gap-3 rounded-md border border-border bg-muted p-3">
+                <MembershipTermFields value={term} onChange={setTerm} errors={fieldErrors} />
+                <MembershipSourceField value={source} onChange={setSource} />
+                <TextField
+                  label="Source reference"
+                  name="source_reference"
+                  autoComplete="off"
+                  value={sourceReference}
+                  onChange={setSourceReference}
+                  errors={fieldErrors.source_reference}
+                  hint="Optional, and never checked against anything."
+                  required={false}
+                  maxLength={191}
+                />
+                <div className="flex gap-3">
+                  <Button variant="primary" onClick={review}>
+                    Review and add
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setAdding(false)
+                      setTerm(initialMembershipTerm)
+                      setFieldErrors({})
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-      ) : null}
+            )}
+          </div>
+        ) : null}
+      </div>
 
       {confirmingGrant ? (
         <ConfirmDialog
@@ -291,6 +276,6 @@ export function MembershipGrantsSection({
           </p>
         </ConfirmDialog>
       ) : null}
-    </section>
+    </Panel>
   )
 }

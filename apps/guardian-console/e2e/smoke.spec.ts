@@ -16,8 +16,8 @@ test('Guardian Console loads, styles apply, and the API is reachable same-origin
   const heading = page.getByRole('heading', { level: 1, name: 'Sign in' })
   await expect(heading).toBeVisible()
 
-  // Tailwind compiled: `text-2xl` is 1.5rem = 24px (the browser default h1 is 32px).
-  await expect(heading).toHaveCSS('font-size', '24px')
+  // Tailwind compiled: `text-title` is 1.9375rem = 31px (the browser default h1 is 32px, and 24px was the old text-2xl).
+  await expect(heading).toHaveCSS('font-size', '31px')
 
   // The API call went to the page's own origin, so it did not depend on CORS (ADR 0016).
   const response = await meResponse

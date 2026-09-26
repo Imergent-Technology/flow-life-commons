@@ -2,6 +2,7 @@ import { useRef, useState, type SyntheticEvent } from 'react'
 
 import { useAuth } from '../auth/auth-context.ts'
 import { Alert } from '../ui/Alert.tsx'
+import { Button } from '../ui/Button.tsx'
 import { AuthLayout } from '../ui/AuthLayout.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { proofFrom, type FactorMode } from '../ui/factor.ts'
@@ -63,19 +64,20 @@ export function MfaChallenge() {
           errors={problem?.fields ?? {}}
           inputRef={inputRef}
         />
-        <SubmitButton pending={pending} pendingLabel="Checking…">
+        <SubmitButton size="lg" fullWidth pending={pending} pendingLabel="Checking…">
           Sign in
         </SubmitButton>
       </form>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={() => {
           endPendingSignIn(null)
         }}
-        className="self-start text-sm text-slate-700 underline"
+        className="self-start"
       >
         Start over
-      </button>
+      </Button>
     </AuthLayout>
   )
 }

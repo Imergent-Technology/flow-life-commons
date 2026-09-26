@@ -1,6 +1,7 @@
 import type { Ref, SyntheticEvent } from 'react'
 
 import type { FieldErrors } from '../api/http.ts'
+import { Button } from './Button.tsx'
 import type { FactorMode } from './factor.ts'
 import { SecondFactorFields } from './SecondFactorFields.tsx'
 import { SubmitButton } from './SubmitButton.tsx'
@@ -48,9 +49,9 @@ export function ProofForm({
         event.preventDefault()
         onSubmit()
       }}
-      className="flex max-w-md flex-col gap-4"
+      className="flex flex-col gap-4"
     >
-      <p className="text-sm text-slate-600">
+      <p className="text-label text-muted-foreground">
         Confirm it is you: your password and a second-step code.
       </p>
       <TextField
@@ -75,13 +76,7 @@ export function ProofForm({
         <SubmitButton pending={pending} pendingLabel="Checking…">
           {submitLabel}
         </SubmitButton>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
-        >
-          Cancel
-        </button>
+        <Button onClick={onCancel}>Cancel</Button>
       </div>
     </form>
   )

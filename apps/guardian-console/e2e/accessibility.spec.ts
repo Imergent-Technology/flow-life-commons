@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
-import { apiFrom, signedInAs } from './support.ts'
+import { aMemberId, apiFrom, signedInAs } from './support.ts'
 
 /**
  * The production-readiness accessibility pass.
@@ -56,46 +56,140 @@ async function axeViolations(page: Page): Promise<string[]> {
   return violations
 }
 
-test.describe('accessibility of the principal screens', () => {
-  test('the public pages pass axe in a real browser, contrast included', async ({ page }) => {
-    for (const path of ['/login', '/forgot-password', '/reset-password', '/accept-invitation']) {
-      await page.goto(path)
-      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
-      expect(await axeViolations(page), path).toEqual([])
-    }
-  })
+const THEMES = ['light', 'dark'] as const
+type Theme = (typeof THEMES)[number]
 
-  test('the second-factor step passes too', async ({ page }) => {
-    // Reached for real, because it only exists mid-sign-in.
-    await page.goto('/login')
-    await page.getByLabel('Email address').fill(ADMIN.email)
-    await page.getByLabel('Password', { exact: true }).fill(ADMIN.password)
-    await page.getByRole('button', { name: 'Sign in' }).click()
-    await expect(page.getByRole('heading', { level: 1, name: 'Enter your code' })).toBeVisible()
+/** Seeds the one approved preference key before any page script runs, so the page boots in that theme. */
+async function inTheme(page: Page, theme: Theme): Promise<void> {
+  await page.context().addInitScript((value) => {
+    ;(
+      globalThis as unknown as { localStorage: { setItem: (k: string, v: string) => void } }
+    ).localStorage.setItem('flowlife.console.ui', JSON.stringify({ v: 1, theme: value }))
+  }, theme)
+}
 
-    expect(await axeViolations(page)).toEqual([])
-  })
+async function resolvedTheme(page: Page): Promise<string | undefined> {
+  return page.evaluate(
+    () =>
+      (globalThis as unknown as { document: { documentElement: { dataset: { theme?: string } } } })
+        .document.documentElement.dataset.theme,
+  )
+}
 
-  test('the signed-in and administration screens pass', async ({ browser, baseURL }) => {
-    const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
-    await admin.goto('/')
+/** Opens `path` in the theme, waits for the page's one h1 and for its data to arrive, and returns axe's findings. */
+async function auditRoute(page: Page, path: string, theme: Theme): Promise<string[]> {
+  await page.goto(path)
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  await page.waitForLoadState('networkidle')
+  // Skeletons and "Loading…" lines are gone: what is audited is the real page, not its placeholder.
+  await expect(page.locator('[aria-busy="true"]')).toHaveCount(0)
+  expect(await resolvedTheme(page), `${path} booted in ${theme}`).toBe(theme)
+  return axeViolations(page)
+}
 
-    for (const path of ['/', '/account/security', '/admin/accounts', '/admin/invitations/new']) {
-      await admin.goto(path)
+for (const theme of THEMES) {
+  test.describe(`accessibility of every screen in ${theme}`, () => {
+    test(`the public pages pass axe in a real browser, contrast included (${theme})`, async ({
+      page,
+    }) => {
+      await inTheme(page, theme)
+      for (const path of ['/login', '/forgot-password', '/reset-password', '/accept-invitation']) {
+        expect(await auditRoute(page, path, theme), path).toEqual([])
+      }
+    })
+
+    test(`the second-factor step passes too (${theme})`, async ({ page }) => {
+      // Reached for real, because it only exists mid-sign-in.
+      await inTheme(page, theme)
+      await page.goto('/login')
+      await page.getByLabel('Email address').fill(ADMIN.email)
+      await page.getByLabel('Password', { exact: true }).fill(ADMIN.password)
+      await page.getByRole('button', { name: 'Sign in' }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Enter your code' })).toBeVisible()
+
+      expect(await axeViolations(page)).toEqual([])
+    })
+
+    test(`the sign-in failure and service-unavailable screens pass (${theme})`, async ({
+      page,
+    }) => {
+      await inTheme(page, theme)
+      await page.goto('/login')
+      await page.getByLabel('Email address').fill('nobody@example.org')
+      await page.getByLabel('Password', { exact: true }).fill('not the password at all')
+      await page.getByRole('button', { name: 'Sign in' }).click()
+      await expect(page.getByRole('alert')).toBeVisible()
+      expect(await axeViolations(page), 'a refused sign-in').toEqual([])
+
+      await page.route('**/api/v1/me', (route) => route.abort())
+      await page.goto('/')
+      await expect(
+        page.getByRole('heading', { level: 1, name: 'Service unavailable' }),
+      ).toBeVisible()
+      expect(await axeViolations(page), 'service unavailable').toEqual([])
+    })
+
+    test(`the signed-in and administration screens pass (${theme})`, async ({
+      browser,
+      baseURL,
+    }) => {
+      const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
+      await inTheme(admin, theme)
+      await admin.goto('/')
+
+      const listed = await apiFrom(admin, 'GET', '/api/v1/admin/accounts?q=e2e.admin.read@')
+      const id = (listed.body as { data: { id: string }[] }).data[0]?.id ?? ''
+      const memberId = await aMemberId(admin)
+
+      for (const path of [
+        '/',
+        '/account/security',
+        '/admin/accounts',
+        '/admin/accounts/invite',
+        `/admin/accounts/${id}`,
+        '/admin/members',
+        '/admin/members/new',
+        `/admin/members/${memberId}`,
+        '/no/such/page',
+      ]) {
+        expect(await auditRoute(admin, path, theme), path).toEqual([])
+      }
+
+      await admin.context().close()
+    })
+
+    test(`a guardian refused a section, and a person refused the Console, pass (${theme})`, async ({
+      browser,
+      baseURL,
+    }) => {
+      const guardian = await signedInAs(browser, baseURL ?? '', 'plain-guardian')
+      await inTheme(guardian, theme)
+      expect(await auditRoute(guardian, '/admin/accounts', theme), 'not permitted').toEqual([])
+      await guardian.context().close()
+    })
+
+    test(`access denied passes (${theme})`, async ({ page }) => {
+      await inTheme(page, theme)
+      await page.goto('/login')
+      await page.getByLabel('Email address').fill('e2e.noaccess@example.org')
+      await page.getByLabel('Password', { exact: true }).fill('e2e-noaccess-password-not-a-secret')
+      await page.getByRole('button', { name: 'Sign in' }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Access denied' })).toBeVisible()
+      expect(await axeViolations(page)).toEqual([])
+    })
+
+    test(`dialogs pass (${theme})`, async ({ browser, baseURL }) => {
+      const admin = await openDisableTarget(browser, baseURL ?? '')
+      await inTheme(admin, theme)
+      await admin.reload()
       await expect(admin.getByRole('heading', { level: 1 })).toBeVisible()
-      expect(await axeViolations(admin), path).toEqual([])
-    }
-
-    // And a detail page, which needs an id.
-    const listed = await apiFrom(admin, 'GET', '/api/v1/admin/accounts?q=e2e.admin.read@')
-    const id = (listed.body as { data: { id: string }[] }).data[0]?.id ?? ''
-    await admin.goto(`/admin/accounts/${id}`)
-    await expect(admin.getByRole('heading', { level: 1, name: 'E2E Admin Read' })).toBeVisible()
-    expect(await axeViolations(admin)).toEqual([])
-
-    await admin.context().close()
+      await admin.getByRole('button', { name: 'Disable this account' }).click()
+      await expect(admin.getByRole('dialog')).toBeVisible()
+      expect(await axeViolations(admin), 'the destructive confirmation').toEqual([])
+      await admin.context().close()
+    })
   })
-})
+}
 
 test.describe('what a rule engine cannot check', () => {
   test('returns focus to the control that opened a dialog when it is cancelled', async ({

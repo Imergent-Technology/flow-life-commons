@@ -87,7 +87,7 @@ test.describe('membership administration', () => {
     await admin.getByRole('dialog').getByRole('button', { name: 'Add grant' }).click()
     await expect(admin.getByText('A membership grant was added.')).toBeVisible()
     // The merged run is now open-ended (the summary line, distinct from a grant row's own lowercase "open-ended").
-    await expect(admin.locator('header').getByText('Open-ended', { exact: true })).toBeVisible()
+    await expect(admin.getByRole('main').getByText('Open-ended', { exact: true })).toBeVisible()
 
     // Revoke the ORIGINAL (bounded) grant; the record stays active because the open-ended one still covers it.
     const rows = admin.getByRole('main').getByRole('listitem').filter({ hasText: 'Operator' })

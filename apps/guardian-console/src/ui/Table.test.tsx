@@ -26,7 +26,9 @@ function Sample({ email = 'ada@example.org' }: { email?: string }) {
           <DataTableRowHeader>
             <a href="/m/1">Ada</a>
           </DataTableRowHeader>
-          <DataTableCell truncate>{email}</DataTableCell>
+          <DataTableCell label="Email" truncate>
+            {email}
+          </DataTableCell>
         </DataTableRow>
       </tbody>
     </DataTable>
@@ -52,7 +54,8 @@ describe('DataTable', () => {
   it('takes plain table props, so it is a table and nothing more', () => {
     render(<Sample />)
     expect(screen.getByRole('table')).toHaveClass('min-w-[32rem]')
-    expect(screen.getByRole('table').closest('div')).toHaveClass('overflow-x-auto')
+    // The table never scrolls sideways (its cells wrap or truncate), which is what lets the header stay put.
+    expect(screen.getByRole('table').closest('div')).not.toHaveClass('overflow-x-auto')
   })
 
   it('truncates on request and keeps the full text as a title', () => {
@@ -67,7 +70,7 @@ describe('DataTable', () => {
       <DataTable caption="T">
         <tbody>
           <DataTableRow>
-            <DataTableCell>Everything shown</DataTableCell>
+            <DataTableCell label="Note">Everything shown</DataTableCell>
           </DataTableRow>
         </tbody>
       </DataTable>,

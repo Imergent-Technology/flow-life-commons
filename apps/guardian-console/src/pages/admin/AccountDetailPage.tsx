@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { Link, useParams } from 'react-router'
+import { useParams } from 'react-router'
 
 import { getAccount } from '../../api/admin.ts'
 import { useLoad } from '../../admin/useLoad.ts'
@@ -16,9 +16,14 @@ import {
 } from '../../auth/capabilities.ts'
 import { useBreadcrumbLeaf } from '../../shell/breadcrumb-leaf.ts'
 import { Alert } from '../../ui/Alert.tsx'
-import { PageHeading } from '../../ui/PageHeading.tsx'
+import { DetailLayout, Page } from '../../ui/Page.tsx'
+import { PageHeader } from '../../ui/PageHeader.tsx'
+import { Panel } from '../../ui/Panel.tsx'
 import { describeFailure } from '../../ui/problem.ts'
+import { Property, PropertyList } from '../../ui/PropertyList.tsx'
+import { SkeletonRegion, SkeletonText } from '../../ui/Skeleton.tsx'
 import { StatusBadge } from '../../ui/StatusBadge.tsx'
+import { TextLink } from '../../ui/TextLink.tsx'
 import { AccessRolesSection } from './AccessRolesSection.tsx'
 import { AccountMembershipSection } from './AccountMembershipSection.tsx'
 import { AccountStatusSection } from './AccountStatusSection.tsx'
@@ -38,20 +43,22 @@ export function AccountDetailPage() {
 
   if (loaded.status === 'loading') {
     return (
-      <p role="status" className="text-slate-600">
-        Loading account…
-      </p>
+      <Page width="detail">
+        <SkeletonRegion label="Loading account…" visibleLabel>
+          <SkeletonText lines={4} />
+        </SkeletonRegion>
+      </Page>
     )
   }
   if (loaded.status === 'failed') {
     return (
-      <div className="flex max-w-md flex-col gap-3">
-        <PageHeading title="Account" />
+      <Page width="prose">
+        <PageHeader title="Account" />
         <Alert tone="error">{describeFailure(loaded.failure).message}</Alert>
-        <Link to="/admin/accounts" className="text-sm underline">
+        <TextLink to="/admin/accounts" className="self-start">
           Back to accounts
-        </Link>
-      </div>
+        </TextLink>
+      </Page>
     )
   }
 
@@ -59,65 +66,59 @@ export function AccountDetailPage() {
   const own = account.id === current.account.id
 
   return (
-    <div className="flex max-w-2xl flex-col gap-8">
-      <header className="flex flex-col gap-2">
-        <Link to="/admin/accounts" className="text-sm underline">
-          ← Accounts
-        </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <PageHeading title={account.displayName} />
-          <StatusBadge status={account.status} />
-        </div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-          <dt className="text-slate-500">Email</dt>
-          <dd className="break-all">{account.email}</dd>
-          <dt className="text-slate-500">Email verified</dt>
-          <dd>
-            {account.emailVerifiedAt === null ? 'Not verified' : shown(account.emailVerifiedAt)}
-          </dd>
-          <dt className="text-slate-500">Added</dt>
-          <dd>{shown(account.createdAt)}</dd>
-          <dt className="text-slate-500">Last signed in</dt>
-          <dd>{account.lastLoginAt === null ? 'Never' : shown(account.lastLoginAt)}</dd>
-          {account.disabledAt === null ? null : (
-            <>
-              <dt className="text-slate-500">Disabled</dt>
-              <dd>{shown(account.disabledAt)}</dd>
-            </>
-          )}
-        </dl>
-      </header>
+    <Page width="detail">
+      <PageHeader title={account.displayName} status={<StatusBadge status={account.status} />} />
 
-      {account.status === 'invited' || account.invitation !== null ? (
-        <InvitationSection
+      <DetailLayout
+        aside={
+          <Panel title="Details">
+            <PropertyList>
+              <Property term="Email">{account.email}</Property>
+              <Property term="Email verified">
+                {account.emailVerifiedAt === null ? 'Not verified' : shown(account.emailVerifiedAt)}
+              </Property>
+              <Property term="Added">{shown(account.createdAt)}</Property>
+              <Property term="Last signed in">
+                {account.lastLoginAt === null ? 'Never' : shown(account.lastLoginAt)}
+              </Property>
+              {account.disabledAt === null ? null : (
+                <Property term="Disabled">{shown(account.disabledAt)}</Property>
+              )}
+            </PropertyList>
+          </Panel>
+        }
+      >
+        {account.status === 'invited' || account.invitation !== null ? (
+          <InvitationSection
+            account={account}
+            mayIssue={hasCapability(current, INVITATIONS_ISSUE) && account.status === 'invited'}
+            onChanged={replace}
+          />
+        ) : null}
+
+        <AccessRolesSection
           account={account}
-          mayIssue={hasCapability(current, INVITATIONS_ISSUE) && account.status === 'invited'}
+          mayAssign={hasCapability(current, ROLES_ASSIGN)}
           onChanged={replace}
         />
-      ) : null}
 
-      <AccessRolesSection
-        account={account}
-        mayAssign={hasCapability(current, ROLES_ASSIGN)}
-        onChanged={replace}
-      />
+        <MfaRecoverySection
+          account={account}
+          own={own}
+          mayRecover={hasCapability(current, MFA_RECOVER)}
+          onChanged={replace}
+        />
 
-      <MfaRecoverySection
-        account={account}
-        own={own}
-        mayRecover={hasCapability(current, MFA_RECOVER)}
-        onChanged={replace}
-      />
+        <AccountMembershipSection
+          account={account}
+          mayView={hasCapability(current, MEMBERSHIP_VIEW)}
+          mayManage={hasCapability(current, MEMBERSHIP_MANAGE)}
+        />
 
-      <AccountMembershipSection
-        account={account}
-        mayView={hasCapability(current, MEMBERSHIP_VIEW)}
-        mayManage={hasCapability(current, MEMBERSHIP_MANAGE)}
-      />
-
-      {hasCapability(current, ACCOUNTS_MANAGE) ? (
-        <AccountStatusSection account={account} own={own} onChanged={replace} />
-      ) : null}
-    </div>
+        {hasCapability(current, ACCOUNTS_MANAGE) ? (
+          <AccountStatusSection account={account} own={own} onChanged={replace} />
+        ) : null}
+      </DetailLayout>
+    </Page>
   )
 }

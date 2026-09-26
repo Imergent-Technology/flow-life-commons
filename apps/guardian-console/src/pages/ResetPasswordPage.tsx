@@ -1,14 +1,15 @@
 import { useRef, useState, type SyntheticEvent } from 'react'
 import { Link } from 'react-router'
-
 import { resetPassword } from '../api/auth.ts'
 import { useAuth } from '../auth/auth-context.ts'
 import { useSecretFragment } from '../auth/useSecretFragment.ts'
 import { Alert } from '../ui/Alert.tsx'
+import { buttonVariants } from '../ui/button-variants.ts'
 import { AuthLayout } from '../ui/AuthLayout.tsx'
 import { NewPasswordFields } from '../ui/NewPasswordFields.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
+import { TextLink } from '../ui/TextLink.tsx'
 
 /**
  * The page the emailed link opens: `/reset-password#token=...&email=...`. The secrets are read from
@@ -60,7 +61,7 @@ export function ResetPasswordPage() {
         </Alert>
         <Link
           to="/login"
-          className="self-start rounded-md bg-slate-900 px-4 py-2 font-medium text-white"
+          className={buttonVariants({ variant: 'primary', size: 'lg', className: 'w-full' })}
         >
           Continue to sign in
         </Link>
@@ -76,9 +77,9 @@ export function ResetPasswordPage() {
         <Alert tone="error">
           This password reset link is invalid, incomplete or has expired. Request a new one.
         </Alert>
-        <Link to="/forgot-password" className="self-start text-slate-700 underline">
+        <TextLink to="/forgot-password" className="self-start">
           Request a new reset link
-        </Link>
+        </TextLink>
       </AuthLayout>
     )
   }
@@ -112,7 +113,7 @@ export function ResetPasswordPage() {
           onConfirmationChange={setConfirmation}
           errors={problem?.fields ?? {}}
         />
-        <SubmitButton pending={pending} pendingLabel="Saving…">
+        <SubmitButton size="lg" fullWidth pending={pending} pendingLabel="Saving…">
           Set new password
         </SubmitButton>
       </form>

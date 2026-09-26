@@ -32,8 +32,7 @@ const RECOVER_TARGET = {
   secret: 'MOUYMASSFUZOSF2XUTWSGM7XYTNSZYWX',
 }
 
-const consoleHeading = (page: Page) =>
-  page.getByRole('heading', { level: 1, name: 'Flow Life Guardian Console' })
+const consoleHeading = (page: Page) => page.getByRole('heading', { level: 1, name: 'Overview' })
 
 async function freshPage(browser: Browser, baseURL: string): Promise<Page> {
   return (await browser.newContext({ baseURL })).newPage()

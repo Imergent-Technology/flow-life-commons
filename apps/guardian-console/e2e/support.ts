@@ -352,3 +352,20 @@ export async function expectNoTokenShapedText(page: Page): Promise<void> {
   })
   expect(found, 'token-shaped text on the page').toEqual([])
 }
+
+/** A member to look at: the first listed, or a new one if the development database has none. */
+export async function aMemberId(admin: Page): Promise<string> {
+  const listed = await apiFrom(admin, 'GET', '/api/v1/admin/members?per_page=1')
+  const first = (listed.body as { data: { person: { id: string } }[] }).data[0]
+  if (first !== undefined) return first.person.id
+  const day = 86_400_000
+  const created = await apiFrom(admin, 'POST', '/api/v1/admin/members', {
+    display_name: 'E2E Accessibility Member',
+    starts_at: new Date(Date.now() - day).toISOString(),
+    open_ended: false,
+    ends_at: new Date(Date.now() + 30 * day).toISOString(),
+    source: 'operator',
+    source_reference: null,
+  })
+  return (created.body as { data: { person: { id: string } } }).data.person.id
+}

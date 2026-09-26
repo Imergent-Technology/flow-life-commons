@@ -1,7 +1,8 @@
-import { useId } from 'react'
-
 import type { MembershipTermState } from '../../admin/membershipTerm.ts'
 import type { FieldErrors } from '../../api/membership.ts'
+import { Checkbox } from '../../ui/Checkbox.tsx'
+import { Field } from '../../ui/Field.tsx'
+import { Input } from '../../ui/Input.tsx'
 
 /**
  * The two fields every Membership grant needs: when it starts, and when (or whether) it ends. Open-ended access is an
@@ -19,70 +20,65 @@ export function MembershipTermFields({
   errors?: FieldErrors | undefined
   disabled?: boolean
 }) {
-  const startsId = useId()
-  const endsId = useId()
-  const openEndedId = useId()
   const startErrors = errors.starts_at
   const endErrors = errors.ends_at
 
   return (
     <>
-      <div className="flex flex-col gap-1">
-        <label htmlFor={startsId} className="text-sm font-medium text-slate-800">
-          Starts at
-        </label>
-        <input
-          id={startsId}
-          type="datetime-local"
-          required
-          disabled={disabled}
-          value={value.startsAt}
-          onChange={(event) => {
-            onChange({ ...value, startsAt: event.target.value })
-          }}
-          aria-invalid={startErrors !== undefined && startErrors.length > 0}
-          className="w-fit rounded-md border border-slate-300 bg-white px-3 py-2 text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900 disabled:bg-slate-100 aria-invalid:border-red-600"
-        />
-        {startErrors !== undefined && startErrors.length > 0 ? (
-          <p className="text-sm text-red-700">{startErrors.join(' ')}</p>
-        ) : null}
+      <div className="w-full sm:w-64">
+        <Field
+          label="Starts at"
+          error={
+            startErrors !== undefined && startErrors.length > 0 ? startErrors.join(' ') : undefined
+          }
+        >
+          {(control) => (
+            <Input
+              {...control}
+              type="datetime-local"
+              required
+              disabled={disabled}
+              value={value.startsAt}
+              onChange={(event) => {
+                onChange({ ...value, startsAt: event.target.value })
+              }}
+            />
+          )}
+        </Field>
       </div>
 
-      <label htmlFor={openEndedId} className="flex items-center gap-2 text-sm text-slate-800">
-        <input
-          id={openEndedId}
-          type="checkbox"
-          disabled={disabled}
-          checked={value.openEnded}
-          onChange={(event) => {
-            onChange({ ...value, openEnded: event.target.checked })
-          }}
-        />
-        Open-ended access (no end date)
-      </label>
+      <Checkbox
+        label="Open-ended access (no end date)"
+        disabled={disabled}
+        checked={value.openEnded}
+        onChange={(event) => {
+          onChange({ ...value, openEnded: event.target.checked })
+        }}
+      />
 
       {value.openEnded ? (
-        <p className="text-sm text-slate-600">This access will not expire on its own.</p>
+        <p className="text-label text-muted-foreground">This access will not expire on its own.</p>
       ) : (
-        <div className="flex flex-col gap-1">
-          <label htmlFor={endsId} className="text-sm font-medium text-slate-800">
-            Ends at
-          </label>
-          <input
-            id={endsId}
-            type="datetime-local"
-            required
-            disabled={disabled}
-            value={value.endsAt}
-            onChange={(event) => {
-              onChange({ ...value, endsAt: event.target.value })
-            }}
-            aria-invalid={endErrors !== undefined && endErrors.length > 0}
-            className="w-fit rounded-md border border-slate-300 bg-white px-3 py-2 text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900 disabled:bg-slate-100 aria-invalid:border-red-600"
-          />
-          {endErrors !== undefined && endErrors.length > 0 ? (
-            <p className="text-sm text-red-700">{endErrors.join(' ')}</p>
-          ) : null}
+        <div className="w-full sm:w-64">
+          <Field
+            label="Ends at"
+            error={
+              endErrors !== undefined && endErrors.length > 0 ? endErrors.join(' ') : undefined
+            }
+          >
+            {(control) => (
+              <Input
+                {...control}
+                type="datetime-local"
+                required
+                disabled={disabled}
+                value={value.endsAt}
+                onChange={(event) => {
+                  onChange({ ...value, endsAt: event.target.value })
+                }}
+              />
+            )}
+          </Field>
         </div>
       )}
     </>

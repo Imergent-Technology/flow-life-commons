@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import type { AuthenticatorSetup } from '../api/auth.ts'
+import { Button } from './Button.tsx'
 import { QrCode } from './QrCode.tsx'
 
 /** Groups the manual key in fours, the way authenticator apps show it. Purely for reading. */
@@ -46,7 +47,7 @@ export function AuthenticatorSetupDetails({ setup }: { setup: AuthenticatorSetup
 
   return (
     <div className="flex flex-col gap-4">
-      <ol className="list-decimal space-y-3 pl-5 text-sm text-slate-700">
+      <ol className="list-decimal space-y-3 pl-5 text-body text-foreground marker:text-muted-foreground">
         <li>
           Open an authenticator app (any that supports the standard, such as 1Password, Authy or
           Google Authenticator).
@@ -57,28 +58,26 @@ export function AuthenticatorSetupDetails({ setup }: { setup: AuthenticatorSetup
             <QrCode value={setup.otpauthUri} label="QR code for your authenticator app" />
             <p>
               Can&rsquo;t scan it? Setup key:{' '}
-              <code className="rounded bg-slate-100 px-2 py-1 font-mono text-base tracking-wide select-all">
+              <code className="rounded-sm bg-muted px-2 py-1 font-mono text-body tracking-wide wrap-anywhere text-foreground select-all">
                 {grouped(setup.secret)}
               </code>
             </p>
-            <button
-              type="button"
+            <Button
               onClick={() => {
                 void copyKey()
               }}
-              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
             >
               Copy setup key
-            </button>
+            </Button>
             {/* Always in the page, so a screen reader is already watching it when the note appears. */}
-            <p role="status" className="min-h-5 text-sm text-slate-600">
+            <p role="status" className="min-h-5 text-label text-muted-foreground">
               {note}
             </p>
           </div>
         </li>
         <li>Enter the 6-digit code the app shows.</li>
       </ol>
-      <p className="text-xs text-slate-500">
+      <p className="text-meta text-muted-foreground">
         {expires === null ? '' : `This setup key expires at ${expires}. `}
         This key is shown once and cannot be retrieved later.
       </p>

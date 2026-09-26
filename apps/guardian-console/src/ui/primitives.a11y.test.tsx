@@ -80,7 +80,7 @@ function Gallery() {
             <DataTableRowHeader>
               <a href="/m/1">Ada</a>
             </DataTableRowHeader>
-            <DataTableCell>
+            <DataTableCell label="State">
               <Badge variant="warning">Invited</Badge>
             </DataTableCell>
           </DataTableRow>

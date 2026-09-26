@@ -349,7 +349,7 @@ test.describe('desktop navigation', () => {
     const withDrawer = (await page.locator('main').boundingBox())?.width ?? 0
 
     await consoleNav(page).getByRole('link', { name: 'Overview' }).click()
-    await expect(h1(page, 'Flow Life Guardian Console')).toBeFocused()
+    await expect(h1(page, 'Overview')).toBeFocused()
     await expect(pinned(page)).toHaveCount(0)
     const without = (await page.locator('main').boundingBox())?.width ?? 0
     expect(without).toBeGreaterThan(withDrawer + 200) // the reclaimed drawer width
@@ -626,7 +626,7 @@ test.describe('heading focus after navigation', () => {
     const page = await admin(browser, baseURL)
     await page.goto('/account/security')
     await consoleNav(page).getByRole('link', { name: 'Overview' }).click()
-    await expect(h1(page, 'Flow Life Guardian Console')).toBeFocused()
+    await expect(h1(page, 'Overview')).toBeFocused()
   })
 })
 

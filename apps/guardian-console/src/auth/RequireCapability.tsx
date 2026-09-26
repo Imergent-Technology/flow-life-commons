@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
-import { PageHeading } from '../ui/PageHeading.tsx'
+import { Page } from '../ui/Page.tsx'
+import { PageHeader } from '../ui/PageHeader.tsx'
 import { useCurrentAccount } from './auth-context.ts'
 import { hasCapability } from './capabilities.ts'
 
@@ -19,9 +20,11 @@ export function RequireCapability({
   if (hasCapability(current, capability)) return children
 
   return (
-    <div className="flex max-w-md flex-col gap-3">
-      <PageHeading title="Not permitted" />
-      <p className="text-slate-700">Your account cannot use this part of the Console.</p>
-    </div>
+    <Page width="prose">
+      <PageHeader
+        title="Not permitted"
+        description="Your account cannot use this part of the Console."
+      />
+    </Page>
   )
 }

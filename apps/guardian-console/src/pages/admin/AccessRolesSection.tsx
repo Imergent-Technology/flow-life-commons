@@ -11,8 +11,11 @@ import { toConfirmResult } from '../../admin/confirmResult.ts'
 import { useAdminAction } from '../../admin/useAdminAction.ts'
 import { useLoad } from '../../admin/useLoad.ts'
 import { Alert } from '../../ui/Alert.tsx'
-import { dangerButton, secondaryButton } from '../../ui/classes.ts'
+import { Button } from '../../ui/Button.tsx'
 import { ConfirmDialog } from '../../ui/ConfirmDialog.tsx'
+import { Field } from '../../ui/Field.tsx'
+import { Panel } from '../../ui/Panel.tsx'
+import { Select } from '../../ui/Select.tsx'
 
 type Pending =
   { kind: 'grant'; entry: RoleDescriptor } | { kind: 'revoke'; key: string; name: string }
@@ -44,87 +47,86 @@ export function AccessRolesSection({
   const chosen = available.find((entry) => entry.key === choice)
 
   return (
-    <section aria-labelledby="access-heading" className="flex flex-col gap-3">
-      <h2 id="access-heading" className="text-lg font-medium">
-        Access
-      </h2>
-      {notice ? (
-        <Alert key={notice} tone="success">
-          {notice}
-        </Alert>
-      ) : null}
-      {account.assignments.length === 0 ? (
-        <p className="text-sm text-slate-600">They hold no access. They cannot use the Console.</p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {account.assignments.map((assignment) => (
-            <li
-              key={assignment.key}
-              className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-slate-200 p-3"
-            >
-              <div className="text-sm">
-                <p className="font-medium">{assignment.name}</p>
-                <p className="text-slate-600">{assignment.description}</p>
-              </div>
-              {mayAssign ? (
-                <button
-                  type="button"
-                  className={dangerButton}
-                  aria-label={`Remove ${assignment.name}`}
-                  onClick={() => {
-                    setNotice(null)
-                    setPending({ kind: 'revoke', key: assignment.key, name: assignment.name })
-                  }}
-                >
-                  Remove
-                </button>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
+    <Panel title="Access">
+      <div className="flex flex-col gap-3">
+        {notice ? (
+          <Alert key={notice} tone="success">
+            {notice}
+          </Alert>
+        ) : null}
+        {account.assignments.length === 0 ? (
+          <p className="text-body text-muted-foreground">
+            They hold no access. They cannot use the Console.
+          </p>
+        ) : (
+          <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
+            {account.assignments.map((assignment) => (
+              <li
+                key={assignment.key}
+                className="flex flex-wrap items-start justify-between gap-3 p-3"
+              >
+                <div className="min-w-0 text-body">
+                  <p className="font-medium text-foreground">{assignment.name}</p>
+                  <p className="text-muted-foreground">{assignment.description}</p>
+                </div>
+                {mayAssign ? (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    aria-label={`Remove ${assignment.name}`}
+                    onClick={() => {
+                      setNotice(null)
+                      setPending({ kind: 'revoke', key: assignment.key, name: assignment.name })
+                    }}
+                  >
+                    Remove
+                  </Button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
 
-      {mayAssign ? (
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1">
-            <label htmlFor="add-access" className="text-sm font-medium text-slate-800">
-              Give them access
-            </label>
-            <select
-              id="add-access"
-              value={choice}
-              disabled={catalog.status !== 'loaded' || available.length === 0}
-              onChange={(event) => {
-                setChoice(event.target.value)
+        {mayAssign ? (
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="w-full sm:w-72">
+              <Field label="Give them access">
+                {(control) => (
+                  <Select
+                    {...control}
+                    value={choice}
+                    disabled={catalog.status !== 'loaded' || available.length === 0}
+                    onChange={(event) => {
+                      setChoice(event.target.value)
+                    }}
+                  >
+                    <option value="">
+                      {catalog.status === 'loaded' && available.length === 0
+                        ? 'They hold everything on offer'
+                        : 'Choose…'}
+                    </option>
+                    {available.map((entry) => (
+                      <option key={entry.key} value={entry.key}>
+                        {entry.name}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            </div>
+            <Button
+              disabled={chosen === undefined}
+              onClick={() => {
+                if (chosen === undefined) return
+                setNotice(null)
+                setPending({ kind: 'grant', entry: chosen })
               }}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900 disabled:bg-slate-100"
             >
-              <option value="">
-                {catalog.status === 'loaded' && available.length === 0
-                  ? 'They hold everything on offer'
-                  : 'Choose…'}
-              </option>
-              {available.map((entry) => (
-                <option key={entry.key} value={entry.key}>
-                  {entry.name}
-                </option>
-              ))}
-            </select>
+              Add access
+            </Button>
           </div>
-          <button
-            type="button"
-            className={secondaryButton}
-            disabled={chosen === undefined}
-            onClick={() => {
-              if (chosen === undefined) return
-              setNotice(null)
-              setPending({ kind: 'grant', entry: chosen })
-            }}
-          >
-            Add access
-          </button>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
       {pending?.kind === 'grant' ? (
         <ConfirmDialog
@@ -166,6 +168,6 @@ export function AccessRolesSection({
           <p>It stops applying on their very next request. Their sessions are not ended.</p>
         </ConfirmDialog>
       ) : null}
-    </section>
+    </Panel>
   )
 }

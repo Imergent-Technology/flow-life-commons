@@ -54,14 +54,14 @@ describe('PageHeader', () => {
   it('takes focus on arrival and names the document', () => {
     render(<PageHeader title="Members" />)
     expect(screen.getByRole('heading', { level: 1 })).toHaveFocus()
-    expect(document.title).toBe('Members · Flow Life Guardian Console')
+    expect(document.title).toBe('Members · Flow Life Commons')
   })
 
   it('moves focus and the title again when the page changes', () => {
     const { rerender } = render(<PageHeader title="Members" />)
     rerender(<PageHeader title="Accounts" />)
     expect(screen.getByRole('heading', { level: 1, name: 'Accounts' })).toHaveFocus()
-    expect(document.title).toBe('Accounts · Flow Life Guardian Console')
+    expect(document.title).toBe('Accounts · Flow Life Commons')
   })
 })
 
@@ -69,6 +69,6 @@ describe('PageHeading (legacy)', () => {
   it('behaves as it always did: an h1 that names the document and takes focus', () => {
     render(<PageHeading title="Overview" />)
     expect(screen.getByRole('heading', { level: 1, name: 'Overview' })).toHaveFocus()
-    expect(document.title).toBe('Overview · Flow Life Guardian Console')
+    expect(document.title).toBe('Overview · Flow Life Commons')
   })
 })

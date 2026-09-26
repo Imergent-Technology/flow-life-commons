@@ -19,9 +19,9 @@ import { MembersPage } from './pages/admin/MembersPage.tsx'
 import { RegisterMemberPage } from './pages/admin/RegisterMemberPage.tsx'
 import { AccountSecurityPage } from './pages/AccountSecurityPage.tsx'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.tsx'
-import { HomePage } from './pages/HomePage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
+import { OverviewPage } from './pages/OverviewPage.tsx'
 import { ResetPasswordPage } from './pages/ResetPasswordPage.tsx'
 import { ConsoleShell } from './shell/ConsoleShell.tsx'
 import { ThemeProvider } from './ui/ThemeProvider.tsx'
@@ -47,7 +47,7 @@ function App() {
           <Route element={<RequireAuthentication />}>
             <Route element={<RequireConsoleAccess />}>
               <Route element={<ConsoleShell />}>
-                <Route index element={<HomePage />} />
+                <Route index element={<OverviewPage />} />
                 <Route path="account/security" element={<AccountSecurityPage />} />
                 <Route
                   path="admin/accounts"

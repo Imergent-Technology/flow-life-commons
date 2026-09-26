@@ -62,7 +62,7 @@ describe('navigation', () => {
   it('hides the Members link without membership.records.view', async () => {
     serveOperator(operator(['console.access']))
     renderApp('/')
-    await screen.findByRole('heading', { level: 1, name: 'Flow Life Guardian Console' })
+    await screen.findByRole('heading', { level: 1, name: 'Overview' })
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument()
   })
 

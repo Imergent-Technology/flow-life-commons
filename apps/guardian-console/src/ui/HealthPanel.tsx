@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 
 import { fetchHealth, type HealthResponse } from '../api/health.ts'
+import { Badge } from './Badge.tsx'
+import { Panel } from './Panel.tsx'
+import { Skeleton, SkeletonRegion } from './Skeleton.tsx'
 
 type HealthState =
   { kind: 'loading' } | { kind: 'loaded'; health: HealthResponse } | { kind: 'unreachable' }
@@ -24,35 +27,35 @@ export function HealthPanel() {
   }, [])
 
   return (
-    <section aria-labelledby="api-health" className="rounded-lg border border-slate-200 p-4">
-      <h2 id="api-health" className="text-sm font-medium text-slate-500">
-        Platform API
-      </h2>
+    <Panel title="Platform API">
       <ApiHealth state={state} />
-    </section>
+    </Panel>
   )
 }
 
 function ApiHealth({ state }: { state: HealthState }) {
   if (state.kind === 'loading') {
-    return <p className="mt-2 text-slate-500">Checking…</p>
+    return (
+      <SkeletonRegion label="Checking…" visibleLabel>
+        <Skeleton className="w-24" />
+      </SkeletonRegion>
+    )
   }
   if (state.kind === 'unreachable') {
     return (
-      <p role="status" className="mt-2 font-medium text-red-700">
-        API unreachable
-      </p>
+      <div role="status">
+        <Badge variant="danger">API unreachable</Badge>
+      </div>
     )
   }
 
   const { health } = state
-  const ok = health.status === 'ok'
   return (
-    <div role="status" className="mt-2">
-      <p className={ok ? 'font-medium text-emerald-700' : 'font-medium text-amber-700'}>
-        API {health.status}
-      </p>
-      <ul className="mt-1 text-sm text-slate-600">
+    <div role="status" className="flex flex-col gap-2">
+      <div>
+        <Badge variant={health.status === 'ok' ? 'success' : 'warning'}>API {health.status}</Badge>
+      </div>
+      <ul className="text-body text-muted-foreground">
         {Object.entries(health.checks).map(([name, result]) => (
           <li key={name}>
             {name}: {result}

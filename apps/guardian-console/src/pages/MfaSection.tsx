@@ -9,24 +9,24 @@ import {
 } from '../api/auth.ts'
 import { useAuth, useCurrentAccount } from '../auth/auth-context.ts'
 import { Alert } from '../ui/Alert.tsx'
+import { Button } from '../ui/Button.tsx'
 import { AuthenticatorSetupDetails } from '../ui/AuthenticatorSetup.tsx'
+import { Panel } from '../ui/Panel.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { ProofForm } from '../ui/ProofForm.tsx'
+import { Property, PropertyList } from '../ui/PropertyList.tsx'
 import { RecoveryCodes } from '../ui/RecoveryCodes.tsx'
 import { proofFrom, type FactorMode } from '../ui/factor.ts'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
 import { TotpCodeField } from '../ui/TotpCodeField.tsx'
 
-type Panel =
+type PanelState =
   | { kind: 'closed' }
   | { kind: 'regenerate' }
   | { kind: 'regenerated'; codes: string[] }
   | { kind: 'replace' }
   | { kind: 'replace-confirm'; setup: AuthenticatorSetup }
   | { kind: 'replaced' }
-
-const button =
-  'rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900'
 
 /**
  * Two-step verification, once it exists: its status, and the two things that can be done to it, each behind
@@ -43,7 +43,7 @@ const button =
 export function MfaSection() {
   const current = useCurrentAccount()
   const { refresh } = useAuth()
-  const [panel, setPanel] = useState<Panel>({ kind: 'closed' })
+  const [panel, setPanel] = useState<PanelState>({ kind: 'closed' })
   const [password, setPassword] = useState('')
   const [mode, setMode] = useState<FactorMode>('code')
   const [factor, setFactor] = useState('')
@@ -56,7 +56,7 @@ export function MfaSection() {
 
   const { recovery_codes_remaining: remaining } = current.mfa
 
-  function open(next: Panel) {
+  function open(next: PanelState) {
     setPanel(next)
     setProblem(null)
     setPassword('')
@@ -144,168 +144,162 @@ export function MfaSection() {
   }
 
   return (
-    <section aria-labelledby="mfa-heading" className="flex max-w-md flex-col gap-4">
-      <h2 id="mfa-heading" className="text-lg font-medium">
-        Two-step verification
-      </h2>
+    <Panel title="Two-step verification">
+      <div className="flex flex-col gap-4">
+        <PropertyList>
+          <Property term="Authenticator app">On</Property>
+          <Property term="Recovery codes left">{remaining}</Property>
+        </PropertyList>
+        {remaining <= 3 ? (
+          <Alert tone="info">
+            {remaining === 0
+              ? 'You have no recovery codes left. Generate new ones so you can get in if you lose your authenticator.'
+              : 'You are running low on recovery codes. Consider generating a new set.'}
+          </Alert>
+        ) : null}
 
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-        <dt className="text-slate-500">Authenticator app</dt>
-        <dd>On</dd>
-        <dt className="text-slate-500">Recovery codes left</dt>
-        <dd>{remaining}</dd>
-      </dl>
-      {remaining <= 3 ? (
-        <Alert tone="info">
-          {remaining === 0
-            ? 'You have no recovery codes left. Generate new ones so you can get in if you lose your authenticator.'
-            : 'You are running low on recovery codes. Consider generating a new set.'}
-        </Alert>
-      ) : null}
-
-      {/* The three panels with a form of their own show their error beside it, so it is announced once. */}
-      {problem &&
-      panel.kind !== 'regenerate' &&
-      panel.kind !== 'replace' &&
-      panel.kind !== 'replace-confirm' ? (
-        <Alert key={problem.attempt} tone="error" focusOnMount={problem.fields.code === undefined}>
-          {problem.message}
-        </Alert>
-      ) : null}
-
-      {panel.kind === 'closed' ? (
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={button}
-            onClick={() => {
-              open({ kind: 'regenerate' })
-            }}
+        {/* The three panels with a form of their own show their error beside it, so it is announced once. */}
+        {problem &&
+        panel.kind !== 'regenerate' &&
+        panel.kind !== 'replace' &&
+        panel.kind !== 'replace-confirm' ? (
+          <Alert
+            key={problem.attempt}
+            tone="error"
+            focusOnMount={problem.fields.code === undefined}
           >
-            Generate new recovery codes
-          </button>
-          <button
-            type="button"
-            className={button}
-            onClick={() => {
-              open({ kind: 'replace' })
-            }}
-          >
-            Replace authenticator
-          </button>
-        </div>
-      ) : null}
+            {problem.message}
+          </Alert>
+        ) : null}
 
-      {panel.kind === 'regenerate' ? (
-        <>
-          {problem ? (
-            <Alert
-              key={problem.attempt}
-              tone="error"
-              focusOnMount={Object.keys(problem.fields).length === 0}
-            >
-              {problem.message}
-            </Alert>
-          ) : null}
-          <p className="text-sm text-slate-600">
-            New codes replace every code you have now: the old ones stop working.
-          </p>
-          <ProofForm
-            {...proofFormProps}
-            title="Generate new recovery codes"
-            submitLabel="Generate codes"
-            onSubmit={() => {
-              void regenerate()
-            }}
-          />
-        </>
-      ) : null}
-
-      {panel.kind === 'regenerated' ? (
-        <RecoveryCodes
-          codes={panel.codes}
-          doneLabel="Done"
-          onDone={() => {
-            open({ kind: 'closed' })
-          }}
-        />
-      ) : null}
-
-      {panel.kind === 'replace' ? (
-        <>
-          {problem ? (
-            <Alert
-              key={problem.attempt}
-              tone="error"
-              focusOnMount={Object.keys(problem.fields).length === 0}
-            >
-              {problem.message}
-            </Alert>
-          ) : null}
-          <p className="text-sm text-slate-600">
-            Your current authenticator keeps working until you prove the new one, so you cannot lock
-            yourself out.
-          </p>
-          <ProofForm
-            {...proofFormProps}
-            title="Replace authenticator"
-            submitLabel="Continue"
-            onSubmit={() => {
-              void beginReplace()
-            }}
-          />
-        </>
-      ) : null}
-
-      {panel.kind === 'replace-confirm' ? (
-        <form
-          aria-label="Prove the new authenticator"
-          onSubmit={(event: SyntheticEvent) => {
-            event.preventDefault()
-            void confirmReplace()
-          }}
-          className="flex flex-col gap-4"
-        >
-          {problem ? (
-            <Alert
-              key={problem.attempt}
-              tone="error"
-              focusOnMount={problem.fields.code === undefined}
-            >
-              {problem.message}
-            </Alert>
-          ) : null}
-          <AuthenticatorSetupDetails setup={panel.setup} />
-          <TotpCodeField
-            ref={newCodeRef}
-            label="Code from the new authenticator"
-            value={newCode}
-            onChange={setNewCode}
-            errors={problem?.fields.code}
-          />
-          <div className="flex gap-3">
-            <SubmitButton pending={pending} pendingLabel="Checking…">
-              Switch to the new authenticator
-            </SubmitButton>
-            <button
-              type="button"
-              className={button}
+        {panel.kind === 'closed' ? (
+          <div className="flex flex-wrap gap-2">
+            <Button
               onClick={() => {
-                open({ kind: 'closed' })
+                open({ kind: 'regenerate' })
               }}
             >
-              Cancel
-            </button>
+              Generate new recovery codes
+            </Button>
+            <Button
+              onClick={() => {
+                open({ kind: 'replace' })
+              }}
+            >
+              Replace authenticator
+            </Button>
           </div>
-        </form>
-      ) : null}
+        ) : null}
 
-      {panel.kind === 'replaced' ? (
-        <Alert tone="success" focusOnMount>
-          Your authenticator has been replaced. The old one no longer works, and other devices have
-          been signed out.
-        </Alert>
-      ) : null}
-    </section>
+        {panel.kind === 'regenerate' ? (
+          <>
+            {problem ? (
+              <Alert
+                key={problem.attempt}
+                tone="error"
+                focusOnMount={Object.keys(problem.fields).length === 0}
+              >
+                {problem.message}
+              </Alert>
+            ) : null}
+            <p className="text-label text-muted-foreground">
+              New codes replace every code you have now: the old ones stop working.
+            </p>
+            <ProofForm
+              {...proofFormProps}
+              title="Generate new recovery codes"
+              submitLabel="Generate codes"
+              onSubmit={() => {
+                void regenerate()
+              }}
+            />
+          </>
+        ) : null}
+
+        {panel.kind === 'regenerated' ? (
+          <RecoveryCodes
+            codes={panel.codes}
+            doneLabel="Done"
+            onDone={() => {
+              open({ kind: 'closed' })
+            }}
+          />
+        ) : null}
+
+        {panel.kind === 'replace' ? (
+          <>
+            {problem ? (
+              <Alert
+                key={problem.attempt}
+                tone="error"
+                focusOnMount={Object.keys(problem.fields).length === 0}
+              >
+                {problem.message}
+              </Alert>
+            ) : null}
+            <p className="text-label text-muted-foreground">
+              Your current authenticator keeps working until you prove the new one, so you cannot
+              lock yourself out.
+            </p>
+            <ProofForm
+              {...proofFormProps}
+              title="Replace authenticator"
+              submitLabel="Continue"
+              onSubmit={() => {
+                void beginReplace()
+              }}
+            />
+          </>
+        ) : null}
+
+        {panel.kind === 'replace-confirm' ? (
+          <form
+            aria-label="Prove the new authenticator"
+            onSubmit={(event: SyntheticEvent) => {
+              event.preventDefault()
+              void confirmReplace()
+            }}
+            className="flex flex-col gap-4"
+          >
+            {problem ? (
+              <Alert
+                key={problem.attempt}
+                tone="error"
+                focusOnMount={problem.fields.code === undefined}
+              >
+                {problem.message}
+              </Alert>
+            ) : null}
+            <AuthenticatorSetupDetails setup={panel.setup} />
+            <TotpCodeField
+              ref={newCodeRef}
+              label="Code from the new authenticator"
+              value={newCode}
+              onChange={setNewCode}
+              errors={problem?.fields.code}
+            />
+            <div className="flex gap-3">
+              <SubmitButton pending={pending} pendingLabel="Checking…">
+                Switch to the new authenticator
+              </SubmitButton>
+              <Button
+                onClick={() => {
+                  open({ kind: 'closed' })
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        ) : null}
+
+        {panel.kind === 'replaced' ? (
+          <Alert tone="success" focusOnMount>
+            Your authenticator has been replaced. The old one no longer works, and other devices
+            have been signed out.
+          </Alert>
+        ) : null}
+      </div>
+    </Panel>
   )
 }

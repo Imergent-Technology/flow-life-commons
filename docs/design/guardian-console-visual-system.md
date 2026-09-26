@@ -400,6 +400,14 @@ From WP3 on, the existing behaviour tests should pass **unchanged**. That is the
 - The sign-in, MFA, reset and invitation pages move to a restyled `AuthLayout`: a centred panel over the wash, with the logo and horizon line. `StatusScreen` and `ServiceUnavailable` are restyled too.
 - **Done when:** all behaviour tests pass unchanged, and axe passes on every page in both themes.
 
+**As built (deviations from the plan above, recorded once):**
+- **Sticky header shipped.** Below 768px the table stacks; from 768px it never scrolls sideways (cells wrap or truncate), so the wrapper uses `overflow: clip` and the header cells are `position: sticky`. Verified in Chromium at 768, 1024 and 1280px, including a very long unbroken name and address.
+- **Stacked rows are the same markup.** Each `DataTableCell` takes a required `label`, which CSS shows from `data-label`; the header row is visually hidden, not removed.
+- **The detail aside follows the page, not the window.** The 20rem aside appears when the page's own width reaches 56rem (a container query), because `detail` is capped at 74rem and can never reach "1200px of content". `PropertyList` stacks term over value in a container narrower than 20rem, so an email address is not broken in the aside.
+- **Page titles read `<Page> · Flow Life Commons`**; the retired "Flow Life Guardian Console" appears nowhere. Home became **Overview** (h1, title and route file).
+- **Auth frame.** The badge is 96px below 640px and 156px above, the h1 uses the standard `text-title` (31px), and every full-page screen (access denied, service unavailable) shares the one `AuthLayout`.
+- **The QR plate is part of the drawing** (a white `rect` inside the SVG), so no theme or class can make the code unscannable.
+
 ### WP6 — Guardrails, accessibility, cleanup and visual QA
 - Delete `classes.ts` and the duplicate badges and tables.
 - Add a guardrail rule that bans raw palette utilities (`slate-`, `red-`, `emerald-`, `amber-` and so on) and arbitrary colour values in `src/pages` and `src/ui`, with the usual positive control.

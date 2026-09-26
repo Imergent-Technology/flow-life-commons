@@ -6,10 +6,28 @@ import { useLoad } from '../../admin/useLoad.ts'
 import { useCurrentAccount } from '../../auth/auth-context.ts'
 import { hasCapability, INVITATIONS_ISSUE } from '../../auth/capabilities.ts'
 import { Alert } from '../../ui/Alert.tsx'
-import { secondaryButton } from '../../ui/classes.ts'
-import { PageHeading } from '../../ui/PageHeading.tsx'
+import { buttonVariants } from '../../ui/button-variants.ts'
+import { Button } from '../../ui/Button.tsx'
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeaderCell,
+  DataTableRow,
+  DataTableRowHeader,
+} from '../../ui/DataTable.tsx'
+import { EmptyState } from '../../ui/EmptyState.tsx'
+import { Field } from '../../ui/Field.tsx'
+import { Input } from '../../ui/Input.tsx'
+import { Page } from '../../ui/Page.tsx'
+import { PageHeader } from '../../ui/PageHeader.tsx'
+import { Pagination } from '../../ui/Pagination.tsx'
 import { describeFailure } from '../../ui/problem.ts'
+import { Select } from '../../ui/Select.tsx'
+import { SkeletonRegion, SkeletonRows } from '../../ui/Skeleton.tsx'
 import { StatusBadge } from '../../ui/StatusBadge.tsx'
+import { TextLink } from '../../ui/TextLink.tsx'
 
 const PER_PAGE = 25
 
@@ -31,15 +49,17 @@ export function AccountsPage() {
   const [accounts] = useLoad(load)
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <PageHeading title="Accounts" />
-        {hasCapability(current, INVITATIONS_ISSUE) ? (
-          <Link to="/admin/accounts/invite" className={secondaryButton}>
-            Invite an operator
-          </Link>
-        ) : null}
-      </div>
+    <Page width="wide">
+      <PageHeader
+        title="Accounts"
+        action={
+          hasCapability(current, INVITATIONS_ISSUE) ? (
+            <Link to="/admin/accounts/invite" className={buttonVariants({ variant: 'primary' })}>
+              Invite an operator
+            </Link>
+          ) : undefined
+        }
+      />
 
       <form
         role="search"
@@ -51,50 +71,50 @@ export function AccountsPage() {
         }}
         className="flex flex-wrap items-end gap-3"
       >
-        <div className="flex flex-col gap-1">
-          <label htmlFor="account-search" className="text-sm font-medium text-slate-800">
-            Name or email
-          </label>
-          <input
-            id="account-search"
-            type="search"
-            value={typed}
-            onChange={(event) => {
-              setTyped(event.target.value)
-            }}
-            maxLength={100}
-            autoComplete="off"
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900"
-          />
+        <div className="w-full sm:w-72">
+          <Field label="Name or email">
+            {(control) => (
+              <Input
+                {...control}
+                type="search"
+                value={typed}
+                onChange={(event) => {
+                  setTyped(event.target.value)
+                }}
+                maxLength={100}
+                autoComplete="off"
+              />
+            )}
+          </Field>
         </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="account-status" className="text-sm font-medium text-slate-800">
-            Status
-          </label>
-          <select
-            id="account-status"
-            value={status}
-            onChange={(event) => {
-              setPage(1)
-              setStatus(event.target.value as AccountStatus | '')
-            }}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900"
-          >
-            <option value="">Any</option>
-            <option value="invited">Invited</option>
-            <option value="active">Active</option>
-            <option value="disabled">Disabled</option>
-          </select>
+        <div className="w-full sm:w-44">
+          <Field label="Status">
+            {(control) => (
+              <Select
+                {...control}
+                value={status}
+                onChange={(event) => {
+                  setPage(1)
+                  setStatus(event.target.value as AccountStatus | '')
+                }}
+              >
+                <option value="">Any</option>
+                <option value="invited">Invited</option>
+                <option value="active">Active</option>
+                <option value="disabled">Disabled</option>
+              </Select>
+            )}
+          </Field>
         </div>
-        <button type="submit" className={secondaryButton}>
+        <Button type="submit" className="max-sm:w-full">
           Search
-        </button>
+        </Button>
       </form>
 
       {accounts.status === 'loading' ? (
-        <p role="status" className="text-slate-600">
-          Loading accounts…
-        </p>
+        <SkeletonRegion label="Loading accounts…" visibleLabel>
+          <SkeletonRows />
+        </SkeletonRegion>
       ) : null}
       {accounts.status === 'failed' ? (
         <Alert tone="error">{describeFailure(accounts.failure).message}</Alert>
@@ -102,90 +122,64 @@ export function AccountsPage() {
       {accounts.status === 'loaded' ? (
         <>
           {accounts.value.accounts.length === 0 ? (
-            <p role="status" className="text-slate-600">
-              No accounts match.
-            </p>
+            <EmptyState title="No accounts match.">
+              Try a different name, email address or status.
+            </EmptyState>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[40rem] border-collapse text-left text-sm">
-                <caption className="sr-only">Accounts</caption>
-                <thead>
-                  <tr className="border-b border-slate-300 text-slate-600">
-                    <th scope="col" className="py-2 pr-4 font-medium">
-                      Name
-                    </th>
-                    <th scope="col" className="py-2 pr-4 font-medium">
-                      Email
-                    </th>
-                    <th scope="col" className="py-2 pr-4 font-medium">
-                      Status
-                    </th>
-                    <th scope="col" className="py-2 pr-4 font-medium">
-                      Two-step
-                    </th>
-                    <th scope="col" className="py-2 font-medium">
-                      Access
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {accounts.value.accounts.map((account) => (
-                    <tr key={account.id} className="border-b border-slate-200 align-top">
-                      <th scope="row" className="py-2 pr-4 font-medium">
-                        <Link
-                          to={`/admin/accounts/${account.id}`}
-                          className="underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900"
-                        >
-                          {account.displayName}
-                        </Link>
-                        {account.id === current.account.id ? (
-                          <span className="ml-2 text-xs font-normal text-slate-500">(you)</span>
-                        ) : null}
-                      </th>
-                      <td className="py-2 pr-4 break-all">{account.email}</td>
-                      <td className="py-2 pr-4">
-                        <StatusBadge status={account.status} />
-                      </td>
-                      <td className="py-2 pr-4">{account.mfa.enrolled ? 'On' : 'Not set up'}</td>
-                      <td className="py-2">
-                        {account.assignments.length === 0
-                          ? '—'
-                          : account.assignments.map((a) => a.name).join(', ')}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable caption="Accounts">
+              <DataTableHead>
+                <tr>
+                  <DataTableHeaderCell>Name</DataTableHeaderCell>
+                  <DataTableHeaderCell className="w-[34%]">Email</DataTableHeaderCell>
+                  <DataTableHeaderCell>Status</DataTableHeaderCell>
+                  <DataTableHeaderCell>Two-step</DataTableHeaderCell>
+                  <DataTableHeaderCell>Access</DataTableHeaderCell>
+                </tr>
+              </DataTableHead>
+              <DataTableBody>
+                {accounts.value.accounts.map((account) => (
+                  <DataTableRow key={account.id}>
+                    <DataTableRowHeader>
+                      <TextLink
+                        to={`/admin/accounts/${account.id}`}
+                        className="text-foreground decoration-border-strong hover:text-foreground hover:decoration-current"
+                      >
+                        {account.displayName}
+                      </TextLink>
+                      {account.id === current.account.id ? (
+                        <span className="ml-2 text-meta font-normal text-muted-foreground">
+                          (you)
+                        </span>
+                      ) : null}
+                    </DataTableRowHeader>
+                    <DataTableCell label="Email" truncate>
+                      {account.email}
+                    </DataTableCell>
+                    <DataTableCell label="Status">
+                      <StatusBadge status={account.status} />
+                    </DataTableCell>
+                    <DataTableCell label="Two-step">
+                      {account.mfa.enrolled ? 'On' : 'Not set up'}
+                    </DataTableCell>
+                    <DataTableCell label="Access">
+                      {account.assignments.length === 0
+                        ? '—'
+                        : account.assignments.map((a) => a.name).join(', ')}
+                    </DataTableCell>
+                  </DataTableRow>
+                ))}
+              </DataTableBody>
+            </DataTable>
           )}
-          <nav aria-label="Pages" className="flex flex-wrap items-center gap-3 text-sm">
-            <button
-              type="button"
-              className={secondaryButton}
-              disabled={accounts.value.page <= 1}
-              onClick={() => {
-                setPage(accounts.value.page - 1)
-              }}
-            >
-              Previous
-            </button>
-            <span role="status">
-              Page {accounts.value.page} of {accounts.value.lastPage} ({accounts.value.total}{' '}
-              {accounts.value.total === 1 ? 'account' : 'accounts'})
-            </span>
-            <button
-              type="button"
-              className={secondaryButton}
-              disabled={accounts.value.page >= accounts.value.lastPage}
-              onClick={() => {
-                setPage(accounts.value.page + 1)
-              }}
-            >
-              Next
-            </button>
-          </nav>
+          <Pagination
+            page={accounts.value.page}
+            lastPage={accounts.value.lastPage}
+            total={accounts.value.total}
+            noun={{ one: 'account', other: 'accounts' }}
+            onPageChange={setPage}
+          />
         </>
       ) : null}
-    </div>
+    </Page>
   )
 }

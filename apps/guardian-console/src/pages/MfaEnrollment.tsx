@@ -3,6 +3,7 @@ import { useRef, useState, type SyntheticEvent } from 'react'
 import { beginEnrollment, confirmEnrollment, type AuthenticatorSetup } from '../api/auth.ts'
 import { useAuth } from '../auth/auth-context.ts'
 import { Alert } from '../ui/Alert.tsx'
+import { Button } from '../ui/Button.tsx'
 import { AuthenticatorSetupDetails } from '../ui/AuthenticatorSetup.tsx'
 import { AuthLayout } from '../ui/AuthLayout.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
@@ -96,16 +97,17 @@ export function MfaEnrollment() {
       ) : null}
 
       {phase.kind === 'intro' ? (
-        <button
-          type="button"
+        <Button
+          variant="primary"
+          size="lg"
           disabled={pending}
           onClick={() => {
             void begin()
           }}
-          className="self-start rounded-md bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 disabled:bg-slate-500"
+          className="w-full"
         >
           {pending ? 'Preparing…' : 'Set up authenticator'}
-        </button>
+        </Button>
       ) : (
         <form
           onSubmit={(event: SyntheticEvent) => {
@@ -122,19 +124,20 @@ export function MfaEnrollment() {
             onChange={setCode}
             errors={problem?.fields.code}
           />
-          <SubmitButton pending={pending} pendingLabel="Checking…">
+          <SubmitButton size="lg" fullWidth pending={pending} pendingLabel="Checking…">
             Verify and continue
           </SubmitButton>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             disabled={pending}
             onClick={() => {
               void begin()
             }}
-            className="self-start text-sm text-slate-700 underline"
+            className="self-start"
           >
             Start over with a new key
-          </button>
+          </Button>
         </form>
       )}
     </AuthLayout>

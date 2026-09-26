@@ -4,11 +4,13 @@ import { Link } from 'react-router'
 import { acceptInvitation } from '../api/auth.ts'
 import { useSecretFragment } from '../auth/useSecretFragment.ts'
 import { Alert } from '../ui/Alert.tsx'
+import { buttonVariants } from '../ui/button-variants.ts'
 import { AuthLayout } from '../ui/AuthLayout.tsx'
 import { NewPasswordFields } from '../ui/NewPasswordFields.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
 import { TextField } from '../ui/TextField.tsx'
+import { TextLink } from '../ui/TextLink.tsx'
 
 /**
  * Accepts an invitation and chooses a password. The token comes from `#token=...` when a link carried
@@ -65,7 +67,7 @@ export function AcceptInvitationPage() {
         </Alert>
         <Link
           to="/login"
-          className="self-start rounded-md bg-slate-900 px-4 py-2 font-medium text-white"
+          className={buttonVariants({ variant: 'primary', size: 'lg', className: 'w-full' })}
         >
           Continue to sign in
         </Link>
@@ -110,7 +112,7 @@ export function AcceptInvitationPage() {
             hint="The token you were given with your invitation."
           />
         ) : (
-          <p className="text-sm text-slate-600">Your invitation link was recognised.</p>
+          <p className="text-label text-muted-foreground">Your invitation link was recognised.</p>
         )}
         <NewPasswordFields
           passwordRef={passwordRef}
@@ -120,13 +122,13 @@ export function AcceptInvitationPage() {
           onConfirmationChange={setConfirmation}
           errors={problem?.fields ?? {}}
         />
-        <SubmitButton pending={pending} pendingLabel="Saving…">
+        <SubmitButton size="lg" fullWidth pending={pending} pendingLabel="Saving…">
           Set password and activate
         </SubmitButton>
       </form>
-      <Link to="/login" className="text-sm text-slate-700 underline">
+      <TextLink to="/login" className="self-start text-label">
         Back to sign in
-      </Link>
+      </TextLink>
     </AuthLayout>
   )
 }

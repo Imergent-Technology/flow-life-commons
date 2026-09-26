@@ -89,7 +89,7 @@ function StepUpPrompt({ onVerified, onCancel }: { onVerified: () => void; onCanc
         if (!pending) onCancel()
       }}
     >
-      <p className="text-sm text-slate-700">
+      <p className="text-body text-foreground">
         This action changes someone&rsquo;s access, so it needs a recent check of who you are.
         Nothing has been changed yet: after you confirm, you will be asked to press the button
         again.

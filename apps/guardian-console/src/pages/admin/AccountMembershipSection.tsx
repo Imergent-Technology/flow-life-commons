@@ -1,6 +1,4 @@
 import { useCallback, useState } from 'react'
-import { Link } from 'react-router'
-
 import { initialMembershipTerm, resolveMembershipTerm } from '../../admin/membershipTerm.ts'
 import { useAdminAction } from '../../admin/useAdminAction.ts'
 import { useLoad } from '../../admin/useLoad.ts'
@@ -13,8 +11,12 @@ import {
   type MembershipSource,
 } from '../../api/membership.ts'
 import { Alert } from '../../ui/Alert.tsx'
-import { secondaryButton } from '../../ui/classes.ts'
+import { Button } from '../../ui/Button.tsx'
+import { Panel } from '../../ui/Panel.tsx'
+import { Skeleton, SkeletonRegion } from '../../ui/Skeleton.tsx'
 import { TextField } from '../../ui/TextField.tsx'
+import { TextLink } from '../../ui/TextLink.tsx'
+import { MembershipSourceField } from './MembershipSourceField.tsx'
 import { MembershipStateBadge } from './MembershipStateBadge.tsx'
 import { MembershipTermFields } from './MembershipTermFields.tsx'
 
@@ -101,110 +103,88 @@ function AccountMembershipContent({
   }
 
   return (
-    <section aria-labelledby="membership-heading" className="flex flex-col gap-3">
-      <h2 id="membership-heading" className="text-lg font-medium">
-        Membership
-      </h2>
-      {notice ? (
-        <Alert key={notice} tone="success">
-          {notice}
-        </Alert>
-      ) : null}
+    <Panel title="Membership">
+      <div className="flex flex-col gap-3">
+        {notice ? (
+          <Alert key={notice} tone="success">
+            {notice}
+          </Alert>
+        ) : null}
 
-      {loaded.status === 'loading' ? <p className="text-sm text-slate-600">Loading…</p> : null}
+        {loaded.status === 'loading' ? (
+          <SkeletonRegion label="Loading…" visibleLabel>
+            <Skeleton className="w-40" />
+          </SkeletonRegion>
+        ) : null}
 
-      {loaded.status === 'loaded' ? (
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <MembershipStateBadge active={loaded.value.active} />
-          <span>{accessThroughLabel(loaded.value)}</span>
-          <Link to={`/admin/members/${account.personId}`} className="underline">
-            View membership record
-          </Link>
-        </div>
-      ) : null}
+        {loaded.status === 'loaded' ? (
+          <div className="flex flex-wrap items-center gap-3 text-body">
+            <MembershipStateBadge active={loaded.value.active} />
+            <span>{accessThroughLabel(loaded.value)}</span>
+            <TextLink to={`/admin/members/${account.personId}`}>View membership record</TextLink>
+          </div>
+        ) : null}
 
-      {loaded.status === 'failed' && loaded.failure.kind === 'not-found' ? (
-        <>
-          <p className="text-sm text-slate-600">They hold no membership record.</p>
-          {mayManage ? (
-            <div>
-              {!adding ? (
-                <button
-                  type="button"
-                  className={secondaryButton}
-                  onClick={() => {
-                    setAdding(true)
-                  }}
-                >
-                  Grant membership access
-                </button>
-              ) : (
-                <div className="flex flex-col gap-3 rounded-md border border-slate-200 p-3">
-                  {problem !== null ? <Alert tone="error">{problem}</Alert> : null}
-                  <MembershipTermFields value={term} onChange={setTerm} errors={fieldErrors} />
-                  <div className="flex flex-col gap-1">
-                    <label
-                      htmlFor="account-membership-source"
-                      className="text-sm font-medium text-slate-800"
-                    >
-                      Source
-                    </label>
-                    <select
-                      id="account-membership-source"
-                      value={source}
-                      onChange={(event) => {
-                        setSource(event.target.value as MembershipSource)
-                      }}
-                      className="w-fit rounded-md border border-slate-300 bg-white px-3 py-1.5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-slate-900"
-                    >
-                      <option value="operator">Operator</option>
-                      <option value="luma_legacy">Luma legacy</option>
-                    </select>
+        {loaded.status === 'failed' && loaded.failure.kind === 'not-found' ? (
+          <>
+            <p className="text-body text-muted-foreground">They hold no membership record.</p>
+            {mayManage ? (
+              <div>
+                {!adding ? (
+                  <Button
+                    onClick={() => {
+                      setAdding(true)
+                    }}
+                  >
+                    Grant membership access
+                  </Button>
+                ) : (
+                  <div className="flex flex-col gap-3 rounded-md border border-border bg-muted p-3">
+                    {problem !== null ? <Alert tone="error">{problem}</Alert> : null}
+                    <MembershipTermFields value={term} onChange={setTerm} errors={fieldErrors} />
+                    <MembershipSourceField value={source} onChange={setSource} />
+                    <TextField
+                      label="Source reference"
+                      name="source_reference"
+                      autoComplete="off"
+                      value={sourceReference}
+                      onChange={setSourceReference}
+                      errors={fieldErrors.source_reference}
+                      required={false}
+                      maxLength={191}
+                    />
+                    <div className="flex gap-3">
+                      <Button
+                        variant="primary"
+                        disabled={pending}
+                        onClick={() => {
+                          void submitGrant()
+                        }}
+                      >
+                        {pending ? 'Granting…' : 'Grant access'}
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          setAdding(false)
+                          setTerm(initialMembershipTerm)
+                          setFieldErrors({})
+                          setProblem(null)
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
                   </div>
-                  <TextField
-                    label="Source reference"
-                    name="source_reference"
-                    autoComplete="off"
-                    value={sourceReference}
-                    onChange={setSourceReference}
-                    errors={fieldErrors.source_reference}
-                    required={false}
-                    maxLength={191}
-                  />
-                  <div className="flex gap-3">
-                    <button
-                      type="button"
-                      className={secondaryButton}
-                      disabled={pending}
-                      onClick={() => {
-                        void submitGrant()
-                      }}
-                    >
-                      {pending ? 'Granting…' : 'Grant access'}
-                    </button>
-                    <button
-                      type="button"
-                      className={secondaryButton}
-                      onClick={() => {
-                        setAdding(false)
-                        setTerm(initialMembershipTerm)
-                        setFieldErrors({})
-                        setProblem(null)
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : null}
-        </>
-      ) : null}
+                )}
+              </div>
+            ) : null}
+          </>
+        ) : null}
 
-      {loaded.status === 'failed' && loaded.failure.kind !== 'not-found' ? (
-        <Alert tone="error">{describeMembershipFailure(loaded.failure).message}</Alert>
-      ) : null}
-    </section>
+        {loaded.status === 'failed' && loaded.failure.kind !== 'not-found' ? (
+          <Alert tone="error">{describeMembershipFailure(loaded.failure).message}</Alert>
+        ) : null}
+      </div>
+    </Panel>
   )
 }

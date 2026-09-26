@@ -8,9 +8,14 @@ import { describeAdminFailure } from '../../admin/wording.ts'
 import { useCurrentAccount } from '../../auth/auth-context.ts'
 import { hasCapability, ROLES_ASSIGN } from '../../auth/capabilities.ts'
 import { Alert } from '../../ui/Alert.tsx'
-import { secondaryButton } from '../../ui/classes.ts'
-import { PageHeading } from '../../ui/PageHeading.tsx'
+import { buttonVariants } from '../../ui/button-variants.ts'
+import { Button } from '../../ui/Button.tsx'
+import { Checkbox } from '../../ui/Checkbox.tsx'
+import { Page } from '../../ui/Page.tsx'
+import { PageHeader } from '../../ui/PageHeader.tsx'
+import { Panel } from '../../ui/Panel.tsx'
 import { type Problem } from '../../ui/problem.ts'
+import { Skeleton, SkeletonRegion } from '../../ui/Skeleton.tsx'
 import { SubmitButton } from '../../ui/SubmitButton.tsx'
 import { TextField } from '../../ui/TextField.tsx'
 
@@ -69,8 +74,8 @@ export function InviteOperatorPage() {
   if (result !== null) {
     const sent = result.delivery === 'sent'
     return (
-      <div className="flex max-w-lg flex-col gap-4">
-        <PageHeading title={sent ? 'Invitation sent' : 'Invitation not sent'} />
+      <Page width="form">
+        <PageHeader title={sent ? 'Invitation sent' : 'Invitation not sent'} />
         {sent ? (
           <Alert tone="success" focusOnMount>
             {result.account.displayName} has been invited. The invitation went to{' '}
@@ -84,12 +89,13 @@ export function InviteOperatorPage() {
           </Alert>
         )}
         <div className="flex flex-wrap gap-3">
-          <Link to={`/admin/accounts/${result.account.id}`} className={secondaryButton}>
+          <Link
+            to={`/admin/accounts/${result.account.id}`}
+            className={buttonVariants({ variant: 'secondary' })}
+          >
             Open the account
           </Link>
-          <button
-            type="button"
-            className={secondaryButton}
+          <Button
             onClick={() => {
               setResult(null)
               setName('')
@@ -98,19 +104,18 @@ export function InviteOperatorPage() {
             }}
           >
             Invite someone else
-          </button>
+          </Button>
         </div>
-      </div>
+      </Page>
     )
   }
 
   return (
-    <div className="flex max-w-lg flex-col gap-4">
-      <PageHeading title="Invite an operator" />
-      <p className="text-sm text-slate-600">
-        They will get an email with a link to set their password. Nothing is shown here that they
-        would need to sign in.
-      </p>
+    <Page width="form">
+      <PageHeader
+        title="Invite an operator"
+        description="They will get an email with a link to set their password. Nothing is shown here that they would need to sign in."
+      />
       {notice ? (
         <Alert key={notice} tone="info" focusOnMount>
           {notice}
@@ -121,48 +126,53 @@ export function InviteOperatorPage() {
           {problem.message}
         </Alert>
       ) : null}
-      <form
-        aria-label="Invite an operator"
-        onSubmit={(event: SyntheticEvent) => {
-          event.preventDefault()
-          void submit()
-        }}
-        className="flex flex-col gap-4"
-      >
-        <TextField
-          label="Display name"
-          name="display_name"
-          autoComplete="off"
-          value={name}
-          onChange={setName}
-          errors={problem?.fields.display_name}
-          maxLength={200}
-        />
-        <TextField
-          ref={emailRef}
-          label="Email address"
-          name="email"
-          type="email"
-          autoComplete="off"
-          value={email}
-          onChange={setEmail}
-          errors={problem?.fields.email}
-        />
-        {mayAssign ? (
-          <fieldset className="flex flex-col gap-2">
-            <legend className="text-sm font-medium text-slate-800">Access to give them</legend>
-            {catalog.status === 'loading' ? (
-              <p className="text-sm text-slate-600">Loading…</p>
-            ) : null}
-            {catalog.status === 'failed' ? (
-              <Alert tone="error">The list of access roles could not be loaded.</Alert>
-            ) : null}
-            {catalog.status === 'loaded'
-              ? catalog.value.map((entry) => (
-                  <label key={entry.key} className="flex items-start gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
+      <Panel>
+        <form
+          aria-label="Invite an operator"
+          onSubmit={(event: SyntheticEvent) => {
+            event.preventDefault()
+            void submit()
+          }}
+          className="flex flex-col gap-4"
+        >
+          <TextField
+            label="Display name"
+            name="display_name"
+            autoComplete="off"
+            value={name}
+            onChange={setName}
+            errors={problem?.fields.display_name}
+            maxLength={200}
+          />
+          <TextField
+            ref={emailRef}
+            label="Email address"
+            name="email"
+            type="email"
+            autoComplete="off"
+            value={email}
+            onChange={setEmail}
+            errors={problem?.fields.email}
+          />
+          {mayAssign ? (
+            <fieldset className="flex flex-col gap-3">
+              <legend className="mb-2 text-label font-medium text-foreground">
+                Access to give them
+              </legend>
+              {catalog.status === 'loading' ? (
+                <SkeletonRegion label="Loading…" visibleLabel>
+                  <Skeleton className="w-40" />
+                </SkeletonRegion>
+              ) : null}
+              {catalog.status === 'failed' ? (
+                <Alert tone="error">The list of access roles could not be loaded.</Alert>
+              ) : null}
+              {catalog.status === 'loaded'
+                ? catalog.value.map((entry) => (
+                    <Checkbox
+                      key={entry.key}
+                      label={entry.name}
+                      hint={entry.description}
                       checked={chosen.includes(entry.key)}
                       onChange={(event) => {
                         setChosen((held) =>
@@ -172,28 +182,24 @@ export function InviteOperatorPage() {
                         )
                       }}
                     />
-                    <span>
-                      <span className="font-medium">{entry.name}</span>
-                      <span className="block text-slate-600">{entry.description}</span>
-                    </span>
-                  </label>
-                ))
-              : null}
-            <p className="text-sm text-slate-600">
-              You can leave all of these off. Without access to the Console they can set a password
-              but cannot use it.
-            </p>
-          </fieldset>
-        ) : null}
-        <div className="flex gap-3">
-          <SubmitButton pending={pending} pendingLabel="Sending…">
-            Send invitation
-          </SubmitButton>
-          <Link to="/admin/accounts" className={secondaryButton}>
-            Cancel
-          </Link>
-        </div>
-      </form>
-    </div>
+                  ))
+                : null}
+              <p className="text-label text-muted-foreground">
+                You can leave all of these off. Without access to the Console they can set a
+                password but cannot use it.
+              </p>
+            </fieldset>
+          ) : null}
+          <div className="flex flex-wrap gap-3">
+            <SubmitButton pending={pending} pendingLabel="Sending…">
+              Send invitation
+            </SubmitButton>
+            <Link to="/admin/accounts" className={buttonVariants({ variant: 'secondary' })}>
+              Cancel
+            </Link>
+          </div>
+        </form>
+      </Panel>
+    </Page>
   )
 }

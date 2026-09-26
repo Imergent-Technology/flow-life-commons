@@ -71,8 +71,7 @@ const CHANGER = {
   secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
 }
 
-const consoleHeading = (page: Page) =>
-  page.getByRole('heading', { level: 1, name: 'Flow Life Guardian Console' })
+const consoleHeading = (page: Page) => page.getByRole('heading', { level: 1, name: 'Overview' })
 const loginHeading = (page: Page) => page.getByRole('heading', { level: 1, name: 'Sign in' })
 const passwordField = (page: Page) => page.getByLabel('Password', { exact: true })
 

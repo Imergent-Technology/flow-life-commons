@@ -48,3 +48,24 @@ export function SkeletonRegion({
     </div>
   )
 }
+
+/**
+ * A list's worth of rows, on the surface a table sits on, for `SkeletonRegion` while a page of records
+ * loads: the picture of what is about to appear, so the page does not jump when it does.
+ */
+export function SkeletonRows({ rows = 5 }: { rows?: number }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4 shadow-panel"
+    >
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="flex items-center gap-4">
+          <Skeleton className="h-5 w-1/4" />
+          <Skeleton className="h-5 w-2/5" />
+          <Skeleton className="h-5 w-16" />
+        </div>
+      ))}
+    </div>
+  )
+}

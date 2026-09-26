@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { Link, useParams } from 'react-router'
+import { useParams } from 'react-router'
 
 import { getMember } from '../../api/membership.ts'
 import { useLoad } from '../../admin/useLoad.ts'
@@ -8,7 +8,10 @@ import { useCurrentAccount } from '../../auth/auth-context.ts'
 import { hasCapability, MEMBERSHIP_MANAGE } from '../../auth/capabilities.ts'
 import { useBreadcrumbLeaf } from '../../shell/breadcrumb-leaf.ts'
 import { Alert } from '../../ui/Alert.tsx'
-import { PageHeading } from '../../ui/PageHeading.tsx'
+import { Page } from '../../ui/Page.tsx'
+import { PageHeader } from '../../ui/PageHeader.tsx'
+import { SkeletonRegion, SkeletonText } from '../../ui/Skeleton.tsx'
+import { TextLink } from '../../ui/TextLink.tsx'
 import { MembershipStateBadge } from './MembershipStateBadge.tsx'
 import { MembershipGrantsSection } from './MembershipGrantsSection.tsx'
 
@@ -31,43 +34,40 @@ export function MemberDetailPage() {
 
   if (loaded.status === 'loading') {
     return (
-      <p role="status" className="text-slate-600">
-        Loading member…
-      </p>
+      <Page width="detail">
+        <SkeletonRegion label="Loading member…" visibleLabel>
+          <SkeletonText lines={4} />
+        </SkeletonRegion>
+      </Page>
     )
   }
   if (loaded.status === 'failed') {
     return (
-      <div className="flex max-w-md flex-col gap-3">
-        <PageHeading title="Member" />
+      <Page width="prose">
+        <PageHeader title="Member" />
         <Alert tone="error">{describeMembershipFailure(loaded.failure).message}</Alert>
-        <Link to="/admin/members" className="text-sm underline">
+        <TextLink to="/admin/members" className="self-start">
           Back to members
-        </Link>
-      </div>
+        </TextLink>
+      </Page>
     )
   }
 
   const member = loaded.value
 
   return (
-    <div className="flex max-w-2xl flex-col gap-8">
-      <header className="flex flex-col gap-2">
-        <Link to="/admin/members" className="text-sm underline">
-          ← Members
-        </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <PageHeading title={member.person.displayName} />
-          <MembershipStateBadge active={member.active} />
-        </div>
-        <p className="text-sm text-slate-700">{accessThroughLabel(member)}</p>
-      </header>
+    <Page width="detail">
+      <PageHeader
+        title={member.person.displayName}
+        status={<MembershipStateBadge active={member.active} />}
+        description={accessThroughLabel(member)}
+      />
 
       <MembershipGrantsSection
         member={member}
         mayManage={hasCapability(current, MEMBERSHIP_MANAGE)}
         refresh={refresh}
       />
-    </div>
+    </Page>
   )
 }

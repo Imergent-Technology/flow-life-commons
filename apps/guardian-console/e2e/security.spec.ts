@@ -117,9 +117,7 @@ async function signIn(page: Page, who: Operator): Promise<void> {
   await expect(page.getByRole('heading', { level: 1, name: 'Enter your code' })).toBeVisible()
   await page.getByLabel('Authentication code').fill(await nextCode(who.secret))
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(
-    page.getByRole('heading', { level: 1, name: 'Flow Life Guardian Console' }),
-  ).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
 }
 
 /**
@@ -199,14 +197,23 @@ test.describe('the production security policy', () => {
         }
       ).getComputedStyle(node),
     )
-    expect(Number(style.fontWeight)).toBeGreaterThanOrEqual(600)
+    expect(Number(style.fontWeight)).toBeGreaterThanOrEqual(500)
 
-    // The self-hosted interface face (ADR 0030 §6): `body`'s font-family is Hanken Grotesk Variable,
-    // inherited onto every heading until a later work package gives titles their own display face.
-    // Rendering this very heading is what makes the browser actually FETCH the woff2 under font-src
-    // 'self' rather than just parsing a rule that names it — a policy without that directive would
-    // fail this test with a real securitypolicyviolation below, not with an assertion here.
-    expect(style.fontFamily).toContain('Hanken Grotesk Variable')
+    // The self-hosted faces (ADR 0030 §6): the page title is set in the display face, Newsreader Variable,
+    // and the interface around it in Hanken Grotesk Variable. Rendering them is what makes the browser
+    // actually FETCH the woff2 files under font-src 'self' rather than just parsing a rule that names them
+    // — a policy without that directive would fail this test with a real securitypolicyviolation below,
+    // not with an assertion here.
+    expect(style.fontFamily).toContain('Newsreader Variable')
+    const label = await page
+      .getByText('Email address', { exact: true })
+      .evaluate(
+        (node) =>
+          (
+            globalThis as unknown as { getComputedStyle: (n: unknown) => { fontFamily: string } }
+          ).getComputedStyle(node).fontFamily,
+      )
+    expect(label).toContain('Hanken Grotesk Variable')
 
     expect(logged).toEqual([])
     expect(await reported(page)).toEqual([])
@@ -413,9 +420,7 @@ test.describe('the production security policy', () => {
 
     try {
       await page.goto(`${PROD}/`)
-      await expect(
-        page.getByRole('heading', { level: 1, name: 'Flow Life Guardian Console' }),
-      ).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
       await page.goto(`${PROD}/admin/accounts`)
       await expect(page.getByRole('heading', { level: 1, name: 'Accounts' })).toBeVisible()
 

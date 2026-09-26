@@ -1,4 +1,5 @@
 import { useCurrentAccount } from '../auth/auth-context.ts'
+import { Property, PropertyList } from './PropertyList.tsx'
 
 const when = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
@@ -11,15 +12,13 @@ function format(iso: string): string {
 export function SessionSummary() {
   const { session } = useCurrentAccount()
   return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-      <dt className="text-slate-500">Session started</dt>
-      <dd>
+    <PropertyList>
+      <Property term="Session started">
         <time dateTime={session.authenticated_at}>{format(session.authenticated_at)}</time>
-      </dd>
-      <dt className="text-slate-500">Ends no later than</dt>
-      <dd>
+      </Property>
+      <Property term="Ends no later than">
         <time dateTime={session.absolute_expires_at}>{format(session.absolute_expires_at)}</time>
-      </dd>
-    </dl>
+      </Property>
+    </PropertyList>
   )
 }

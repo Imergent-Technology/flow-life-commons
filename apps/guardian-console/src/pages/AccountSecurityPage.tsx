@@ -4,7 +4,9 @@ import { changePassword } from '../api/auth.ts'
 import { useAuth, useCurrentAccount } from '../auth/auth-context.ts'
 import { Alert } from '../ui/Alert.tsx'
 import { NewPasswordFields } from '../ui/NewPasswordFields.tsx'
-import { PageHeading } from '../ui/PageHeading.tsx'
+import { Page } from '../ui/Page.tsx'
+import { PageHeader } from '../ui/PageHeader.tsx'
+import { Panel } from '../ui/Panel.tsx'
 import { describeFailure, type Problem } from '../ui/problem.ts'
 import { SessionSummary } from '../ui/SessionSummary.tsx'
 import { SubmitButton } from '../ui/SubmitButton.tsx'
@@ -63,84 +65,80 @@ export function AccountSecurityPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <PageHeading title="Account security" />
+    <Page width="form">
+      <PageHeader title="Account security" />
 
-      <section aria-labelledby="session-heading" className="flex flex-col gap-2">
-        <h2 id="session-heading" className="text-lg font-medium">
-          Your session
-        </h2>
+      <Panel title="Your session">
         <SessionSummary />
-      </section>
+      </Panel>
 
       <MfaSection />
 
-      <section aria-labelledby="password-heading" className="flex max-w-md flex-col gap-4">
-        <h2 id="password-heading" className="text-lg font-medium">
-          Change password
-        </h2>
-        <p className="text-sm text-slate-600">
-          Changing your password signs you out of every other device. This session stays open.
-        </p>
-        {changes > 0 ? (
-          <Alert key={changes} tone="success" focusOnMount>
-            Your password has been changed. Other devices have been signed out.
-          </Alert>
-        ) : null}
-        {problem ? (
-          <Alert
-            key={problem.attempt}
-            tone="error"
-            focusOnMount={
-              problem.fields.current_password === undefined &&
-              problem.fields.password === undefined &&
-              problem.fields.password_confirmation === undefined
-            }
+      <Panel
+        title="Change password"
+        description="Changing your password signs you out of every other device. This session stays open."
+      >
+        <div className="flex flex-col gap-4">
+          {changes > 0 ? (
+            <Alert key={changes} tone="success" focusOnMount>
+              Your password has been changed. Other devices have been signed out.
+            </Alert>
+          ) : null}
+          {problem ? (
+            <Alert
+              key={problem.attempt}
+              tone="error"
+              focusOnMount={
+                problem.fields.current_password === undefined &&
+                problem.fields.password === undefined &&
+                problem.fields.password_confirmation === undefined
+              }
+            >
+              {problem.message}
+            </Alert>
+          ) : null}
+          <form
+            onSubmit={(event: SyntheticEvent) => {
+              event.preventDefault()
+              void submit()
+            }}
+            className="flex flex-col gap-4"
           >
-            {problem.message}
-          </Alert>
-        ) : null}
-        <form
-          onSubmit={(event: SyntheticEvent) => {
-            event.preventDefault()
-            void submit()
-          }}
-          className="flex flex-col gap-4"
-        >
-          {/* Tells a password manager which saved login this password belongs to. Not for people. */}
-          <input
-            type="text"
-            name="username"
-            autoComplete="username"
-            value={current.account.email}
-            readOnly
-            tabIndex={-1}
-            aria-hidden="true"
-            className="sr-only"
-          />
-          <TextField
-            ref={currentRef}
-            label="Current password"
-            name="current_password"
-            type="password"
-            autoComplete="current-password"
-            value={currentPassword}
-            onChange={setCurrentPassword}
-            errors={problem?.fields.current_password}
-          />
-          <NewPasswordFields
-            passwordRef={newRef}
-            password={password}
-            confirmation={confirmation}
-            onPasswordChange={setPassword}
-            onConfirmationChange={setConfirmation}
-            errors={problem?.fields ?? {}}
-          />
-          <SubmitButton pending={pending} pendingLabel="Changing password…">
-            Change password
-          </SubmitButton>
-        </form>
-      </section>
-    </div>
+            {/* Tells a password manager which saved login this password belongs to. Not for people. */}
+            <input
+              type="text"
+              name="username"
+              autoComplete="username"
+              value={current.account.email}
+              readOnly
+              tabIndex={-1}
+              aria-hidden="true"
+              className="sr-only"
+            />
+            <TextField
+              ref={currentRef}
+              label="Current password"
+              name="current_password"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={setCurrentPassword}
+              errors={problem?.fields.current_password}
+            />
+            <NewPasswordFields
+              passwordRef={newRef}
+              password={password}
+              confirmation={confirmation}
+              onPasswordChange={setPassword}
+              onConfirmationChange={setConfirmation}
+              errors={problem?.fields ?? {}}
+            />
+            <SubmitButton pending={pending} pendingLabel="Changing password…">
+              Change password
+            </SubmitButton>
+          </form>
+        </div>
+      </Panel>
+    </Page>
   )
 }
