@@ -3,9 +3,9 @@
 **Product:** Flow Life Commons · Guardian Console (`apps/guardian-console`, React 19 + Tailwind CSS 4)
 **Status:** Accepted, 25 September 2026. This is the source of truth for the Console's mutable visual values.
 **Decision record:** [ADR 0030](../adr/0030-guardian-console-visual-system.md) holds the durable architecture. This file holds everything the ADR deliberately leaves out.
-**Companion file:** [`guardian-console-tokens.css`](guardian-console-tokens.css) is the token reference for the implementation work. Its target is `apps/guardian-console/src/theme/tokens.css`, copied there in WP1 — it is not application code while it lives here.
+**Tokens:** [`apps/guardian-console/src/theme/tokens.css`](../../apps/guardian-console/src/theme/tokens.css) is the one definition of every value in this document that a browser reads. There is no second copy: a token changes there, and the tables below follow it. `src/theme/contrast.test.ts` reads that file and judges the contrast of every pair the design relies on.
 
-This specification is the agreed outcome of four design rounds, written so that it can be built from. Colours, type sizes, radii, shadows and spacing are expected to move during implementation and browser QA; when they do, they move **here**, not in the ADR. A value changing in this file is a normal design change, not an architectural one.
+This specification records the agreed design **as it shipped** (the seven work packages of section 12 are complete). Colours, type sizes, radii, shadows and spacing can still move; when they do, they move in `tokens.css` and here, not in the ADR. A value changing in this file is a normal design change, not an architectural one.
 
 ---
 
@@ -21,8 +21,8 @@ This specification is the agreed outcome of four design rounds, written so that 
 | Naming | The wordmark reads **Flow Life Commons**, with **Guardian Console** as a subordinate descriptor beneath it. Page names stay functional: Overview, Accounts, Members, Account security. |
 | Navigation | An attached rail with a secondary drawer from the outset. The drawer can be pinned, and its **default follows the viewport** (section 6). |
 | Account security | In the account menu only, not in the rail. |
-| Logo | The Flow Life Sanctuary badge, to be added as a same-origin image file (already allowed by `img-src 'self'`). Sizes: 50px in the rail, 38px beside the wordmark in the navigation sheet, 40px in the mobile top bar, 156px on the sign-in and invitation pages. The asset does not exist in the repository yet — see section 13. |
-| Fonts | Self-hosted: Newsreader (titles), Hanken Grotesk (interface), JetBrains Mono (identifiers). This needs `font-src 'self'`. |
+| Logo | The Flow Life Sanctuary badge, to be added as a same-origin image file (already allowed by `img-src 'self'`). Sizes: 50px in the rail, 38px beside the wordmark in the navigation sheet, 40px in the mobile top bar, 156px on the credential and status pages (96px below 640px, so the form stays in view on a phone). Shipped as `src/assets/brand/FlowLife-Logo-320.png` (see section 13). |
+| Fonts | Self-hosted: Newsreader (titles), Hanken Grotesk (interface), JetBrains Mono (identifiers). This needs `font-src 'self'`, and that is the only policy change (ADR 0026, amended). |
 | Preferences | One narrowly scoped `localStorage` key, owned by a single UI-preferences module. It holds a schema version, the theme mode and the drawer choice, and nothing else. Syncing to the account can come later. |
 | Violet | Confirmed. Hue 253°, in the middle of the logo's own range (about 235° to 283°). |
 
@@ -40,7 +40,7 @@ This specification is the agreed outcome of four design rounds, written so that 
 
 ## 3. Colour tokens
 
-Names follow shadcn's conventions where one exists (`surface` is shadcn's `card`, `surface-raised` is `popover`), so its primitives drop in without renaming. All values are in `guardian-console-tokens.css`.
+Names follow shadcn's conventions where one exists (`surface` is shadcn's `card`, `surface-raised` is `popover`), so its primitives drop in without renaming. All values are in `src/theme/tokens.css`.
 
 | Token | Garden (light) | Deep Tide (dark) | Use |
 |---|---|---|---|
@@ -53,7 +53,7 @@ Names follow shadcn's conventions where one exists (`surface` is shadcn's `card`
 | `subtle-foreground` | `#848E89` | `#71838A` | Placeholders and separators only. Never required information. |
 | `border` | `#DDE3DF` | `#233036` | Panel and row dividers |
 | `border-strong` | `#CAD2CD` | `#303E45` | Secondary button outline, emphasis |
-| `input` | `#8C968F` | `#6C7F87` | Form control boundary (3:1 or better against the field) |
+| `input` | `#7C867F` | `#6C7F87` | Form control boundary (3:1 or better against the field and against every ground a control sits on) |
 | `field` | `#FFFFFF` | `#121A1D` | Input background |
 | `ring` | `#7456E3` | `#B09CFF` | Focus ring |
 | `primary` | `#6140D6` | `#A790FF` | Primary action, selection |
@@ -73,7 +73,7 @@ Names follow shadcn's conventions where one exists (`surface` is shadcn's `card`
 | `nav` | `rgba(255,255,255,.50)` | `rgba(3,10,12,.38)` | Rail and pinned drawer, translucent over the wash (no blur) |
 | `nav-foreground` | `#38433E` | `#C2D0D4` | Items |
 | `nav-strong` | `#1D1A26` | `#F2EFF7` | Drawer title, current rail label |
-| `nav-muted` | `#7E8984` | `#6F848B` | Group labels |
+| `nav-muted` | `#646F6A` | `#8598A0` | Group labels (12.5px text: 4.5:1 over the rail's real backing) |
 | `nav-active` | `#E6DFFC` | `rgba(167,144,255,.16)` | Current item and rail pill |
 | `nav-active-foreground` | `#3B22A0` | `#FFFFFF` | |
 | `nav-active-icon` | `#6140D6` | `#B8A6FF` | |
@@ -83,11 +83,11 @@ Names follow shadcn's conventions where one exists (`surface` is shadcn's `card`
 
 ### How it sits in Tailwind v4
 
-- `src/index.css` imports `tailwindcss`, then `./theme/fonts.css` (the `@font-face` rules) and `./theme/tokens.css` (the companion file).
+- `src/index.css` imports `tailwindcss`, then `./theme/fonts.css` (the `@font-face` rules) and `./theme/tokens.css`.
 - **Garden** is defined in full on `:root`. **Deep Tide** is defined in full on `[data-theme=dark]`. A `prefers-color-scheme: dark` block (guarded by `:root:not([data-theme=light])`) repeats Deep Tide, so the right theme paints before any script runs.
 - An `@theme inline` block maps each variable to a Tailwind colour, giving utilities such as `bg-surface`, `text-muted-foreground` and `border-input`.
 - `@custom-variant dark` is keyed to `[data-theme=dark]`, but components should never need it.
-- The default Tailwind palette stays available. A guardrail rule stops raw palette utilities appearing in `src/pages` or `src/ui` (WP6).
+- The default Tailwind palette stays available, and a guardrail (`src/guardrails.test.ts`) stops anything in `src` from using it: raw palette and black/white utilities, arbitrary colour values, `dark:` variants, inline colour styles, colour literals in source or in any stylesheet outside `src/theme`, and reading the theme anywhere but the theme machinery and the account menu. The single exception is the QR code, whose black-on-white plate is drawn into the image itself because scanners need it in every theme.
 
 ## 4. Typography
 
@@ -102,9 +102,9 @@ Names follow shadcn's conventions where one exists (`surface` is shadcn's `card`
 | Meta | Hanken Grotesk | 12.5 / 1.4 | 400, muted | Hints, timestamps. Table headers use 550. |
 | Identifier | JetBrains Mono | 12.5 / 1.4 | 400 | ULIDs, recovery codes, setup keys |
 
-- **Packages:** `@fontsource-variable/newsreader`, `@fontsource-variable/hanken-grotesk` and `@fontsource-variable/jetbrains-mono`, bundled by Vite into hashed `woff2` files served from `/assets`. Confirm the exact package names and axes (Newsreader's optical size) when installing.
-- **Subsets:** latin plus latin-ext only. latin-ext is required for names with diacritics, such as the macron in Hēnare.
-- **Loading:** Hanken Grotesk uses `font-display: optional` with a size-adjusted local fallback, so tables never reflow. Newsreader and JetBrains Mono use `swap`.
+- **Packages:** `@fontsource-variable/newsreader`, `@fontsource-variable/hanken-grotesk` and `@fontsource-variable/jetbrains-mono` (the `wght` axis; none of the three publishes an optical-size axis), bundled by Vite into hashed `woff2` files served from `/assets`, never inlined (`assetsInlineLimit: 0`).
+- **Subsets:** the packages' own CSS declares every script with a `unicode-range`, and a browser fetches a subset only when a character in its range is rendered, so the Latin text and diacritics (the macron in Hēnare) cost their subsets and nothing else.
+- **Loading:** all three use `font-display: swap`, as Fontsource ships them. The planned `optional` with a size-adjusted fallback for Hanken Grotesk needs per-font metric overrides that were not measured; it remains a possible refinement, not a shipped behaviour.
 - **Numbers:** `tabular-nums` on tables, property lists, dates and counts.
 - **Serif discipline:** Newsreader appears only in page, dialog and drawer titles and in the wordmark. Never in controls, labels or tables.
 
@@ -115,11 +115,11 @@ Mobile browsers — Safari on iOS most visibly — zoom the viewport when a cont
 > Every text-accepting control (`input`, `select`, `textarea`, and any control the primitives build on them) renders at **no less than 16px** wherever the pointer is coarse or the viewport is narrow. Everywhere else it renders at the 14px body size.
 
 - It is carried by **one token**, `--text-control`, which resolves to 14px by default and to 16px under `(max-width: 767.98px), (pointer: coarse)`. The token is defined once in `tokens.css`; `Input`, `Select`, `Textarea` and `TotpCodeField` consume it and never set a size of their own.
-- Because it is a token and not a utility, a new control inherits the floor by construction. A control that hard-codes `text-body` or `text-[14px]` is the bug, and the WP6 guardrail against literal values in `src/ui` is what catches it.
+- Because it is a token and not a utility, a new control inherits the floor by construction. A control that hard-codes `text-body` or `text-[14px]` is the bug, and `src/ui/formControlFloor.test.ts` is what catches it in the control primitives, with the guardrail against literal colours and sizes beside it.
 - The desktop interface is unaffected: 14px controls beside 13px labels remain the operational density.
 - The same breakpoints already step control **heights** up one size on coarse pointers (section 5), so the floor and the target sizes move together rather than fighting each other.
 
-**Acceptance:** a unit test asserts the computed `font-size` of each control primitive is at least 16px under a coarse-pointer/narrow media context, and 14px otherwise; the 375px pass of the WP6 visual QA confirms no zoom-on-focus in a real mobile browser.
+**Acceptance:** a unit test asserts the computed `font-size` of each control primitive is at least 16px under a coarse-pointer/narrow media context, and 14px otherwise; `e2e/layout.spec.ts` confirms 16px fields on an emulated touch screen and 14px on a desktop pointer.
 
 ## 5. Shape, space, elevation, motion
 
@@ -128,7 +128,7 @@ Mobile browsers — Safari on iOS most visibly — zoom the viewport when a cont
   - `radius-md` 9px for menus, wells and alerts.
   - `radius-lg` 14px for panels, dialogs and the drawer.
   - `radius-pill` for badges, the rail pill and the avatar.
-- **Control heights:** `control-sm` 28, `control-md` 34 (default), `control-lg` 40 (sign-in pages). Coarse pointers step up one size, and everything in a row shares a height.
+- **Control heights:** `control-sm` 28, `control-md` 34 (default), `control-lg` 40 (sign-in pages). On a coarse pointer they become 40, 40 and 44, so every control is at least 40px there (section 11), and everything in a row shares a height.
 - **Density:** table rows 42px, header 36px, cell padding 14px across. Panel padding is 16 by 18. The page gutter clamps from 16 to 32px.
 - **Elevation:**
   - `shadow-panel` is a 1px whisper in light and none in dark.
@@ -140,7 +140,7 @@ Mobile browsers — Safari on iOS most visibly — zoom the viewport when a cont
   - All use `cubic-bezier(.2,.8,.2,1)`. The theme switches instantly, and everything drops to 0 under `prefers-reduced-motion`.
 - **Page widths:**
   - `prose` 42rem, `form` 36rem and `wide` 92rem.
-  - `detail` 74rem, a two-column grid with a 20rem aside from about 1200px of content.
+  - `detail` 74rem, a two-column grid with a 20rem aside once the page itself is 56rem wide (a container query: `detail` is capped below 1200px, so the window's width is the wrong measure). Below that the aside stacks first. A `PropertyList` stacks term over value inside anything narrower than 20rem, so an email address is never broken mid-word in the aside.
   - Content is left-aligned to the navigation, not centred.
 
 ## 6. Shell and navigation
@@ -204,7 +204,7 @@ The governing principle is **pin only when enough workspace remains**. A pinned 
 | About 1024–1199px | Desktop rail, attached | **Overlay** — the drawer floats over the content, summoned from the rail |
 | About 1200px and wider | Desktop rail, attached | **Pinned** — the drawer holds its own grid column |
 
-- **The wide breakpoint is tunable.** 1200px is the starting value, expressed once as `--bp-pin` in `tokens.css`. Implementation and browser QA (WP4, WP6) may move it; moving it is a change to this specification and to that one token, and to nothing else. What must not change is the principle above.
+- **The wide breakpoint is tunable.** 1200px is the starting value, expressed once as `--bp-pin` in `tokens.css`. Browser QA did not move it (section 13). If it ever moves, that is a change to this specification and to that one token, and to nothing else. What must not change is the principle above.
 - **The preference overrides the default, and only when set.** `nav` is **absent** from stored preferences until the operator pins or unpins the drawer themselves. While absent, the breakpoint decides. Once set, the choice is honoured at every desktop width — an operator who unpins at 1440px stays unpinned.
 - **Below 1024px the preference is not consulted at all**, and is not cleared either: it is a desktop concept, and the operator gets it back when they return to a desktop width.
 - **Crossing a breakpoint never silently rewrites the preference.** The layout re-derives; storage is written only by an explicit pin or unpin.
@@ -270,19 +270,21 @@ Guardian Console       ← descriptor, Hanken Grotesk, meta size, muted-foregrou
 
 The primitives use `cva` variants and a `cn()` helper (`clsx` plus `tailwind-merge`). They follow shadcn conventions, with the source owned in `src/ui`.
 
-| Primitive | Variants and rules | Replaces |
-|---|---|---|
-| `Button` | `primary · secondary · ghost · danger (outline) · danger-solid` × `sm · md · lg`. Pending state keeps its width and swaps the label. One primary per view. `danger-solid` is used only in confirmations. | `classes.ts`, `SubmitButton`, inline button strings (5 definitions) |
-| `Field`, `Input`, `Select`, `Checkbox` | Label, then hint, then control, then error. Errors are tied by `aria-describedby` with an icon plus text. `aria-invalid` gives a danger border and a 1px ring. Keep all of `TextField`'s credential attributes. | `TextField` styling, raw inputs and selects in pages |
-| `Badge` | `success · warning · neutral · danger · accent`. Shape carries meaning without colour: a filled dot means live, a diamond means waiting, a hollow ring means off. | `StatusBadge`, `MembershipStateBadge` |
-| `Panel` | Header (title, description, actions) and body. A `danger` tone tints the border, and the danger-zone panel always comes last. | Ad hoc bordered divs and bare sections |
-| `Alert` | `error · success · warning · info`, icon plus text. Keep the `alert`/`status` roles and `focusOnMount` exactly. | Restyle of `Alert` |
-| `Modal`, `ConfirmDialog` | Keep the native `<dialog>` and its focus logic. Add a tone icon, a display-face title and a `scrim` backdrop, with Cancel first and focused. | Restyle only |
-| `DataTable`, `Pagination` | Tinted sticky header, 42px single-line rows (ellipsis plus `title`), name cell as the link, footer with a range and Previous/Next, and stacked rows below 768px. | Duplicated Accounts and Members tables and navs |
-| `PropertyList` | A 130px term column and tabular values. Values wrap anywhere, so there's no `break-all`. | Inline `dl` grids |
-| `EmptyState`, `Skeleton` | The empty state names what is empty and offers one next action if permitted. Skeleton rows match the table's shape, next to the kept `role="status"` text. | Bare "Loading…" and "No … match" sentences |
-| `Page`, `PageHeader` | `width` prop (prose, form, detail, wide) and the header layout. `PageHeading`'s focus and title behaviour is kept. | Per-page `max-w-*` |
-| `QrCode` | Always dark on a white plate, including in Deep Tide, as its source comment requires. | |
+| Primitive | Variants and rules |
+|---|---|
+| `Button` | `primary · secondary · ghost · danger (outline) · danger-solid` × `sm · md · lg`. Pending state keeps its width and swaps the label. One primary per view. `danger-solid` is used only in confirmations. `buttonVariants` gives a router link the same look. `SubmitButton` is the form's primary submit with its label swap. |
+| `Field`, `Input`, `Select`, `Checkbox` | Label, then hint, then control, then error. Errors are tied by `aria-describedby` with an icon plus text. `aria-invalid` gives a danger border and a 1px ring. `TextField` is a `Field` around an `Input` with the credential attributes fixed. |
+| `Badge` | `success · warning · neutral · danger · accent`. Shape carries meaning without colour: a filled dot means live, a diamond means waiting, a hollow ring means off. `StatusBadge` and `MembershipStateBadge` only choose the words and the variant. |
+| `Panel` | Header (title, description, actions) and body. A `danger` tone tints the border and ground, and the danger-zone panel always comes last. |
+| `Alert` | `error · success · warning · info`, icon plus text. The `alert`/`status` roles and `focusOnMount` are exact. |
+| `Modal`, `ConfirmDialog` | The native `<dialog>` and its focus logic, with a display-face title and a `scrim` backdrop, Cancel first and focused. |
+| `DataTable`, `Pagination` | Tinted header pinned to the top of the window from 768px, 42px rows, name cell as the link, Previous/Next with the position, and labelled stacked records below 768px (each cell's required `label` is shown from `data-label`). |
+| `PropertyList` | A 130px term column beside tabular values once the list is 20rem wide, term over value below that. Values wrap anywhere, so there is no `break-all`. |
+| `EmptyState`, `Skeleton` | The empty state names what is empty and may offer one next action. Skeleton rows match the table's shape, beside the `role="status"` text. |
+| `Page`, `DetailLayout`, `PageHeader` | `Page` takes a `width` (prose, form, detail, wide); `DetailLayout` is the detail grid and its aside; `PageHeader` is the h1 (display face), status, description and primary action. Title and focus behaviour is shared with `AuthLayout` through `usePageHeading`. |
+| `AuthLayout` | The 400px column for every page outside the shell: badge, wordmark, h1, then everything the page says or asks inside one surface. |
+| `TextLink` | An in-text link: the action colour, underlined. |
+| `QrCode` | Black modules on a white plate drawn into the SVG itself, in every theme. |
 
 ## 9. Theme and preferences
 
@@ -341,97 +343,56 @@ Adding `font-src 'self'` is the only policy change. Every place that defines or 
 
 The badge needs no CSP *directive*, because `img-src 'self'` is already served. What it does need is the ADR amendment above: ADR 0026 states the absence of images as a property of the build that someone could check, and that statement stops being true the moment the badge ships. The maintenance page (`maintenance.php`) stays font-free and image-free, because its rewrite intercepts assets. It should use the system fallback stack.
 
-**None of this happens in WP0.** The policy is unchanged until WP1 changes it and its tests together.
+**All of it landed together in WP1**, with its tests, so the policy and its record never disagreed.
 
 ## 11. Accessibility acceptance
 
 - **Contrast:**
   - Body and metadata text at 4.5:1 or better.
   - Large titles and non-text UI (input borders, focus ring, rail pill, badge shapes) at 3:1 or better.
-  - Both themes must pass. Add an automated check that computes contrast for the token pairs in `tokens.css`, next to the existing axe runs.
-- **axe:** the existing `src/test/a11y.ts` and `e2e/accessibility.spec.ts` runs cover every page in **both** themes, with the drawer pinned and in overlay.
+  - Both themes must pass. `src/theme/contrast.test.ts` computes it from `tokens.css` itself, for every text and non-text pair the interface uses (about 180 measurements). Translucent tokens are composited over what is really behind them, and the navigation, which sits over the ground and the top of the wash, is measured over each.
+  - The rail's **pill fill** is a soft cue, not the identifier: it is about 1.3:1 with the rail by design. What identifies the current place is the icon and label colour (at least 5:1) with `aria-current`, and, in the drawer, a solid bar.
+- **axe:** `src/test/a11y.ts` (structure, in jsdom, over every route) and `e2e/accessibility.spec.ts` (a real browser, contrast enabled) cover every page and full-page screen in **both** themes, and the shell in each state: pinned drawer, overlay drawer open, account menu open, mobile sheet open.
 - **Keyboard:** e2e journeys for the account menu, the overlay drawer (open, move, choose, Escape and focus return) and the mobile sheet.
-- **Targets:** at least 24px on desktop and 40px or more on coarse pointers. Rail buttons are 60 by 48.
-- **Form controls on small screens:** at least 16px of text wherever the pointer is coarse or the viewport is narrow, so focusing a field never zooms the viewport and strands the operator (section 4.1). Proved by unit test on the primitives, and confirmed in a real mobile browser during the WP6 pass.
-- **Reduced motion:** the drawer, menu and dialog have no transforms, and skeletons don't shimmer.
+- **Targets:** at least 24px on desktop and 40px or more on coarse pointers (proved for every button, field and select in `e2e/layout.spec.ts`). Rail buttons are 60 by 48.
+- **Form controls on small screens:** at least 16px of text wherever the pointer is coarse or the viewport is narrow, so focusing a field never zooms the viewport and strands the operator (section 4.1). Proved by unit test on the primitives, and confirmed in a real touch-emulated browser (`e2e/layout.spec.ts`).
+- **Reduced motion:** the drawer, sheet and dialogs do not animate, transitions are 0ms and skeletons do not pulse. Proved in a real browser, with the same page under no preference as the control that proves the test can fail (`e2e/layout.spec.ts`).
 
-## 12. Implementation plan
+## 12. Delivery
 
-**Seven reviewable work packages.** Each one is independently green — `./flow check` passes at the end of every package — and independently reviewable. How each is carried (branch, commit, or pull request) follows the repository's normal [Git workflow](../development/git-workflow.md); the package boundary is a review boundary, not a branching rule.
+The visual foundation was delivered as seven reviewable work packages on `feat/guardian-console-visual-foundation`, each independently green.
 
-From WP3 on, the existing behaviour tests should pass **unchanged**. That is the proof that the visual work changed no behaviour.
+| Package | Commit | What it delivered |
+|---|---|---|
+| WP0 | `a6d91f0` | ADR 0030 and this specification. |
+| WP1 | `0644b83` | Tokens, self-hosted fonts, the global canvas (ground, wash, horizon, base type), and `font-src 'self'` with ADR 0026 amended and every policy test moved with it. |
+| WP2 | `bd031b0` | The one preferences module, `ThemeProvider`, the pre-render stamp in `main.tsx`, and the storage guardrail split. |
+| WP3 | `e6ca69d` | The primitives of section 8, with unit and axe tests in both themes and the form-control floor. |
+| WP4 | `5a04a74`, `0db821e` | The shell: navigation model, rail, pinned and overlay drawers, top bar and breadcrumbs, mobile sheet, account menu, the badge asset and wordmark. |
+| WP5 | `ce2b05b` | Every page and credential screen on the primitives; the responsive table; the detail layout; `AuthLayout`; Home renamed Overview; page titles `<Page> · Flow Life Commons`. |
+| WP6 | the commit that carries this text | The permanent guardrails, the contrast check, the structural check on the pre-render stamp, the final accessibility, width and motion suites, and the removal of the transitional helpers (`classes.ts`, `PageHeading`). |
 
-### WP0 — Record the design architecture
-- [ADR 0030](../adr/0030-guardian-console-visual-system.md), the durable architecture of the visual system.
-- This specification and its token companion, finalized under `docs/design/`.
-- The ADR index updated.
-- **Docs only.** No application code, no dependencies, no policy change.
-- **Done when:** the ADR and this spec agree, links resolve, and `./flow check repo` passes.
+Settled while building, and now part of the design:
 
-### WP1 — Tokens, fonts, global canvas, CSP/font foundation
-- Copy the companion file to `src/theme/tokens.css` and add `fonts.css` (the `@font-face` rules); import both from `index.css`, which today imports Tailwind alone.
-- Install the three `@fontsource-variable` packages. Confirm the exact package names and axes at this point.
-- Make the `font-src 'self'` changes from section 10, and amend [ADR 0026](../adr/0026-production-browser-security-policy.md) in the same package, so the decision and the policy move together rather than the record drifting ahead of the header. The same amendment covers the badge, because ADR 0026's build-shape clause currently asserts "no fonts, no images" (section 13).
-- `scripts/verify-build.mjs`: it asserts CSS content today; extend it to assert that token utilities (for example `.bg-surface`) and at least one hashed `.woff2` are emitted.
-- **Done when:** the new global canvas is in place — the background, the atmospheric wash, the horizon line and the base typography now paint, because `tokens.css` defines them in `@layer base` — while existing page and component structures are otherwise intact and unmodified. Fonts load under the production policy, and every policy test passes.
-- **Not claimed:** that the application looks unchanged. It will not. This package deliberately changes the ground and the type; what it does not change is any page's structure, markup or behaviour.
-
-### WP2 — Theme and UI preferences
-- `src/ui/preferences.ts`, `ThemeProvider`, `useTheme`, `useNavPreference`, and the pre-render stamp in `main.tsx`.
-- Split the single `browser storage` guardrail rule (currently one pattern covering `localStorage`, `sessionStorage`, `indexedDB` and `openDatabase`) into the two rules in section 9. Add the unit tests and `expectOnlyUiPreferences`, and update the eight e2e `storageSizes` assertions.
-- **Done when:** the theme can be forced by preference in tests, and storage holds only the one key with only the allowed fields.
-
-### WP3 — Shared UI primitives
-- Add `class-variance-authority`, `clsx` and `tailwind-merge`, with `cn()`.
-- Build Button, Field, Input, Select, Checkbox, Badge, Panel, Alert, DataTable, Pagination, PropertyList, EmptyState, Skeleton, Page and PageHeader. Restyle Modal and ConfirmDialog. The control primitives consume `--text-control` (section 4.1).
-- Optionally add a `components.json` so the shadcn CLI can add further primitives into `src/ui` as owned source. Each Radix-based addition must pass the CSP browser journey, because some inject `<style>` tags that `style-src 'self'` blocks.
-- **Done when:** each primitive has unit and axe tests in both themes, and the form-control floor is proved by test. No page uses them yet.
-
-### WP4 — Shell, navigation and account menu
-- `src/shell/navigation.ts`, the rail, the drawer (pinned and overlay, with the responsive default from section 6), the top bar with breadcrumbs, the logo, the horizon line and wash, and the mobile navigation sheet.
-- Add the badge asset and the `Flow Life Commons · Guardian Console` wordmark. Correct the `<title>` in `index.html`, which reads "Flow Life Guardian Console" today.
-- `AccountMenu` (popover, roving focus, theme radios, absorbing `SignOutButton`). Account security leaves the primary navigation.
-- Replace `ConsoleLayout`. `StepUpProvider` and `Outlet` placement are unchanged.
-- **Done when:** the keyboard e2e journeys for the menu, drawer and sheet pass; the drawer default is proved at all three viewport bands; capability filtering is proved by tests; and existing page tests pass.
-
-### WP5 — Page migration and refinement
-- The `DataTable` sticky header lands here with the stacked rows. Measured in WP4: inside the primitive's `overflow-x-auto` wrapper a sticky header scrolls away with the page, and `overflow-x: clip` makes it stick but leaves overflowing columns unreachable. It is only safe once tables stack below 768px and no longer need to scroll sideways.
-- Accounts and Members lists (wide), account and member detail (detail grid, danger zone last), invite and add-member forms (form width), Account security, and Home renamed to Overview (session and API health only: no new figures or APIs).
-- The sign-in, MFA, reset and invitation pages move to a restyled `AuthLayout`: a centred panel over the wash, with the logo and horizon line. `StatusScreen` and `ServiceUnavailable` are restyled too.
-- **Done when:** all behaviour tests pass unchanged, and axe passes on every page in both themes.
-
-**As built (deviations from the plan above, recorded once):**
-- **Sticky header shipped.** Below 768px the table stacks; from 768px it never scrolls sideways (cells wrap or truncate), so the wrapper uses `overflow: clip` and the header cells are `position: sticky`. Verified in Chromium at 768, 1024 and 1280px, including a very long unbroken name and address.
-- **Stacked rows are the same markup.** Each `DataTableCell` takes a required `label`, which CSS shows from `data-label`; the header row is visually hidden, not removed.
-- **The detail aside follows the page, not the window.** The 20rem aside appears when the page's own width reaches 56rem (a container query), because `detail` is capped at 74rem and can never reach "1200px of content". `PropertyList` stacks term over value in a container narrower than 20rem, so an email address is not broken in the aside.
-- **Page titles read `<Page> · Flow Life Commons`**; the retired "Flow Life Guardian Console" appears nowhere. Home became **Overview** (h1, title and route file).
-- **Auth frame.** The badge is 96px below 640px and 156px above, the h1 uses the standard `text-title` (31px), and every full-page screen (access denied, service unavailable) shares the one `AuthLayout`.
-- **The QR plate is part of the drawing** (a white `rect` inside the SVG), so no theme or class can make the code unscannable.
-
-### WP6 — Guardrails, accessibility, cleanup and visual QA
-- Delete `classes.ts` and the duplicate badges and tables.
-- Add a guardrail rule that bans raw palette utilities (`slate-`, `red-`, `emerald-`, `amber-` and so on) and arbitrary colour values in `src/pages` and `src/ui`, with the usual positive control.
-- Add the token-contrast check. Do a visual QA pass at 375, 1024, 1199, 1280 and 1680px in both themes — the 1199 and 1280 pair is what confirms the pin breakpoint, and 375 is where the form-control floor is confirmed in a real mobile browser.
-- Tune `--bp-pin` if QA shows it in the wrong place, and record the change here.
-- **Done when:** no literal colours remain outside `src/theme`.
+- **Tables.** Below 768px a table is stacked, labelled records; from 768px it is a table that never scrolls sideways (cells wrap or truncate), so its header can be pinned with `position: sticky` under `overflow: clip`.
+- **Titles.** `<Page> · Flow Life Commons`; the document's `index.html` title is "Flow Life Commons · Guardian Console". "Flow Life Guardian Console" is a guardrail failure.
+- **Auth frame.** The h1 uses the standard `text-title` (31px) rather than a bespoke 32px, and the badge is 96px below 640px.
+- **Account menu.** A disclosure menu on plain elements, not the `popover` attribute (section 7).
+- **Token corrections found by the contrast check** (WP6): `input` in Garden `#8C968F` → `#7C867F`; `nav-muted` in Garden `#7E8984` → `#646F6A` and in Deep Tide `#6F848B` → `#8598A0`; `--control-sm` on a coarse pointer 34px → 40px.
 
 ## 13. Reconciliation with the repository
 
-Checked against the repository at the time of writing. Each item below is a place where the design meets something that does not yet exist, or that currently says otherwise.
-
-| Item | State of the repository | Resolution |
-|---|---|---|
-| **Badge asset** | No image asset existed anywhere in `apps/guardian-console`, and there is no `public/` directory. The spec's Logo row described the badge as though it were already shipped. | Supplied and added in WP4. The Console imports `src/assets/brand/FlowLife-Logo-320.png` (320px, resampled from the supplied 1022px `FlowLife-Logo.png`, which is kept as the source) through `src/shell/brand.ts`, so Vite emits it as a hashed same-origin file (never a `data:` URI). The largest use is 156px, so 320px covers a 2× display. `img-src 'self'` already permits it, so no CSP directive was needed. A vector replacement is a change to that one import. `FlowLife-Logo-WithAddress.png` sits beside it for customer-facing use and is not imported by the Console. |
-| **ADR 0026 build shape** | ADR 0026 asserts the build loads "no fonts, **no images**, no `data:` URIs" as a deliberate, checkable property, and separately explains why there is no `font-src` line. | Both clauses are broken by this design, not just the font one. The **WP1 amendment to ADR 0026 must cover the badge as well as the fonts**, with the reason: same-origin interface type and one same-origin brand image, no third-party origin either way. |
-| **Product name in `index.html`** | `<title>` reads "Flow Life Guardian Console" — a third name, matching neither the product nor the descriptor. | Corrected in WP4 to "Flow Life Commons · Guardian Console". |
-| **`index.css`** | Contains exactly one line, `@import 'tailwindcss'`. | WP1 adds the `fonts.css` and `tokens.css` imports and the `@theme inline` block in the documented order. |
-| **Guardrail rule** | `src/guardrails.test.ts` has a single `browser storage` rule whose one pattern covers `localStorage`, `sessionStorage`, `indexedDB` and `openDatabase` together. | WP2 splits it in two, as section 9 sets out. The three non-`localStorage` APIs stay banned everywhere. |
-| **`storageSizes` assertions** | Eight assertions across `console.spec.ts` (4), `mfa.spec.ts` (3) and `administration.spec.ts` (1), over a helper in `e2e/support.ts`. | WP2 moves all eight to `expectOnlyUiPreferences(page)`. The count in section 9 is confirmed. |
-| **`verify-build.mjs`** | Asserts CSS content only; has no font or token assertions. | Extended in WP1. |
-| **"Work Package"** | Already the repository's unit of reviewable work — [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) refers to Work Packages 5 and 6 by that name. | Section 12 uses the same vocabulary. |
+| Item | State |
+|---|---|
+| **Badge asset** | `src/assets/brand/FlowLife-Logo-320.png` (320px, resampled from the supplied 1022px `FlowLife-Logo.png`, which stays as the source) is imported through `src/shell/brand.ts`, so Vite emits it as a hashed same-origin file, never a `data:` URI. The largest use is 156px, so 320px covers a 2× display. `img-src 'self'` already permitted it. `FlowLife-Logo-WithAddress.png` sits beside it for customer-facing use and is not imported. |
+| **ADR 0026 build shape** | Amended (2026-09-25, and again for the shipped badge): the build carries same-origin hashed fonts and one same-origin hashed image, no third-party origin, no `data:`. |
+| **Product name** | The wordmark is "Flow Life Commons" over "Guardian Console"; `index.html` reads "Flow Life Commons · Guardian Console". |
+| **Guardrails** | `src/guardrails.test.ts` bans raw palette and literal colours, `dark:` variants, and reading the theme (section 3); `localStorage` is legal in exactly `ui/preferences.ts`, and `sessionStorage`, `indexedDB` and `openDatabase` stay banned everywhere (section 9). |
+| **Storage assertions** | The e2e storage assertions go through `expectOnlyUiPreferences(page)` (section 9). |
+| **`verify-build.mjs`** | Asserts CSS content, design tokens, hashed fonts and the hashed image. |
+| **`--bp-pin`** | 1200px, unchanged by QA: at 1199px the drawer defaults to overlay and at 1200px to pinned (`e2e/layout.spec.ts`). |
 
 ### Still open
 
-- **Simplified mark.** If a mark without lettering exists or is commissioned, it replaces the badge in the rail and as the favicon, with the full badge kept for the sign-in pages. This is an asset swap at declared sizes and needs no architectural change, so it is not a blocker for any work package.
-- **Font package names.** Confirm the exact `@fontsource-variable` package names and axis support (Newsreader's optical size in particular) when installing in WP1.
-- **`--bp-pin` value.** 1200px is the starting value for the pin breakpoint. WP4 and WP6 may tune it; the principle it serves is fixed.
+- **Simplified mark.** If a mark without lettering exists or is commissioned, it replaces the badge in the rail and as the favicon, with the full badge kept for the credential pages. It is an asset swap at declared sizes and needs no architectural change.
+- **Hanken Grotesk `optional` loading** with a measured size-adjusted fallback (section 4).

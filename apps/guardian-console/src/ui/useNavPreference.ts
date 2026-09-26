@@ -12,7 +12,7 @@ export interface NavPreferenceValue {
   /**
    * The operator's explicit choice, or `undefined` while none has been made — the shell's responsive
    * default decides while it is absent (design spec S6). This hook never derives one from the
-   * viewport: it owns preference state, not shell layout. Resolving it against a breakpoint is WP4's.
+   * viewport: it owns preference state, not shell layout. Resolving it against a breakpoint is `useDrawerMode`'s (shell/drawer-mode.ts).
    */
   nav: NavPreference | undefined
   setPinned: () => void
@@ -21,7 +21,7 @@ export interface NavPreferenceValue {
   clear: () => void
 }
 
-/** The drawer preference seam WP4 builds its breakpoint resolution on top of. */
+/** The stored drawer choice, and the only way to change it. */
 export function useNavPreference(): NavPreferenceValue {
   const preferences = useSyncExternalStore(subscribeToPreferences, getPreferencesSnapshot)
   return {

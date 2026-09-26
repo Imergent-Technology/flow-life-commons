@@ -5,7 +5,7 @@ import { usePageHeading } from './usePageHeading.ts'
 /**
  * The top of a page: the h1 (in the display face), an optional status beside it, an optional one-line
  * description, and the page's one primary action on the right. The h1 is the page's only one, names the
- * document and takes focus on arrival, exactly as `PageHeading` does.
+ * document and takes focus on arrival, exactly as `AuthLayout`'s does.
  */
 export function PageHeader({
   title,

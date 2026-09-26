@@ -118,7 +118,7 @@ describe('Checkbox', () => {
   })
 })
 
-describe('TextField (legacy adapter over Field and Input)', () => {
+describe('TextField (a Field around an Input)', () => {
   it('keeps the credential attributes and the label, hint and error wiring', () => {
     render(
       <TextField

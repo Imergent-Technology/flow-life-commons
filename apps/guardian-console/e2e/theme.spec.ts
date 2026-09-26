@@ -3,13 +3,13 @@ import { expect, test, type Page } from '@playwright/test'
 import { expectOnlyUiPreferences } from './support.ts'
 
 /**
- * The theme infrastructure (ADR 0030, Work Package 2), in a real browser under the production policy.
+ * The theme infrastructure (ADR 0030), in a real browser under the production policy.
  *
- * There is no UI control yet to choose a theme — the account menu arrives with WP4 — so these journeys
+ * The account menu's own theme choice is exercised in shell.spec.ts; these journeys instead
  * seed the one approved preference key directly via `addInitScript`. That is Playwright's own
  * instrumentation: it runs before any page script and is not subject to the page's CSP, exactly like
- * the violation reporter `security.spec.ts` installs the same way. No temporary UI is invented for this
- * package, and the production-equivalent origin (`prod.flowlife.localhost`) is used throughout, so
+ * the violation reporter `security.spec.ts` installs the same way. No UI is added just for the
+ * test, and the production-equivalent origin (`prod.flowlife.localhost`) is used throughout, so
  * these journeys prove the real build under the real policy rather than the weaker development one.
  */
 

@@ -8,7 +8,7 @@ import {
 } from './support.ts'
 
 /**
- * The application shell (ADR 0030, Work Package 4), in a real browser: the rail and drawer, the mobile
+ * The application shell (ADR 0030), in a real browser: the rail and drawer, the mobile
  * sheet, the top bar, the breadcrumbs and the account menu. Focus, dialogs, media queries and the
  * production policy are exactly what jsdom cannot show, so these journeys are where they are proved.
  *

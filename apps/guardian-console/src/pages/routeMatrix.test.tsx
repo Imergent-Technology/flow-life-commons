@@ -1,5 +1,5 @@
 import { screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PageWidth } from '../ui/Page.tsx'
 import { expectNoAxeViolations } from '../test/a11y.ts'
@@ -14,6 +14,10 @@ import { renderApp } from '../test/renderApp.tsx'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+beforeEach(() => {
+  document.title = ''
 })
 
 const EVERYTHING = [...ADMIN_CAPABILITIES, 'membership.records.view', 'membership.records.manage']
@@ -47,7 +51,10 @@ describe('every signed-in Console route', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: h1 })).toBeVisible()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
-    expect(document.title).toBe(`${h1} · Flow Life Commons`)
+    // The title is set in an effect, and document.title outlives a test: wait for THIS page's, never read the last one's.
+    await waitFor(() => {
+      expect(document.title).toBe(`${h1} · Flow Life Commons`)
+    })
     await waitFor(() => {
       expect(document.querySelector('[data-page-width]')).toHaveAttribute('data-page-width', width)
     })
@@ -96,7 +103,10 @@ describe('every full-page screen outside the shell', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: h1 })).toBeVisible()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
-    expect(document.title).toBe(`${h1} · Flow Life Commons`)
+    // The title is set in an effect, and document.title outlives a test: wait for THIS page's, never read the last one's.
+    await waitFor(() => {
+      expect(document.title).toBe(`${h1} · Flow Life Commons`)
+    })
     expect(screen.getByRole('main')).toHaveClass('max-w-[25rem]')
     expect(screen.getByText('Flow Life Commons')).toBeVisible()
     await expectNoAxeViolations()

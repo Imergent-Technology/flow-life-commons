@@ -18,7 +18,7 @@ import { MembershipGrantsSection } from './MembershipGrantsSection.tsx'
 /**
  * One Person's membership record: their current, derived state and their complete grant history. `404` covers both a
  * Person who does not exist and one who exists but has never held a grant — a bare Person is not yet a membership
- * record (ADR 0028, Work Package 5's Phase-1 choice).
+ * record (ADR 0028).
  */
 export function MemberDetailPage() {
   const current = useCurrentAccount()

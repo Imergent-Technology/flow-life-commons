@@ -14,9 +14,9 @@ const css = cssFiles.map((f) => readFileSync(join(assets, f), 'utf8')).join('\n'
 // this one included, so a needle spelled out as a class name here would generate ITSELF and pass
 // whether or not the app used it.
 const needles = [
-  ['text', '2xl'],
+  ['text', 'section'],
   ['font', 'semibold'],
-  ['max', 'w', 'md'],
+  ['max', 'w', 'page-form'],
 ].map((parts) => `.${parts.join('-')}`)
 for (const needle of needles) {
   if (!css.includes(needle)) {
@@ -29,10 +29,9 @@ if (css.includes('@import "tailwindcss"') || css.includes("@import 'tailwindcss'
 
 // The visual system's token foundation (ADR 0030, docs/design/guardian-console-visual-system.md).
 //
-// WP1 could only prove the base layer and the theme-independent scales, because `@theme inline` emits a
-// role's utility only once something in the source uses it. WP3's primitives now do, so the role
-// utilities are asserted below (needles built at run time, for the reason given above). What WP1 proved
-// stays proved:
+// `@theme inline` emits a role's utility only once something in the source uses it, so the role utilities
+// the primitives are written in are asserted below (needles built at run time, for the reason given above),
+// beside the parts that are hand-written CSS and always ship:
 //
 // - `--radius-md` is redefined by the design from Tailwind's stock value to 9px, and `rounded-md` is
 //   already used in the Console (TextField and others) — so this single assertion proves the token

@@ -39,7 +39,7 @@ describe('Badge', () => {
   })
 })
 
-describe('the legacy status badges, now on Badge', () => {
+describe('the status badges over Badge', () => {
   it.each([
     ['invited', 'Invited', 'diamond'],
     ['active', 'Active', 'dot'],

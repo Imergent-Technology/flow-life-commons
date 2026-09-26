@@ -135,7 +135,7 @@ describe('Button', () => {
   })
 })
 
-describe('SubmitButton (legacy adapter)', () => {
+describe('SubmitButton', () => {
   it('is a primary submit button that swaps its label while pending', () => {
     const { rerender } = render(
       <SubmitButton pending={false} pendingLabel="Signing in…">

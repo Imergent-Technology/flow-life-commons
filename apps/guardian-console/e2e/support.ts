@@ -262,6 +262,7 @@ export async function signedInAs(
   browser: Browser,
   baseURL: string,
   name: FixtureSession,
+  contextOptions: Parameters<Browser['newContext']>[0] = {},
 ): Promise<Page> {
   const all = JSON.parse(readFileSync('e2e/.fixtures/sessions.json', 'utf8')) as Record<
     string,
@@ -271,7 +272,7 @@ export async function signedInAs(
   if (fixture === undefined)
     throw new Error(`No minted session named ${name}. Run ./flow test e2e.`)
 
-  const context = await browser.newContext({ baseURL })
+  const context = await browser.newContext({ baseURL, ...contextOptions })
   await context.addCookies([
     {
       name: SESSION_COOKIE,

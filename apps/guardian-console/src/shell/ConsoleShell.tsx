@@ -78,7 +78,7 @@ export function ConsoleShell() {
   const account = <AccountMenu current={current} compact={band === 'mobile'} signOut={signOut} />
 
   const content = (
-    <main id={MAIN_ID} tabIndex={-1} className={`min-w-0 flex-1 pb-10 outline-none ${gutter}`}>
+    <main id={MAIN_ID} tabIndex={-1} className={`min-w-0 flex-1 pt-2 pb-10 outline-none ${gutter}`}>
       {signOut.error ? (
         <div className="mb-4">
           <Alert key={signOut.error.attempt} tone="error" focusOnMount>

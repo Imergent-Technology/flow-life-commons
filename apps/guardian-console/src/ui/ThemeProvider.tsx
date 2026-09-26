@@ -11,8 +11,8 @@ import {
 import { ThemeContext, type ThemeContextValue } from './theme-context.ts'
 
 /**
- * Resolves the theme and keeps the document stamped as it changes, and exposes both to whatever WP4
- * mounts to let an operator change it. The pre-render stamp in `main.tsx` already applied the correct
+ * Resolves the theme and keeps the document stamped as it changes, and exposes both to the account menu,
+ * which is what lets an operator change it. The pre-render stamp in `main.tsx` already applied the correct
  * value before this component exists; this keeps it correct afterward — an explicit choice, or (in
  * System mode) the OS changing live underneath the operator.
  */

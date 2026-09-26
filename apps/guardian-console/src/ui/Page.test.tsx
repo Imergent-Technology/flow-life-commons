@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 
 import { Page } from './Page.tsx'
 import { PageHeader } from './PageHeader.tsx'
-import { PageHeading } from './PageHeading.tsx'
 
 describe('Page', () => {
   it.each([
@@ -55,6 +54,7 @@ describe('PageHeader', () => {
     render(<PageHeader title="Members" />)
     expect(screen.getByRole('heading', { level: 1 })).toHaveFocus()
     expect(document.title).toBe('Members · Flow Life Commons')
+    expect(document.title).not.toContain('Guardian Console')
   })
 
   it('moves focus and the title again when the page changes', () => {
@@ -62,13 +62,5 @@ describe('PageHeader', () => {
     rerender(<PageHeader title="Accounts" />)
     expect(screen.getByRole('heading', { level: 1, name: 'Accounts' })).toHaveFocus()
     expect(document.title).toBe('Accounts · Flow Life Commons')
-  })
-})
-
-describe('PageHeading (legacy)', () => {
-  it('behaves as it always did: an h1 that names the document and takes focus', () => {
-    render(<PageHeading title="Overview" />)
-    expect(screen.getByRole('heading', { level: 1, name: 'Overview' })).toHaveFocus()
-    expect(document.title).toBe('Overview · Flow Life Commons')
   })
 })

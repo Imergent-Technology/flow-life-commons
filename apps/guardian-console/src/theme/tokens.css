@@ -2,10 +2,10 @@
  * Guardian Console visual system: design tokens
  * Flow Life Commons · Guardian Console
  *
- * THIS IS THE FILE THAT SHIPS. Its source of truth is docs/design/guardian-console-tokens.css
- * (the design reference) and docs/design/guardian-console-visual-system.md (the specification);
- * see ADR 0030 for the durable architecture. A value change belongs in the design reference first
- * and is carried here by the same copy this file started from — not edited here and left to drift.
+ * THE ONE DEFINITION of every colour, type role, radius, width and motion value the Console uses. The
+ * specification (docs/design/guardian-console-visual-system.md) describes them and ADR 0030 records the
+ * architecture; a value changes HERE, and src/theme/contrast.test.ts judges the contrast of what it
+ * changed. There is no second copy to keep in step.
  *
  * Import order in src/index.css:
  *
@@ -17,16 +17,17 @@
  *   Light: Garden     (:root, the default)
  *   Dark:  Deep Tide  ([data-theme="dark"], plus a prefers-color-scheme fallback)
  *
- * The ThemeProvider (WP2) will stamp the RESOLVED theme on <html data-theme="light|dark"> before
- * first render. Until then, the prefers-color-scheme block below is what paints Deep Tide for a
- * System-dark visitor, and :root's own values are what paint Garden for everyone else.
- * Components must use the semantic utilities below, and never raw palette classes
- * or dark: variants. A guardrail enforces this from WP6.
+ * main.tsx stamps the RESOLVED theme on <html data-theme="light|dark"> before first render (a test
+ * protects that it stays synchronous). Before even that has run, the prefers-color-scheme block below
+ * paints Deep Tide for a System-dark visitor, and :root's own values paint Garden for everyone else.
+ * Keep the two dark blocks identical (a test checks it).
  *
- * WP1's acceptance: the @layer base block at the foot of this file sets the page ground, the
- * atmospheric wash, the horizon line and the base typography, and the form-control floor applies
- * globally to every native text-accepting control. So this package DOES change how the application
- * looks. What it does not change is any page's structure, markup or behaviour.
+ * Components use the semantic utilities below, never raw palette classes or dark: variants, and never
+ * a colour literal: src/guardrails.test.ts enforces it.
+ *
+ * The @layer base block at the foot of this file sets the page ground, the atmospheric wash, the
+ * horizon line and the base typography, and the form-control floor applies globally to every native
+ * text-accepting control.
  */
 
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
@@ -52,7 +53,7 @@
   /* lines */
   --border: #dde3df;
   --border-strong: #cad2cd;
-  --input: #8c968f; /* 3:1 or better against --field */
+  --input: #7c867f; /* 3:1 or better against the field and the ground it sits on: see contrast.test.ts */
   --field: #ffffff;
   --ring: #7456e3;
 
@@ -78,7 +79,7 @@
   --nav: rgb(255 255 255 / 0.5);
   --nav-foreground: #38433e;
   --nav-strong: #1d1a26;
-  --nav-muted: #7e8984;
+  --nav-muted: #646f6a;
   --nav-active: #e6dffc;
   --nav-active-foreground: #3b22a0;
   --nav-active-icon: #6140d6;
@@ -138,7 +139,7 @@
   --nav: rgb(3 10 12 / 0.38);
   --nav-foreground: #c2d0d4;
   --nav-strong: #f2eff7;
-  --nav-muted: #6f848b;
+  --nav-muted: #8598a0;
   --nav-active: rgb(167 144 255 / 0.16);
   --nav-active-foreground: #ffffff;
   --nav-active-icon: #b8a6ff;
@@ -199,7 +200,7 @@
     --nav: rgb(3 10 12 / 0.38);
     --nav-foreground: #c2d0d4;
     --nav-strong: #f2eff7;
-    --nav-muted: #6f848b;
+    --nav-muted: #8598a0;
     --nav-active: rgb(167 144 255 / 0.16);
     --nav-active-foreground: #ffffff;
     --nav-active-icon: #b8a6ff;
@@ -340,8 +341,8 @@
    *   below --bp-rail : mobile top bar + modal navigation sheet
    *   --bp-rail       : desktop rail; secondary drawer defaults to OVERLAY
    *   --bp-pin        : secondary drawer defaults to PINNED
-   * --bp-pin is the tunable one. WP4/WP6 browser QA may move it; nothing else needs
-   * to change when it does. These are declarative records of the media queries the
+   * --bp-pin is the tunable one. Browser QA left it where it is (1199px overlays, 1200px pins);
+   * nothing else needs to change if it ever moves. These are declarative records of the media queries the
    * shell uses — CSS cannot interpolate a variable into a media query, so the shell's
    * own @media rules and the useNavPreference matchMedia query must be kept in step
    * with these values by hand.
@@ -367,7 +368,8 @@
 
 @media (pointer: coarse) {
   :root {
-    --control-sm: 34px;
+    /* Every control is at least 40px where a finger is the pointer (spec §11), the small one included. */
+    --control-sm: 40px;
     --control-md: 40px;
     --control-lg: 44px;
   }
@@ -433,11 +435,10 @@
 
   /*
    * The form-control floor (design spec §4.1), wired here rather than per component: Tailwind's
-   * preflight sets every native form control's font-size to inherit the body's, and no page or
-   * primitive overrides it (TextField, and every raw <input>/<select> in the pages, is unstyled for
-   * size today) — so this one rule is what makes the 16px floor real for the whole Console, on the
-   * existing markup, without WP3's primitives existing yet. A new primitive inherits it the same way;
-   * one that hard-codes its own font-size is what the WP6 guardrail against literal values catches.
+   * preflight sets every native form control's font-size to inherit the body's, and no primitive
+   * overrides it, so this one rule makes the 16px floor real for every control in the Console. A new
+   * primitive inherits it the same way; one that sets its own font-size is what
+   * src/ui/formControlFloor.test.ts catches.
    */
   input,
   select,

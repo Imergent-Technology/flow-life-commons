@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { aMemberId, signedInAs } from './support.ts'
 
 /**
- * The Accounts and Members lists (design spec §8, WP5): a real table from 768px, stacked records below it.
+ * The Accounts and Members lists (design spec §8): a real table from 768px, stacked records below it.
  * jsdom cannot lay anything out, so the layout is proved here, in Chromium, with computed styles.
  *
  * Structural checks only: the colours of both themes are audited in accessibility.spec.ts.

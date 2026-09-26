@@ -191,6 +191,93 @@ for (const theme of THEMES) {
   })
 }
 
+for (const theme of THEMES) {
+  test.describe(`accessibility of the shell's states in ${theme}`, () => {
+    /** A signed-in page in the theme at a width, on a page whose section has a drawer. */
+    async function shell(browser: Browser, baseURL: string, width: number): Promise<Page> {
+      const admin = await signedInAs(browser, baseURL, 'admin-read')
+      await inTheme(admin, theme)
+      await admin.setViewportSize({ width, height: 800 })
+      await admin.goto('/admin/accounts')
+      await expect(admin.getByRole('heading', { level: 1, name: 'Accounts' })).toBeVisible()
+      await admin.waitForLoadState('networkidle')
+      expect(await resolvedTheme(admin)).toBe(theme)
+      return admin
+    }
+
+    test(`pinned drawer (1280px) (${theme})`, async ({ browser, baseURL }) => {
+      const admin = await shell(browser, baseURL ?? '', 1280)
+      await expect(admin.locator('[data-drawer="pinned"]')).toBeVisible()
+      expect(await axeViolations(admin)).toEqual([])
+      await admin.context().close()
+    })
+
+    test(`overlay drawer, open (1100px) (${theme})`, async ({ browser, baseURL }) => {
+      const admin = await shell(browser, baseURL ?? '', 1100)
+      await admin
+        .getByRole('navigation', { name: 'Console' })
+        .getByRole('button', { name: 'Admin' })
+        .click()
+      await expect(admin.locator('[data-drawer="overlay"]')).toBeVisible()
+      expect(await axeViolations(admin)).toEqual([])
+      await admin.context().close()
+    })
+
+    test(`account menu, open (${theme})`, async ({ browser, baseURL }) => {
+      const admin = await shell(browser, baseURL ?? '', 1280)
+      await admin.getByRole('button', { name: /account menu/i }).click()
+      await expect(admin.getByRole('menu', { name: 'Account' })).toBeVisible()
+      expect(await axeViolations(admin)).toEqual([])
+      await admin.context().close()
+    })
+
+    test(`mobile navigation sheet, open (375px) (${theme})`, async ({ browser, baseURL }) => {
+      const admin = await shell(browser, baseURL ?? '', 375)
+      await admin.getByRole('button', { name: 'Navigation menu' }).click()
+      await expect(admin.getByRole('dialog')).toBeVisible()
+      expect(await axeViolations(admin)).toEqual([])
+      await admin.context().close()
+    })
+
+    test(`every stop of the keyboard path shows a focus ring (${theme})`, async ({ page }) => {
+      await inTheme(page, theme)
+      await page.goto('/login')
+      await expect(page.getByRole('heading', { level: 1, name: 'Sign in' })).toBeVisible()
+      // The heading takes focus on arrival; Tab then walks the form and its links.
+      const stops: { tag: string; outline: string; width: string }[] = []
+      for (let step = 0; step < 5; step += 1) {
+        await page.keyboard.press('Tab')
+        stops.push(
+          await page.evaluate(() => {
+            const g = globalThis as unknown as {
+              document: { activeElement: unknown }
+              getComputedStyle: (e: unknown) => {
+                outlineStyle: string
+                outlineWidth: string
+                outlineColor: string
+              }
+            }
+            const active = g.document.activeElement as { tagName: string }
+            const style = g.getComputedStyle(active)
+            return {
+              tag: active.tagName,
+              outline: `${style.outlineStyle} ${style.outlineColor}`,
+              width: style.outlineWidth,
+            }
+          }),
+        )
+      }
+      expect(stops.map((stop) => stop.tag)).toEqual(['INPUT', 'INPUT', 'BUTTON', 'A', 'A'])
+      for (const stop of stops) {
+        expect(stop.outline, `${stop.tag} has a visible outline`).toMatch(/^solid rgb/)
+        expect(Number.parseFloat(stop.width), `${stop.tag} outline is 2px`).toBeGreaterThanOrEqual(
+          2,
+        )
+      }
+    })
+  })
+}
+
 test.describe('what a rule engine cannot check', () => {
   test('returns focus to the control that opened a dialog when it is cancelled', async ({
     browser,
