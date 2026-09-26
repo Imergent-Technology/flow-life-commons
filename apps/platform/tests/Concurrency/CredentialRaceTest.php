@@ -95,7 +95,10 @@ function committedInvitation(string $email = 'invitee@example.org'): array
 {
     $account = Identity::savedInvitedAccount($email);
     $token = InvitationToken::generate();
-    app(AccountInvitationRepository::class)->save(Identity::invitation($account, $token));
+    // Issued at the fixed Identity::now(), but the racing worker judges validity by the real wall
+    // clock. A production-length TTL would let this fixture lapse once real time passes that
+    // instant, so ask for one that outlives any run.
+    app(AccountInvitationRepository::class)->save(Identity::invitation($account, $token, ttl: 'P100Y'));
 
     return [$account, $token->reveal()];
 }
