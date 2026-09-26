@@ -111,7 +111,10 @@ export function DataTableRowHeader({ className, ...props }: ComponentProps<'th'>
  * A data cell. `label` is the column's name: it is what the stacked layout shows beside the value, so it is
  * required. `truncate` keeps the value to one line with an ellipsis and exposes the full text as a `title`
  * when the content is plain text; use it for values that are long but not essential to read in full (an
- * email address), not for anything a person must be able to read. A stacked record never truncates.
+ * email address), not for anything a person must be able to read. A stacked record never truncates, and it
+ * puts the label above such a value instead of beside it, so a long value has the whole width of the record
+ * rather than what a label column leaves it (a name a few characters too long for the narrow column would
+ * otherwise leave its last one or two on a line of their own).
  */
 export function DataTableCell({
   label,
@@ -133,7 +136,10 @@ export function DataTableCell({
         'text-foreground',
         truncate &&
           'max-w-0 truncate max-md:max-w-none max-md:overflow-visible max-md:wrap-anywhere max-md:text-clip max-md:whitespace-normal',
-        'max-md:grid max-md:grid-cols-[6.5rem_minmax(0,1fr)] max-md:items-baseline max-md:gap-x-3 max-md:px-0 max-md:py-1 max-md:*:justify-self-start max-md:before:text-meta max-md:before:text-muted-foreground max-md:before:content-[attr(data-label)]',
+        'max-md:grid max-md:items-baseline max-md:px-0 max-md:py-1 max-md:*:justify-self-start max-md:before:text-meta max-md:before:text-muted-foreground max-md:before:content-[attr(data-label)]',
+        truncate
+          ? 'max-md:grid-cols-[minmax(0,1fr)] max-md:gap-y-0.5'
+          : 'max-md:grid-cols-[6.5rem_minmax(0,1fr)] max-md:gap-x-3',
         className,
       )}
     >

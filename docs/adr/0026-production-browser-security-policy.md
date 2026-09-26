@@ -70,7 +70,7 @@ The development gateway serves the Console from Vite under a policy that allows 
 A second gateway site, `prod.flowlife.localhost`, serves the **actual Vite build** as static files beside the API under the **exact production headers** — the same arrangement Apache will serve. `e2e/security.spec.ts` drives real Chromium against it and shows both halves:
 
 - the Console **starts, styles, signs in, challenges a second factor, renders the QR code, administers accounts, calls the API, copies and downloads recovery codes and scrubs a secret-bearing fragment**, with **zero** `securitypolicyviolation` events — since 2026-09-25 this includes the sign-in page's own heading and form label actually rendering in the self-hosted faces (Newsreader and Hanken Grotesk), which is what makes the browser fetch the fonts under `font-src 'self'` rather than merely parse a rule naming it; and
-- the policy **actually blocks**: a script from another origin, an inline script, `eval`, an image from another origin, a font from another origin, a `fetch` to another origin, and being framed.
+- the policy **actually blocks**: a script from another origin, an inline script, `eval`, an image from another origin, a font from another origin, a `fetch` to another origin, and being framed. A font is proved by the browser's own `font-src` `securitypolicyviolation` report naming the other origin, not by the load failing: a file that is not a font (or is not there) fails to load with no policy at all, so a failure alone would prove nothing.
 
 The second half is the point. A header that is present but not enforced is indistinguishable from an enforced one in a snapshot test.
 

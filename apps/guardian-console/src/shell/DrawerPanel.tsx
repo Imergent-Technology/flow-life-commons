@@ -3,7 +3,7 @@ import { cn } from '../ui/cn.ts'
 import { CloseIcon, PinIcon } from './icons.tsx'
 import { NavItemLink } from './NavItemLink.tsx'
 import { DRAWER_ID } from './ids.ts'
-import type { Location, NavSection } from './navigation.ts'
+import { currentMarker, type Location, type NavSection } from './navigation.ts'
 
 /**
  * The secondary navigation for one section: its groups and their pages. Pinned, it is a column of the layout
@@ -75,7 +75,7 @@ export function DrawerPanel({
                 <li key={item.to}>
                   <NavItemLink
                     item={item}
-                    current={location?.item === item}
+                    current={currentMarker(location, item)}
                     onNavigate={onNavigate}
                   />
                 </li>

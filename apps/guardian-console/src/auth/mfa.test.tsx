@@ -2,6 +2,7 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { badgeUrl } from '../shell/brand.ts'
 import { accountFor, empty, FakeApi, json } from '../test/fakeApi.ts'
 import { renderApp } from '../test/renderApp.tsx'
 
@@ -53,6 +54,37 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+/** Every <img> on the page is the decorative brand badge: the one shipped file, not any other image at all. */
+function expectOnlyTheBrandBadge(): void {
+  for (const image of document.querySelectorAll('img')) {
+    expect(image).toHaveAttribute('alt', '')
+    expect(image.getAttribute('src')).toBe(badgeUrl)
+  }
+}
+
+describe('the brand-badge assertion', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('accepts the badge itself', () => {
+    document.body.innerHTML = `<img alt="" src="${badgeUrl}">`
+    expect(expectOnlyTheBrandBadge).not.toThrow()
+  })
+
+  it('rejects any other same-origin image, so it can tell a badge from a secret-bearing image (positive control)', () => {
+    document.body.innerHTML = '<img alt="" src="/api/v1/qr.png"><img alt="" src="/elsewhere.png">'
+    expect(expectOnlyTheBrandBadge).toThrow()
+  })
+
+  it('rejects the badge given a description, and a cross-origin copy of it', () => {
+    document.body.innerHTML = `<img alt="Badge" src="${badgeUrl}">`
+    expect(expectOnlyTheBrandBadge).toThrow()
+    document.body.innerHTML = `<img alt="" src="https://elsewhere.example${badgeUrl}">`
+    expect(expectOnlyTheBrandBadge).toThrow()
+  })
 })
 
 describe('the second step of signing in', () => {
@@ -319,11 +351,7 @@ describe('enrolling an authenticator on first sign-in', () => {
     expect(screen.getByText('JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP')).toBeVisible()
     // The QR code is not an image file: the only <img> on the page is the decorative same-origin brand badge, so
     // nothing fetched an image built from the secret. Every request the Console made went to the platform API.
-    for (const image of document.querySelectorAll('img')) {
-      expect(image).toHaveAttribute('alt', '')
-      expect(image.getAttribute('src')).toMatch(/^\/[^/]/)
-      expect(image.getAttribute('src')).not.toContain('otpauth')
-    }
+    expectOnlyTheBrandBadge()
     for (const call of api.calls) expect(call.path).toMatch(/^\/api\/v1\//)
     expect(screen.getByLabelText('Authentication code')).toHaveAttribute(
       'autocomplete',

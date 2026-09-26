@@ -146,6 +146,19 @@ export function locate(sections: readonly NavSection[], pathname: string): Locat
   return null
 }
 
+/**
+ * How a drawer or sheet item says it is current. On the item's own page it is THE current page. On a page beneath
+ * it (an account's own page under "All accounts") the item is only where you are within the site, so it says `true`:
+ * the breadcrumb's last crumb is the one current page, and a page has one.
+ */
+export function currentMarker(
+  location: Location | null,
+  item: NavItem,
+): 'page' | 'true' | undefined {
+  if (location?.item !== item) return undefined
+  return location.detail ? 'true' : 'page'
+}
+
 export interface Crumb {
   label: string
   /** Absent on the last crumb: the page itself. */

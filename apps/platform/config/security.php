@@ -24,9 +24,8 @@ return [
      *
      *   index.html   one external <script type="module">, one external <link rel="stylesheet">
      *                and NO inline script or style of any kind
-     *   assets/      one .js, one .css, hashed same-origin font files (ADR 0030), no images yet
-     *                (the Console's brand badge is planned but not shipped — Work Package 4), no
-     *                data: URIs, no source maps
+     *   assets/      one .js, one .css, hashed same-origin font files and one hashed same-origin
+     *                image (the Console's brand badge; ADR 0030), no data: URIs, no source maps
      *   favicon.ico  a real file on the origin
      *   at runtime   fetch() to relative /api/v1/... only; the QR code is inline SVG drawn in the
      *                browser from the module matrix (never an <img>, never a QR service)

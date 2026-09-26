@@ -1,10 +1,13 @@
 # ADR 0030: The Guardian Console visual system
 
-- **Status:** Accepted (architecture decided; no part of it is implemented yet)
+- **Status:** Accepted
 - **Date:** 2026-09-25
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0003](0003-react-guardian-console.md), [ADR 0012](0012-tailwind-4-via-vite.md)
+- **Implemented:** 2026-09-26, by the Visual Foundation work packages on `feat/guardian-console-visual-foundation` (delivery table in [the specification](../design/guardian-console-visual-system.md), section 12). What shipped is what this record decided: the seven commitments below are unchanged, and this record is not superseded. Only its current-state wording was brought up to date, in two places, where the work moved past what the original text expected:
+  - The shipping token source is `apps/guardian-console/src/theme/tokens.css`. The `docs/design/guardian-console-tokens.css` companion this record originally named was folded into it and removed, so there is one definition of every value, not a design copy and a shipped copy.
+  - The semantic-style guardrail (`src/guardrails.test.ts`) scans all of the Console's production source, not only `src/pages` and `src/ui` as first written, and a contrast test (`src/theme/contrast.test.ts`) judges the token pairs from `tokens.css` itself.
 
 ## Context
 
@@ -20,9 +23,9 @@ Two constraints are inherited and non-negotiable. [ADR 0026](0026-production-bro
 
 ## Decision
 
-Adopt a **semantic design-token system** for the Guardian Console, with seven durable commitments. The specification at [`docs/design/guardian-console-visual-system.md`](../design/guardian-console-visual-system.md) and its token companion carry the values; this ADR carries only the structure.
+Adopt a **semantic design-token system** for the Guardian Console, with seven durable commitments. The specification at [`docs/design/guardian-console-visual-system.md`](../design/guardian-console-visual-system.md) and the token file `apps/guardian-console/src/theme/tokens.css` carry the values; this ADR carries only the structure.
 
-**1. Components style by semantic role, never by literal value.** A component asks for `surface`, `primary`, `danger`, `muted-foreground`. It never names a colour, and it never carries a `dark:` variant. The role vocabulary is the stable interface; what each role resolves to is a design decision that can change on any given afternoon. A guardrail test bans raw palette utilities and arbitrary colour values in `src/pages` and `src/ui`, so the boundary is enforced rather than merely encouraged.
+**1. Components style by semantic role, never by literal value.** A component asks for `surface`, `primary`, `danger`, `muted-foreground`. It never names a colour, and it never carries a `dark:` variant. The role vocabulary is the stable interface; what each role resolves to is a design decision that can change on any given afternoon. A guardrail test bans raw palette utilities and arbitrary colour values (initially in `src/pages` and `src/ui`, and across all production source since the work was completed), so the boundary is enforced rather than merely encouraged.
 
 **2. Theming is CSS custom properties mapped into Tailwind 4.** Each role is a CSS variable; Tailwind's `@theme inline` maps variables to utilities. A theme is therefore a block of variable assignments, and adding one requires no component change and no build change. This is the CSS-first customisation [ADR 0012](0012-tailwind-4-via-vite.md) chose, used for the purpose it was chosen for.
 

@@ -148,12 +148,14 @@ describe('the pinned drawer', () => {
     expect(drawer()).toBeNull()
   })
 
-  it('stays current on a detail page, and follows the section onto a form page', async () => {
+  it('stays current on a detail page without being the current page, and follows the section onto a form page', async () => {
     await open('/admin/accounts/01J0000000000000000000ACCT', 1400)
+    // The page beneath it is the one current page (its breadcrumb says so); the item is only where it belongs.
     expect(within(openDrawer()).getByRole('link', { name: 'All accounts' })).toHaveAttribute(
       'aria-current',
-      'page',
+      'true',
     )
+    expect(openDrawer().querySelectorAll('[aria-current="page"]')).toHaveLength(0)
   })
 
   it('goes to the first page of a section from its rail control', async () => {
@@ -287,6 +289,63 @@ describe('the overlay drawer', () => {
     expect(drawer()).toBeNull()
     resizeTo(1100)
     expect(drawer()).toBeNull() // and does not spring back open
+  })
+
+  it('sits right after the rail in the document, before the top bar and the page', async () => {
+    const user = userEvent.setup()
+    await open('/', 1100)
+    await user.click(adminToggle())
+    const panel = openDrawer()
+    const after = (first: Node, second: Node) =>
+      (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    // Tab order follows the document, so the drawer must come before what it covers, not after it.
+    expect(after(railNav(), panel)).toBe(true)
+    expect(after(panel, document.querySelector('header') as Node)).toBe(true)
+    expect(after(panel, screen.getByRole('main'))).toBe(true)
+  })
+
+  it('stays open while focus moves between its own controls', async () => {
+    const user = userEvent.setup()
+    await open('/', 1100)
+    await user.click(adminToggle())
+    await user.tab()
+    await user.tab()
+    expect(openDrawer()).toContainElement(document.activeElement as HTMLElement)
+    expect(drawer()).not.toBeNull()
+  })
+
+  it('closes when Tab leaves it, and focus carries on into the page rather than being sent back', async () => {
+    const user = userEvent.setup()
+    await open('/', 1100)
+    await user.click(adminToggle())
+    within(openDrawer()).getByRole('link', { name: 'Add a member' }).focus()
+    await user.tab()
+
+    expect(drawer()).toBeNull()
+    expect(menuButton()).toHaveFocus() // the next thing in the document, not the rail control
+    expect(adminToggle()).not.toHaveFocus()
+  })
+
+  it('closes when Shift+Tab leaves it for the rail, and the rail control keeps the focus without reopening it', async () => {
+    const user = userEvent.setup()
+    await open('/', 1100)
+    await user.click(adminToggle())
+    within(openDrawer()).getByRole('button', { name: 'Pin navigation panel' }).focus()
+    await user.tab({ shift: true })
+
+    expect(drawer()).toBeNull()
+    expect(adminToggle()).toHaveFocus()
+    expect(adminToggle()).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('does not treat focus going nowhere (the window losing it) as leaving', async () => {
+    const user = userEvent.setup()
+    await open('/', 1100)
+    await user.click(adminToggle())
+    act(() => {
+      ;(document.activeElement as HTMLElement).blur()
+    })
+    expect(drawer()).not.toBeNull()
   })
 
   it('never writes a preference by being opened, closed, or navigated with', async () => {
@@ -550,9 +609,70 @@ describe('the breadcrumbs', () => {
     await waitFor(() => {
       expect(within(crumbs).getByText('Tara Target')).toHaveAttribute('aria-current', 'page')
     })
+    // A page has one current page: the breadcrumb's last crumb. The navigation only says where it belongs.
+    expect(document.querySelectorAll('[aria-current="page"]')).toHaveLength(1)
+    expect(within(openDrawer()).getByRole('link', { name: 'All accounts' })).toHaveAttribute(
+      'aria-current',
+      'true',
+    )
     await user.click(within(crumbs).getByRole('link', { name: 'Accounts' }))
     expect(await heading('Accounts')).toHaveFocus()
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull()
+  })
+})
+
+describe('the breadcrumbs on a phone', () => {
+  const crumbsNav = () => screen.queryAllByRole('navigation', { name: 'Breadcrumb' })
+
+  it('sit below the top bar on a form page, from the same model as the desktop trail', async () => {
+    await open('/admin/accounts/invite', 600)
+    const [crumbs, ...others] = crumbsNav()
+    expect(others).toHaveLength(0)
+    expect(crumbs).toBeDefined()
+    if (crumbs === undefined) return
+    expect(within(crumbs).getByRole('link', { name: 'Accounts' })).toHaveAttribute(
+      'href',
+      '/admin/accounts',
+    )
+    expect(within(crumbs).getByText('Invite an operator')).toHaveAttribute('aria-current', 'page')
+    const header = document.querySelector('header')
+    if (header === null) throw new Error('No top bar is showing.')
+    expect(header).not.toContainElement(crumbs) // below the bar, not in it
+    expect(header.compareDocumentPosition(crumbs) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(crumbs.compareDocumentPosition(screen.getByRole('main'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+  })
+
+  it('name a detail page by what it loaded, and lead back up to the list with the heading focused', async () => {
+    const user = userEvent.setup()
+    installViewport(600)
+    const api = serve()
+    api.on('GET /api/v1/admin/roles', json({ data: [] }))
+    api.on(`GET /api/v1/admin/accounts/${wire().id as string}`, () => json(wire()))
+    renderApp(`/admin/accounts/${wire().id as string}`)
+
+    const crumbs = await screen.findByRole('navigation', { name: 'Breadcrumb' })
+    await waitFor(() => {
+      expect(within(crumbs).getByText('Tara Target')).toHaveAttribute('aria-current', 'page')
+    })
+    await user.click(within(crumbs).getByRole('link', { name: 'Accounts' }))
+    expect(await heading('Accounts')).toHaveFocus()
+    expect(crumbsNav()).toHaveLength(0)
+  })
+
+  it('appear only where the navigation model supplies a trail: not on Overview, a list, or Account security', async () => {
+    for (const path of ['/', '/admin/accounts', '/admin/members', '/account/security']) {
+      const { unmount } = await open(path, 600)
+      expect(crumbsNav(), path).toHaveLength(0)
+      unmount()
+    }
+  })
+
+  it('are not doubled where the desktop top bar already has them', async () => {
+    await open('/admin/members/new', 1400)
+    expect(crumbsNav()).toHaveLength(1)
+    expect(document.querySelector('header')).toContainElement(crumbsNav()[0] ?? null)
   })
 })
 

@@ -8,6 +8,7 @@ import {
 } from '../auth/capabilities.ts'
 import {
   breadcrumbs,
+  currentMarker,
   firstDestination,
   locate,
   navigation,
@@ -155,5 +156,28 @@ describe('firstDestination', () => {
 
   it('leads to the first page the operator may see', () => {
     expect(having(MEMBERSHIP_VIEW).map(firstDestination)).toEqual(['/', '/admin/members'])
+  })
+})
+
+describe('currentMarker', () => {
+  const admin = having(...everything)[1]
+  const accounts = admin?.groups?.[0]?.items[0]
+  const invite = admin?.groups?.[0]?.items[1]
+  const at = (pathname: string) => locate(having(...everything), pathname)
+
+  it('marks an item as the current PAGE on its own page, list or form', () => {
+    expect(accounts && currentMarker(at('/admin/accounts'), accounts)).toBe('page')
+    expect(invite && currentMarker(at('/admin/accounts/invite'), invite)).toBe('page')
+  })
+
+  it('marks an item as current but NOT the page on a page beneath it, so a page has one current page', () => {
+    expect(accounts && currentMarker(at('/admin/accounts/01J000'), accounts)).toBe('true')
+    expect(accounts && currentMarker(at('/admin/accounts/invite'), accounts)).toBeUndefined() // exact pages win
+  })
+
+  it('marks nothing elsewhere, or where the page is not in the navigation', () => {
+    expect(invite && currentMarker(at('/admin/accounts'), invite)).toBeUndefined()
+    expect(accounts && currentMarker(at('/account/security'), accounts)).toBeUndefined()
+    expect(accounts && currentMarker(null, accounts)).toBeUndefined()
   })
 })

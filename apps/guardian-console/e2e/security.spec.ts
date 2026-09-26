@@ -262,6 +262,7 @@ test.describe('the production security policy', () => {
   })
 
   test('blocks an image, a font and a fetch from another origin', async ({ page }) => {
+    violations(page) // installs the reporter the font assertion below reads back
     await page.goto(`${PROD}/login`)
 
     const image = await page.evaluate(async (src) => {
@@ -280,21 +281,28 @@ test.describe('the production security policy', () => {
     }, OTHER_ORIGIN)
     expect(image).toBe('blocked')
 
-    // font-src 'self': the one directive this policy gained for the visual system (ADR 0030). The
-    // FontFace constructor's load() rejects if the fetch it triggers is refused, same as the Image
-    // and fetch probes above being refused for their own directives; the target need not really be a
-    // font; CSP blocks the request before any response body is inspected.
-    const font = await page.evaluate(async (src) => {
+    // font-src 'self': the one directive this policy gained for the visual system (ADR 0030). What proves
+    // the POLICY blocked it is the browser's own securitypolicyviolation event for the font directive, naming
+    // the other origin. That event does not depend on the remote file existing or being a real font (the
+    // load rejecting would prove nothing: an .ico, or a file that is not there, is rejected with no policy at
+    // all). It fires when the request is refused before it is made, so it is the policy speaking.
+    const fontOrigin = new URL(OTHER_ORIGIN).origin
+    await page.evaluate(async (src) => {
       const d = globalThis as unknown as Dom
-      const face = new d.FontFace('Blocked Test Face', `url(${src}/favicon.ico)`)
+      const face = new d.FontFace('Blocked Test Face', `url(${src}/not-allowed.woff2)`)
       try {
         await face.load()
-        return 'loaded'
       } catch {
-        return 'blocked'
+        // Expected either way; the violation event below is what is asserted.
       }
-    }, OTHER_ORIGIN)
-    expect(font).toBe('blocked')
+    }, fontOrigin)
+    await expect
+      .poll(async () =>
+        (await reported(page)).some(
+          (report) => /^font-src\b/.test(report) && report.includes(fontOrigin),
+        ),
+      )
+      .toBe(true)
 
     // connect-src 'self': the Console could not send anything to another origin even if something in
     // it tried to. On a page that handles credentials this is the directive that matters most.

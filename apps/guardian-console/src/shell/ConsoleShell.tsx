@@ -129,6 +129,13 @@ export function ConsoleShell() {
             </div>
             <div className="ml-auto">{account}</div>
           </header>
+          {crumbs.length > 0 ? (
+            // The same trail the desktop top bar shows, below the bar where a phone has room for it: the way back
+            // up from a detail or form page, which the navigation sheet alone would make a menu away.
+            <div className={`pb-2 ${gutter}`}>
+              <Breadcrumbs crumbs={crumbs} />
+            </div>
+          ) : null}
           {content}
           {sheetOpen ? (
             <NavSheet
@@ -150,6 +157,15 @@ export function ConsoleShell() {
               setOverlayId((open) => (open === id ? null : id))
             }}
           />
+          {overlaySection === undefined ? null : (
+            <OverlayDrawer
+              section={overlaySection}
+              location={where}
+              onNavigate={closeOverlay}
+              onPinChange={setPinned}
+              onClose={closeOverlay}
+            />
+          )}
           {drawerSection === undefined ? null : (
             <DrawerPanel
               section={drawerSection}
@@ -168,15 +184,6 @@ export function ConsoleShell() {
             </header>
             {content}
           </div>
-          {overlaySection === undefined ? null : (
-            <OverlayDrawer
-              section={overlaySection}
-              location={where}
-              onNavigate={closeOverlay}
-              onPinChange={setPinned}
-              onClose={closeOverlay}
-            />
-          )}
         </div>
       )}
     </BreadcrumbLeafContext>

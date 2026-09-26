@@ -346,9 +346,9 @@
    *   --bp-pin        : secondary drawer defaults to PINNED
    * --bp-pin is the tunable one. Browser QA left it where it is (1199px overlays, 1200px pins);
    * nothing else needs to change if it ever moves. These are declarative records of the media queries the
-   * shell uses — CSS cannot interpolate a variable into a media query, so the shell's
-   * own @media rules and the useNavPreference matchMedia query must be kept in step
-   * with these values by hand.
+   * shell follows — CSS cannot interpolate a variable into a media query, so RAIL_QUERY and PIN_QUERY in
+   * src/shell/viewport.ts (read by useViewportBand, resolved into a drawer mode by useDrawerMode) must be
+   * kept in step with these values by hand.
    */
   --bp-rail: 1024px;
   --bp-pin: 1200px;

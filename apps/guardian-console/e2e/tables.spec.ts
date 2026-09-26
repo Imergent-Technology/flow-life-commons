@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 import { aMemberId, signedInAs } from './support.ts'
 
@@ -146,7 +146,120 @@ for (const list of LISTS) {
 }
 
 test.describe('long values', () => {
-  for (const width of [375, 768, 1024]) {
+  interface Measured {
+    lines: number
+    overflow: number
+    outside: number
+  }
+
+  /** How a value sits in its record: the lines its text takes, and whether it overflows or leaves its box. */
+  const measure = (cell: Locator): Promise<Measured> =>
+    cell.evaluate((el) => {
+      const g = globalThis as unknown as {
+        document: {
+          createRange: () => {
+            selectNodeContents: (n: unknown) => void
+            getClientRects: () => ArrayLike<{ top: number; right: number }>
+          }
+        }
+      }
+      const range = g.document.createRange()
+      range.selectNodeContents(el)
+      const rects = Array.from(range.getClientRects())
+      const box = (
+        el as unknown as { getBoundingClientRect: () => { right: number } }
+      ).getBoundingClientRect()
+      const own = el as unknown as { scrollWidth: number; clientWidth: number }
+      return {
+        lines: new Set(rects.map((rect) => Math.round(rect.top))).size,
+        overflow: own.scrollWidth - own.clientWidth,
+        outside: Math.max(0, ...rects.map((rect) => rect.right - box.right)),
+      }
+    })
+
+  for (const width of [320, 375]) {
+    test(`stacked records at ${String(width)}px keep an address that fits on one line, and wrap the rest inside the record`, async ({
+      browser,
+      baseURL,
+    }) => {
+      const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
+      const person = (id: string, name: string, email: string) => ({
+        id: `01J0000000000000000${id}`,
+        person_id: `01J000000000000000${id}PR`,
+        display_name: name,
+        email,
+        email_verified_at: null,
+        status: 'active',
+        created_at: '2026-09-19T09:00:00Z',
+        last_login_at: null,
+        disabled_at: null,
+        mfa: { enrolled: true, recovery_codes_remaining: 8 },
+        invitation: null,
+        assignments: [],
+      })
+      await admin.route('**/api/v1/admin/accounts?*', (route) =>
+        route.fulfill({
+          json: {
+            data: [
+              // What the development data really has: a 28-character address that used to leave its last letter alone.
+              person('TYPICAL001', 'E2E Invited Operator', 'invited.b3d6ac06@example.org'),
+              person(
+                'LONGMAIL01',
+                'Featherstonehaugh Cholmondeley-Wolfeschlegelstein',
+                'a.very.long.operator.name.with.many.parts@a-rather-long-subdomain.example.org',
+              ),
+              // An identifier-shaped local part with nothing to break on.
+              person(
+                'IDENTIFIER',
+                'Wolfeschlegelsteinhausenbergerdorffvoralternwarengewissenhaft',
+                'e2e.identifier.0123456789abcdef0123456789abcdef0123456789@example.org',
+              ),
+            ],
+            meta: { page: 1, per_page: 25, total: 3, last_page: 1 },
+          },
+        }),
+      )
+      await admin.setViewportSize({ width, height: 800 })
+      await admin.goto('/admin/accounts')
+      const table = admin.getByRole('table', { name: 'Accounts' })
+      await expect(table).toBeVisible()
+
+      const root = await admin.evaluate(() => {
+        const r = (globalThis as unknown as Dom).document.documentElement
+        return r.scrollWidth - r.clientWidth
+      })
+      expect(root, 'horizontal overflow of the page').toBeLessThanOrEqual(0)
+
+      const rows = table.locator('tbody tr')
+      // An address that fits the record's width takes ONE line: no orphaned last character.
+      const typical = await measure(rows.nth(0).locator('td[data-label="Email"]'))
+      expect(typical.lines, 'lines for a 28-character address').toBe(1)
+
+      for (const row of [0, 1, 2]) {
+        const email = await measure(rows.nth(row).locator('td[data-label="Email"]'))
+        expect(email.overflow, `row ${String(row)} address overflows its cell`).toBeLessThanOrEqual(
+          0,
+        )
+        expect(email.outside, `row ${String(row)} address leaves its cell`).toBeLessThanOrEqual(0.5)
+        const name = await measure(rows.nth(row).locator('th[scope="row"]'))
+        expect(name.overflow, `row ${String(row)} name overflows`).toBeLessThanOrEqual(0)
+        expect(name.outside, `row ${String(row)} name leaves its cell`).toBeLessThanOrEqual(0.5)
+      }
+
+      // Short fields keep the compact two-column line: label beside value, the record no taller for them.
+      const beside = await rows
+        .nth(0)
+        .locator('td[data-label="Status"]')
+        .evaluate((el) => {
+          const own = el as unknown as { getBoundingClientRect: () => { height: number } }
+          return own.getBoundingClientRect().height
+        })
+      expect(beside, 'a short field stays a single line').toBeLessThan(34)
+      await admin.context().close()
+    })
+  }
+
+  for (const width of [320, 375, 768, 1024]) {
     test(`a very long name and address neither overflow nor clip at ${String(width)}px`, async ({
       browser,
       baseURL,

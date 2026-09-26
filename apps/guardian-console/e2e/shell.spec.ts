@@ -274,6 +274,98 @@ test.describe('desktop navigation', () => {
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
   })
 
+  test('puts the overlay in the tab order right after the rail, so Shift+Tab goes back to the rail, not to the end of the page', async ({
+    browser,
+    baseURL,
+  }) => {
+    const page = await admin(browser, baseURL)
+    await page.setViewportSize({ width: 1100, height: 800 })
+    await page.goto('/admin/accounts')
+    await expect(page.getByRole('table', { name: 'Accounts' })).toBeVisible()
+    // The page has pagination at its very end: where the old order sent Shift+Tab.
+    await expect(page.getByRole('button', { name: 'Next' })).toBeVisible()
+
+    await railAdmin(page).click()
+    await expect(overlay(page)).toBeVisible()
+    // Opening still moves focus to the current page in the drawer.
+    await expect(overlay(page).getByRole('link', { name: 'All accounts' })).toBeFocused()
+
+    // In the document, the drawer follows the rail and precedes the top bar and the page.
+    const order = await page.evaluate(() => {
+      const g = globalThis as unknown as {
+        document: {
+          querySelector: (s: string) => {
+            compareDocumentPosition: (other: unknown) => number
+          } | null
+        }
+      }
+      const drawer = g.document.querySelector('[data-drawer="overlay"]')
+      const rail = g.document.querySelector('nav[aria-label="Console"]')
+      return {
+        railToDrawer: rail?.compareDocumentPosition(drawer),
+        drawerToHeader: drawer?.compareDocumentPosition(g.document.querySelector('header')),
+        drawerToMain: drawer?.compareDocumentPosition(g.document.querySelector('main')),
+      }
+    })
+    const following = 4 // Node.DOCUMENT_POSITION_FOLLOWING
+    expect((order.railToDrawer ?? 0) & following).toBe(following)
+    expect((order.drawerToHeader ?? 0) & following).toBe(following)
+    expect((order.drawerToMain ?? 0) & following).toBe(following)
+
+    // Shift+Tab walks back through the drawer's own controls, then out to the rail: it closes, the rail control
+    // that took focus keeps it, and nothing in the page (least of all its last control) is where focus went.
+    await page.keyboard.press('Shift+Tab')
+    await expect(
+      overlay(page).getByRole('button', { name: 'Close navigation panel' }),
+    ).toBeFocused()
+    await page.keyboard.press('Shift+Tab')
+    await expect(overlay(page).getByRole('button', { name: 'Pin navigation panel' })).toBeFocused()
+    await expect(overlay(page)).toBeVisible() // still open while focus is inside it
+    await page.keyboard.press('Shift+Tab')
+    await expect(overlay(page)).toHaveCount(0)
+    await expect(railAdmin(page)).toBeFocused()
+    await expect(railAdmin(page)).toHaveAttribute('aria-expanded', 'false')
+    expect(await focusIsInside(page, 'main')).toBe(false)
+  })
+
+  test('closes when Tab leaves the overlay, and focus goes on into the page rather than back to the rail', async ({
+    browser,
+    baseURL,
+  }) => {
+    const page = await admin(browser, baseURL)
+    await page.setViewportSize({ width: 1100, height: 800 })
+    await page.goto('/admin/accounts')
+    await expect(page.getByRole('table', { name: 'Accounts' })).toBeVisible()
+
+    await railAdmin(page).click()
+    await expect(overlay(page)).toBeVisible()
+    await overlay(page).getByRole('link', { name: 'Add a member' }).focus()
+    await page.keyboard.press('Tab')
+
+    // The overlay is closed before focus reaches anything it was covering, and nothing bounced focus back.
+    await expect(overlay(page)).toHaveCount(0)
+    await expect(menuButton(page)).toBeFocused() // the next thing in the document
+    await expect(railAdmin(page)).not.toBeFocused()
+    expect(await focusIsInside(page, 'main')).toBe(false)
+    await expect(railAdmin(page)).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test('still closes on Escape and returns focus to the rail control, from anywhere inside it', async ({
+    browser,
+    baseURL,
+  }) => {
+    const page = await admin(browser, baseURL)
+    await page.setViewportSize({ width: 1100, height: 800 })
+    await page.goto('/admin/accounts')
+    await expect(page.getByRole('table', { name: 'Accounts' })).toBeVisible()
+
+    await railAdmin(page).click()
+    await overlay(page).getByRole('link', { name: 'All members' }).focus()
+    await page.keyboard.press('Escape')
+    await expect(overlay(page)).toHaveCount(0)
+    await expect(railAdmin(page)).toBeFocused()
+  })
+
   test('opens the overlay on the current page, closes on an outside press, and on choosing a page', async ({
     browser,
     baseURL,
@@ -381,11 +473,13 @@ test.describe('desktop navigation', () => {
       'aria-current',
       'page',
     )
-    // The item stays current on a detail page.
+    // The item stays current on a detail page, without claiming to be the current PAGE: a page has one, the
+    // breadcrumb's last crumb, and the navigation only says where it belongs.
     await expect(pinned(page).getByRole('link', { name: 'All accounts' })).toHaveAttribute(
       'aria-current',
-      'page',
+      'true',
     )
+    await expect(page.locator('[aria-current="page"]')).toHaveCount(1)
 
     // Choosing the parent crumb goes up, and the page heading takes focus as it does everywhere.
     await crumbs.getByRole('link', { name: 'Accounts' }).click()
@@ -458,6 +552,67 @@ test.describe('responsive defaults', () => {
     await expect(railAdmin(page)).toBeVisible() // relevant again: the explicit overlay choice
     await expect(pinned(page)).toHaveCount(0)
     expect(await stored(page)).toBe(explicit)
+  })
+})
+
+test.describe('the breadcrumbs on a phone', () => {
+  const trail = (page: Page) => page.getByRole('navigation', { name: 'Breadcrumb' })
+
+  test('give detail and form pages a way back up, below the top bar, from the same model', async ({
+    browser,
+    baseURL,
+  }) => {
+    const page = await admin(browser, baseURL)
+    await page.setViewportSize({ width: 375, height: 800 })
+
+    await page.goto('/admin/accounts/invite')
+    await expect(h1(page, 'Invite an operator')).toBeVisible()
+    await expect(trail(page)).toHaveCount(1)
+    await expect(trail(page).getByText('Invite an operator')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    const bar = await page.locator('header').boundingBox()
+    const box = await trail(page).boundingBox()
+    expect(bar).not.toBeNull()
+    expect(box?.y ?? 0).toBeGreaterThanOrEqual((bar?.y ?? 0) + (bar?.height ?? 0) - 1) // below the bar, not in it
+    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(375) // and inside the screen
+
+    // An account's own page: named by what it loaded, and the trail leads back to the list.
+    await page.goto('/admin/accounts')
+    await page.getByRole('table', { name: 'Accounts' }).getByRole('link').first().click()
+    await expect(page).toHaveURL(/\/admin\/accounts\/[^/]+$/)
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Accounts', exact: true }),
+    ).toHaveCount(0)
+    const name = await page.getByRole('heading', { level: 1 }).textContent()
+    await expect(trail(page).getByText(name ?? '', { exact: true })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    await trail(page).getByRole('link', { name: 'Accounts' }).click()
+    await expect(h1(page, 'Accounts')).toBeFocused()
+    expect(path(page)).toBe('/admin/accounts')
+    await expect(trail(page)).toHaveCount(0)
+    await page.context().close()
+  })
+
+  test('appear only where the model supplies a trail, and are not doubled on a desktop', async ({
+    browser,
+    baseURL,
+  }) => {
+    const page = await admin(browser, baseURL)
+    await page.setViewportSize({ width: 375, height: 800 })
+    for (const route of ['/', '/admin/accounts', '/admin/members', '/account/security']) {
+      await page.goto(route)
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+      await expect(trail(page), route).toHaveCount(0)
+    }
+    await page.setViewportSize({ width: 1400, height: 800 })
+    await page.goto('/admin/members/new')
+    await expect(h1(page, 'Add a new member')).toBeVisible()
+    await expect(trail(page)).toHaveCount(1) // the top bar's, once
+    await page.context().close()
   })
 })
 

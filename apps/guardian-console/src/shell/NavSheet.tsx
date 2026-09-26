@@ -3,13 +3,13 @@ import { useModalDialog } from '../ui/useModalDialog.ts'
 import { Badge, Wordmark } from './Brand.tsx'
 import { CloseIcon } from './icons.tsx'
 import { NavItemLink } from './NavItemLink.tsx'
-import type { Location, NavSection } from './navigation.ts'
+import { currentMarker, type Location, type NavSection } from './navigation.ts'
 import { Link } from 'react-router'
 import { cn } from '../ui/cn.ts'
 
 /** Deterministic: the page you are on, otherwise the first link. */
 const focusCurrentOrFirst = (dialog: HTMLDialogElement) =>
-  dialog.querySelector<HTMLElement>('nav [aria-current="page"]') ??
+  dialog.querySelector<HTMLElement>('nav [aria-current="page"], nav [aria-current="true"]') ??
   dialog.querySelector<HTMLElement>('nav a[href]')
 
 /**
@@ -98,7 +98,7 @@ export function NavSheet({
                         <li key={item.to}>
                           <NavItemLink
                             item={item}
-                            current={location?.item === item}
+                            current={currentMarker(location, item)}
                             onNavigate={onClose}
                           />
                         </li>
