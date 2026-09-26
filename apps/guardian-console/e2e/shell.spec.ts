@@ -371,6 +371,11 @@ test.describe('desktop navigation', () => {
 
     await page.goto('/admin/accounts')
     await page.getByRole('table', { name: 'Accounts' }).getByRole('link').first().click()
+    // Wait for the detail page itself: until it renders, the h1 is still the list's "Accounts".
+    await expect(page).toHaveURL(/\/admin\/accounts\/[^/]+$/)
+    await expect(
+      page.getByRole('heading', { level: 1, name: 'Accounts', exact: true }),
+    ).toHaveCount(0)
     const name = await page.getByRole('heading', { level: 1 }).textContent()
     await expect(crumbs.getByText(name ?? '', { exact: true })).toHaveAttribute(
       'aria-current',

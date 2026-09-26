@@ -38,9 +38,9 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
-    // Each test renders the whole application, and one jsdom worker runs per core. Under load (a shared
-    // machine, CI) a test that takes 1s alone can take 5s: a longer ceiling changes no assertion, only how
-    // long a slow run is given.
-    testTimeout: 15_000,
+    // Caps worker oversubscription. Each worker is a jsdom environment running whole-application tests, and the
+    // default is one per logical CPU; on an SMT host (16 threads over 8 cores) that is twice the cores, and
+    // the suite runs slower and less reliably than with one worker per physical core.
+    maxWorkers: 8,
   },
 })

@@ -1,9 +1,6 @@
 import '@testing-library/jest-dom/vitest'
-import { cleanup, configure } from '@testing-library/react'
+import { cleanup } from '@testing-library/react'
 import { afterEach } from 'vitest'
-
-// The same allowance for `findBy*`/`waitFor` (default 1s): see testTimeout in vite.config.ts.
-configure({ asyncUtilTimeout: 4000 })
 
 // Vitest globals are off (explicit imports), so RTL's auto-cleanup is wired by hand.
 afterEach(() => {
