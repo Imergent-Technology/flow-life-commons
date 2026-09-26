@@ -9,7 +9,7 @@ const page = cva('flex w-full flex-col gap-6', {
       prose: 'max-w-page-prose',
       form: 'max-w-page-form',
       detail: 'max-w-page-detail',
-      wide: 'max-w-page-wide',
+      wide: 'max-w-none',
     },
   },
 })
@@ -17,9 +17,10 @@ const page = cva('flex w-full flex-col gap-6', {
 export type PageWidth = NonNullable<VariantProps<typeof page>['width']>
 
 /**
- * A page's content column. The width follows the task (prose to read, a form to fill, a detail view, a wide
- * list) and the column stays left-aligned beside the navigation rather than being centred. It sets a
- * maximum only: on a narrow screen the page is simply as wide as the screen.
+ * A page's content column. The width follows the task (prose to read, a form to fill, a detail view, an
+ * operational list) and the column stays left-aligned beside the navigation rather than being centred. The
+ * first three set a maximum: on a narrow screen the page is simply as wide as the screen. `wide` sets none: a
+ * list takes the whole width the shell leaves it, inside the shell's own gutters.
  */
 export function Page({
   width,

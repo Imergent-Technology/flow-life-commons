@@ -54,7 +54,7 @@ export function Rail({
   return (
     <nav
       aria-label="Console"
-      className="sticky top-0 flex h-dvh w-(--shell-rail) shrink-0 flex-col items-center gap-4 border-r border-nav-border bg-nav py-3"
+      className="sticky top-0 flex h-dvh w-(--shell-rail) shrink-0 flex-col items-center gap-4 border-r border-nav-border bg-nav-rail py-3"
     >
       <Badge className="size-(--logo-rail)" label="Flow Life Commons" />
       <ul className="flex flex-col gap-1">

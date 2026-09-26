@@ -12,7 +12,7 @@ const twMerge = extendTailwindMerge({
       text: ['title', 'dialog-title', 'section', 'body', 'label', 'meta'],
       radius: ['pill'],
       shadow: ['panel', 'pop'],
-      container: ['page-prose', 'page-form', 'page-detail', 'page-wide'],
+      container: ['page-prose', 'page-form', 'page-detail'],
     },
   },
 })

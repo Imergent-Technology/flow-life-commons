@@ -172,6 +172,7 @@ interface Requirement {
 const grounds = ['background', 'wash0', 'wash1']
 const cards = ['surface', 'surface-raised', 'muted']
 const navBacking = grounds.map((ground) => `nav/${ground}`)
+const railBacking = grounds.map((ground) => `nav-rail/${ground}`)
 
 const requirements: Requirement[] = [
   // --- body text
@@ -214,7 +215,7 @@ const requirements: Requirement[] = [
   { fg: 'danger-foreground', on: ['danger'], min: TEXT, why: 'the solid destructive button' },
   { fg: 'neutral-foreground', on: ['neutral-soft'], min: TEXT, why: 'the inactive badge' },
 
-  // --- navigation: the rail and pinned drawer sit over the ground and the wash; the overlay drawer and the sheet on a raised surface
+  // --- navigation: the pinned drawer sits over the ground and the wash (the rail's own plane follows below); the overlay drawer and the sheet on a raised surface
   {
     fg: 'nav-foreground',
     on: [...navBacking, 'surface-raised'],
@@ -247,6 +248,32 @@ const requirements: Requirement[] = [
     ],
     min: TEXT,
     why: 'a hovered drawer item',
+  },
+
+  // --- the rail: its own, deeper plane over the same ground and wash. It carries no group labels (nav-muted lives in the drawer).
+  {
+    fg: 'nav-foreground',
+    on: railBacking,
+    min: TEXT,
+    why: 'the rail section labels',
+  },
+  {
+    fg: 'nav-strong',
+    on: railBacking,
+    min: TEXT,
+    why: 'the current rail label',
+  },
+  {
+    fg: 'nav-active-icon',
+    on: [...grounds.map((ground) => `nav-active/nav-rail/${ground}`), ...railBacking],
+    min: UI,
+    why: 'the current-section icon on its pill, and every rail icon on the rail',
+  },
+  {
+    fg: 'nav-foreground',
+    on: grounds.map((ground) => `nav-active@0.6/nav-rail/${ground}`),
+    min: TEXT,
+    why: 'a hovered rail label',
   },
 
   // --- placeholder: the one text that is not required information (spec §3), so the non-text minimum
@@ -293,6 +320,21 @@ describe.each(Object.entries(themes))('contrast in %s', (themeName, theme) => {
       const ratio = contrastRatio(resolve(theme, fg), resolve(theme, surface))
       expect(ratio, `${fg} on ${surface} in ${themeName}`).toBeGreaterThanOrEqual(min)
     })
+  })
+})
+
+describe.each(Object.entries(themes))('the navigation planes in %s', (themeName, theme) => {
+  // The rail is the deepest navigation plane and the pinned drawer a lighter one, over the same backing. The
+  // difference is meant to be seen and not to be loud: more than a rounding error, well under a border.
+  it.each(grounds)('separate the rail from the drawer over %s, visibly but quietly', (ground) => {
+    const rail = resolve(theme, `nav-rail/${ground}`)
+    const drawer = resolve(theme, `nav/${ground}`)
+    const ratio = contrastRatio(rail, drawer)
+    expect(luminance(rail), `the rail is deeper than the drawer in ${themeName}`).toBeLessThan(
+      luminance(drawer),
+    )
+    expect(ratio, `rail against drawer over ${ground} in ${themeName}`).toBeGreaterThanOrEqual(1.04)
+    expect(ratio, `rail against drawer over ${ground} in ${themeName}`).toBeLessThanOrEqual(1.4)
   })
 })
 

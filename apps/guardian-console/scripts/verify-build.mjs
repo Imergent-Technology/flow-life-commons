@@ -70,7 +70,8 @@ const roleUtilities = [
   ['text', 'muted-foreground'],
   ['border', 'input'],
   ['border', 'border-strong'],
-  ['max', 'w', 'page-wide'],
+  ['max', 'w', 'page-detail'],
+  ['bg', 'nav-rail'],
   ['font', 'display'],
 ].map((parts) => `.${parts.join('-')}`)
 for (const needle of roleUtilities) {

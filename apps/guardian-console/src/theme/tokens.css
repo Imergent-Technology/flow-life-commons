@@ -75,7 +75,8 @@
   --neutral-soft: #e8ece9;
   --neutral-foreground: #46504b;
 
-  /* navigation: rail, pinned drawer, mobile sheet */
+  /* navigation: rail, pinned drawer, mobile sheet. The rail is the deepest plane, the drawer a lighter one. */
+  --nav-rail: rgb(190 213 199 / 0.6);
   --nav: rgb(255 255 255 / 0.5);
   --nav-foreground: #38433e;
   --nav-strong: #1d1a26;
@@ -136,6 +137,7 @@
   --neutral-soft: #1c262b;
   --neutral-foreground: #b4c3c8;
 
+  --nav-rail: rgb(2 7 9 / 0.85);
   --nav: rgb(3 10 12 / 0.38);
   --nav-foreground: #c2d0d4;
   --nav-strong: #f2eff7;
@@ -197,6 +199,7 @@
     --neutral-soft: #1c262b;
     --neutral-foreground: #b4c3c8;
 
+    --nav-rail: rgb(2 7 9 / 0.85);
     --nav: rgb(3 10 12 / 0.38);
     --nav-foreground: #c2d0d4;
     --nav-strong: #f2eff7;
@@ -258,6 +261,7 @@
   --color-neutral-soft: var(--neutral-soft);
   --color-neutral-foreground: var(--neutral-foreground);
 
+  --color-nav-rail: var(--nav-rail);
   --color-nav: var(--nav);
   --color-nav-foreground: var(--nav-foreground);
   --color-nav-strong: var(--nav-strong);
@@ -310,11 +314,10 @@
   --radius-lg: 14px; /* panels, dialogs, drawer */
   --radius-pill: 9999px; /* badges, rail pill, avatar */
 
-  /* page widths: max-w-page-prose, max-w-page-form … */
+  /* page widths: max-w-page-prose, max-w-page-form … (`wide` has none: it takes the shell's full width) */
   --container-page-prose: 42rem;
   --container-page-form: 36rem;
   --container-page-detail: 74rem;
-  --container-page-wide: 92rem;
 
   /* motion */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);

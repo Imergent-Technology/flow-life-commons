@@ -21,7 +21,7 @@ describe('cn', () => {
   it('understands the custom radius, shadow and page-width scales', () => {
     expect(cn('rounded-sm', 'rounded-pill')).toBe('rounded-pill')
     expect(cn('shadow-panel', 'shadow-pop')).toBe('shadow-pop')
-    expect(cn('max-w-page-form', 'max-w-page-wide')).toBe('max-w-page-wide')
+    expect(cn('max-w-page-form', 'max-w-page-detail')).toBe('max-w-page-detail')
   })
 
   it('still resolves colour conflicts between semantic tokens', () => {

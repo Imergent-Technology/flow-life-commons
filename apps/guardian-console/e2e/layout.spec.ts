@@ -109,6 +109,206 @@ test.describe('no page scrolls sideways, and the shell changes where it says it 
   })
 })
 
+interface Box {
+  left: number
+  right: number
+  width: number
+}
+
+interface Measuring {
+  document: {
+    querySelector: (selector: string) => Element | null
+    body: { appendChild: (el: unknown) => void; removeChild: (el: unknown) => void }
+    createElement: (tag: string) => { style: { backgroundColor: string } }
+  }
+  getComputedStyle: (element: unknown) => {
+    maxWidth: string
+    backgroundColor: string
+    paddingLeft: string
+    paddingRight: string
+  }
+}
+
+interface Element {
+  getBoundingClientRect: () => Box
+}
+
+/** The page column, the space the shell leaves it, and what it is capped to, as the browser lays them out. */
+const measurePage = (page: Page) =>
+  page.evaluate(() => {
+    const g = globalThis as unknown as Measuring
+    const column = g.document.querySelector('[data-page-width]')
+    const main = g.document.querySelector('main')
+    if (column === null || main === null) throw new Error('no page column')
+    const inner = main.getBoundingClientRect()
+    const style = g.getComputedStyle(main)
+    const box = column.getBoundingClientRect()
+    return {
+      kind: (column as unknown as { dataset: { pageWidth: string } }).dataset.pageWidth,
+      maxWidth: g.getComputedStyle(column).maxWidth,
+      width: box.width,
+      right: box.right,
+      available: inner.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+      gutterRight: inner.right - box.right,
+      paddingRight: parseFloat(style.paddingRight),
+    }
+  })
+
+test.describe('operational lists take the full width the shell leaves them', () => {
+  // 1024 rail only · 1280 pinned drawer · 1680 wide desktop · 2560 and 3440 (ultrawide), all far beyond the old 92rem (1472px) cap.
+  const VIEWPORTS = [1024, 1280, 1680, 2560, 3440]
+
+  for (const width of VIEWPORTS) {
+    test(`Accounts and Members fill it at ${String(width)}px, inside the shell's gutters`, async ({
+      browser,
+      baseURL,
+    }) => {
+      const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
+      await admin.setViewportSize({ width, height: 900 })
+      for (const [route, name] of [
+        ['/admin/accounts', 'Accounts'],
+        ['/admin/members', 'Members'],
+      ] as const) {
+        await admin.goto(route)
+        await expect(admin.getByRole('heading', { level: 1, name })).toBeVisible()
+        await expect(admin.getByRole('table', { name })).toBeVisible()
+        const page = await measurePage(admin)
+        const at = `${route} at ${String(width)}px`
+        expect(page.kind, at).toBe('wide')
+        expect(page.maxWidth, `${at}: no cap`).toBe('none')
+        // The column IS the available width: it neither stops early nor eats the gutter.
+        expect(Math.abs(page.width - page.available), `${at}: fills the shell`).toBeLessThan(1)
+        expect(page.paddingRight, `${at}: the shell keeps a right gutter`).toBeGreaterThan(0)
+        expect(Math.abs(page.gutterRight - page.paddingRight), `${at}: gutter kept`).toBeLessThan(1)
+        // The table itself reaches the column's right edge instead of ending early: it sits inside the
+        // card's 1px border, so within 2px is flush.
+        const tableRight = await admin
+          .getByRole('table', { name })
+          .evaluate((el) => (el as unknown as Element).getBoundingClientRect().right)
+        expect(
+          Math.abs(page.right - tableRight),
+          `${at}: the table fills the column`,
+        ).toBeLessThanOrEqual(2)
+        if (width >= 2560) expect(page.width, `${at}: past the old 92rem cap`).toBeGreaterThan(1472)
+      }
+      expect(await horizontalOverflow(admin)).toBeLessThanOrEqual(0)
+      await admin.context().close()
+    })
+  }
+
+  test('prose, form and detail pages keep their own maximums at an ultrawide width', async ({
+    browser,
+    baseURL,
+  }) => {
+    const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
+    await admin.setViewportSize({ width: 3440, height: 900 })
+    await admin.goto('/')
+    const listed = await apiFrom(admin, 'GET', '/api/v1/admin/accounts?q=e2e.admin.read@')
+    const accountId = (listed.body as { data: { id: string }[] }).data[0]?.id ?? ''
+    const memberId = await aMemberId(admin)
+    const capped = { prose: 672, form: 576, detail: 1184 } as const // 42rem, 36rem, 74rem
+    const seen = new Set<string>()
+    for (const route of [
+      '/',
+      '/account/security',
+      '/admin/accounts/invite',
+      '/admin/members/new',
+      `/admin/accounts/${accountId}`,
+      `/admin/members/${memberId}`,
+      '/no/such/page',
+    ]) {
+      await admin.goto(route)
+      await expect(admin.getByRole('heading', { level: 1 })).toBeVisible()
+      const page = await measurePage(admin)
+      const kind = page.kind as keyof typeof capped
+      seen.add(kind)
+      expect(capped[kind], `${route} declares ${kind}`).toBeDefined()
+      expect(page.maxWidth, route).toBe(`${String(capped[kind])}px`)
+      expect(page.width, route).toBeLessThanOrEqual(capped[kind] + 1)
+      expect(page.width, `${route} is capped, well short of the available width`).toBeLessThan(
+        page.available - 200,
+      )
+    }
+    expect([...seen].sort()).toEqual(['detail', 'form', 'prose'])
+    await admin.context().close()
+  })
+})
+
+test.describe('the rail is the deepest navigation plane', () => {
+  /** What a token paints as, resolved by the browser itself, so `rgb(2 7 9 / .85)` and `rgba(2, 7, 9, 0.85)` compare. */
+  const painted = (page: Page, token: string) =>
+    page.evaluate((name) => {
+      const g = globalThis as unknown as Measuring
+      const probe = g.document.createElement('div')
+      probe.style.backgroundColor = `var(${name})`
+      g.document.body.appendChild(probe)
+      const value = g.getComputedStyle(probe).backgroundColor
+      g.document.body.removeChild(probe)
+      return value
+    }, token)
+
+  const backgroundOf = (page: Page, selector: string) =>
+    page
+      .locator(selector)
+      .first()
+      .evaluate((el) => (globalThis as unknown as Measuring).getComputedStyle(el).backgroundColor)
+
+  for (const [scheme, theme] of [
+    ['light', 'Garden'],
+    ['dark', 'Deep Tide'],
+  ] as const) {
+    test(`in ${theme}: the rail has its own surface, the pinned drawer keeps the navigation surface`, async ({
+      browser,
+      baseURL,
+    }) => {
+      const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
+      await admin.emulateMedia({ colorScheme: scheme })
+      await admin.setViewportSize({ width: 1440, height: 900 })
+      await admin.goto('/admin/accounts')
+      await expect(admin.locator('[data-drawer="pinned"]')).toBeVisible()
+
+      const rail = await backgroundOf(admin, 'nav[aria-label="Console"]')
+      const drawer = await backgroundOf(admin, '[data-drawer="pinned"]')
+      expect(rail, 'the rail paints --nav-rail').toBe(await painted(admin, '--nav-rail'))
+      expect(drawer, 'the pinned drawer paints --nav').toBe(await painted(admin, '--nav'))
+      expect(rail, 'the two planes are different surfaces').not.toBe(drawer)
+      // The top bar and the page are not the rail: they show the canvas.
+      expect(await backgroundOf(admin, 'header'), 'the top bar stays transparent').toBe(
+        'rgba(0, 0, 0, 0)',
+      )
+      await admin.context().close()
+    })
+  }
+
+  test('the overlay drawer and the mobile sheet stay on the secondary surface, not the rail plane', async ({
+    browser,
+    baseURL,
+  }) => {
+    const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
+    await admin.goto('/')
+    const raised = await painted(admin, '--surface-raised')
+
+    await admin.setViewportSize({ width: 1100, height: 800 }) // rail, drawer overlays
+    await admin.goto('/admin/accounts')
+    await admin
+      .getByRole('navigation', { name: 'Console' })
+      .getByRole('button', { name: 'Admin' })
+      .click()
+    await expect(admin.locator('[data-drawer="overlay"]')).toBeVisible()
+    expect(await backgroundOf(admin, '[data-drawer="overlay"]')).toBe(raised)
+    expect(await backgroundOf(admin, '[data-drawer="overlay"]')).not.toBe(
+      await painted(admin, '--nav-rail'),
+    )
+
+    await admin.setViewportSize({ width: 600, height: 800 }) // mobile bar and sheet
+    await admin.goto('/admin/accounts')
+    await admin.getByRole('button', { name: 'Navigation menu' }).click()
+    await expect(admin.locator('dialog[open]')).toBeVisible()
+    expect(await backgroundOf(admin, 'dialog[open]')).toBe(raised)
+    await admin.context().close()
+  })
+})
+
 test.describe('controls are big enough to use', () => {
   test('on a desktop pointer every button, field and select is at least 24px tall, and fields read at 14px', async ({
     browser,

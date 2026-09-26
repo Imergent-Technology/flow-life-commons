@@ -9,15 +9,23 @@ describe('Page', () => {
     ['prose', 'max-w-page-prose'],
     ['form', 'max-w-page-form'],
     ['detail', 'max-w-page-detail'],
-    ['wide', 'max-w-page-wide'],
   ] as const)('gives the %s width its own maximum, and no other', (width, expected) => {
     const { container } = render(<Page width={width}>Content</Page>)
     const column = container.firstElementChild
     expect(column).toHaveClass(expected)
-    const others = ['prose', 'form', 'detail', 'wide']
+    const others = ['prose', 'form', 'detail']
       .filter((w) => w !== width)
       .map((w) => `max-w-page-${w}`)
     for (const other of others) expect(column).not.toHaveClass(other)
+    expect(column).not.toHaveClass('max-w-none')
+  })
+
+  it('gives the wide width no maximum at all: an operational list takes the width the shell leaves it', () => {
+    const { container } = render(<Page width="wide">Content</Page>)
+    const column = container.firstElementChild
+    expect(column).toHaveClass('max-w-none', 'w-full')
+    expect(column?.className).not.toMatch(/max-w-page-/)
+    expect(column).toHaveAttribute('data-page-width', 'wide')
   })
 
   it('stays left-aligned: it is never centred', () => {
