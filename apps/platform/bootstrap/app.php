@@ -18,6 +18,8 @@ use App\Modules\Identity\Application\InvitationNotIssuable;
 use App\Modules\Identity\Application\InvitationRejected;
 use App\Modules\Identity\Application\NoLongerAuthenticated;
 use App\Modules\Identity\Application\PasswordRejected;
+use App\Modules\Identity\Application\PersonHasAccount;
+use App\Modules\Identity\Application\PersonNotFound;
 use App\Modules\Identity\Application\ResetRejected;
 use App\Modules\Identity\Application\SecondFactorRejected;
 use App\Modules\Identity\Application\SelfMfaResetProhibited;
@@ -181,6 +183,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (AccountNotDisabled $e) => AdministrationProblems::conflict('account_not_disabled', $e->getMessage()));
         $exceptions->render(fn (EmailAlreadyInUse $e) => AdministrationProblems::conflict('email_already_in_use', 'An account already uses that email address.'));
         $exceptions->render(fn (InvitationNotIssuable $e) => AdministrationProblems::conflict('invitation_not_issuable', $e->getMessage()));
+        $exceptions->render(fn (PersonNotFound $e) => AdministrationProblems::personNotFound());
+        $exceptions->render(fn (PersonHasAccount $e) => AdministrationProblems::conflict('person_already_has_account', $e->getMessage()));
         $exceptions->render(fn (MfaNotEnrolled $e) => AdministrationProblems::conflict('mfa_not_enrolled', $e->getMessage()));
         $exceptions->render(fn (UnknownRole $e) => AdministrationProblems::invalid('unknown_role', 'key', $e->getMessage()));
         $exceptions->render(fn (SelfMfaResetProhibited $e) => AdministrationProblems::invalid('self_mfa_reset_prohibited', 'account', $e->getMessage()));

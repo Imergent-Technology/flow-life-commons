@@ -133,7 +133,7 @@ it('gives every Membership controller its caller through RequestActor, and none 
         }
     }
 
-    expect($problems)->toBe([])->and($controllers)->toHaveCount(5);
+    expect($problems)->toBe([])->and($controllers)->toHaveCount(6);
 });
 
 // --- What Membership may and may not become ----------------------------------------------------------------------

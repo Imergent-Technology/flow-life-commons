@@ -172,7 +172,7 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    expect($checked)->toBe(15);
+    expect($checked)->toBe(16);
 });
 
 it('never lets an administration schema name a secret', function () {

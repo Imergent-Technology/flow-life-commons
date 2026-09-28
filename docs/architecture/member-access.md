@@ -1,6 +1,6 @@
 # Member-facing access
 
-**Status: WP0 — architecture recorded, nothing implemented.** This is the consolidated design for how an ordinary Member (and later a Volunteer) reaches Commons, referred by [ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md) and [ADR 0033](../adr/0033-service-identity-and-delegated-human-authority-are-distinct.md), in the style [identity-and-access.md](identity-and-access.md) uses for the Identity and Access design: the ADRs are the frozen decisions, this page is the living design and the record of how far implementation has gone.
+**Status: WP1 + WP2 built (backend only); WP3–WP5 not started.** This is the consolidated design for how an ordinary Member (and later a Volunteer) reaches Commons, referred by [ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md) and [ADR 0033](../adr/0033-service-identity-and-delegated-human-authority-are-distinct.md), in the style [identity-and-access.md](identity-and-access.md) uses for the Identity and Access design: the ADRs are the frozen decisions, this page is the living design and the record of how far implementation has gone.
 
 ## Where this sits relative to what already exists
 
@@ -40,7 +40,7 @@ The member area is an authenticated self-service surface, open to any signed-in 
 
 Consequently:
 
-- `GET /my/membership` (not yet built) answers truthfully for whichever of those is true — "no membership on record", "active, ends `<date>`", "active, open-ended", or "ended `<date>`" — and a Member-facing page must render all of those states, not assume the first one.
+- `GET /my/membership` (built, Work Package 2) answers truthfully for whichever of those is true — "no membership on record", "active, ends `<date>`", "active, open-ended", or "ended `<date>`" — and a Member-facing page must render all of those states, not assume the first one.
 - Self-account operations (profile, password, security) are subject-based on the signed-in Account/Person, exactly as `/me` and `/password/change` already are, and need no membership check at all.
 - **A genuinely Member-only resource**, when one exists, is authorized by an actual capability derived from *current* membership state — not by the fact that the request reached `/my/`, and not by a durable role. This is the mechanism [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) already reserved: Access defines the port, Membership implements it, and `Authorizer::capabilitiesOf` combines it with role-derived capabilities on every call, so a lapsed grant loses the capability on the very next request with no sweep and no stale session to worry about.
 
@@ -84,9 +84,9 @@ Each package is independently shippable and independently revertible; none depen
 
 | Package | Scope | Depends on |
 | --- | --- | --- |
-| **WP0** (this) | ADR 0032, ADR 0033, this document, stale-documentation reconciliation | — |
-| **WP1** | A generic Identity capability: invite an *existing* Person who has no Account (an Identity use case, not a Membership one — Membership already creates Persons with no Account via `RegisterPerson`, and has no way today to give one an Account afterwards) | WP0 |
-| **WP2** | `GET /api/v1/my/membership` — subject strictly the authenticated session's own Person, answering the full active/lapsed/none/open-ended range described above | WP0 (independent of WP1) |
+| **WP0** (done) | ADR 0032, ADR 0033, this document, stale-documentation reconciliation | — |
+| **WP1** (done) | A generic Identity capability: invite an *existing* Person who has no Account (`Identity\Application\InviteAccountForPerson`, exposed as `POST /admin/people/{person}/invitation` — an Identity use case, not a Membership one; Membership already creates Persons with no Account via `RegisterPerson`, and had no way to give one an Account afterwards) | WP0 |
+| **WP2** (done) | `GET /api/v1/my/membership` (`Membership\Application\GetCurrentMembership`) — subject strictly the authenticated session's own Person, answering the full active/lapsed/none/open-ended range described above, with a privacy-minimized `CurrentMembership` DTO distinct from the admin one | WP0 (independent of WP1) |
 | **WP3** | Neutral Commons credential-page and mail copy; post-login destination logic (an Account with `console.access` lands in the Console, everyone else lands in `/my/`) | WP0 |
 | **WP4** | `MemberShell` and an initial `/my/*` route area (home, own membership status, own account/security) in the existing React application, with an enforced import boundary from Console/admin code | WP1–WP3 |
 | **WP5** | A real-browser vertical journey: an operator registers or adopts an existing Person, invites them, the invitation is caught by Mailpit, accepted, the Member signs in, reaches `/my/`, sees their own membership, and signs out | WP1–WP4 |

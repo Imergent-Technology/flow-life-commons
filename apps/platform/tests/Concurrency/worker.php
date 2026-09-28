@@ -27,6 +27,7 @@ declare(strict_types=1);
  *   php worker.php enable '{"account":"..."}'
  *   php worker.php reissue '{"account":"..."}'
  *   php worker.php invite '{"email":"...","name":"..."}'
+ *   php worker.php invite_existing_person '{"person":"...","email":"..."}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
  * the operation succeeded, 2 when it was refused or failed. It refuses to run against any
@@ -48,6 +49,7 @@ use App\Modules\Identity\Application\DisableAccount;
 use App\Modules\Identity\Application\EnableAccount;
 use App\Modules\Identity\Application\InvitationDetails;
 use App\Modules\Identity\Application\InviteAccount;
+use App\Modules\Identity\Application\InviteAccountForPerson;
 use App\Modules\Identity\Application\PendingLogin;
 use App\Modules\Identity\Application\ReactivationOutcome;
 use App\Modules\Identity\Application\ReissueInvitation;
@@ -176,6 +178,8 @@ try {
         $app->make(ReissueInvitation::class)(AccountId::fromString($arg('account')));
     } elseif ($operation === 'invite') {
         $app->make(InviteAccount::class)->byEmail(InvitationDetails::from($arg('email'), $arg('name')));
+    } elseif ($operation === 'invite_existing_person') {
+        $app->make(InviteAccountForPerson::class)(PersonId::fromString($arg('person')), $arg('email'));
     } elseif ($operation === 'lock_invitation') {
         // Just takes and releases the invitation row lock: it finishes only once it has been granted.
         DB::transaction(fn () => $app->make(AccountInvitationRepository::class)->findByTokenForUpdate(InvitationToken::fromPresented($arg('token'))));

@@ -20,6 +20,11 @@ final class AdministrationProblems
         return response()->json(['message' => 'There is no such account.', 'code' => 'account_not_found'], 404);
     }
 
+    public static function personNotFound(): JsonResponse
+    {
+        return response()->json(['message' => 'There is no such person.', 'code' => 'person_not_found'], 404);
+    }
+
     public static function conflict(string $code, string $message): JsonResponse
     {
         return response()->json(['message' => $message, 'code' => $code], 409);

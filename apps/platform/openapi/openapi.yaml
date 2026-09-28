@@ -333,6 +333,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+  /my/membership:
+    get:
+      operationId: getCurrentMembership
+      summary: The signed-in account's own membership
+      description: >-
+        Self-service (ADR 0032, docs/architecture/member-access.md): authentication is the whole
+        requirement. No capability, no `console.access`, and the Person is always the caller's own
+        — there is no way to ask about anyone else. `active: false` (never a member, or a lapsed
+        one) is as ordinary an answer as `active: true`: reaching this endpoint is never itself
+        evidence of membership. Excludes every administrative fact about a grant (who granted or
+        revoked it, why, any provenance reference); see `GET /admin/members/{person}` for that view.
+      tags: [Authentication]
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The caller's own membership state and grant history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentMembership'
+        '401':
+          description: Not signed in, or the session has expired (inactivity, absolute lifetime, or the account can no longer authenticate).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
   /invitations/accept:
     post:
       operationId: acceptInvitation
@@ -1259,6 +1286,80 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+  /admin/people/{person}/invitation:
+    post:
+      operationId: inviteExistingPerson
+      summary: Invite an existing Person to Commons
+      description: >-
+        Needs `identity.invitations.issue` **and recent verification** — the same capability that
+        governs `POST /admin/invitations`. For a Person who already exists and has no Account yet
+        (most likely one Membership registered with `POST /admin/members` and no Account): creates
+        an *invited* Account with no password and a single-use, EMAIL-channel invitation, then
+        emails it after the commit, outside it, with the secret in the URL *fragment*. Unlike
+        `POST /admin/invitations`, no new Person is created and no role is assigned here.
+
+
+        **`201` means the Account exists**, whether or not the message could be sent:
+        `delivery.status` is `sent` or `failed`. On `failed` the state stays committed and the
+        remedy is `POST /admin/accounts/{account}/invitation`, the same reissue endpoint every
+        other invited Account uses. The response **never** contains the invitation secret.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.invitations.issue
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteExistingPersonRequest'
+      responses:
+        '201':
+          description: The Account, and whether the invitation was sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationResult'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'The Person already has an Account (`code: person_already_has_account`), or another account already uses that address (`code: email_already_in_use`). Nothing was changed or sent.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: An invalid email address (`invalid_invitation_details`), or a malformed request. Nothing was changed or sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedValidationError'
   /admin/accounts/{account}/disable:
     post:
       operationId: disableAccount
@@ -2027,6 +2128,13 @@ components:
           maxItems: 10
           description: Role keys from `GET /admin/roles`. Optional; none is required for the Account to be created.
           items: {type: string, maxLength: 64}
+    InviteExistingPersonRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          maxLength: 254
     GrantRoleRequest:
       type: object
       required: [key]
@@ -2127,6 +2235,40 @@ components:
             per_page: {type: integer}
             total: {type: integer}
             last_page: {type: integer}
+    CurrentMembershipGrant:
+      type: object
+      description: >-
+        A grant as it appears in the caller's OWN membership history (`GET /my/membership`).
+        Deliberately narrower than `MembershipGrantHistoryEntry`: no `id` (an internal reference,
+        not something a Member acts on), no `source`/`source_reference` (how or why an operator
+        granted it), and revocation is the boolean fact `revoked`, not the instant it happened.
+      required: [starts_at, ends_at, revoked]
+      properties:
+        starts_at: {type: string, format: date-time}
+        ends_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null is an explicit, approved open-ended grant, never "no end date entered yet".
+        revoked: {type: boolean}
+    CurrentMembership:
+      type: object
+      description: >-
+        The signed-in Account's own membership state and grant history (ADR 0032). Carries no
+        administrative provenance: not who granted or revoked anything, and not why. `active: false`
+        is as ordinary an answer as `active: true` — this is never evidence of membership by itself.
+      required: [active, current_access_ends_at, open_ended, grants]
+      properties:
+        active: {type: boolean}
+        current_access_ends_at:
+          type: [string, 'null']
+          format: date-time
+          description: Null when access is not currently active, or when the current access run is open-ended.
+        open_ended: {type: boolean}
+        grants:
+          type: array
+          description: The complete history, oldest first, including revoked, expired and future grants.
+          items:
+            $ref: '#/components/schemas/CurrentMembershipGrant'
     RegisterMemberRequest:
       type: object
       required: [display_name, starts_at, open_ended, ends_at, source]

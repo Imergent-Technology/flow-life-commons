@@ -298,6 +298,7 @@ foreach ([
     'App\\Modules\\Identity\\Application\\EnableAccount',
     'App\\Modules\\Identity\\Application\\ResetMultiFactor',
     'App\\Modules\\Identity\\Application\\InviteAccount',
+    'App\\Modules\\Identity\\Application\\InviteAccountForPerson',
     'App\\Modules\\Identity\\Application\\ReissueInvitation',
     'App\\Modules\\Identity\\Application\\DeliverInvitation',
     'App\\Modules\\Identity\\Application\\IssuedInvitation',
@@ -321,7 +322,8 @@ arch('Identity\'s mutating use cases are called only by the Access use cases tha
     expect("{$identity}\\EnableAccount")->toOnlyBeUsedIn("{$access}\\EnableManagedAccount");
     expect("{$identity}\\ReissueInvitation")->toOnlyBeUsedIn("{$access}\\ReissueOperatorInvitation");
     expect("{$identity}\\InviteAccount")->toOnlyBeUsedIn(["{$access}\\InviteOperator", "{$access}\\BootstrapAdministrator"]);
-    expect("{$identity}\\DeliverInvitation")->toOnlyBeUsedIn(["{$access}\\InviteOperator", "{$access}\\ReissueOperatorInvitation"]);
+    expect("{$identity}\\InviteAccountForPerson")->toOnlyBeUsedIn("{$access}\\InviteExistingPerson");
+    expect("{$identity}\\DeliverInvitation")->toOnlyBeUsedIn(["{$access}\\InviteOperator", "{$access}\\ReissueOperatorInvitation", "{$access}\\InviteExistingPerson"]);
 });
 
 arch('Identity\'s account directory is read only through Access\'s presenting use cases', function () {

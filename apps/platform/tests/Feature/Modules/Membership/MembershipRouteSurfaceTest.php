@@ -7,9 +7,11 @@ use Symfony\Component\Yaml\Yaml;
 use Tests\Support\Api;
 
 /*
- * The Membership route surface is CLOSED (Work Package 7): exactly the five operator routes Work Package 5 approved, each
- * behind the Commons human session, and nothing member-facing, WordPress-facing, public or bearer-authenticated. A new
- * Membership route fails here until this contract is updated on purpose, in the same change.
+ * The Membership route surface is CLOSED: exactly the five operator routes Work Package 5 approved, plus the one
+ * self-service route Work Package 2 added (ADR 0032, docs/architecture/member-access.md) — `GET /my/membership`,
+ * authenticated self-service with no capability and no `console.access`, deliberately NOT behind the operator
+ * boundary the other five are. Nothing else member-facing, WordPress-facing, public or bearer-authenticated. A
+ * new Membership route fails here until this contract is updated on purpose, in the same change.
  *
  * Found by what the runtime serves, not by reading one routes file: a route added in another module's routes file, or
  * pointing at a Membership controller from anywhere, is still found.
@@ -35,7 +37,8 @@ function membershipRoutes(): array
     return $found;
 }
 
-const APPROVED_MEMBERSHIP_ROUTES = [
+/** The five operator routes: behind console.access, one Membership capability, and security.verified on a mutation. */
+const APPROVED_OPERATOR_MEMBERSHIP_ROUTES = [
     'GET api/v1/admin/members' => 'membership.records.view',
     'GET api/v1/admin/members/{person}' => 'membership.records.view',
     'POST api/v1/admin/members' => 'membership.records.manage',
@@ -43,17 +46,26 @@ const APPROVED_MEMBERSHIP_ROUTES = [
     'POST api/v1/admin/membership-grants/{grant}/revoke' => 'membership.records.manage',
 ];
 
-it('serves exactly the five approved operator routes, and no other route touches Membership', function () {
+/** The one self-service route: authenticated, but neither console.access nor a Membership capability. */
+const APPROVED_SELF_MEMBERSHIP_ROUTES = [
+    'GET api/v1/my/membership',
+];
+
+it('serves exactly the five approved operator routes and the one self-service route, and no other route touches Membership', function () {
     $routes = array_keys(membershipRoutes());
-    $approved = array_keys(APPROVED_MEMBERSHIP_ROUTES);
+    $approved = [...array_keys(APPROVED_OPERATOR_MEMBERSHIP_ROUTES), ...APPROVED_SELF_MEMBERSHIP_ROUTES];
     sort($approved);
 
     expect($routes)->toBe($approved);
 });
 
-it('puts every Membership route behind the Commons human session and one Membership capability', function () {
+it('puts every operator Membership route behind the Commons human session, console.access and one Membership capability', function () {
     $problems = [];
     foreach (membershipRoutes() as $route => $middleware) {
+        if (in_array($route, APPROVED_SELF_MEMBERSHIP_ROUTES, true)) {
+            continue; // the self-service route is asserted on its own terms below, deliberately not this shape
+        }
+
         $capabilities = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:') && $m !== 'can:console.access'));
         $auth = array_values(array_filter($middleware, fn (string $m): bool => $m === 'auth' || str_starts_with($m, 'auth:')));
         $mutation = str_starts_with($route, 'POST ');
@@ -67,7 +79,7 @@ it('puts every Membership route behind the Commons human session and one Members
         if ($auth !== ['auth:web']) {
             $problems[] = "{$route} authenticates with ".implode(', ', $auth);
         }
-        if ($capabilities !== ['can:'.(APPROVED_MEMBERSHIP_ROUTES[$route] ?? '?')]) {
+        if ($capabilities !== ['can:'.(APPROVED_OPERATOR_MEMBERSHIP_ROUTES[$route] ?? '?')]) {
             $problems[] = "{$route} checks ".implode(', ', $capabilities);
         }
         if ($mutation !== in_array('security.verified', $middleware, true)) {
@@ -78,14 +90,30 @@ it('puts every Membership route behind the Commons human session and one Members
     expect($problems)->toBe([]);
 });
 
-it('has no member-facing, WordPress-facing, public or client-authenticated route anywhere under /api/v1', function () {
+it('puts the self-service membership route behind the Commons human session ALONE: no console.access, no capability, no step-up', function () {
+    $middleware = membershipRoutes()['GET api/v1/my/membership'] ?? null;
+    expect($middleware)->not->toBeNull();
+    assert(is_array($middleware));
+
+    $auth = array_values(array_filter($middleware, fn (string $m): bool => $m === 'auth' || str_starts_with($m, 'auth:')));
+    $capabilities = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:')));
+
+    expect($middleware)->toContain('stateful')->toContain('auth:web')
+        ->and($auth)->toBe(['auth:web'])
+        // Reaching /my/ is authenticated self-service, not console.access, and needs no capability at all
+        // (docs/architecture/member-access.md): any signed-in Account may ask about its own membership.
+        ->and($capabilities)->toBe([])
+        ->and($middleware)->not->toContain('security.verified'); // a read, and self-service never step-up-gated here
+});
+
+it('has no member-facing, WordPress-facing, public or client-authenticated route anywhere under /api/v1, except the one approved self-service route', function () {
     $problems = [];
     foreach (Route::getRoutes()->getRoutes() as $route) {
         $uri = $route->uri();
         if (! str_starts_with($uri, 'api/v1/')) {
             continue;
         }
-        if (preg_match('#^api/v1/(?:members?|membership|my|me/membership|wordpress|wp)(?:/|$)#i', $uri) === 1) {
+        if ($uri !== 'api/v1/my/membership' && preg_match('#^api/v1/(?:members?|membership|my|me/membership|wordpress|wp)(?:/|$)#i', $uri) === 1) {
             $problems[] = "{$uri} is a member- or WordPress-facing path";
         }
         foreach (Api::strings($route->gatherMiddleware()) as $middleware) {
@@ -119,7 +147,7 @@ it('configures one authentication guard, the Console session, with nothing that 
     expect(class_exists('App\\Models\\User'))->toBeFalse();
 });
 
-it('documents exactly the same Membership operations in the OpenAPI contract, each as a session-authenticated operator call', function () {
+it('documents exactly the same Membership operations in the OpenAPI contract, each with its actual security shape', function () {
     $spec = Yaml::parseFile(base_path('openapi/openapi.yaml'));
     assert(is_array($spec));
     $documented = [];
@@ -141,8 +169,13 @@ it('documents exactly the same Membership operations in the OpenAPI contract, ea
     ksort($documented);
 
     $expected = [];
-    foreach (APPROVED_MEMBERSHIP_ROUTES as $route => $capability) {
+    foreach (APPROVED_OPERATOR_MEMBERSHIP_ROUTES as $route => $capability) {
         $expected[$route] = [[['sessionCookie' => []]], $capability];
+    }
+    // The self-service route is session-authenticated too, but documents no required capability at all: reaching
+    // it needs nothing beyond being signed in.
+    foreach (APPROVED_SELF_MEMBERSHIP_ROUTES as $route) {
+        $expected[$route] = [[['sessionCookie' => []]], null];
     }
     ksort($expected);
 

@@ -2,12 +2,25 @@
 
 declare(strict_types=1);
 
+use App\Modules\Membership\Http\CurrentMembershipController;
 use App\Modules\Membership\Http\GrantMembershipController;
 use App\Modules\Membership\Http\ListMembersController;
 use App\Modules\Membership\Http\RegisterMemberController;
 use App\Modules\Membership\Http\RevokeMembershipGrantController;
 use App\Modules\Membership\Http\ShowMemberController;
 use Illuminate\Support\Facades\Route;
+
+/*
+ * Self-service (ADR 0032, docs/architecture/member-access.md): authentication is the whole
+ * requirement. No console.access, no capability — any signed-in Account may ask about its own
+ * membership, whether the answer is active, lapsed, or never a member at all. This is on the SAME
+ * `stateful` session surface every authenticated endpoint uses (Identity\Http\routes.php's /me),
+ * deliberately outside the `can:console.access` group below: reaching /my/ is not, and must never
+ * become, a Console permission.
+ */
+Route::middleware(['stateful', 'auth:web'])->prefix('my')->group(function (): void {
+    Route::get('membership', CurrentMembershipController::class)->name('api.v1.my.membership');
+});
 
 /*
  * Operator administration of membership records (ADR 0028, Work Package 5), under /api/v1/admin.
