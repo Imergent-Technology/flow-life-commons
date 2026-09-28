@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0033](0033-service-identity-and-delegated-human-authority-are-distinct.md), which corrects this ADR's Consequences (a WordPress compromise under a *built and used* delegated flow exposes live delegated authority, not merely service-client authority), settles that implementation is deferred until a concrete consumer needs it, and directs delegation toward standards-based authorization-code semantics rather than an invented handoff. The invariants recorded below are otherwise unchanged.
 
 ## Context
 

@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Refined by:** [ADR 0032](0032-members-use-a-commons-hosted-surface.md), which revises this ADR's Context — member functionality is now expected to be presented on Commons itself, not "largely through WordPress" — while leaving this ADR's Decision (WordPress is never the authority) unchanged and reinforced
 
 ## Context
 

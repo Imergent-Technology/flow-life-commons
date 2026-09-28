@@ -5,7 +5,7 @@ Flow Life Global is building a long-lived organizational platform for **members,
 ## Direction
 
 - The **platform** (`apps/platform`) is authoritative for organizational data, identity relationships, authorization, workflows and business rules.
-- Member and volunteer experiences are exposed substantially through **WordPress** via a thin companion plugin (`apps/wordpress-companion`). WordPress is an adapter and presentation surface, never a source of truth ([ADR 0004](../adr/0004-wordpress-adapter-not-authority.md)).
+- **Member and volunteer self-service is a Commons-hosted surface**, on the same origin and session model as the Guardian Console, distinct from it ([ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md); design in [member access](member-access.md), not yet built). WordPress hosts the public site and links into Commons; it is a thin companion plugin (`apps/wordpress-companion`) away from doing anything else, and is an adapter and presentation surface, never a source of truth ([ADR 0004](../adr/0004-wordpress-adapter-not-authority.md)). This supersedes this charter's earlier direction that member/volunteer experiences would be exposed *substantially through WordPress*.
 - Guardian operations are exposed through a separately hardened **Guardian Console** (`apps/guardian-console`).
 - WordPress must be replaceable or supplementable later without redesigning the platform core.
 
@@ -77,7 +77,7 @@ The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md)
 
 ## Membership Foundation (backend, operator API and Console UI built)
 
-The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). The `Membership` module, `membership_grants`, `Identity\Application\RegisterPerson`, the `membership.records.view`/`membership.records.manage` capabilities, an operator-only `/admin/members` HTTP surface (Work Package 5), and a Guardian Console Membership administration UI on top of it (Work Package 6) are built. **Not built:** a member-facing API, WordPress integration, service/delegated authentication, and Zeffy/Luma automation.
+The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). The `Membership` module, `membership_grants`, `Identity\Application\RegisterPerson`, the `membership.records.view`/`membership.records.manage` capabilities, an operator-only `/admin/members` HTTP surface (Work Package 5), and a Guardian Console Membership administration UI on top of it (Work Package 6) are built. **Not built:** a member-facing API, service/delegated authentication, and Zeffy/Luma automation. A member-facing API is designed, not merely absent, and does not route through WordPress — see the Member-Facing Access design gate ([ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md), [ADR 0033](../adr/0033-service-identity-and-delegated-human-authority-are-distinct.md), [member access](member-access.md)).
 
 Two decisions constrain later work and belong here rather than only in the ADRs:
 
