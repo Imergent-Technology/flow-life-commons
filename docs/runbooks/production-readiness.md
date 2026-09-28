@@ -6,6 +6,8 @@
 
 **Status (2026-09-22):** the application-side checks are automated and green in development. The hosting account **has been inspected and the platform has been deployed to it**: every item in section 4 was probed on the real host, all but one passed, and the first production deployment (v0.1.1, live) exercised the rest end to end, including the one item this checklist could not probe ahead of a real release — writable runtime directories (item 9). **The open item is outbound mail authentication**, deliberately deferred pending an organizational decision (section 5). Production currently has one administrator, by deliberate operational choice, not because bootstrap is incomplete.
 
+**Update (2026-09-28):** the *code* side of item 8/section 5 is now prepared (ADR 0031) — authenticated SMTP is implemented, and `security:production-check` fails closed on it. The provider, DNS and a real verified send are still not done, and production still runs `MAIL_MAILER=log`. See section 5's "IMPLEMENTED" / "NOT YET VERIFIED" split for exactly what changed.
+
 The distinction running through this document is the only thing that makes it useful:
 
 - **Verified here** — proved by a test or a command in this repository, on every run.
@@ -45,7 +47,7 @@ php artisan security:production-check
 
 (`./flow doctor --production` runs the same thing in the development container, against the development environment file, where it is *expected* to fail.)
 
-It reads the configuration this deployment is actually running under and refuses anything dangerous: `APP_ENV`, `APP_DEBUG`, an `http://` application URL, `APP_KEY` presence and size, the no-op breached-password checker, a test-speed bcrypt cost, every session-cookie invariant, the session driver and lifetimes, the raised development login limit, the reset-response floor, CORS, PHP version and extensions, writable runtime directories, a maintenance driver other than `file` (under which `php artisan down` never writes the file Apache's maintenance arm reads), missing database credentials or the development ones, any cache or queue store needing a service this host does not run, and PHP `mail()` as the transport. No check prints a secret: a failing `APP_KEY` or database password is named, never shown.
+It reads the configuration this deployment is actually running under and refuses anything dangerous: `APP_ENV`, `APP_DEBUG`, an `http://` application URL, `APP_KEY` presence and size, the no-op breached-password checker, a test-speed bcrypt cost, every session-cookie invariant, the session driver and lifetimes, the raised development login limit, the reset-response floor, CORS, PHP version and extensions, writable runtime directories, a maintenance driver other than `file` (under which `php artisan down` never writes the file Apache's maintenance arm reads), missing database credentials or the development ones, any cache or queue store needing a service this host does not run, and the mail transport — an **allowlist**, not a blocklist (ADR 0031): only `log` (the deliberate deferral) and a structurally sound `smtp` are accepted, so `sendmail`, the test-only `array` transport and anything unreviewed each fail by not being on it, not by matching a specific refused name. No check prints a secret: a failing `APP_KEY` or database password is named, never shown.
 
 Start the production file from **`apps/platform/.env.production.example`**, not the development `.env.example` ([deployment runbook](deployment.md), first deployment step 3). A test loads that template as the environment, fills in only the four operator-supplied values, and runs this command against it — so the template and the check cannot drift apart without the build failing.
 
@@ -119,7 +121,7 @@ Neither level is the production host: LSAPI on CloudLinux is not a container's m
 | 5 | **`mysqldump` is available**, with shared-hosting-safe flags | **Verified 2026-09-21** | `/usr/bin/mysqldump`, Ver 10.19 Distrib 10.11.18-MariaDB. A real dump with `--no-tablespaces --single-transaction --quick` succeeded (1,332 bytes on an empty database). `--no-tablespaces` is required: shared-hosting users lack the `PROCESS` privilege. |
 | 6 | **MariaDB reachable** with production credentials | **Verified 2026-09-21** | `10.11.18-MariaDB-cll-lve`, matching the development engine. |
 | 7 | **Outbound HTTPS** to `api.pwnedpasswords.com` | **Verified 2026-09-21** | HTTP 200 from the account's shell. |
-| 8 | **Outbound mail works from the configured sender** | **OPEN — deferred.** See section 5 | SMTP ports 25/465/587 are open locally, and a PHP `mail()` test was delivered — but **not DMARC-aligned and unsigned**. Not production-approved. |
+| 8 | **Outbound mail works from the configured sender** | **OPEN — deferred.** See section 5 | SMTP ports 25/465/587 are open locally, and a PHP `mail()` test was delivered — but **not DMARC-aligned and unsigned**. Not production-approved. **The code side of authenticated SMTP is now prepared and structurally checked (ADR 0031, 2026-09-28) — the provider, DNS and a real verified send are not.** |
 | 9 | **Filesystem permissions**: `storage/` and `bootstrap/cache/` writable by the PHP user | **VERIFIED on production 2026-09-22** | Not separately probed ahead of a release, because the release tree did not exist yet. `security:production-check` reported this green at first deployment and again on the v0.1.1 redeployment. |
 | 10 | **Disk quota** sufficient for five retained releases plus backups | **Verified 2026-09-21** | 4.76 GB used of **75 GB** (6.34%), ~70 GB free. At ~65 MB per release, five retained releases are ~325 MB — comfortably supported. The earlier `df` figure measured the shared filesystem, not the account, and did not establish this. |
 
@@ -138,6 +140,20 @@ R5, R7 and R8 are load-bearing for security. The rest are correctness or operati
 **Status: OPEN, deliberately deferred** pending an organizational decision about Flow Life's mail arrangement. This does **not** block release tooling, and it is not a defect in the platform. It blocks *inviting people*, which is the last thing first deployment does.
 
 It matters more here than on most platforms: this is an invite-only directory, so **the invitation email is the onboarding path**. A message that silently lands in spam is an outage that looks like nothing at all.
+
+### IMPLEMENTED (2026-09-28, ADR 0031) — the code, not the mail
+
+The transport-hardening work package prepared production for authenticated SMTP without touching the live host or choosing a provider:
+
+- `security:production-check` now fails closed on an **allowlist** (`log` or `smtp`) rather than a blocklist of just `sendmail`.
+- When `smtp` is configured, its **shape** is checked: a real host/port (not Mailpit's), real credentials, a real sender identity, TLS made **mandatory** rather than merely offered (`MAIL_REQUIRE_TLS`, or implicit TLS on port 465 — Symfony Mailer's default on the `smtp` scheme is *opportunistic* STARTTLS, which would otherwise send in plaintext if a server ever stopped advertising it), certificate verification left enabled, and a bounded, positive `MAIL_TIMEOUT` (default 10s, enforced ≤30s) — there is no queue absorbing a hang, so this is how long a real request can block on a stalled connection.
+- `apps/platform/.env.production.example` documents the exact variables this will need, in a clearly-marked, commented, provider-free block — see it directly rather than retyping it here, so this runbook cannot drift from what the template actually says.
+
+**None of this is, or can be, a claim about deliverability.** Configuration shape cannot establish SPF alignment, DKIM signing, a DMARC pass or inbox placement — see "What was measured on 2026-09-21" below and "The follow-up verification" at the end of this section, both unchanged. `security:production-check` continues to report outbound mail as open on every run regardless of how correctly `smtp` is shaped, and production **remains `MAIL_MAILER=log`** until a real provider, real DNS and a real verified send exist.
+
+### NOT YET VERIFIED — everything below this line
+
+The provider, the sending subdomain's DNS, and a real send through the application are all still ahead, exactly as before this work package. Nothing in this runbook has been rewritten to imply otherwise.
 
 ### What was measured on 2026-09-21
 

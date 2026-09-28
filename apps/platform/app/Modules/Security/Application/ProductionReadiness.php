@@ -27,6 +27,32 @@ final readonly class ProductionReadiness
     /** Backing services the hosting account does not have and will not grow (charter, ADR 0010). */
     private const array SERVICES_THE_HOST_LACKS = ['redis', 'memcached', 'dynamodb', 'sqs', 'beanstalkd'];
 
+    /**
+     * Production mail transports this deployment currently approves (ADR 0031): `log`, the documented
+     * deliberate deferral, and `smtp`, the one real delivery transport this package prepares. Adopting
+     * another transport — an HTTP-API provider, `failover`, `roundrobin` — is meant to be an
+     * intentional, reviewed change to this allowlist, not a value someone can set ahead of it.
+     */
+    private const array APPROVED_PRODUCTION_MAILERS = ['log', 'smtp'];
+
+    /**
+     * The development mail catcher's own identity (docker-compose's `mailpit` service, `.env.example`).
+     * None of these can validly appear in a production SMTP configuration.
+     */
+    private const array DEVELOPMENT_SMTP_HOSTS = ['mailpit', '127.0.0.1', 'localhost', '::1'];
+
+    /** Mailpit's fixed SMTP port (`.env.example`). A real provider does not use it. */
+    private const int DEVELOPMENT_SMTP_PORT = 1025;
+
+    /**
+     * The ceiling for MAIL_TIMEOUT. Invitation and password-reset delivery are synchronous and
+     * unqueued (Identity's mail adapters, ADR 0024), so this bounds how long an operator's or a
+     * visitor's HTTP request can block on a stalled SMTP conversation — not a performance tuning
+     * knob. Kept small and simple rather than derived from any host's specific request-timeout
+     * ceiling, which this command has no way to read.
+     */
+    private const float MAX_SMTP_TIMEOUT_SECONDS = 30.0;
+
     public function __construct(private Config $config, private Application $app) {}
 
     /** @return list<ReadinessCheck> */
@@ -286,24 +312,119 @@ final readonly class ProductionReadiness
     }
 
     /**
-     * The one mail fact that is settled: PHP\'s own transport is not approved.
+     * What configuration ALONE can honestly settle about mail (ADR 0031): which transport is in use,
+     * and — only when it is `smtp` — whether its shape is one a real provider could actually own. It
+     * cannot settle SPF alignment, DKIM signing, a DMARC pass or inbox placement; those can only be
+     * learned by sending real mail and looking at where it landed, and stay `deferred()`'s job.
      *
-     * Everything else about mail is deliberately open and is reported by `deferred()` instead.
+     * **Fail-closed, not a blocklist.** Earlier this only refused `sendmail` by name, so an unreviewed
+     * future transport (or a typo) would silently pass. Now only `log` and `smtp`
+     * (`APPROVED_PRODUCTION_MAILERS`) are accepted at all; `sendmail` (tested on this host on
+     * 2026-09-21: delivered, no DKIM signature, a Return-Path not aligned with the visible From, so it
+     * fails DMARC), `array` (a test-only transport that silently discards mail) and anything else —
+     * `ses`, `postmark`, `mailgun`, a typo — each fail the same way: by not being on the allowlist.
+     *
+     * **The `smtp` structural checks are each written `! $isSmtp || …`**, so they read as trivially
+     * satisfied — and never separately fail a `log`-configured deployment — when `smtp` is not the
+     * configured transport, matching how every other check in this class reports "not applicable" as
+     * passed rather than adding a second axis of failure.
      *
      * @return list<ReadinessCheck>
      */
     private function mail(): array
     {
         $mailer = $this->config->string('mail.default');
+        $isSmtp = $mailer === 'smtp';
+
+        $smtp = $this->config->array('mail.mailers.smtp');
+        $host = is_string($smtp['host'] ?? null) ? $smtp['host'] : '';
+        $port = $smtp['port'] ?? null;
+        $username = is_string($smtp['username'] ?? null) ? $smtp['username'] : '';
+        $password = is_string($smtp['password'] ?? null) ? $smtp['password'] : '';
+        $timeout = $smtp['timeout'] ?? null;
+        $configuredScheme = is_string($smtp['scheme'] ?? null) ? $smtp['scheme'] : null;
+        // Mirrors Illuminate\Mail\MailManager::createSmtpTransport(): an explicit scheme wins; failing
+        // that, port 465 means implicit TLS ("smtps"), and everything else is the "smtp" scheme with
+        // opportunistic STARTTLS.
+        $scheme = ($configuredScheme !== null && $configuredScheme !== '')
+            ? $configuredScheme
+            : ((is_numeric($port) && (int) $port === 465) ? 'smtps' : 'smtp');
+        $requireTls = filter_var($smtp['require_tls'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $verifyPeerDisabled = array_key_exists('verify_peer', $smtp)
+            && $smtp['verify_peer'] !== ''
+            && ! filter_var($smtp['verify_peer'], FILTER_VALIDATE_BOOLEAN);
+        $fromAddress = $this->config->string('mail.from.address');
 
         return [
             ReadinessCheck::assert(
-                'the unapproved PHP mail() transport is not in use',
-                $mailer !== 'sendmail',
-                'MAIL_MAILER is "sendmail", which hands mail to the host\'s own binary. Tested on this host on '
-                .'2026-09-21: it delivers, and it delivers with no DKIM signature and a Return-Path that is not aligned '
-                .'with the visible From, so it fails DMARC. An invitation that silently lands in spam is an outage that '
-                .'looks like nothing at all, and this is an invite-only directory where that email is the way in.',
+                'the configured mail transport is one production currently approves (log or smtp)',
+                in_array($mailer, self::APPROVED_PRODUCTION_MAILERS, true),
+                match (true) {
+                    $mailer === 'sendmail' => 'MAIL_MAILER is "sendmail", which hands mail to the host\'s own binary. '
+                        .'Tested on this host on 2026-09-21: it delivers, and it delivers with no DKIM signature and a '
+                        .'Return-Path that is not aligned with the visible From, so it fails DMARC. An invitation that '
+                        .'silently lands in spam is an outage that looks like nothing at all, and this is an '
+                        .'invite-only directory where that email is the way in.',
+                    $mailer === 'array' => 'MAIL_MAILER is "array", a test-only transport that accepts every message '
+                        .'and delivers none. It belongs in phpunit.xml, never in a deployment.',
+                    default => 'MAIL_MAILER is "'.$mailer.'". Only "log" (deliberately deferred: nothing is sent) and '
+                        .'"smtp" (the transport this package prepares) are approved here. Adopting another transport '
+                        .'is meant to be an intentional, reviewed change to this allowlist (ADR 0031), not a value '
+                        .'set ahead of it.',
+                },
+            ),
+            ReadinessCheck::assert(
+                'an smtp mailer names a real host, not the development Mailpit one',
+                ! $isSmtp || ($host !== '' && ! in_array(strtolower($host), self::DEVELOPMENT_SMTP_HOSTS, true)),
+                'MAIL_HOST is "'.$host.'". That is empty, or it is the development Mailpit host — the same catcher '
+                .'docker-compose runs and .env.example points at. Production needs the transactional provider\'s own '
+                .'SMTP host.',
+            ),
+            ReadinessCheck::assert(
+                'an smtp mailer uses a real submission port, not the development Mailpit one',
+                ! $isSmtp || (is_numeric($port) && (int) $port > 0 && (int) $port !== self::DEVELOPMENT_SMTP_PORT),
+                'MAIL_PORT is "'.(is_scalar($port) ? (string) $port : 'unset').'". '.self::DEVELOPMENT_SMTP_PORT
+                .' is Mailpit\'s fixed development port. A provider\'s real submission port is ordinarily 587 '
+                .'(STARTTLS) or 465 (implicit TLS).',
+            ),
+            ReadinessCheck::assert(
+                'an smtp mailer supplies authentication credentials',
+                ! $isSmtp || ($username !== '' && $password !== ''),
+                'MAIL_USERNAME or MAIL_PASSWORD is empty. Mailpit accepts unauthenticated mail; a real transactional '
+                .'provider does not, and an unauthenticated relay is exactly the kind of unsigned, DMARC-misaligned '
+                .'delivery already measured and rejected with PHP mail().',
+            ),
+            ReadinessCheck::assert(
+                'an smtp mailer has a real sender identity configured',
+                ! $isSmtp || ($fromAddress !== '' && $fromAddress !== 'hello@example.com'
+                    && str_contains($fromAddress, '@') && ! str_ends_with($fromAddress, '@')),
+                'MAIL_FROM_ADDRESS is "'.$fromAddress.'". That is empty or the framework\'s own placeholder. The '
+                .'visible From is what SPF, DKIM and DMARC alignment are checked against once real delivery is '
+                .'verified (production-readiness.md, section 5).',
+            ),
+            ReadinessCheck::assert(
+                'an smtp mailer requires TLS rather than merely allowing it',
+                ! $isSmtp || $scheme === 'smtps' || $requireTls,
+                'Neither the "smtps" scheme (implicit TLS, ordinarily port 465) nor MAIL_REQUIRE_TLS is set. Symfony '
+                .'Mailer\'s default on the "smtp" scheme is OPPORTUNISTIC STARTTLS: if the server does not advertise '
+                .'it, the message is sent in plaintext over the open Internet instead of the connection failing '
+                .'(symfony/mailer\'s EsmtpTransportFactory). Set MAIL_REQUIRE_TLS=true on port 587, or use port 465, '
+                .'so a downgrade fails the send instead of sending it unencrypted.',
+            ),
+            ReadinessCheck::assert(
+                'an smtp mailer does not disable certificate verification',
+                ! $isSmtp || ! $verifyPeerDisabled,
+                'verify_peer is disabled in the smtp mailer configuration, which accepts a TLS certificate from '
+                .'anyone claiming to be the provider. This is deliberately not read from the environment, so fixing '
+                .'it means editing config/mail.php, not flipping an env value back.',
+            ),
+            ReadinessCheck::assert(
+                'an smtp mailer\'s timeout is set and bounded',
+                ! $isSmtp || (is_numeric($timeout) && (float) $timeout > 0.0 && (float) $timeout <= self::MAX_SMTP_TIMEOUT_SECONDS),
+                'MAIL_TIMEOUT resolves to '.(is_scalar($timeout) ? (string) $timeout : 'unset').'. Invitation and '
+                .'password-reset delivery are synchronous and unqueued, so this is how long a real person\'s request '
+                .'can block on a stalled connection: it must be a positive number of seconds, no more than '
+                .((int) self::MAX_SMTP_TIMEOUT_SECONDS).'.',
             ),
         ];
     }

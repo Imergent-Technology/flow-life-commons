@@ -45,6 +45,26 @@ it('keeps the automated gate off the public network, and production on the real 
     expect($config)->toContain("env('IDENTITY_COMPROMISED_PASSWORD_CHECK', 'pwned_passwords')");
 });
 
+it('bounds synchronous SMTP delivery with a small, explicit, always-set timeout', function () {
+    // config/mail.php used to ship `'timeout' => null`. `isset($config['timeout'])` is FALSE for a null
+    // array value, so Laravel's MailManager never called the transport stream's setTimeout() at all — a
+    // stalled connection was bounded only by PHP's own default_socket_timeout ini, not anything this
+    // application controls. Invitation and password-reset delivery are synchronous and unqueued (ADR
+    // 0024, ADR 0031), so a real person's request blocks on exactly this for as long as it is set.
+    $timeout = app('config')->float('mail.mailers.smtp.timeout');
+
+    expect($timeout)->toBeFloat()
+        ->and($timeout)->toBeGreaterThan(0.0)
+        ->and(is_finite($timeout))->toBeTrue()
+        // phpunit.xml sets no MAIL_TIMEOUT, so this is the framework default this repository chose —
+        // ProductionReadiness::MAX_SMTP_TIMEOUT_SECONDS documents why 30s is the production ceiling.
+        ->and($timeout)->toBe(10.0);
+
+    $configFile = file_get_contents(base_path('config/mail.php'));
+    assert(is_string($configFile));
+    expect($configFile)->toContain("env('MAIL_TIMEOUT', 10)");
+});
+
 it('ships the same-origin development topology with no CORS allow-list', function () {
     // ADR 0016: the Console and the API share one origin, so nothing needs CORS.
     // A non-empty default would silently grant cross-origin browser access.

@@ -270,7 +270,7 @@ describe('each dangerous value is refused', function () {
     it('refuses the unapproved PHP mail() transport', function () {
         // Tested on the host on 2026-09-21: it delivered, unsigned and not DMARC-aligned.
         config(['mail.default' => 'sendmail']);
-        expect(readiness()['the unapproved PHP mail() transport is not in use'])->toBeFalse();
+        expect(readiness()['the configured mail transport is one production currently approves (log or smtp)'])->toBeFalse();
     });
 
     it('refuses every weakening of the session cookie', function () {
@@ -377,7 +377,12 @@ describe('outbound mail: deferred, exactly as documented', function () {
             ->expectsOutputToContain('so nothing is sent')
             ->assertSuccessful();
 
-        config(['mail.default' => 'smtp']);
+        // A structurally VALID smtp configuration, not merely `mail.default => 'smtp'`: since this
+        // package, "configured" for `deferred()`'s wording and "passes the structural checks" for
+        // `checks()` are two different questions, and this asserts the command succeeds only once
+        // both are true — bare `smtp` with no host/credentials fails the structural checks below now,
+        // by design.
+        asValidProductionSmtp();
         commandProductionReadiness('security:production-check')
             ->expectsOutputToContain('necessary but not')
             ->assertSuccessful();
@@ -389,9 +394,133 @@ describe('outbound mail: deferred, exactly as documented', function () {
         asProduction();
         config(['mail.default' => 'sendmail']);
 
-        expect(readiness()['the unapproved PHP mail() transport is not in use'])->toBeFalse();
+        expect(readiness()['the configured mail transport is one production currently approves (log or smtp)'])->toBeFalse();
         expect(deferredItems()['outbound mail is authenticated and its deliverability is verified'])->toBeFalse();
         commandProductionReadiness('security:production-check')->assertFailed();
+    });
+});
+
+/** The name `ProductionReadiness::mail()` gives the allowlist check, reused across the mail describe blocks. */
+const MAIL_APPROVED_TRANSPORT_CHECK = 'the configured mail transport is one production currently approves (log or smtp)';
+
+/** A structurally correct smtp configuration, as a real provider (never named) would hand it out. */
+function asValidProductionSmtp(): void
+{
+    config([
+        'mail.default' => 'smtp',
+        'mail.mailers.smtp.host' => 'smtp.transactional-provider.example',
+        'mail.mailers.smtp.port' => 587,
+        'mail.mailers.smtp.username' => 'commons-account',
+        'mail.mailers.smtp.password' => 'a-provider-issued-secret',
+        'mail.mailers.smtp.scheme' => null,
+        'mail.mailers.smtp.require_tls' => true,
+        'mail.mailers.smtp.timeout' => 10.0,
+        'mail.from.address' => 'commons@mail.commons.flowlifeglobal.org',
+    ]);
+}
+
+describe('outbound mail: fail-closed transport allowlist (ADR 0031)', function () {
+    beforeEach(fn () => asProduction());
+
+    it('accepts log', function () {
+        config(['mail.default' => 'log']);
+        expect(readiness()[MAIL_APPROVED_TRANSPORT_CHECK])->toBeTrue();
+    });
+
+    it('rejects array as a production transport, even though it is safe for tests', function () {
+        config(['mail.default' => 'array']);
+        expect(readiness()[MAIL_APPROVED_TRANSPORT_CHECK])->toBeFalse();
+    });
+
+    it('rejects an unrecognised mailer rather than assuming it is safe', function () {
+        foreach (['mailgun', 'ses', 'postmark', 'resend', 'failover', 'roundrobin', 'typo-transport'] as $mailer) {
+            config(['mail.default' => $mailer]);
+            expect(readiness()[MAIL_APPROVED_TRANSPORT_CHECK])->toBeFalse($mailer);
+        }
+    });
+
+    it('accepts a structurally complete, TLS-required smtp configuration', function () {
+        asValidProductionSmtp();
+
+        expect(array_keys(array_filter(readiness(), static fn (bool $passed): bool => ! $passed)))->toBe([]);
+    });
+
+    it('accepts implicit TLS on port 465 without require_tls', function () {
+        asValidProductionSmtp();
+        config(['mail.mailers.smtp.port' => 465, 'mail.mailers.smtp.require_tls' => false]);
+
+        expect(readiness()['an smtp mailer requires TLS rather than merely allowing it'])->toBeTrue();
+    });
+
+    it('rejects the development Mailpit host as production smtp', function () {
+        asValidProductionSmtp();
+        config(['mail.mailers.smtp.host' => 'mailpit']);
+        expect(readiness()['an smtp mailer names a real host, not the development Mailpit one'])->toBeFalse();
+
+        foreach (['127.0.0.1', 'localhost', '::1', ''] as $host) {
+            config(['mail.mailers.smtp.host' => $host]);
+            expect(readiness()['an smtp mailer names a real host, not the development Mailpit one'])->toBeFalse($host);
+        }
+    });
+
+    it('rejects Mailpit\'s fixed development port as production smtp', function () {
+        asValidProductionSmtp();
+        config(['mail.mailers.smtp.port' => 1025]);
+        expect(readiness()['an smtp mailer uses a real submission port, not the development Mailpit one'])->toBeFalse();
+    });
+
+    it('rejects missing smtp authentication credentials', function () {
+        foreach (['mail.mailers.smtp.username', 'mail.mailers.smtp.password'] as $key) {
+            asValidProductionSmtp();
+            config([$key => null]);
+            expect(readiness()['an smtp mailer supplies authentication credentials'])->toBeFalse($key);
+        }
+    });
+
+    it('rejects a missing or placeholder sender identity', function () {
+        foreach (['', 'hello@example.com', 'not-an-address'] as $address) {
+            asValidProductionSmtp();
+            config(['mail.from.address' => $address]);
+            expect(readiness()['an smtp mailer has a real sender identity configured'])->toBeFalse($address);
+        }
+    });
+
+    it('rejects smtp that neither requires TLS nor implies it, so a downgrade cannot send in plaintext', function () {
+        asValidProductionSmtp();
+        config(['mail.mailers.smtp.require_tls' => false]); // still port 587
+        expect(readiness()['an smtp mailer requires TLS rather than merely allowing it'])->toBeFalse();
+    });
+
+    it('rejects a config that disables certificate verification', function () {
+        asValidProductionSmtp();
+        config(['mail.mailers.smtp.verify_peer' => false]);
+        expect(readiness()['an smtp mailer does not disable certificate verification'])->toBeFalse();
+    });
+
+    it('rejects an unset, zero, negative or excessive smtp timeout', function () {
+        foreach ([null, 0, 0.0, -1, 31, 999] as $timeout) {
+            asValidProductionSmtp();
+            config(['mail.mailers.smtp.timeout' => $timeout]);
+            expect(readiness()['an smtp mailer\'s timeout is set and bounded'])->toBeFalse(var_export($timeout, true));
+        }
+    });
+
+    it('accepts the timeout at its boundary and just under it', function () {
+        foreach ([0.001, 1, 10, 30, 30.0] as $timeout) {
+            asValidProductionSmtp();
+            config(['mail.mailers.smtp.timeout' => $timeout]);
+            expect(readiness()['an smtp mailer\'s timeout is set and bounded'])->toBeTrue((string) $timeout);
+        }
+    });
+
+    it('never fails a log-configured deployment on any smtp-only structural fact', function () {
+        // `! $isSmtp || …`: every smtp-shape check is vacuously satisfied when the transport is not
+        // smtp, so leftover or absent smtp.* config never adds a second, surprising failure mode to a
+        // deployment that has correctly deferred mail with `log`.
+        asProduction();
+        config(['mail.default' => 'log', 'mail.mailers.smtp.host' => '', 'mail.mailers.smtp.port' => null]);
+
+        expect(array_keys(array_filter(readiness(), static fn (bool $passed): bool => ! $passed)))->toBe([]);
     });
 });
 

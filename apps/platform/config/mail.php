@@ -47,8 +47,24 @@ return [
             'port' => env('MAIL_PORT', 2525),
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            // Was `null` (Symfony's stock default). `isset($config['timeout'])` is FALSE for a null
+            // value, so Laravel's MailManager never called the stream's setTimeout() at all, and a
+            // hung SMTP conversation was bounded only by PHP's own `default_socket_timeout` ini
+            // (commonly 60s, and not something this application controls). This send is synchronous
+            // and unqueued (see the Identity mail adapters), so a hang blocks the request that
+            // triggered it — invite or reset — for as long as the socket allows. A small, explicit,
+            // always-set timeout replaces that: `security:production-check` enforces it stays
+            // positive and bounded (ProductionReadiness::mail()).
+            'timeout' => (float) env('MAIL_TIMEOUT', 10),
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+            // Symfony Mailer's default is OPPORTUNISTIC STARTTLS on the `smtp` scheme: if the server
+            // does not advertise STARTTLS, the message is sent in plaintext rather than the connection
+            // failing (EsmtpTransportFactory::create(), symfony/mailer). Setting this true makes a
+            // downgrade fail the send instead of silently sending unencrypted; it is unnecessary (and
+            // ignored) on port 465 / the `smtps` scheme, which is implicit TLS from the first byte.
+            // Defaults false because Mailpit, this repository's development mail catcher, does not
+            // speak TLS at all — see docker-compose's `mailpit` service.
+            'require_tls' => filter_var(env('MAIL_REQUIRE_TLS', false), FILTER_VALIDATE_BOOLEAN),
         ],
 
         'ses' => [
