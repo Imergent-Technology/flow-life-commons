@@ -112,6 +112,26 @@ describe('every full-page screen outside the shell', () => {
     await expectNoAxeViolations()
   })
 
+  it('never tells a shared credential surface it is the Guardian Console (ADR 0032): a Member reaches these too', async () => {
+    // "Access denied" is deliberately excluded: it is shown only once a signed-in Account has already
+    // been refused the Guardian Console specifically (RequireConsoleAccess), so naming that surface
+    // there is not the false universal assumption this proves the absence of.
+    for (const { path, server } of outside.filter(({ h1 }) => h1 !== 'Access denied')) {
+      const api = new FakeApi()
+      server(api)
+      api.install()
+      const { unmount } = renderApp(path)
+
+      await waitFor(() => {
+        expect(document.title).not.toBe('')
+      })
+      // A substring check, not queryByText: the phrase might sit inside a longer sentence, where an
+      // exact-text query would miss it.
+      expect(document.body.textContent).not.toContain('Guardian Console')
+      unmount()
+    }
+  })
+
   it('an unreachable platform is the same frame, with a retry', async () => {
     const api = new FakeApi()
     api.on('GET /api/v1/me', () => Promise.reject(new TypeError('Failed to fetch')))

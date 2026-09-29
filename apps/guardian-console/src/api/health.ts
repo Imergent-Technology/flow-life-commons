@@ -1,7 +1,7 @@
 // Temporary hand-written API call that proves the environment end to end.
 // The Console and the API share one origin (ADR 0016), so API paths are relative:
 // there is no base URL to configure and no CORS involved.
-// Once the API justifies it, the Guardian Console consumes a TypeScript client
+// Once the API justifies it, the Console consumes a TypeScript client
 // generated from apps/platform/openapi/openapi.yaml (packages/api-client, ADR 0007)
 // instead of accumulating calls like this one.
 

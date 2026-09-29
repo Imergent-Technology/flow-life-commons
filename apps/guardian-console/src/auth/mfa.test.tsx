@@ -97,6 +97,9 @@ describe('the second step of signing in', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Enter your code' })).toBeVisible()
     expect(screen.queryByRole('navigation', { name: 'Console' })).not.toBeInTheDocument()
+    // A Member's Account never reaches this screen today (an authenticator is proved only once one is
+    // enrolled, and enrolment itself is console.access-gated), but the screen makes no claim either way.
+    expect(document.body.textContent).not.toContain('Guardian Console')
     // Not authenticated: /me was asked once (at start) and says nobody is signed in.
     expect(api.callsTo('GET /api/v1/me')).toHaveLength(1)
     expect(api.signedIn).toBe(false)
@@ -327,6 +330,11 @@ describe('enrolling an authenticator on first sign-in', () => {
       await screen.findByRole('heading', { level: 1, name: 'Set up two-step verification' }),
     ).toBeVisible()
     expect(screen.getByText(/stolen password is not enough/)).toBeVisible()
+    // Genuinely accurate today (SecondFactorRequirement/ConsoleMultiFactorPolicy ties enrolment to
+    // holding console.access, not to any role), so "the Console" may stay; the RETIRED, wider claim
+    // that this is specifically the "Guardian" Console may not.
+    expect(screen.getByText(/needs a second step/)).toBeVisible()
+    expect(document.body.textContent).not.toContain('Guardian Console')
     expect(api.callsTo('POST /api/v1/mfa/enrollment')).toHaveLength(0)
 
     await user.click(screen.getByRole('button', { name: 'Set up authenticator' }))

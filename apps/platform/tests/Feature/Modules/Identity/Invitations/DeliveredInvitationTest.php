@@ -70,6 +70,27 @@ it('mails the link with the token in the URL FRAGMENT, and nowhere else', functi
     });
 });
 
+it('presents Flow Life Commons, not the Guardian Console, in the subject and the body (ADR 0032, Work Package 3)', function () {
+    // Whoever is invited may be a Member (via InviteAccountForPerson, ADR 0032) as much as an operator
+    // (InviteAccount): the message must not claim the recipient is joining an operator console.
+    Mail::fake();
+    $issued = app(InviteAccount::class)->byEmail(InvitationDetails::from('new@example.org', 'New Person'));
+
+    $outcome = app(DeliverInvitation::class)($issued, null, 'issued');
+
+    expect($outcome)->toBe(InvitationDelivery::Sent);
+    Mail::assertSent(InvitationMail::class, function (InvitationMail $mail): bool {
+        $subject = $mail->envelope()->subject;
+        $html = $mail->render();
+
+        return is_string($subject)
+            && str_contains($subject, 'Flow Life Commons')
+            && ! str_contains($subject, 'Guardian')
+            && str_contains($html, 'Flow Life Commons')
+            && ! str_contains($html, 'Guardian');
+    });
+});
+
 it('reports a delivery failure, records it, and keeps the committed Account and invitation', function () {
     Log::spy();
     Mail::shouldReceive('to')->andThrow(new RuntimeException('smtp is down'));

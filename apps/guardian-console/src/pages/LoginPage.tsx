@@ -67,7 +67,7 @@ export function LoginPage() {
   }
 
   return (
-    <AuthLayout title="Sign in" intro="For Guardians and operators. Accounts are by invitation.">
+    <AuthLayout title="Sign in" intro="Sign in to Flow Life Commons. Accounts are by invitation.">
       {state.notice ? <Alert tone="info">{NOTICES[state.notice]}</Alert> : null}
       {problem ? (
         <Alert key={problem.attempt} tone="error" focusOnMount={problem.fields.email === undefined}>

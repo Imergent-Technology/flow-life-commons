@@ -102,6 +102,18 @@ const rules: Rule[] = [
     fine: "document.title = 'Overview · Flow Life Commons'",
   },
   {
+    name: 'Guardian Console branding on a shared credential surface',
+    because:
+      'sign-in, invitation acceptance, password reset and MFA are reached by a Member as much as a Guardian (ADR 0032), so a shared surface must not claim the visitor is entering the Guardian Console specifically',
+    pattern: /Guardian Console/,
+    // Genuinely Guardian-only: the signed-in shell (which really is the Guardian Console by the time it
+    // renders), and the page that explains a signed-in Account was refused THAT specific surface.
+    allowedIn: /(^|\/)shell\/(Brand|ConsoleShell|NavSheet)\.tsx$|(^|\/)pages\/ForbiddenPage\.tsx$/,
+    offends:
+      '<AuthLayout title="Sign in" intro="For the Guardian Console. Accounts are by invitation.">',
+    fine: '<AuthLayout title="Sign in" intro="Sign in to Flow Life Commons. Accounts are by invitation.">',
+  },
+  {
     name: 'system role names',
     because:
       'the Console asks about capabilities, never roles (ADR 0017); a role check here is the rot the design forbids',

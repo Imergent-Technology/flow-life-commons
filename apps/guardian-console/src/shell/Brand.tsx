@@ -12,14 +12,22 @@ export function Badge({ className, label }: { className: string; label?: string 
   )
 }
 
-/** Two lines, the first dominant: the product, then this interface onto it. The software is not called "Sanctuary". */
-export function Wordmark() {
+/**
+ * The product name, and optionally a second, smaller line naming the interface onto it (the software is
+ * not called "Sanctuary"). The shared credential surfaces (sign-in, invitation, password reset — anything
+ * inside `AuthLayout`) pass no `subtitle`: a Member and a Guardian both reach those pages, so neither may
+ * claim to be a surface the visitor might not be entering. The signed-in Guardian Console shell passes
+ * `subtitle="Guardian Console"`, since by the time it renders that is genuinely where the person is.
+ */
+export function Wordmark({ subtitle }: { subtitle?: string } = {}) {
   return (
     <div className="flex min-w-0 flex-col leading-tight">
       <span className="truncate font-display text-section font-medium text-foreground">
         Flow Life Commons
       </span>
-      <span className="truncate text-meta text-muted-foreground">Guardian Console</span>
+      {subtitle !== undefined ? (
+        <span className="truncate text-meta text-muted-foreground">{subtitle}</span>
+      ) : null}
     </div>
   )
 }

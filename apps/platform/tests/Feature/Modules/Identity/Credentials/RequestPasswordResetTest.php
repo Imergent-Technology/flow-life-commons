@@ -45,6 +45,18 @@ it('emails an eligible account exactly one message', function () {
     Mail::assertSent(PasswordResetMail::class, fn (PasswordResetMail $mail): bool => $mail->hasTo('ada@example.org'));
 });
 
+it('never claims the Guardian Console (ADR 0032, Work Package 3): whoever asks may be a Member', function () {
+    Identity::savedActiveAccount('ada@example.org');
+
+    Recovery::forgot('ada@example.org')->assertStatus(202);
+
+    $mail = Recovery::sent()[0];
+    expect($mail)->not->toBeNull();
+    $subject = $mail->envelope()->subject;
+    expect(is_string($subject) && ! str_contains($subject, 'Guardian'))->toBeTrue()
+        ->and(Recovery::body($mail))->not->toContain('Guardian');
+});
+
 it('answers identically for an active, an invited, a disabled and an unknown address, and emails only the active one', function () {
     accountsInEveryState();
 

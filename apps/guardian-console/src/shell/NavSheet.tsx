@@ -49,7 +49,7 @@ export function NavSheet({
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
             <Badge className="size-(--logo-wordmark)" />
-            <Wordmark />
+            <Wordmark subtitle="Guardian Console" />
           </div>
           <Button
             variant="ghost"

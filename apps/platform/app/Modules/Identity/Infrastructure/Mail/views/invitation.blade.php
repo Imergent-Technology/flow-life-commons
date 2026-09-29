@@ -1,4 +1,4 @@
-You have been invited to the Flow Life Guardian Console.
+You have been invited to Flow Life Commons.
 
 To set your password and finish setting up your account, open this link within {{ $days }} {{ $days === 1 ? 'day' : 'days' }}:
 

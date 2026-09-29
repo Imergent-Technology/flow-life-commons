@@ -125,7 +125,7 @@ export function ConsoleShell() {
             </Button>
             <Badge className="size-(--logo-mobile)" />
             <div className="hidden min-w-0 min-[420px]:block">
-              <Wordmark />
+              <Wordmark subtitle="Guardian Console" />
             </div>
             <div className="ml-auto">{account}</div>
           </header>

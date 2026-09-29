@@ -26,7 +26,7 @@ final class InvitationMail extends Mailable
 
     public function envelope(): Envelope
     {
-        return new Envelope(subject: 'You have been invited to the Flow Life Guardian Console');
+        return new Envelope(subject: 'You have been invited to Flow Life Commons');
     }
 
     public function content(): Content
