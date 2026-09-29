@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Illuminate\Support\Carbon;
 use Symfony\Component\Yaml\Yaml;
 use Tests\Support\Api;
+use Tests\Support\Console;
 use Tests\Support\Identity;
 use Tests\Support\Membership;
 use Tests\Support\Mfa;
@@ -146,6 +147,19 @@ it('documents request-validation failures on the two term-carrying operations as
         ->and(responseSchemaRef('/admin/members/{person}/grants', 'post', '422'))->toBe('ValidationError')
         ->and(Api::strings($validation['required']))->not->toContain('code')
         ->and(file_get_contents(base_path('openapi/openapi.yaml')))->not->toContain('invalid_membership_term');
+});
+
+it('serves GET /my/membership responses matching the CurrentMembership schema, nested grant included', function () {
+    $account = Identity::savedActiveAccount('member@example.org', name: 'Contract Member');
+    Membership::savedGrant($account->personId);
+    $console = new Console;
+    $console->login('member@example.org', Identity::PASSWORD)->assertOk();
+
+    $response = $console->get('/api/v1/my/membership')->assertOk()->json();
+
+    expectBodyMatchesSchema($response, 'CurrentMembership');
+    expectBodyMatchesSchema(Api::rows(Api::map($response)['grants'])[0] ?? null, 'CurrentMembershipGrant');
+    expect(responseSchemaRef('/my/membership', 'get', '200'))->toBe('CurrentMembership');
 });
 
 it('requires an explicit open_ended and ends_at in both term-carrying request schemas', function () {

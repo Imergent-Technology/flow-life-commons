@@ -7,7 +7,6 @@ use App\Modules\Access\Application\InviteExistingPerson;
 use App\Modules\Identity\Application\InvitationDelivery;
 use App\Modules\Identity\Infrastructure\Mail\InvitationMail;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Tests\Support\Access;
 use Tests\Support\Api;
@@ -163,8 +162,12 @@ it('reissues after a failed delivery, through the SAME reissue endpoint every ot
     Invitations::accept($notifier->sent[1]['token'], 'a long enough passphrase for the invitee')->assertNoContent();
 });
 
-it('never puts the invitation secret in the response, the audit trail, the log or the database', function () {
-    Log::spy();
+it('never puts the invitation secret in the response, the audit trail or the database', function () {
+    // NOT re-checking the log here: nothing on this success path ever logs anything (MailInvitationNotifier logs
+    // only on a failed send, and even then just the exception's class and message), so a spy with no assertion
+    // would prove nothing. The log boundary that CAN carry a token — the failure path, the only place anything is
+    // logged — is where it is actually proven: DeliveredInvitationTest's "never writes the raw token to the log
+    // when delivery fails", against the same shared InvitationNotifier this use case's delivery goes through too.
     [$console] = Mfa::signedInAdmin();
     $person = Identity::savedPerson();
 
@@ -177,4 +180,19 @@ it('never puts the invitation secret in the response, the audit trail, the log o
         ->and(Mfa::auditText())->not->toContain($token)
         ->and(json_encode(DB::table('account_invitations')->get()->all()))->not->toContain($token)
         ->and(DB::table('account_invitations')->value('token_hash'))->toBe(hash('sha256', $token));
+});
+
+it('sends the message only AFTER the transaction has committed, and never from inside it', function () {
+    // Same method as InviteOperatorTest's equivalent: the fake records how many transactions were open at send
+    // time, and RefreshDatabase holds one open for the whole test, so "committed" means "back at that baseline" —
+    // this fails if InviteExistingPerson (or anything it calls) ever wraps delivery inside a still-open transaction.
+    $notifier = FakeInvitationNotifier::install();
+    [$console] = Mfa::signedInAdmin();
+    $person = Identity::savedPerson();
+
+    $console->post("/api/v1/admin/people/{$person->id->value}/invitation", ['email' => 'existing@example.org'])->assertCreated();
+
+    expect($notifier->sent)->toHaveCount(1)
+        ->and($notifier->sent[0]['level'])->toBe($notifier->baseline)
+        ->and($notifier->sent[0]['email'])->toBe('existing@example.org');
 });

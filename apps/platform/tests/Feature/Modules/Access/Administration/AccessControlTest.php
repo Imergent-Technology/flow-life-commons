@@ -6,6 +6,7 @@ use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Access\Application\DisableManagedAccount;
 use App\Modules\Access\Application\EnableManagedAccount;
 use App\Modules\Access\Application\GrantRoleToAccount;
+use App\Modules\Access\Application\InviteExistingPerson;
 use App\Modules\Access\Application\InviteOperator;
 use App\Modules\Access\Application\ListManagedAccounts;
 use App\Modules\Access\Application\ListRoleCatalog;
@@ -49,6 +50,10 @@ function adminOperations(): array
         ['GET', '/api/v1/admin/roles', []],
         ['POST', '/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New']],
         ['POST', '/api/v1/admin/accounts/{a}/invitation', []],
+        // {a} here is the target's Account id doing duty as a Person id: every gate this loop exercises
+        // (auth, capability, step-up) fires before the controller ever looks the id up as a Person, so any
+        // ULID-shaped value proves the same thing the real Person id would.
+        ['POST', '/api/v1/admin/people/{a}/invitation', ['email' => 'new-existing-person@example.org']],
         ['POST', '/api/v1/admin/accounts/{a}/disable', []],
         ['POST', '/api/v1/admin/accounts/{a}/enable', []],
         ['POST', '/api/v1/admin/accounts/{a}/mfa/reset', []],
@@ -180,6 +185,7 @@ it('checks the capability again inside every use case, so no other caller can sk
         fn () => app(InviteOperator::class)($actor, 'new@example.org', 'New'),
         // Reissue also takes the caller's context, for the mail rate limit keyed on the target.
         fn () => app(ReissueOperatorInvitation::class)($actor, $id, new ClientContext('127.0.0.1', 'test')),
+        fn () => app(InviteExistingPerson::class)($actor, $target->personId, 'new@example.org'),
         fn () => app(DisableManagedAccount::class)($actor, $id),
         fn () => app(EnableManagedAccount::class)($actor, $id),
         fn () => app(ResetManagedMfa::class)($actor, $id),
@@ -200,6 +206,7 @@ it('binds each operation to ITS capability, in the route and in the use case', f
         'api.v1.admin.roles.index' => ['identity.accounts.view', ListRoleCatalog::class, 'ViewAccounts'],
         'api.v1.admin.invitations.store' => ['identity.invitations.issue', InviteOperator::class, 'IssueInvitations'],
         'api.v1.admin.invitations.reissue' => ['identity.invitations.issue', ReissueOperatorInvitation::class, 'IssueInvitations'],
+        'api.v1.admin.people.invitation.store' => ['identity.invitations.issue', InviteExistingPerson::class, 'IssueInvitations'],
         'api.v1.admin.accounts.disable' => ['identity.accounts.manage', DisableManagedAccount::class, 'ManageAccounts'],
         'api.v1.admin.accounts.enable' => ['identity.accounts.manage', EnableManagedAccount::class, 'ManageAccounts'],
         'api.v1.admin.mfa.reset' => ['identity.mfa.recover', ResetManagedMfa::class, 'RecoverMfa'],
