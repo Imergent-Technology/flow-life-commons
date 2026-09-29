@@ -39,9 +39,10 @@ export function LoginPage() {
   if (state.status === 'second-factor') {
     return state.step === 'challenge' ? <MfaChallenge /> : <MfaEnrollment />
   }
-  // Already signed in (or just now signed in): on to the Console, or back to where they were headed.
+  // Already signed in (or just now signed in): on to this Account's own surface (console.access -> the
+  // Console, otherwise /my/), or back to where it was headed, if that is somewhere it can actually land.
   if (state.status === 'authenticated') {
-    return <Navigate to={returnPathFrom(location.state)} replace />
+    return <Navigate to={returnPathFrom(location.state, state.current)} replace />
   }
 
   async function submit() {

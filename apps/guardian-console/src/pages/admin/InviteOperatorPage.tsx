@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 
 import { inviteOperator, listRoleCatalog, type InvitationOutcome } from '../../api/admin.ts'
 import { useAdminAction } from '../../admin/useAdminAction.ts'
-import { useLoad } from '../../admin/useLoad.ts'
+import { useLoad } from '../../ui/useLoad.ts'
 import { describeAdminFailure } from '../../admin/wording.ts'
 import { useCurrentAccount } from '../../auth/auth-context.ts'
 import { hasCapability, ROLES_ASSIGN } from '../../auth/capabilities.ts'

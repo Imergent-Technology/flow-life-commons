@@ -6,7 +6,7 @@ import { operator, serveOperator } from '../test/admin.ts'
 import { empty, json } from '../test/fakeApi.ts'
 import { renderApp } from '../test/renderApp.tsx'
 import { installViewport } from '../test/viewport.ts'
-import { clearNavPreference } from '../ui/preferences.ts'
+import { clearNavPreference } from './preferences.ts'
 import { initials } from './initials.ts'
 
 const STORAGE_KEY = 'flowlife.console.ui'

@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { initialMembershipTerm, resolveMembershipTerm } from '../../admin/membershipTerm.ts'
 import { useAdminAction } from '../../admin/useAdminAction.ts'
-import { useLoad } from '../../admin/useLoad.ts'
+import { useLoad } from '../../ui/useLoad.ts'
 import { accessThroughLabel, describeMembershipFailure } from '../../admin/wording.ts'
 import type { ManagedAccount } from '../../api/admin.ts'
 import {

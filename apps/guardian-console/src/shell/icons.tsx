@@ -54,14 +54,6 @@ export function CloseIcon() {
   )
 }
 
-export function ChevronDownIcon() {
-  return (
-    <Svg className="size-4 shrink-0">
-      <path d="m6 9 6 6 6-6" />
-    </Svg>
-  )
-}
-
 export function PinIcon() {
   return (
     <Svg className="size-4 shrink-0">

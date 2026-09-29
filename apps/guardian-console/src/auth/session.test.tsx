@@ -133,16 +133,17 @@ describe('Console entry is a capability, not a role', () => {
   })
 
   it.each([[[]], [['access.roles.assign']]])(
-    'shows access-denied, not the login page, when the capabilities are %j',
+    'sends a non-Console Account from the root to /my/, not access-denied, when the capabilities are %j',
     async (capabilities: string[]) => {
       api.withSession(accountFor({ capabilities }), { email: EMAIL, password: PASSWORD })
       api.signedIn = true
       api.install()
       renderApp('/')
 
-      expect(await screen.findByRole('heading', { level: 1, name: 'Access denied' })).toBeVisible()
-      expect(where()).toBe('/') // no redirect, so no loop back to login
-      expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible()
+      // The root is a landing spot, not a privileged route: routed on to its own surface, not refused.
+      expect(await screen.findByRole('heading', { level: 1, name: 'Home' })).toBeVisible()
+      expect(where()).toBe('/my')
+      expect(screen.queryByRole('heading', { name: 'Access denied' })).not.toBeInTheDocument()
       expect(screen.queryByRole('navigation', { name: 'Console' })).not.toBeInTheDocument()
       expect(screen.queryByRole('link', { name: 'Account security' })).not.toBeInTheDocument()
       // Nothing about what grants access, or what this account lacks.
@@ -150,13 +151,25 @@ describe('Console entry is a capability, not a role', () => {
     },
   )
 
-  it('shows access-denied on every Console path, including Account security', async () => {
+  it('shows access-denied on a genuinely privileged Console path, like Account security, rather than redirecting', async () => {
     api.withSession(accountFor({ capabilities: [] }), { email: EMAIL, password: PASSWORD })
     api.signedIn = true
     api.install()
     renderApp('/account/security')
 
     expect(await screen.findByRole('heading', { name: 'Access denied' })).toBeVisible()
+    expect(where()).toBe('/account/security') // no redirect, so no loop back to login
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible()
+  })
+
+  it('denies a direct attempt at a privileged admin route too: the wrong LANDING surface redirects, an attempted privileged one does not', async () => {
+    api.withSession(accountFor({ capabilities: [] }), { email: EMAIL, password: PASSWORD })
+    api.signedIn = true
+    api.install()
+    renderApp('/admin/accounts')
+
+    expect(await screen.findByRole('heading', { name: 'Access denied' })).toBeVisible()
+    expect(where()).toBe('/admin/accounts')
   })
 
   it('lets an Account without access sign out from the access-denied page', async () => {
@@ -164,7 +177,7 @@ describe('Console entry is a capability, not a role', () => {
     api.signedIn = true
     api.install()
     const user = userEvent.setup()
-    renderApp('/')
+    renderApp('/account/security')
 
     await user.click(await screen.findByRole('button', { name: 'Sign out' }))
 
@@ -188,7 +201,7 @@ describe('signing in', () => {
     expect(order.lastIndexOf('GET /api/v1/me')).toBeGreaterThan(order.indexOf('POST /api/v1/login'))
   })
 
-  it('does not take the login reply as the answer: /me decides whether the Console opens', async () => {
+  it('does not take the login reply as the answer: /me decides the destination, not the login response', async () => {
     // The login reply claims the capability; /me (the canonical projection) says otherwise.
     api
       .withSession(accountFor({ capabilities: [] }), { email: EMAIL, password: PASSWORD })
@@ -202,7 +215,8 @@ describe('signing in', () => {
 
     await signInThroughTheForm(user)
 
-    expect(await screen.findByRole('heading', { name: 'Access denied' })).toBeVisible()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Home' })).toBeVisible() // /my/, not the Console
+    expect(where()).toBe('/my')
     expect(screen.queryByRole('navigation', { name: 'Console' })).not.toBeInTheDocument()
   })
 

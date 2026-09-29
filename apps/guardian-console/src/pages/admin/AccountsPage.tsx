@@ -2,7 +2,7 @@ import { useCallback, useState, type SyntheticEvent } from 'react'
 import { Link } from 'react-router'
 
 import { listAccounts, type AccountStatus } from '../../api/admin.ts'
-import { useLoad } from '../../admin/useLoad.ts'
+import { useLoad } from '../../ui/useLoad.ts'
 import { useCurrentAccount } from '../../auth/auth-context.ts'
 import { hasCapability, INVITATIONS_ISSUE } from '../../auth/capabilities.ts'
 import { Alert } from '../../ui/Alert.tsx'

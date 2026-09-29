@@ -265,9 +265,12 @@ test.describe.serial('inviting, changing access, disabling and re-enabling someo
     await expect(admin.getByText(/“Guardian” was removed/)).toBeVisible()
     await expect(admin.getByText('They hold no access.')).toBeVisible()
 
-    // No new sign-in: the invitee's page is refused the Console the moment it next asks.
+    // No new sign-in: the invitee's page is routed off the Console the moment it next asks — the root
+    // is a landing spot, not a privileged route, so losing console.access there redirects to the Member
+    // surface (ADR 0032) rather than refusing outright.
     await person.reload()
-    await expect(person.getByRole('heading', { level: 1, name: 'Access denied' })).toBeVisible()
+    await expect(person.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible()
+    expect(new URL(person.url()).pathname).toBe('/my')
 
     await admin.getByLabel('Give them access').selectOption({ label: 'Guardian' })
     await admin.getByRole('button', { name: 'Add access' }).click()
@@ -276,7 +279,9 @@ test.describe.serial('inviting, changing access, disabling and re-enabling someo
       .getByRole('button', { name: 'Give access' })
       .click()
     await expect(admin.getByText(/now has “Guardian” access/)).toBeVisible()
-    await person.reload()
+    // person's page is at /my/ from the redirect above; the root itself, not a mere reload of where it
+    // already sits, is what proves gaining access takes effect on the very next request.
+    await person.goto('/')
     await expect(consoleHeading(person)).toBeVisible()
   })
 

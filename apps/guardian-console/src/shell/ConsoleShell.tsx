@@ -4,14 +4,14 @@ import { Outlet, useLocation } from 'react-router'
 import { useCurrentAccount } from '../auth/auth-context.ts'
 import { hasCapability } from '../auth/capabilities.ts'
 import { StepUpProvider } from '../auth/StepUpProvider.tsx'
+import { AccountMenu } from '../ui/AccountMenu.tsx'
 import { Alert } from '../ui/Alert.tsx'
 import { Button } from '../ui/Button.tsx'
 import { useNavPreference } from '../ui/useNavPreference.ts'
 import { useSignOut } from '../ui/useSignOut.ts'
-import { AccountMenu } from './AccountMenu.tsx'
 import { BreadcrumbLeafContext } from './breadcrumb-leaf.ts'
 import { Breadcrumbs } from './Breadcrumbs.tsx'
-import { Badge, Wordmark } from './Brand.tsx'
+import { Badge, Wordmark } from '../ui/Brand.tsx'
 import { DrawerPanel } from './DrawerPanel.tsx'
 import { useDrawerMode } from './drawer-mode.ts'
 import { MenuIcon } from './icons.tsx'
@@ -75,7 +75,14 @@ export function ConsoleShell() {
     mode === 'pinned' && where?.section.groups !== undefined ? where.section : undefined
   const overlaySection = sections.find((section) => section.id === overlayId)
 
-  const account = <AccountMenu current={current} compact={band === 'mobile'} signOut={signOut} />
+  const account = (
+    <AccountMenu
+      current={current}
+      compact={band === 'mobile'}
+      signOut={signOut}
+      securityPath="/account/security"
+    />
+  )
 
   const content = (
     <main id={MAIN_ID} tabIndex={-1} className={`min-w-0 flex-1 pt-2 pb-10 outline-none ${gutter}`}>

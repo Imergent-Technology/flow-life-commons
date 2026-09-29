@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { Link } from 'react-router'
 
 import { listMembers } from '../../api/membership.ts'
-import { useLoad } from '../../admin/useLoad.ts'
+import { useLoad } from '../../ui/useLoad.ts'
 import { accessThroughLabel } from '../../admin/wording.ts'
 import { useCurrentAccount } from '../../auth/auth-context.ts'
 import { hasCapability, MEMBERSHIP_MANAGE } from '../../auth/capabilities.ts'

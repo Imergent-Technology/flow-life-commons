@@ -1,7 +1,7 @@
 import { Link } from 'react-router'
 
 import { cn } from '../ui/cn.ts'
-import { Badge } from './Brand.tsx'
+import { Badge } from '../ui/Brand.tsx'
 import { SectionIcon } from './icons.tsx'
 import { DRAWER_ID, railTriggerId } from './ids.ts'
 import { firstDestination, type NavSection } from './navigation.ts'

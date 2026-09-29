@@ -2,12 +2,11 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 
 import type { CurrentAccount } from '../api/auth.ts'
-import { cn, focusRing } from '../ui/cn.ts'
-import type { ThemePreference } from '../ui/preferences.ts'
-import { useTheme } from '../ui/theme-context.ts'
-import type { useSignOut } from '../ui/useSignOut.ts'
-import { ChevronDownIcon } from './icons.tsx'
+import { cn, focusRing } from './cn.ts'
 import { initials } from './initials.ts'
+import type { ThemePreference } from './preferences.ts'
+import { useTheme } from './theme-context.ts'
+import type { useSignOut } from './useSignOut.ts'
 
 const themes: readonly { value: ThemePreference; label: string }[] = [
   { value: 'system', label: 'System' },
@@ -15,7 +14,24 @@ const themes: readonly { value: ThemePreference; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ]
 
-const SECURITY_PATH = '/account/security'
+/** Decorative: the button it sits in also carries the word "menu". */
+function ChevronDownIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="size-4 shrink-0"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  )
+}
 
 function menuItems(root: HTMLElement | null): HTMLElement[] {
   return Array.from(root?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])
@@ -26,10 +42,13 @@ const itemClass =
   focusRing
 
 /**
- * The account menu: who is signed in, Account security, the theme, and Sign out. A disclosure menu built
- * on plain elements with a small roving-focus handler, not a menu framework and not the `popover` attribute:
- * it needs no positioning script, no anchor-positioning support and no second dismissal path to keep in step
- * with the rest of the shell, and it renders under every test environment.
+ * The account menu: who is signed in, Account security, the theme, and Sign out. Shared by every signed-in
+ * surface (the Console and the Member self-service area alike): `securityPath` is the one thing
+ * that differs between them, since each has its own security destination.
+ *
+ * A disclosure menu built on plain elements with a small roving-focus handler, not a menu framework and not
+ * the `popover` attribute: it needs no positioning script, no anchor-positioning support and no second
+ * dismissal path to keep in step with the rest of the shell, and it renders under every test environment.
  *
  * Keys: Enter, Space or ↓ open on the first item, ↑ on the last; ↑ ↓ Home End move; ← → move within the
  * Theme choices; Escape closes and returns focus to the button; Tab closes and carries on from the button.
@@ -39,11 +58,14 @@ export function AccountMenu({
   current,
   compact,
   signOut,
+  securityPath,
 }: {
   current: CurrentAccount
   /** Below the rail breakpoint: the avatar alone. */
   compact: boolean
   signOut: ReturnType<typeof useSignOut>
+  /** Where this surface's own account-security page lives (`/account/security`, or `/my/security`). */
+  securityPath: string
 }) {
   const { pathname } = useLocation()
   const { preference, setTheme } = useTheme()
@@ -193,12 +215,12 @@ export function AccountMenu({
               <Link
                 role="menuitem"
                 tabIndex={-1}
-                to={SECURITY_PATH}
-                aria-current={pathname === SECURITY_PATH ? 'page' : undefined}
+                to={securityPath}
+                aria-current={pathname === securityPath ? 'page' : undefined}
                 onClick={() => {
                   setOpen(false)
                   // Nothing else will move focus if this is the page already showing.
-                  if (pathname === SECURITY_PATH) trigger.current?.focus()
+                  if (pathname === securityPath) trigger.current?.focus()
                 }}
                 className={itemClass}
               >

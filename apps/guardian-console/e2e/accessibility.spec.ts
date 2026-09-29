@@ -168,14 +168,44 @@ for (const theme of THEMES) {
       await guardian.context().close()
     })
 
-    test(`access denied passes (${theme})`, async ({ page }) => {
+    test(`a non-Console Account's /my/ home, and access denied on a privileged route, both pass (${theme})`, async ({
+      page,
+    }) => {
       await inTheme(page, theme)
       await page.goto('/login')
       await page.getByLabel('Email address').fill('e2e.noaccess@example.org')
       await page.getByLabel('Password', { exact: true }).fill('e2e-noaccess-password-not-a-secret')
       await page.getByRole('button', { name: 'Sign in' }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible()
+      await page.waitForLoadState('networkidle')
+      expect(await axeViolations(page), '/my/').toEqual([])
+
+      await page.goto('/account/security')
       await expect(page.getByRole('heading', { level: 1, name: 'Access denied' })).toBeVisible()
-      expect(await axeViolations(page)).toEqual([])
+      expect(await axeViolations(page), 'access denied').toEqual([])
+    })
+
+    test(`the rest of the Member surface passes: /my/membership and /my/security (${theme})`, async ({
+      page,
+    }) => {
+      await inTheme(page, theme)
+      await page.goto('/login')
+      await page.getByLabel('Email address').fill('e2e.noaccess@example.org')
+      await page.getByLabel('Password', { exact: true }).fill('e2e-noaccess-password-not-a-secret')
+      await page.getByRole('button', { name: 'Sign in' }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible()
+
+      await page
+        .getByRole('navigation', { name: 'Member' })
+        .getByRole('link', { name: 'Membership' })
+        .click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Membership' })).toBeVisible()
+      await page.waitForLoadState('networkidle')
+      expect(await axeViolations(page), '/my/membership').toEqual([])
+
+      await page.getByRole('link', { name: 'Security' }).click()
+      await expect(page.getByRole('heading', { level: 1, name: 'Security' })).toBeVisible()
+      expect(await axeViolations(page), '/my/security').toEqual([])
     })
 
     test(`dialogs pass (${theme})`, async ({ browser, baseURL }) => {

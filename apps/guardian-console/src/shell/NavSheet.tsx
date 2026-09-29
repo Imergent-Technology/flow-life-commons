@@ -1,6 +1,6 @@
 import { Button } from '../ui/Button.tsx'
 import { useModalDialog } from '../ui/useModalDialog.ts'
-import { Badge, Wordmark } from './Brand.tsx'
+import { Badge, Wordmark } from '../ui/Brand.tsx'
 import { CloseIcon } from './icons.tsx'
 import { NavItemLink } from './NavItemLink.tsx'
 import { currentMarker, type Location, type NavSection } from './navigation.ts'

@@ -2,7 +2,7 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { badgeUrl } from '../shell/brand.ts'
+import { badgeUrl } from '../ui/brand.ts'
 import { accountFor, empty, FakeApi, json } from '../test/fakeApi.ts'
 import { renderApp } from '../test/renderApp.tsx'
 

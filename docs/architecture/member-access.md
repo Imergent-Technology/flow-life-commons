@@ -1,6 +1,6 @@
 # Member-facing access
 
-**Status: WP1–WP3 built (WP3 is presentation-only: no MemberShell, no `/my/*` route area, no routing activation yet); WP4–WP5 not started.** This is the consolidated design for how an ordinary Member (and later a Volunteer) reaches Commons, referred by [ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md) and [ADR 0033](../adr/0033-service-identity-and-delegated-human-authority-are-distinct.md), in the style [identity-and-access.md](identity-and-access.md) uses for the Identity and Access design: the ADRs are the frozen decisions, this page is the living design and the record of how far implementation has gone.
+**Status: WP1–WP4 built; WP5 not started.** This is the consolidated design for how an ordinary Member (and later a Volunteer) reaches Commons, referred by [ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md) and [ADR 0033](../adr/0033-service-identity-and-delegated-human-authority-are-distinct.md), in the style [identity-and-access.md](identity-and-access.md) uses for the Identity and Access design: the ADRs are the frozen decisions, this page is the living design and the record of how far implementation has gone.
 
 ## Where this sits relative to what already exists
 
@@ -26,7 +26,7 @@ flowlifeglobal.org (WordPress, Sucuri)          commons.flowlifeglobal.org (dire
                                                  /api/v1/…      one Laravel API, one session guard
 ```
 
-`/my/` is a working name for the route prefix, not a decided product label.
+`/my/` is a working name for the route prefix, not a decided product label. It is a real route area as of Work Package 4 (below): `MemberShell` at `/my`, `/my/membership`, `/my/security`.
 
 ## `/my/` versus active membership — the distinction that must not collapse
 
@@ -67,13 +67,35 @@ Exactly what [ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md) dec
 
 ## Neutral credential presentation (implemented, Work Package 3)
 
-The credential pages and mail copy used to assume every recipient was a Guardian Console operator: the shared `Wordmark` (`apps/guardian-console/src/shell/Brand.tsx`) always showed "Guardian Console" under "Flow Life Commons", `/login`'s intro named "Guardians and operators" specifically, and the invitation mail's subject and body said "You have been invited to the Flow Life Guardian Console".
+The credential pages and mail copy used to assume every recipient was a Guardian Console operator: the shared `Wordmark` (`apps/guardian-console/src/ui/Brand.tsx`, moved there in Work Package 4 so the Member surface can use it too) always showed "Guardian Console" under "Flow Life Commons", `/login`'s intro named "Guardians and operators" specifically, and the invitation mail's subject and body said "You have been invited to the Flow Life Guardian Console".
 
 **What changed:** `Wordmark` now takes an optional `subtitle`; the shared credential surfaces (`AuthLayout`, so `/login`, `/accept-invitation`, `/forgot-password`, `/reset-password` and the MFA screens reached from `/login`) render it without one, showing "Flow Life Commons" alone. The signed-in Guardian Console shell (`ConsoleShell`, `NavSheet`) still passes `subtitle="Guardian Console"`, since by the time it renders that is genuinely where the person is. `InvitationMail`'s subject and body now say "You have been invited to Flow Life Commons"; `PasswordResetMail` already carried no Guardian Console claim and needed no change. A source-discipline rule in `apps/guardian-console/src/guardrails.test.ts` (`allowedIn` naming the shell files and `ForbiddenPage`, which genuinely is Guardian-only) now keeps "Guardian Console" out of the shared surfaces going forward.
 
 **Deliberately unchanged:** `ForbiddenPage` still says "this account cannot use the Guardian Console" — accurate and Guardian-specific, since it is shown only after `RequireConsoleAccess` has already refused that one surface — and `MfaEnrollment` still says "Access to the Console needs a second step"/"Continue to the Console", because enrolment genuinely is reached only by an Account gaining `console.access` (`SecondFactorRequirement`/`ConsoleMultiFactorPolicy`, ADR 0023): neither is the false universal assumption this package removes.
 
-**Not done here, and deliberately deferred to Work Package 4 below:** the post-login destination logic (an Account with `console.access` lands in the Console, everyone else lands in `/my/`) is NOT activated in this package. There is no `/my/` destination yet for a non-Console Account to land in — `MemberShell` doesn't exist — so an authenticated Account without `console.access` still reaches the existing `ForbiddenPage`, unchanged, exactly as before this package. Introducing a destination-policy function now would have no real consumer; Work Package 4 activates member-aware routing at the same time it gives that routing somewhere real to send a Member.
+**Deferred at the time WP3 shipped, now done (Work Package 4):** the post-login destination logic described above.
+
+## The Member self-service surface (implemented, Work Package 4)
+
+`MemberShell` (`apps/guardian-console/src/member/`) is the authenticated self-service frame every signed-in Account without `console.access` reaches, and any Account may visit regardless. Deliberately simpler than `ConsoleShell`: one header at every width (brand, three flat nav links, the shared account menu), no rail, no secondary drawer, no capability-filtered navigation — there are only three destinations and nothing to filter yet.
+
+**Routes** (`src/App.tsx`), all behind `RequireAuthentication` alone — no `console.access`, no capability, no membership check:
+
+| Route | Page | Backend |
+| --- | --- | --- |
+| `/my` | Home: a greeting, the session (shared `SessionSummary`), a membership summary, links onward | `GET /me` (already used), `GET /my/membership` |
+| `/my/membership` | Full membership state and grant history | `GET /my/membership` (Work Package 2, unchanged) |
+| `/my/security` | Password change; two-step verification management ONLY if already enrolled | `POST /password/change`, `POST /mfa/recovery-codes`, `POST /mfa/authenticator(/confirm)` — all already `auth:web`-only |
+
+**Post-login destination** (`src/auth/destination.ts`, `returnPath.ts`): `defaultDestination(current)` returns `/` for `console.access`, `/my` otherwise — one function, consulted from the one place a successful sign-in resolves (`LoginPage`; the MFA challenge and enrolment steps re-render through the same component, so nothing else needed its own copy). `returnPathFrom` honors a safe internal return path only when this Account can actually use it — a Guardian-only prefix (`/account/security`, `/admin`) falls back to `defaultDestination` for a non-Console Account instead of bouncing it through a refusal.
+
+**The Guardian root** (`RequireConsoleAccess`) now distinguishes the wrong LANDING surface from an attempted PRIVILEGED one: at exactly `/`, an Account without `console.access` is sent to `/my` instead of refused; every other Console route (`/account/security`, `/admin/*`) still shows the existing `ForbiddenPage` outright. A Guardian may visit `/my/` directly too — holding `console.access` refuses nothing there — though signing in still lands a Guardian in the Console by default.
+
+**No new backend capability.** Every `/my/*` route and every operation `/my/security` exposes was already available to any authenticated Account before this package; WP4 only gives them a Member-facing home. Nothing here uses membership state to decide whether `/my/` itself may be entered — reaching it is still not evidence of active membership, exactly as this document requires above.
+
+**MFA stays sign-in-time-only.** `/my/security` shows two-step verification management (regenerate recovery codes, replace the authenticator) only when `current.mfa.enrolled` is already true; an unenrolled Account sees password change alone. First-time enrolment remains part of signing in (`MfaEnrollment`), triggered only by gaining `console.access` (`SecondFactorRequirement`/`ConsoleMultiFactorPolicy`, ADR 0023) — this page does not invent a second way in.
+
+**Import boundary.** `src/member/**` may import `src/ui/**`, `src/api/**` and `src/auth/**`, never `src/pages/admin/**`, `src/shell/**` or `src/admin/**` — enforced by `src/member/import-boundary.test.ts`, which scans real import specifiers rather than trusting review. Three small extractions made the neutral pieces `/my/*` needed reachable without crossing that line: `Wordmark`/`Badge` (`shell/Brand.tsx` → `ui/Brand.tsx`, `Wordmark`'s `subtitle` already optional since Work Package 3), the account menu (`shell/AccountMenu.tsx` → `ui/AccountMenu.tsx`, now taking a `securityPath` prop so each surface points at its own security page), and the generic async-load hook (`admin/useLoad.ts` → `ui/useLoad.ts`, which never had any admin-specific logic). The password-change panel was extracted directly into a new shared `ui/ChangePasswordPanel.tsx` rather than duplicated, since `AccountSecurityPage` and the Member `SecurityPage` need the identical operation.
 
 ## Delegation and service authentication: not built, and why that's fine
 
@@ -89,7 +111,7 @@ Each package is independently shippable and independently revertible; none depen
 | **WP1** (done) | A generic Identity capability: invite an *existing* Person who has no Account (`Identity\Application\InviteAccountForPerson`, exposed as `POST /admin/people/{person}/invitation` — an Identity use case, not a Membership one; Membership already creates Persons with no Account via `RegisterPerson`, and had no way to give one an Account afterwards) | WP0 |
 | **WP2** (done) | `GET /api/v1/my/membership` (`Membership\Application\GetCurrentMembership`) — subject strictly the authenticated session's own Person, answering the full active/lapsed/none/open-ended range described above, with a privacy-minimized `CurrentMembership` DTO distinct from the admin one | WP0 (independent of WP1) |
 | **WP3** (done) | Neutral Flow Life Commons credential-page and mail copy (`/login`, `/accept-invitation`, `/forgot-password`, `/reset-password`, `InvitationMail`) — see "Neutral credential presentation" above. Post-login destination logic is deliberately NOT activated here: there is no `/my/` destination yet to route a non-Console Account to | WP0 |
-| **WP4** | `MemberShell` and an initial `/my/*` route area (home, own membership status, own account/security) in the existing React application, with an enforced import boundary from Console/admin code; activates member-aware post-login routing (an Account with `console.access` lands in the Console, everyone else lands in `/my/`) now that `/my/` is a real destination | WP1–WP3 |
+| **WP4** (done) | `MemberShell` and the `/my/*` route area (home, own membership status, own account/security) in the existing React application, with an enforced import boundary from Console/admin code (`import-boundary.test.ts`); activates member-aware post-login routing (`console.access` → the Console, everyone else → `/my/`) and the Guardian-root-to-`/my/` redirect for a non-Console Account — see "The Member self-service surface" above | WP1–WP3 |
 | **WP5** | A real-browser vertical journey: an operator registers or adopts an existing Person, invites them, the invitation is caught by Mailpit, accepted, the Member signs in, reaches `/my/`, sees their own membership, and signs out | WP1–WP4 |
 
 **Explicitly not scheduled**, and built only on the trigger ADR 0033 names — person-specific data that must render *inside* a WordPress experience: a service client, `api_clients`, any WordPress-held credential, and delegated human authority.

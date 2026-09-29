@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
+import { accountFor } from '../test/fakeApi.ts'
 import { returnPathFrom, safeReturnPath } from './returnPath.ts'
+
+const guardian = accountFor({ capabilities: ['console.access'] })
+const member = accountFor({ capabilities: [] })
 
 describe('safeReturnPath', () => {
   it.each([
@@ -52,11 +56,34 @@ describe('safeReturnPath', () => {
 })
 
 describe('returnPathFrom', () => {
-  it('reads the validated path out of router state and defaults to home', () => {
-    expect(returnPathFrom({ from: '/account/security' })).toBe('/account/security')
-    expect(returnPathFrom({ from: 'https://evil.example' })).toBe('/')
-    expect(returnPathFrom(null)).toBe('/')
-    expect(returnPathFrom({})).toBe('/')
-    expect(returnPathFrom('/account/security')).toBe('/')
+  it('honors a safe internal path this Account can actually use', () => {
+    expect(returnPathFrom({ from: '/some/console/route' }, guardian)).toBe('/some/console/route')
+    expect(returnPathFrom({ from: '/my/membership' }, member)).toBe('/my/membership')
+  })
+
+  it('falls back to this Account’s own default surface with no explicit request', () => {
+    expect(returnPathFrom(null, guardian)).toBe('/')
+    expect(returnPathFrom({}, guardian)).toBe('/')
+    expect(returnPathFrom('/account/security', guardian)).toBe('/') // not an object with `from`: ignored
+    expect(returnPathFrom(null, member)).toBe('/my')
+    expect(returnPathFrom({}, member)).toBe('/my')
+  })
+
+  it('falls back to the default surface when the requested path was rejected outright', () => {
+    expect(returnPathFrom({ from: 'https://evil.example' }, guardian)).toBe('/')
+    expect(returnPathFrom({ from: 'https://evil.example' }, member)).toBe('/my')
+  })
+
+  it('never sends an Account without console.access to a Guardian-only path: it falls back instead', () => {
+    expect(returnPathFrom({ from: '/account/security' }, member)).toBe('/my')
+    expect(returnPathFrom({ from: '/admin/accounts' }, member)).toBe('/my')
+    expect(returnPathFrom({ from: '/admin/accounts/01J0' }, member)).toBe('/my')
+    // A Guardian, who CAN use them, still gets them honored.
+    expect(returnPathFrom({ from: '/account/security' }, guardian)).toBe('/account/security')
+    expect(returnPathFrom({ from: '/admin/accounts' }, guardian)).toBe('/admin/accounts')
+  })
+
+  it('does not treat a merely similar path as Guardian-only: only the exact prefix counts', () => {
+    expect(returnPathFrom({ from: '/administrivia' }, member)).toBe('/administrivia')
   })
 })

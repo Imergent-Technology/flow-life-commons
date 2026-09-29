@@ -9,7 +9,7 @@ import {
 } from '../../api/admin.ts'
 import { toConfirmResult } from '../../admin/confirmResult.ts'
 import { useAdminAction } from '../../admin/useAdminAction.ts'
-import { useLoad } from '../../admin/useLoad.ts'
+import { useLoad } from '../../ui/useLoad.ts'
 import { Alert } from '../../ui/Alert.tsx'
 import { Button } from '../../ui/Button.tsx'
 import { ConfirmDialog } from '../../ui/ConfirmDialog.tsx'

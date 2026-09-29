@@ -10,6 +10,10 @@ import {
 import { RequireAuthentication } from './auth/RequireAuthentication.tsx'
 import { RequireCapability } from './auth/RequireCapability.tsx'
 import { RequireConsoleAccess } from './auth/RequireConsoleAccess.tsx'
+import { HomePage as MemberHomePage } from './member/HomePage.tsx'
+import { MemberShell } from './member/MemberShell.tsx'
+import { MembershipPage as MemberMembershipPage } from './member/MembershipPage.tsx'
+import { SecurityPage as MemberSecurityPage } from './member/SecurityPage.tsx'
 import { AcceptInvitationPage } from './pages/AcceptInvitationPage.tsx'
 import { AccountDetailPage } from './pages/admin/AccountDetailPage.tsx'
 import { AccountsPage } from './pages/admin/AccountsPage.tsx'
@@ -27,9 +31,10 @@ import { ConsoleShell } from './shell/ConsoleShell.tsx'
 import { ThemeProvider } from './ui/ThemeProvider.tsx'
 
 /**
- * The Console's routes. Public pages need no session; everything else sits behind the authentication
- * boundary and then the Console-access boundary. Console routes must never start with /api or be /up:
- * the gateway sends those to the platform, not to this app.
+ * The Console's and the Member surface's routes together (ADR 0032, Work Package 4): public pages need no
+ * session; everything else sits behind the authentication boundary, and THEN splits by capability, never
+ * by role — `/my/*` needs only authentication, `console.access` decides the rest. Routes must never start
+ * with /api or be /up: the gateway sends those to the platform, not to this app.
  *
  * ThemeProvider wraps everything, including the public pages: the theme is a device/interface fact
  * (ADR 0030), not an account one, so it applies whether or not anyone is signed in.
@@ -45,6 +50,19 @@ function App() {
           <Route path="/accept-invitation" element={<AcceptInvitationPage />} />
 
           <Route element={<RequireAuthentication />}>
+            {/*
+             * The Member self-service surface: authenticated is the whole requirement (ADR 0032). No
+             * console.access, no capability, no membership check — an Account with none of those still
+             * gets a normal answer here, exactly as GET /my/membership itself does. A Guardian may reach
+             * it too (13): holding console.access refuses nothing on this surface.
+             */}
+            <Route path="my" element={<MemberShell />}>
+              <Route index element={<MemberHomePage />} />
+              <Route path="membership" element={<MemberMembershipPage />} />
+              <Route path="security" element={<MemberSecurityPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Route>
+
             <Route element={<RequireConsoleAccess />}>
               <Route element={<ConsoleShell />}>
                 <Route index element={<OverviewPage />} />

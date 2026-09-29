@@ -89,7 +89,9 @@ describe('every full-page screen outside the shell', () => {
     { path: '/reset-password', h1: 'Reset link not usable', server: (api) => api.signedOut() },
     { path: '/accept-invitation', h1: 'Accept your invitation', server: (api) => api.signedOut() },
     {
-      path: '/',
+      // A genuinely privileged Console path (unlike the root, which now redirects a non-Console Account
+      // to /my/ instead of refusing it — see session.test.tsx's "Console entry" describe block).
+      path: '/account/security',
       h1: 'Access denied',
       server: (api) => api.signedInAs(accountFor({ capabilities: [] })),
     },

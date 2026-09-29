@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 
-import { Badge, Wordmark } from '../shell/Brand.tsx'
+import { Badge, Wordmark } from './Brand.tsx'
 import { usePageHeading } from './usePageHeading.ts'
 
 /**

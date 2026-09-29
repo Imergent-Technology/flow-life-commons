@@ -89,7 +89,7 @@ const rules: Rule[] = [
       'a component that branches on the theme has stopped using roles; only the theme machinery, its pre-render stamp in main.tsx and the theme menu may know which theme is on',
     pattern: /useTheme|resolvedTheme|data-theme|prefers-color-scheme/,
     allowedIn:
-      /(^|\/)ui\/(ThemeProvider\.tsx|preferences\.ts|theme-context\.ts)$|(^|\/)shell\/AccountMenu\.tsx$|^\.\/main\.tsx$/,
+      /(^|\/)ui\/(ThemeProvider\.tsx|preferences\.ts|theme-context\.ts|AccountMenu\.tsx)$|^\.\/main\.tsx$/,
     offends: "const { resolvedTheme } = useTheme(); if (resolvedTheme === 'dark') …",
     fine: 'className="bg-surface"',
   },
@@ -107,8 +107,11 @@ const rules: Rule[] = [
       'sign-in, invitation acceptance, password reset and MFA are reached by a Member as much as a Guardian (ADR 0032), so a shared surface must not claim the visitor is entering the Guardian Console specifically',
     pattern: /Guardian Console/,
     // Genuinely Guardian-only: the signed-in shell (which really is the Guardian Console by the time it
-    // renders), and the page that explains a signed-in Account was refused THAT specific surface.
-    allowedIn: /(^|\/)shell\/(Brand|ConsoleShell|NavSheet)\.tsx$|(^|\/)pages\/ForbiddenPage\.tsx$/,
+    // renders), the shared Wordmark's doc explaining why (its actual RENDERED subtitle comes from the
+    // shell files, not from here), and the page that explains a signed-in Account was refused THAT
+    // specific surface.
+    allowedIn:
+      /(^|\/)ui\/Brand\.tsx$|(^|\/)shell\/(ConsoleShell|NavSheet)\.tsx$|(^|\/)pages\/ForbiddenPage\.tsx$/,
     offends:
       '<AuthLayout title="Sign in" intro="For the Guardian Console. Accounts are by invitation.">',
     fine: '<AuthLayout title="Sign in" intro="Sign in to Flow Life Commons. Accounts are by invitation.">',

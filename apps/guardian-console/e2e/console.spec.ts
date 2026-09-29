@@ -232,23 +232,26 @@ test.describe('signing in and out of the Console', () => {
     await expect(page.getByText('E2E Console B', { exact: true })).toHaveCount(0)
   })
 
-  test('someone signed in WITHOUT Console access is told so, not shown the login page again', async ({
+  test('someone signed in WITHOUT Console access lands on /my/, not the login page again (ADR 0032)', async ({
     page,
   }) => {
     await signInThroughUi(page, NO_ACCESS.email, NO_ACCESS.password)
 
-    await expect(page.getByRole('heading', { level: 1, name: 'Access denied' })).toBeVisible()
-    expect(new URL(page.url()).pathname).toBe('/') // 403, not a redirect back to login
+    // The root is a landing spot, not a privileged route: routed on to the Member surface, not refused.
+    await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/my')
     expect(await meStatus(page)).toBe(200) // authenticated all the same
     await expect(page.getByRole('navigation', { name: 'Console' })).toHaveCount(0)
-    // It reveals nothing about what would grant access.
+    await expect(page.getByText('Guardian Console')).toHaveCount(0)
+    // It reveals nothing about what would grant Console access.
     await expect(page.locator('body')).not.toContainText(
       /role|capabilit|console\.access|administrator/i,
     )
 
-    // A Console path is denied the same way.
+    // A genuinely privileged Console path is still denied outright, not redirected.
     await page.goto('/account/security')
     await expect(page.getByRole('heading', { level: 1, name: 'Access denied' })).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/account/security') // 403, not a redirect back to login
 
     // This screen has no account menu (there is no Console to put it in): its own Sign out button.
     await page.getByRole('button', { name: 'Sign out' }).click()

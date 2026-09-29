@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { useParams } from 'react-router'
 
 import { getAccount } from '../../api/admin.ts'
-import { useLoad } from '../../admin/useLoad.ts'
+import { useLoad } from '../../ui/useLoad.ts'
 import { shown } from '../../admin/time.ts'
 import { useCurrentAccount } from '../../auth/auth-context.ts'
 import {
