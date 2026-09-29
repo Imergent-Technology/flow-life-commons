@@ -128,6 +128,45 @@ it('reads nothing but `people` in the People directory: no Account column can be
     expect(accountDataLiterals(SourceScan::read($accounts)))->not->toBe([]);
 });
 
+/**
+ * Every Eloquent persistence record in Identity's Infrastructure except the Person's own: Account, invitation and
+ * factor storage among them, and any added later without editing this test.
+ *
+ * @return list<class-string>
+ */
+function nonPersonRecords(): array
+{
+    $records = [];
+    foreach (glob(SourceScan::root().'/app/Modules/Identity/Infrastructure/Persistence/*Record.php') ?: [] as $path) {
+        $name = basename($path, '.php');
+        if ($name !== 'PersonRecord') {
+            $records[] = 'App\\Modules\\Identity\\Infrastructure\\Persistence\\'.$name;
+        }
+    }
+
+    return $records; // @phpstan-ignore return.type
+}
+
+arch('the People directory uses no Account, invitation or factor persistence model', function () {
+    expect(nonPersonRecords())->toContain('App\\Modules\\Identity\\Infrastructure\\Persistence\\AccountRecord') // positive control: the list is real
+        ->and('App\\Modules\\Identity\\Infrastructure\\Persistence\\DatabasePeopleDirectory')->not->toUse(nonPersonRecords());
+});
+
+arch('the People directory depends only on the People ports, the id type and the query builder', function () {
+    // An allowlist, so a new dependency on anything Account-shaped is a decision, not an accident. It is a short list
+    // of what the class is FOR; adding a genuinely harmless collaborator means adding a line here.
+    expect('App\\Modules\\Identity\\Infrastructure\\Persistence\\DatabasePeopleDirectory')->toOnlyUse([
+        'App\\Modules\\Identity\\Application\\PeopleDirectory',
+        'App\\Modules\\Identity\\Application\\PeoplePage',
+        'App\\Modules\\Identity\\Application\\PeopleQuery',
+        'App\\Modules\\Identity\\Application\\PersonSummary',
+        'App\\Modules\\Identity\\Infrastructure\\Persistence\\LikeFragment',
+        'App\\Shared\\Domain\\PersonId',
+        'Illuminate\\Database\\ConnectionInterface',
+        'Illuminate\\Database\\Query\\Builder',
+    ]);
+});
+
 it('gives the People directory no way to ask about Accounts', function () {
     $applicationTypes = array_merge(
         publicSurfaceTypes(PeopleDirectory::class),

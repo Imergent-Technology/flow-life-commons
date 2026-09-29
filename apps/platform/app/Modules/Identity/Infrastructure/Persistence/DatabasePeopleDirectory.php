@@ -16,8 +16,10 @@ use Illuminate\Database\Query\Builder;
  * Plain query builder over `people` ALONE: a read model, two statements per page (a count and the page) and none
  * per row. It reads no other table, so nothing about an Account can leak through it or be matched by it.
  *
- * Portable: `lower()` and an explicit LIKE escape (see LikeFragment), the order on `lower(display_name)` then `id`,
- * and id sets as ordinary bound `IN` lists. An explicitly empty restriction never reaches the database.
+ * The query strategy is portable: `lower()` and an explicit LIKE escape (see LikeFragment), the order on
+ * `lower(display_name)` then `id`, and id sets as ordinary bound `IN` lists. Case-insensitive ASCII behaves the same
+ * on MariaDB and PostgreSQL; accent sensitivity and the order of non-ASCII names follow each engine's collation and
+ * may differ (see LikeFragment). An explicitly empty restriction never reaches the database.
  */
 final readonly class DatabasePeopleDirectory implements PeopleDirectory
 {

@@ -53,6 +53,7 @@ use App\Modules\Identity\Application\InviteAccountForPerson;
 use App\Modules\Identity\Application\PendingLogin;
 use App\Modules\Identity\Application\ReactivationOutcome;
 use App\Modules\Identity\Application\ReissueInvitation;
+use App\Modules\Identity\Application\RenamePerson;
 use App\Modules\Identity\Application\RequestPasswordReset;
 use App\Modules\Identity\Application\ResetMultiFactor;
 use App\Modules\Identity\Application\ResetPassword;
@@ -174,6 +175,8 @@ try {
         if ($app->make(EnableAccount::class)(AccountId::fromString($arg('account'))) !== ReactivationOutcome::Enabled) {
             throw new RuntimeException('the account was not disabled');
         }
+    } elseif ($operation === 'rename_person') {
+        $app->make(RenamePerson::class)(PersonId::fromString($arg('person')), $arg('name'));
     } elseif ($operation === 'reissue') {
         $app->make(ReissueInvitation::class)(AccountId::fromString($arg('account')));
     } elseif ($operation === 'invite') {

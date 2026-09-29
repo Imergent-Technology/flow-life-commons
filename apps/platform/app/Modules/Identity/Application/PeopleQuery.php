@@ -12,7 +12,8 @@ use InvalidArgumentException;
  * let a caller compose the registry with data it owns, and a page. There is no query language.
  *
  * - **`text`** matches the display name, case-insensitively, as a plain fragment (`%` and `_` are ordinary
- *   characters). Null, empty and whitespace-only all mean "no text": every Person.
+ *   characters; accent sensitivity follows the database collation, so `jose` finds `José` on MariaDB but not on
+ *   PostgreSQL). Null, empty and whitespace-only all mean "no text": every Person.
  * - **`includeIds`** are Persons that count as a text match even though their name does not (a caller that found
  *   them in data it owns, such as a contact method). They widen a NON-EMPTY text match; with no text every Person
  *   is already selected, so they change nothing. Null and `[]` both add nothing.

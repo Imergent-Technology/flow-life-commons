@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace App\Modules\Identity\Infrastructure\Persistence;
 
 /**
- * A user's text as a case-insensitive "contains" pattern, portable across MariaDB and PostgreSQL: the caller lower()s
- * the column, and the pattern is lower-cased here with `%`, `_` and the escape character itself made literal, used
- * with `ESCAPE '!'`. (Collation is not relied on: the engines collate a plain VARCHAR differently.)
+ * A user's text as a case-insensitive "contains" pattern, portable in strategy across MariaDB and PostgreSQL: the
+ * caller lower()s the column, and the pattern is lower-cased here with `%`, `_` and the escape character itself made
+ * literal, used with `ESCAPE '!'`.
+ *
+ * What "the same" means: case-insensitive ASCII matching is identical on both engines. Accent sensitivity is NOT
+ * folded here and follows each engine's collation: on MariaDB (`utf8mb4_unicode_ci`) `José` matches `jose`, on
+ * PostgreSQL (`en_US.utf8`) it does not. Ordering of non-ASCII text follows the same collations. Accent folding would
+ * be a separate decision; nothing here attempts it.
  */
 final class LikeFragment
 {

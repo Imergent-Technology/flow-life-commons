@@ -20,8 +20,9 @@ use Illuminate\Database\Query\Builder;
  * row. It selects only the columns an operator may see: never the password hash, a factor's ciphertext, a recovery
  * code digest, an invitation's token hash or a session.
  *
- * Portable: `lower()` and an explicit LIKE escape character behave the same on MariaDB and PostgreSQL, and the order
- * is on `lower(display_name)` because the engines collate a plain VARCHAR differently.
+ * Portable in strategy: `lower()` and an explicit LIKE escape character, and the order on `lower(display_name)`
+ * because the engines collate a plain VARCHAR differently. ASCII and case behave the same on MariaDB and PostgreSQL;
+ * accent sensitivity and non-ASCII order follow each engine's collation and may differ (see LikeFragment).
  */
 final readonly class DatabaseAccountDirectory implements AccountDirectory
 {
