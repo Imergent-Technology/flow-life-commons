@@ -54,6 +54,13 @@ function adminOperations(): array
         // (auth, capability, step-up) fires before the controller ever looks the id up as a Person, so any
         // ULID-shaped value proves the same thing the real Person id would.
         ['POST', '/api/v1/admin/people/{a}/invitation', ['email' => 'new-existing-person@example.org']],
+        // GET .../commons-access is deliberately not in this table: {a} here is the target's ACCOUNT id, and
+        // every operation above either never looks it up as a Person (POST /people/{a}/invitation is gated by
+        // security.verified, so it never reaches the controller in the stale-proof branch below) or genuinely
+        // takes an Account id. This read has no such step-up gate and genuinely needs a Person id, so it would
+        // reach DescribeCommonsAccess and 404 as "no such person" in the read branch below, unlike every other
+        // GET here. It has its own focused coverage instead: CommonsAccessTest (401, 403, and the stale-proof
+        // case, with a real Person id throughout).
         ['POST', '/api/v1/admin/accounts/{a}/disable', []],
         ['POST', '/api/v1/admin/accounts/{a}/enable', []],
         ['POST', '/api/v1/admin/accounts/{a}/mfa/reset', []],

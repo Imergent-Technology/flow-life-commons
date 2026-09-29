@@ -14,6 +14,7 @@ import { type Problem } from '../../ui/problem.ts'
 import { Skeleton, SkeletonRegion } from '../../ui/Skeleton.tsx'
 import { SubmitButton } from '../../ui/SubmitButton.tsx'
 import { TextField } from '../../ui/TextField.tsx'
+import { TextLink } from '../../ui/TextLink.tsx'
 import { useLoad } from '../../ui/useLoad.ts'
 
 function statusLine(state: CommonsAccess['state']): string {
@@ -127,10 +128,21 @@ function CommonsAccessContent({
         set their password from the link in it.
       </Alert>
     ) : (
-      <Alert tone="error" focusOnMount>
-        The Account was created, but the invitation email could not be sent. Reload to try sending
-        it again.
-      </Alert>
+      // The recovery path is the existing Account invitation reissue, not this form: reloading yields
+      // commons_access.state=invited, and there is no second "send" here. This mirrors InviteOperatorPage's
+      // own failed-delivery recovery exactly. The link is safe for every operator who can reach this section:
+      // backend `Role::capabilities` (pinned by `RoleAdministrationTest`) grants `identity.invitations.issue`
+      // to only one role, and that same role grants every capability there is, `identity.accounts.view`
+      // included — this page still asks the server for the capability, never for a role name (ADR 0017).
+      <div className="flex flex-col gap-3">
+        <Alert tone="error" focusOnMount>
+          The Account was created, but the invitation email could not be sent. Open the Account and
+          choose “Send a new invitation” to try again.
+        </Alert>
+        <TextLink to={`/admin/accounts/${result.account.id}`} className="self-start">
+          Open the account
+        </TextLink>
+      </div>
     )
   }
 

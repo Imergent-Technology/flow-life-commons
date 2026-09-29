@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Modules\Identity\Domain\AccountRepository;
 use Illuminate\Support\Facades\Hash;
+use Tests\Support\Console;
 use Tests\Support\Identity;
 use Tests\Support\Mfa;
 use Tests\Support\Totp;
@@ -89,8 +90,18 @@ it('needs identity.invitations.issue, the same capability the invitation itself 
 });
 
 it('needs no recent verification: a read, not a mutation', function () {
-    [$console] = Mfa::signedInAdmin(); // freshly verified from signing in, but this proves the route itself asks for nothing more
+    [$console] = Mfa::signedInAdmin();
     $person = Identity::savedPerson();
+    Console::advance(16 * 60); // past the 15-minute proof window (AccessControlTest's own convention)
+    $console->me()->assertOk(); // still signed in: it is the PROOF that is stale, not the session
 
     $console->get("/api/v1/admin/people/{$person->id->value}/commons-access")->assertOk();
+});
+
+it('is refused, 401, when the caller is not signed in at all', function () {
+    $person = Identity::savedPerson();
+    $console = new Console;
+    $console->bootstrap();
+
+    $console->get("/api/v1/admin/people/{$person->id->value}/commons-access")->assertUnauthorized();
 });

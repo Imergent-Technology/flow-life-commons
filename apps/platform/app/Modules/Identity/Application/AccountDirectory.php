@@ -20,8 +20,8 @@ interface AccountDirectory
 
     /**
      * As `find`, but by the Person it belongs to (ADR 0015: at most one Account per Person, so this can never
-     * return more than one). For a caller that starts from a Person, not an Account — Membership's admin surface,
-     * first, deciding whether a Person may still be invited.
+     * return more than one). For a caller that starts from a Person, not an Account — Access's own
+     * `DescribeCommonsAccess`, first, deciding whether a Person may still be invited.
      */
     public function findByPersonId(PersonId $personId): ?ManagedAccount;
 }

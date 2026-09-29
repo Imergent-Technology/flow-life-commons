@@ -863,6 +863,21 @@ describe('inviting an existing Person to Commons (ADR 0032, Work Package 5)', ()
     expect(api.callsTo(ACCESS)).toHaveLength(0)
   })
 
+  it('shows an error, never "Not invited", when the commons-access read itself fails', async () => {
+    const api = serveOperator(operator(CAN_INVITE))
+    api.on(MEMBER, () => json(wireMember()))
+    api.on(ACCESS, () => json({ message: 'boom' }, 500))
+    renderApp(DETAIL)
+    await screen.findByRole('heading', { level: 1, name: 'Mia Member' })
+
+    // A failed read must not be silently misrepresented as any particular commons-access state.
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Email address')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Invite to Commons' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/no commons account yet/i)).not.toBeInTheDocument()
+    expect(api.callsTo(`POST /api/v1/admin/people/${PERSON_ID}/invitation`)).toHaveLength(0)
+  })
+
   it.each([
     ['invited', 'Invited: has not set a password yet.'],
     ['active', 'Has an active Commons Account.'],
@@ -905,21 +920,32 @@ describe('inviting an existing Person to Commons (ADR 0032, Work Package 5)', ()
     expect(api.callsTo(ACCESS)).toHaveLength(1)
   })
 
-  it('says plainly when the Account was created but the email could not be sent', async () => {
+  it('says plainly when the Account was created but the email could not be sent, and points at the remedy', async () => {
     const user = userEvent.setup()
     const api = await openDetailWithAccess(CAN_INVITE, { state: 'not_invited', can_invite: true })
+    const newAccountId = '01J0000000000000000NEWACCT'
     api.on(`POST /api/v1/admin/people/${PERSON_ID}/invitation`, () =>
-      json({ account: wire({ status: 'invited' }), delivery: { status: 'failed' } }, 201),
+      json(
+        { account: wire({ id: newAccountId, status: 'invited' }), delivery: { status: 'failed' } },
+        201,
+      ),
     )
 
     await user.type(await screen.findByLabelText('Email address'), 'mia.member@example.org')
     await user.click(screen.getByRole('button', { name: 'Invite to Commons' }))
 
-    expect(
-      await screen.findByText(
-        /The Account was created, but the invitation email could not be sent/,
-      ),
-    ).toBeInTheDocument()
+    // Not "reload to try sending it again": reloading yields commons_access.state=invited, and there is
+    // no second "send" on this page. The actual remedy is the existing Account invitation reissue, reached
+    // from the Account detail page — the same recovery InviteOperatorPage points to.
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      'The Account was created, but the invitation email could not be sent. Open the Account and choose “Send a new invitation” to try again.',
+    )
+    expect(alert).not.toHaveTextContent(/reload/i)
+    expect(screen.getByRole('link', { name: 'Open the account' })).toHaveAttribute(
+      'href',
+      `/admin/accounts/${newAccountId}`,
+    )
   })
 
   it('shows the address-already-in-use refusal on the field, not as a page-level alert', async () => {
