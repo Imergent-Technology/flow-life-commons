@@ -5,6 +5,7 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0008](0008-platform-owned-authorization.md)
+- **Refined by:** [ADR 0028](0028-membership-grants-derived-at-query-time.md) (`RegisterPerson`), [ADR 0032](0032-members-use-a-commons-hosted-surface.md) (members reach Commons on a Commons-hosted surface, not through WordPress delegation, correcting this ADR's consequence below), [ADR 0034](0034-crm-enriches-identity-person.md) (the CRM boundary this ADR anticipated)
 - **Clarified:** 2026-09-20. One consequence claimed that accepting an invitation proves control of the address. It does so only when the invitation was actually delivered to that address; see [ADR 0022](0022-password-policy-and-credential-handling.md). The decision itself is unchanged.
 
 ## Context

@@ -4,8 +4,11 @@
 
 ## Role
 
-A thin adapter that lets member and volunteer experiences appear inside WordPress
-while the **platform** (`apps/platform`) stays the single source of truth.
+A thin adapter, reserved for the day WordPress needs to render Commons data. Today it
+does nothing: the Member surface is served by Commons itself (`/my/`, [ADR 0032](../../docs/adr/0032-members-use-a-commons-hosted-surface.md)),
+and WordPress only links to it. The **platform** (`apps/platform`) stays the single
+source of truth. Authenticated, person-specific projection is deferred
+([ADR 0033](../../docs/adr/0033-service-identity-and-delegated-human-authority-are-distinct.md)).
 
 ## Rules (see [docs/integrations/wordpress.md](../../docs/integrations/wordpress.md), [ADR 0004](../../docs/adr/0004-wordpress-adapter-not-authority.md))
 

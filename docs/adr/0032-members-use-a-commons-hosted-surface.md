@@ -1,6 +1,6 @@
 # ADR 0032: Members use a Commons-hosted surface
 
-- **Status:** Accepted (direction; nothing implemented — see [member access](../architecture/member-access.md) for the work-package sequence)
+- **Status:** Accepted (implemented for the Member foundation, Work Packages 1–5; further Member expansion parked — see [member access](../architecture/member-access.md))
 - **Date:** 2026-09-28
 - **Supersedes:** none
 - **Superseded by:** none

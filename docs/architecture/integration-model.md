@@ -33,7 +33,7 @@ provider payment/event → verified, idempotent ingestion → explicit Commons p
 - Webhooks give low-latency signals; provider read APIs give reconciliation. Inbound stays untrusted (rule 5).
 - **Ingestion owns idempotency**, most likely keyed by the provider's own event id. Provenance columns on a grant are not an idempotency mechanism.
 - Offering-to-entitlement interpretation is **explicit code with tests**, not a rules engine and not configuration.
-- **Person matching fails closed**: no guessing, no grant on an ambiguous match, no provider id used as Person identity, and no Person created automatically because a payment arrived. Today a Person has no email unless an Account exists, so account-less members cannot be matched by email at all — a known limit, recorded rather than worked around.
+- **Person matching fails closed**: no guessing, no grant on an ambiguous match, no provider id used as Person identity, and no Person created automatically because a payment arrived. Today a Person has no email unless an Account exists, so account-less members cannot be matched by email at all — a known limit, recorded rather than worked around. CRM ([ADR 0034](../adr/0034-crm-enriches-identity-person.md)) will hold contact emails and so make *candidate* matching possible later, but those emails are deliberately not unique across Persons: more than one candidate, or none, is still no match and no grant.
 
 ## Queues
 

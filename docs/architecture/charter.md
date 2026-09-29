@@ -5,7 +5,7 @@ Flow Life Global is building a long-lived organizational platform for **members,
 ## Direction
 
 - The **platform** (`apps/platform`) is authoritative for organizational data, identity relationships, authorization, workflows and business rules.
-- **Member and volunteer self-service is a Commons-hosted surface**, on the same origin and session model as the Guardian Console, distinct from it ([ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md); design in [member access](member-access.md), not yet built). WordPress hosts the public site and links into Commons; it is a thin companion plugin (`apps/wordpress-companion`) away from doing anything else, and is an adapter and presentation surface, never a source of truth ([ADR 0004](../adr/0004-wordpress-adapter-not-authority.md)). This supersedes this charter's earlier direction that member/volunteer experiences would be exposed *substantially through WordPress*.
+- **Member and volunteer self-service is a Commons-hosted surface**, on the same origin and session model as the Guardian Console, distinct from it ([ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md); design in [member access](member-access.md); the Member foundation is built). WordPress hosts the public site and links into Commons; it is a thin companion plugin (`apps/wordpress-companion`) away from doing anything else, and is an adapter and presentation surface, never a source of truth ([ADR 0004](../adr/0004-wordpress-adapter-not-authority.md)). This supersedes this charter's earlier direction that member/volunteer experiences would be exposed *substantially through WordPress*.
 - Guardian operations are exposed through a separately hardened **Guardian Console** (`apps/guardian-console`).
 - WordPress must be replaceable or supplementable later without redesigning the platform core.
 
@@ -55,7 +55,7 @@ Status: **Encoded** = a test, config or tool fails when broken; **Partial** = en
 | 14 | Persisted timestamps are UTC. | Encoded | `config/app.php`, MariaDB and PostgreSQL connection time zones, dev MariaDB `--default-time-zone=+00:00`, config test |
 | 15 | Secrets are never committed. | Partial | `.gitignore` excludes `.env*` (except `*.example`); examples hold placeholders only. No secret scanner yet. See [secrets](../security/secrets.md) |
 | 16 | Sensitive actions require durable auditing. | Encoded | `RecordSecurityEvent`, written synchronously in the same transaction as the change. See [authorization model](../security/authorization-model.md) |
-| 17 | No speculative shared abstractions or frameworks before real consumers exist. | Documented | Review discipline; `Shared` is empty on purpose |
+| 17 | No speculative shared abstractions or frameworks before real consumers exist. | Documented | Review discipline; `Shared` is deliberately tiny (the ULID identifiers and `Actor`, each with real consumers on day one) and never depends on a module |
 
 Other rules that *are* encoded: no `env()` outside config, no debug or dangerous functions, `declare(strict_types=1)` throughout `app/`, and Larastan at level `max`.
 
@@ -77,13 +77,25 @@ The design gate is complete and recorded in [ADRs 0015–0021](../adr/README.md)
 
 ## Membership Foundation (backend, operator API and Console UI built)
 
-The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). The `Membership` module, `membership_grants`, `Identity\Application\RegisterPerson`, the `membership.records.view`/`membership.records.manage` capabilities, an operator-only `/admin/members` HTTP surface (Work Package 5), and a Guardian Console Membership administration UI on top of it (Work Package 6) are built. **Not built:** a member-facing API, service/delegated authentication, and Zeffy/Luma automation. A member-facing API is designed, not merely absent, and does not route through WordPress — see the Member-Facing Access design gate ([ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md), [ADR 0033](../adr/0033-service-identity-and-delegated-human-authority-are-distinct.md), [member access](member-access.md)).
+The foundation is complete, and the first business domain built on it is **Membership**. Its design gate is frozen and recorded in [ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md) and [ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md). The `Membership` module, `membership_grants`, `Identity\Application\RegisterPerson`, the `membership.records.view`/`membership.records.manage` capabilities, an operator-only `/admin/members` HTTP surface (Work Package 5), and a Guardian Console Membership administration UI on top of it (Work Package 6) are built. The Member foundation is built too (Work Packages 1–5: the existing-Person invitation, `GET /my/membership`, neutral credential presentation, the `/my/` shell, and end-to-end validation) and further Member-facing expansion is parked. **Not built:** service/delegated authentication and Zeffy/Luma automation. Member access does not route through WordPress — see the Member-Facing Access design gate ([ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md), [ADR 0033](../adr/0033-service-identity-and-delegated-human-authority-are-distinct.md), [member access](member-access.md)).
 
 Two decisions constrain later work and belong here rather than only in the ADRs:
 
 - **Membership access is time-bounded grants, derived at query time** — no stored status, no expiry job. In particular, **temporal membership eligibility is never represented solely by a durable role assignment**, because a role assignment does not expire and would outlive the term silently. This does not bar member, volunteer or partner roles later; it bars a non-expiring row being the sole source of truth for access that lapses with time.
 - **Commerce providers own payment facts; Commons owns organizational entitlement.** Amounts, payment status, receipts and subscription mechanics stay with the provider and out of the Membership schema; Commons decides what a payment entitles someone to.
 
-## Out of scope for the foundation
+## Out of scope for the foundation (historical), and the Guardian roadmap
 
-CRM, volunteer management, events, publishing, workflows and AI features. The foundation exists so those can be built on solid ground, not so they can be started early. Membership has now passed its design gate (above) and is the next phase rather than a foundation concern.
+*This section was written when the foundation was being built.* It said CRM, volunteer management, events, publishing, workflows and AI features were out of scope so they would not be started early. That was the foundation's scope, not the roadmap: Membership has since been built (above), and the foundation is complete.
+
+Product development is now **Guardian-first**: give Guardians enough genuinely useful capability that the Guardian Council can see why to adopt Commons. The current sequence, with domain ownership in [ADR 0034](../adr/0034-crm-enriches-identity-person.md):
+
+| Milestone | Domain | Status |
+| --- | --- | --- |
+| G1 | CRM / People | Active. Enriches Identity's Person; does not replace it |
+| G2 | Discussions | Planned |
+| G3 | Events | Planned |
+| G4 | Publishing / Announcements | Planned |
+| G5 | Knowledge / Resources | Planned |
+
+Commons domains own durable business state and rules; the Guardian Console is the primary rich authoring surface; `/my/`, WordPress and any future client present Commons capabilities and own none. Volunteering (a domain in its own right, not merely a role), workflows and AI features remain unscheduled, and Member-facing expansion is parked.

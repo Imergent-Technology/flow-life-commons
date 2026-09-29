@@ -1,6 +1,6 @@
 # WordPress integration
 
-Decision: [ADR 0004](../adr/0004-wordpress-adapter-not-authority.md), refined by [ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md). Code: [`apps/wordpress-companion`](../../apps/wordpress-companion/). **Status: skeleton only, and expected to stay that way through the current member-facing work** (see [member access](../architecture/member-access.md)).
+Decision: [ADR 0004](../adr/0004-wordpress-adapter-not-authority.md), refined by [ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md). Code: [`apps/wordpress-companion`](../../apps/wordpress-companion/). **Status: skeleton only.** The Commons-hosted Member surface ([ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md)) now exists (`/my/`; see [member access](../architecture/member-access.md)), and WordPress has needed no code for it. Authenticated, person-specific projection into WordPress is deferred until ADR 0033's trigger is met. Guardian-domain content (CRM, and the planned Discussions, Events, Publishing and Knowledge) is owned by Commons; if any of it is ever projected outward, WordPress is a client of `/api/v1`, never a second store.
 
 ## Role
 

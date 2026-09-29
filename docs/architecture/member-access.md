@@ -48,9 +48,9 @@ Consequently:
 
 ## Volunteer extension seam
 
-**Decided:** Volunteers are Members with elevated duties or privileges, not a second identity type. Volunteer-specific capabilities, when they exist, can extend the same `/my/` surface a Member already reaches, gated by capability rather than by any special routing. Holding a volunteer capability never implies `console.access`; the Guardian Console remains Guardian/operator-only, unaffected by this design.
+**Decided:** Volunteers are Members with elevated duties or privileges. They are not a second identity type and not merely an Access role. Volunteer-specific capabilities, when they exist, can extend the same `/my/` surface a Member already reaches, gated by capability rather than by any special routing. Holding a volunteer capability never implies `console.access`; the Guardian Console remains Guardian/operator-only, unaffected by this design.
 
-**Deliberately undecided, and not designed here:**
+**Deliberately undecided, and not designed here** — the relationship above is settled; the *Volunteering domain model* is not:
 
 - whether Volunteering eventually gets its own domain aggregate, distinct from a plain Access role;
 - the lifecycle or history of volunteer status (durable assignment, term-bounded like membership grants, or something else);

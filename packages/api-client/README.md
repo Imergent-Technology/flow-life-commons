@@ -12,6 +12,9 @@ this package's original trigger ("more than a handful of endpoints") anticipated
 generating a typed client from here has not yet been picked up as its own piece of
 work, not because the trigger hasn't fired.
 
+The Guardian roadmap (G1 CRM onward) does not wait on this: hand-written modules continue
+until generation is scheduled as its own piece of work.
+
 ## Direction ([ADR 0007](../../docs/adr/0007-versioned-rest-api-openapi.md))
 
 - The contract lives in [`apps/platform/openapi/openapi.yaml`](../../apps/platform/openapi/openapi.yaml)

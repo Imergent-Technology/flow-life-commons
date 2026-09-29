@@ -11,7 +11,7 @@ flowchart LR
     subgraph surfaces [Presentation surfaces]
         wp[WordPress<br/>public site; links only]
         gc[Guardian Console<br/>React SPA, hardened]
-        ms[Member surface<br/>React SPA, same origin as gc<br/>not yet built]
+        ms[Member surface<br/>React SPA, same origin as gc<br/>foundation built; expansion parked]
     end
 
     subgraph core [Platform: authoritative]
@@ -34,7 +34,7 @@ flowchart LR
 
 - **Platform API** is the only component that owns organizational data, identity relationships, authorization and business rules.
 - **WordPress** hosts the public site and links a Member into the Commons-hosted member surface. It renders no authenticated member data, forwards no user action to the API, holds no Commons credential and stores no data of record ([WordPress integration](../integrations/wordpress.md), [ADR 0032](../adr/0032-members-use-a-commons-hosted-surface.md)). This differs from WordPress's originally anticipated role; the reasoning is in [member access](member-access.md).
-- **The member surface** is decided but not yet built ([member access](member-access.md)): an authenticated self-service area served from the same Commons origin as the Guardian Console, using the same session model, but a distinct application shell and never granting Console access.
+- **The member surface** has its foundation built (`/my/`; [member access](member-access.md)), with further expansion parked: an authenticated self-service area served from the same Commons origin as the Guardian Console, using the same session model, but a distinct application shell and never granting Console access.
 - **Guardian Console** is a separately deployed, separately hardened operational client of the same API. It is not a privileged back door: it goes through the same server-side authorization.
 - Any future surface (partner portal, mobile app, WordPress replacement) is another client of the API.
 

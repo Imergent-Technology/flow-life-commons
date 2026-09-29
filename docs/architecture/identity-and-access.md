@@ -10,7 +10,7 @@ These names spread through the codebase, so each is defined by what it is *not* 
 
 | Term | Definition | Deliberately not |
 | --- | --- | --- |
-| **Person** | The canonical human. A thin anchor: ULID, display name. Business modules reference `person_id`. | Not a contact profile — attributes must not accumulate here. CRM later owns rich data keyed by `person_id`. |
+| **Person** | The canonical human. A thin anchor: ULID, display name. Business modules reference `person_id`. | Not a contact profile — attributes must not accumulate here. CRM owns rich data keyed by `person_id` ([ADR 0034](../adr/0034-crm-enriches-identity-person.md)). |
 | **Account** | A Person's means of signing in: login identifier, credential, status. | Not the person. The word *User* is avoided entirely because it conflates the two. |
 | **Credential** | The secret proving control of an Account — initially password fields *on* the Account. | Not a table yet. Further factors arrive as their own tables. |
 | **ExternalIdentity** | A link from an Account to an identity at an external provider. *Designed, not built.* | Never an authority; linking in only. |
