@@ -357,6 +357,7 @@ export async function expectNoTokenShapedText(page: Page): Promise<void> {
 /** A member to look at: the first listed, or a new one if the development database has none. */
 export async function aMemberId(admin: Page): Promise<string> {
   const listed = await apiFrom(admin, 'GET', '/api/v1/admin/members?per_page=1')
+  // GET .../members wraps its rows in `data` (MembershipPresenter::page); each row is a Member.
   const first = (listed.body as { data: { person: { id: string } }[] }).data[0]
   if (first !== undefined) return first.person.id
   const day = 86_400_000
@@ -368,5 +369,8 @@ export async function aMemberId(admin: Page): Promise<string> {
     source: 'operator',
     source_reference: null,
   })
-  return (created.body as { data: { person: { id: string } } }).data.person.id
+  // POST .../members answers the created Member ITSELF (MembershipPresenter::record), not wrapped in
+  // `data`: that envelope belongs to the list endpoint above, not this one (openapi.yaml's own
+  // `registerMember` operation names `Member` as its 201 schema, not a page of them).
+  return (created.body as { person: { id: string } }).person.id
 }
