@@ -37,6 +37,15 @@ final readonly class Person
         return new self($id, trim($displayName), $now, $now);
     }
 
+    /**
+     * The same human under a corrected display name: the id and creation time never change. Validated exactly as
+     * `create` does (trimmed, then 1 to 255 characters).
+     */
+    public function rename(string $displayName, DateTimeImmutable $now): self
+    {
+        return new self($this->id, trim($displayName), $this->createdAt, $now);
+    }
+
     public static function reconstitute(
         PersonId $id,
         string $displayName,

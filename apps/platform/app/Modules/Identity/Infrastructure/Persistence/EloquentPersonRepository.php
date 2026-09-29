@@ -28,6 +28,13 @@ final class EloquentPersonRepository implements PersonRepository
         return $record === null ? null : $this->toDomain($record);
     }
 
+    public function findForUpdate(PersonId $id): ?Person
+    {
+        $record = PersonRecord::query()->whereKey($id->value)->lockForUpdate()->first();
+
+        return $record === null ? null : $this->toDomain($record);
+    }
+
     public function findMany(array $ids): array
     {
         if ($ids === []) {

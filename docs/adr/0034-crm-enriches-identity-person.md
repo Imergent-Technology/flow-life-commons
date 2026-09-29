@@ -1,6 +1,6 @@
 # ADR 0034: CRM enriches Identity's Person
 
-- **Status:** Accepted (direction; nothing implemented)
+- **Status:** Accepted (Identity's People search and rename ports built; the `Crm` module is not)
 - **Date:** 2026-09-29
 - **Supersedes:** none
 - **Superseded by:** none
@@ -64,7 +64,7 @@ The risk to avoid is the one ADR 0015 named: Person becoming a god table, or CRM
 
 ## Consequences
 
-- The `Crm` module can be built without an Identity schema change. What Identity will supply is two Application ports: a paged, id-composable People search (id and display name), and `RenamePerson`.
+- The `Crm` module can be built without an Identity schema change. What Identity supplies is two Application ports, built and tested on both engines: `SearchPeople`, a paged, id-composable search returning a Person's id and display name, and `RenamePerson`.
 - The directory needs no backfill and no membership in anything to appear.
 - Because search over CRM data and over Persons live in two modules, the People list composes them by passing sets of ids. That is fine at Flow Life's scale (thousands of People). A dedicated search read model is a later decision with its own trigger, not a Phase 1 need.
 - Someone reading only Identity's search will not find a Person by login email. That is deliberate (decision 20).

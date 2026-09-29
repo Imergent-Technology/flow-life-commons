@@ -36,4 +36,5 @@ enum IdentityEvent: string
     case SessionSecondFactorRequired = 'session.second_factor_required';
     case MfaAdministrativelyReset = 'mfa.administratively_reset';
     case MfaResetFromServer = 'mfa.reset_from_server';
+    case PersonRenamed = 'person.renamed';
 }

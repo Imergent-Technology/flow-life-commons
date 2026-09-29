@@ -19,6 +19,7 @@ use App\Modules\Identity\Application\LoginThrottle;
 use App\Modules\Identity\Application\MultiFactorPolicy;
 use App\Modules\Identity\Application\PasswordResetNotifier;
 use App\Modules\Identity\Application\PasswordResetTokens;
+use App\Modules\Identity\Application\PeopleDirectory;
 use App\Modules\Identity\Application\SessionMaintenance;
 use App\Modules\Identity\Application\TotpAuthenticator;
 use App\Modules\Identity\Application\TotpSecretCipher;
@@ -46,6 +47,7 @@ use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountDirectory;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountSecurityGeneration;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseAccountSessions;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseActiveAccountQuery;
+use App\Modules\Identity\Infrastructure\Persistence\DatabasePeopleDirectory;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseRecoveryCodeRepository;
 use App\Modules\Identity\Infrastructure\Persistence\DatabaseSessionMaintenance;
 use App\Modules\Identity\Infrastructure\Persistence\EloquentAccountInvitationRepository;
@@ -81,6 +83,7 @@ final class IdentityServiceProvider extends ServiceProvider
         // authentication proof was checked against.
         AccountSecurityGeneration::class => DatabaseAccountSecurityGeneration::class,
         AccountDirectory::class => DatabaseAccountDirectory::class,
+        PeopleDirectory::class => DatabasePeopleDirectory::class,
         // A default that grants nothing. The Access module registers its own over this.
         EffectiveCapabilities::class => NoEffectiveCapabilities::class,
         // Multi-factor authentication (ADR 0023). The policy default FAILS CLOSED (everyone is asked for a

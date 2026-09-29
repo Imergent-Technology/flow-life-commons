@@ -25,8 +25,6 @@ use Illuminate\Database\Query\Builder;
  */
 final readonly class DatabaseAccountDirectory implements AccountDirectory
 {
-    private const string ESCAPE = '!';
-
     public function __construct(private ConnectionInterface $database) {}
 
     public function search(AccountSearch $search): ManagedAccountPage
@@ -74,12 +72,12 @@ final readonly class DatabaseAccountDirectory implements AccountDirectory
             $query->where('a.status', $search->status);
         }
 
-        $fragment = $search->query === null ? '' : mb_strtolower(trim($search->query));
+        $fragment = $search->query === null ? '' : trim($search->query);
         if ($fragment !== '') {
-            $like = '%'.str_replace([self::ESCAPE, '%', '_'], [self::ESCAPE.self::ESCAPE, self::ESCAPE.'%', self::ESCAPE.'_'], $fragment).'%';
+            $like = LikeFragment::contains($fragment);
             $query->where(function (Builder $either) use ($like): void {
-                $either->whereRaw('lower(a.email_canonical) like ? escape \''.self::ESCAPE.'\'', [$like])
-                    ->orWhereRaw('lower(p.display_name) like ? escape \''.self::ESCAPE.'\'', [$like]);
+                $either->whereRaw(LikeFragment::predicate('a.email_canonical'), [$like])
+                    ->orWhereRaw(LikeFragment::predicate('p.display_name'), [$like]);
             });
         }
     }

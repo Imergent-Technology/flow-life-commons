@@ -208,7 +208,7 @@ Spans two modules, enforced with a one-way dependency — **Access → Identity,
 
 ## Auditing
 
-`Audit\Application\RecordSecurityEvent` is called synchronously, inside the same transaction as the state change. Minimum events from day one: authentication succeeded/failed, logout, rate limit triggered; password set/changed/reset requested/reset completed; account invited, invitation accepted, account disabled/re-enabled, email changed; role granted/revoked; administrator bootstrap executed. Never record credentials, tokens or hashes. Event types are dotted lowercase names, `noun.verb` (for example `authentication.failed`, `session.absolute_expired`), which Identity and Access define and Audit stores as plain strings.
+`Audit\Application\RecordSecurityEvent` is called synchronously, inside the same transaction as the state change. Minimum events from day one: authentication succeeded/failed, logout, rate limit triggered; password set/changed/reset requested/reset completed; account invited, invitation accepted, account disabled/re-enabled, email changed; role granted/revoked; administrator bootstrap executed. Never record credentials, tokens or hashes. `person.renamed` (ADR 0034) records who corrected whose display name and when, and deliberately not the names, which an append-only log could never anonymise. Event types are dotted lowercase names, `noun.verb` (for example `authentication.failed`, `session.absolute_expired`), which Identity and Access define and Audit stores as plain strings.
 
 ## Laravel mapping
 

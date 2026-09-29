@@ -14,6 +14,13 @@ interface PersonRepository
     public function find(PersonId $id): ?Person;
 
     /**
+     * As find, but takes a row lock (SELECT ... FOR UPDATE) held until the caller's transaction ends and reads the
+     * latest COMMITTED state, so a decision made about the Person cannot be made on a stale name. Inside a
+     * transaction only.
+     */
+    public function findForUpdate(PersonId $id): ?Person;
+
+    /**
      * Every Person among these ids that exists, in one query. An id with no matching Person is
      * simply absent from the result, not an error.
      *

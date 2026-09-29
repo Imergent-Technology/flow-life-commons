@@ -32,3 +32,21 @@ it('accepts multibyte names up to the limit', function () {
 
     expect(Person::create(PersonId::generate(), $name, Identity::now())->displayName)->toBe($name);
 });
+
+it('is renamed into a new value with the same id and creation time', function () {
+    $person = Identity::person('Ada Lovelase');
+    $later = new DateTimeImmutable('2026-09-29 09:30:00', new DateTimeZone('UTC'));
+
+    $renamed = $person->rename('  Ada Lovelace ', $later);
+
+    expect($renamed->displayName)->toBe('Ada Lovelace')
+        ->and($renamed->id->equals($person->id))->toBeTrue()
+        ->and($renamed->createdAt)->toEqual($person->createdAt)
+        ->and($renamed->updatedAt)->toEqual($later)
+        ->and($person->displayName)->toBe('Ada Lovelase'); // immutable: the original is untouched
+});
+
+it('validates a rename exactly as it validates a new name', function (string $name) {
+    Identity::person('Ada')->rename($name, Identity::now());
+})->with(['empty' => '', 'blank' => '   ', 'too long' => str_repeat('x', 256)])
+    ->throws(InvalidArgumentException::class);
