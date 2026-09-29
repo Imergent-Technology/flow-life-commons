@@ -88,14 +88,6 @@ Two decisions constrain later work and belong here rather than only in the ADRs:
 
 *This section was written when the foundation was being built.* It said CRM, volunteer management, events, publishing, workflows and AI features were out of scope so they would not be started early. That was the foundation's scope, not the roadmap: Membership has since been built (above), and the foundation is complete.
 
-Product development is now **Guardian-first**: give Guardians enough genuinely useful capability that the Guardian Council can see why to adopt Commons. The current sequence, with domain ownership in [ADR 0034](../adr/0034-crm-enriches-identity-person.md):
-
-| Milestone | Domain | Status |
-| --- | --- | --- |
-| G1 | CRM / People | Active. Enriches Identity's Person; does not replace it |
-| G2 | Discussions | Planned |
-| G3 | Events | Planned |
-| G4 | Publishing / Announcements | Planned |
-| G5 | Knowledge / Resources | Planned |
+Product development is now **Guardian-first**: give Guardians enough genuinely useful capability that the Guardian Council can see why to adopt Commons. The milestone sequence (G1 CRM / People, then Discussions, Events, Publishing / Announcements and Knowledge / Resources) and its current status live in the [product roadmap](../roadmap.md); the CRM boundary is [ADR 0034](../adr/0034-crm-enriches-identity-person.md).
 
 Commons domains own durable business state and rules; the Guardian Console is the primary rich authoring surface; `/my/`, WordPress and any future client present Commons capabilities and own none. Volunteering (a domain in its own right, not merely a role), workflows and AI features remain unscheduled, and Member-facing expansion is parked.

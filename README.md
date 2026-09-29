@@ -2,7 +2,7 @@
 
 The long-lived organizational platform for Flow Life Global: the authoritative system for organizational data, identity, authorization and workflows, serving members, volunteers and Guardians. WordPress is a presentation adapter; it is never the source of truth.
 
-> **Status: in active development, and live in production.** The foundation and the Identity and Access system are implemented, and the Guardian Console and Platform API run as real, deployed software: production has been live since the first deployment on 2026-09-22 (**v0.1.1** then; currently **v0.3.0**). Not every commit on `main` has been deployed — see the [deployment runbook](docs/runbooks/deployment.md#release-is-not-deployment). Substantial product functionality beyond the foundation is still being built out incrementally; the Membership Foundation is implemented, and the architecture for member-facing access is decided but not yet built ([architecture/member-access.md](docs/architecture/member-access.md)).
+> **Status: in active development, and live in production.** The foundation and the Identity and Access system are implemented, and the Guardian Console and Platform API run as real, deployed software: production has been live since the first deployment on 2026-09-22 (**v0.1.1** then; currently **v0.3.0**). Not every commit on `main` has been deployed — see the [deployment runbook](docs/runbooks/deployment.md#release-is-not-deployment). Substantial product functionality beyond the foundation is still being built out incrementally; the Membership Foundation is implemented, and the Member self-service foundation is built on `main` (further Member expansion is parked; [architecture/member-access.md](docs/architecture/member-access.md)). Current sequencing is in the [product roadmap](docs/roadmap.md).
 
 ## Quick start
 
@@ -37,6 +37,7 @@ scripts/  flow            The ./flow developer CLI
 
 ## Documentation
 
+- [Product roadmap](docs/roadmap.md): where Commons is and what comes next
 - [Architecture charter](docs/architecture/charter.md): direction and the rules everything is measured against
 - [Getting started](docs/development/getting-started.md), [Docker environment](docs/development/docker.md), [testing](docs/development/testing.md), [coding standards](docs/development/coding-standards.md), [Git workflow](docs/development/git-workflow.md)
 - [Architecture Decision Records](docs/adr/README.md)
