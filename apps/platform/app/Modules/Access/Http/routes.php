@@ -13,6 +13,7 @@ use App\Modules\Access\Http\ReissueInvitationController;
 use App\Modules\Access\Http\ResetMfaController;
 use App\Modules\Access\Http\RevokeRoleController;
 use App\Modules\Access\Http\RoleCatalogController;
+use App\Modules\Access\Http\ShowCommonsAccessController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -40,15 +41,22 @@ Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin
     });
 
     Route::middleware('can:identity.invitations.issue')->group(function () use ($account): void {
-        Route::post('invitations', InviteOperatorController::class)->middleware('security.verified')->name('api.v1.admin.invitations.store');
-        Route::post('accounts/{account}/invitation', ReissueInvitationController::class)->where('account', $account)->middleware('security.verified')->name('api.v1.admin.invitations.reissue');
         // Exactly what Str::isUlid accepts, lowercase (Membership's routes.php uses the same pattern and explains
         // why): the first character 0-7, and no i, l, o or u. A looser [0-9a-z]{26} would let a malformed id reach
         // the value object and throw a 500 instead of the route simply not matching (a 404).
+        $person = '[0-7][0-9a-hjkmnp-tv-z]{25}';
+
+        Route::post('invitations', InviteOperatorController::class)->middleware('security.verified')->name('api.v1.admin.invitations.store');
+        Route::post('accounts/{account}/invitation', ReissueInvitationController::class)->where('account', $account)->middleware('security.verified')->name('api.v1.admin.invitations.reissue');
         Route::post('people/{person}/invitation', InviteExistingPersonController::class)
-            ->where('person', '[0-7][0-9a-hjkmnp-tv-z]{25}')
+            ->where('person', $person)
             ->middleware('security.verified')
             ->name('api.v1.admin.people.invitation.store');
+        // A read, so no security.verified: whether a Person may still be invited (ADR 0032, Work Package 5),
+        // composed into the Console's Member detail page alongside — never inside — Membership's own response.
+        Route::get('people/{person}/commons-access', ShowCommonsAccessController::class)
+            ->where('person', $person)
+            ->name('api.v1.admin.people.commons-access.show');
     });
 
     Route::middleware('can:identity.accounts.manage')->group(function () use ($account): void {

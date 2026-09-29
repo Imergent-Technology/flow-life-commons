@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Access\Http;
 
 use App\Modules\Access\Application\AccountView;
+use App\Modules\Access\Application\CommonsAccessView;
 use App\Modules\Access\Application\ManagedAccountsPage;
 use App\Modules\Access\Application\OperatorInvitation;
 use App\Modules\Access\Application\RoleAssignmentView;
@@ -62,6 +63,12 @@ final readonly class AccountPresenter
     public function invitation(OperatorInvitation $invitation): array
     {
         return ['account' => $this->account($invitation->account), 'delivery' => ['status' => $invitation->delivery->value]];
+    }
+
+    /** @return array<string, mixed> */
+    public function commonsAccess(CommonsAccessView $view): array
+    {
+        return ['commons_access' => ['state' => $view->state->value, 'can_invite' => $view->canInvite]];
     }
 
     /**

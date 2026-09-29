@@ -332,6 +332,10 @@ arch('Identity\'s account directory is read only through Access\'s presenting us
         'App\\Modules\\Access\\Application\\ListManagedAccounts',
         'App\\Modules\\Access\\Application\\GrantRoleToAccount',
         'App\\Modules\\Access\\Application\\RevokeRoleFromAccount',
+        // Whether a Person has a Commons Account yet (Work Package 5, ADR 0032), for the Console's
+        // Member detail page — its own route, entirely outside Membership (MembershipDisclosureTest
+        // keeps Membership's own responses free of anything account-shaped, Work Package 7).
+        'App\\Modules\\Access\\Application\\DescribeCommonsAccess',
         'App\\Modules\\Identity\\Infrastructure\\IdentityServiceProvider',
         'App\\Modules\\Identity\\Infrastructure\\Persistence\\DatabaseAccountDirectory',
     ]);

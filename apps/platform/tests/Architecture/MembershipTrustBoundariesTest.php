@@ -189,7 +189,14 @@ it('keeps what Identity\'s public Person-creating ports RETURN inside Identity\'
 });
 
 arch('Membership composes a display name only through Identity\'s Application read port', function () {
-    expect(FindPeople::class)->toOnlyBeUsedIn(['App\\Modules\\Membership\\Http', 'App\\Modules\\Identity']);
+    // Access uses the same batched port for a different reason (DescribeCommonsAccess, Work Package 5): to fail
+    // closed on an unknown Person, exactly the "an admin surface for another module" this port's own doc comment
+    // says it exists for.
+    expect(FindPeople::class)->toOnlyBeUsedIn([
+        'App\\Modules\\Membership\\Http',
+        'App\\Modules\\Access\\Application',
+        'App\\Modules\\Identity',
+    ]);
 });
 
 it('keeps Membership out of Identity\'s, Access\'s and Audit\'s tables', function () {

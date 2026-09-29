@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveMembershipTerm } from '../../admin/membershipTerm.ts'
-import { operator, serveOperator, verificationRequired } from '../../test/admin.ts'
+import { operator, serveOperator, verificationRequired, wire } from '../../test/admin.ts'
 import { expectNoAxeViolations } from '../../test/a11y.ts'
 import {
   GRANT_ID,
@@ -819,5 +819,138 @@ describe('trust boundary', () => {
     expect(screen.getByText('Inactive')).toBeInTheDocument()
     expect(screen.queryByText('Active')).not.toBeInTheDocument()
     expect(screen.queryByText('Open-ended')).not.toBeInTheDocument()
+  })
+})
+
+describe('inviting an existing Person to Commons (ADR 0032, Work Package 5)', () => {
+  const CAN_INVITE = [...MANAGE, 'identity.invitations.issue']
+  const ACCESS = `GET /api/v1/admin/people/${PERSON_ID}/commons-access` as const
+
+  async function openDetailWithAccess(
+    capabilities: string[],
+    commonsAccess: Record<string, unknown>,
+  ) {
+    const api = serveOperator(operator(capabilities))
+    api.on(MEMBER, () => json(wireMember()))
+    api.on(ACCESS, () => json({ commons_access: commonsAccess }))
+    renderApp(DETAIL)
+    await screen.findByRole('heading', { level: 1, name: 'Mia Member' })
+    return api
+  }
+
+  it('offers the invitation when this Person has no Account and the operator may issue one', async () => {
+    await openDetailWithAccess(CAN_INVITE, { state: 'not_invited', can_invite: true })
+
+    // The "Commons Account" heading is the Panel's own chrome, rendered before its self-fetch resolves; the
+    // email field is what actually proves the loaded, no-Account state, so that is what is waited for.
+    expect(await screen.findByLabelText('Email address')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Commons Account' })).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'This person has no Commons Account yet. Invite them to set a password and sign in.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Invite to Commons' })).toBeInTheDocument()
+  })
+
+  it('is absent for an operator who may view and manage membership but not issue invitations', async () => {
+    const api = await openDetail() // the default MANAGE capability set has no identity.invitations.issue
+
+    expect(screen.queryByRole('heading', { name: 'Commons Account' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Invite to Commons' })).not.toBeInTheDocument()
+    // Nothing here asks the commons-access endpoint at all: an operator who could not act on the
+    // answer is never told it, on this page or under it.
+    expect(api.callsTo(ACCESS)).toHaveLength(0)
+  })
+
+  it.each([
+    ['invited', 'Invited: has not set a password yet.'],
+    ['active', 'Has an active Commons Account.'],
+    ['disabled', 'Has a Commons Account, currently disabled.'],
+  ])(
+    'shows the existing Account state (%s) instead of the form, and never an id or email',
+    async (state, line) => {
+      await openDetailWithAccess(CAN_INVITE, { state, can_invite: false })
+
+      expect(await screen.findByText(line)).toBeInTheDocument()
+      expect(screen.queryByLabelText('Email address')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Invite to Commons' })).not.toBeInTheDocument()
+      expect(document.body.textContent).not.toMatch(/@/) // no email address rendered anywhere on the page
+    },
+  )
+
+  it('invites and shows the sent confirmation', async () => {
+    const user = userEvent.setup()
+    const api = await openDetailWithAccess(CAN_INVITE, { state: 'not_invited', can_invite: true })
+    api.on(`POST /api/v1/admin/people/${PERSON_ID}/invitation`, () =>
+      json(
+        {
+          account: wire({ email: 'mia.member@example.org', status: 'invited' }),
+          delivery: { status: 'sent' },
+        },
+        201,
+      ),
+    )
+
+    await user.type(await screen.findByLabelText('Email address'), 'mia.member@example.org')
+    await user.click(screen.getByRole('button', { name: 'Invite to Commons' }))
+
+    expect(await screen.findByText(/Invited\. The invitation went to/)).toBeInTheDocument()
+    expect(screen.getByText('mia.member@example.org')).toBeInTheDocument()
+    expect(api.callsTo(`POST /api/v1/admin/people/${PERSON_ID}/invitation`)[0]?.body).toEqual({
+      email: 'mia.member@example.org',
+    })
+    // The confirmation is not replaced by a background refetch of stale commons-access data: the
+    // section updates itself from the known-true outcome instead of re-asking the server.
+    expect(api.callsTo(ACCESS)).toHaveLength(1)
+  })
+
+  it('says plainly when the Account was created but the email could not be sent', async () => {
+    const user = userEvent.setup()
+    const api = await openDetailWithAccess(CAN_INVITE, { state: 'not_invited', can_invite: true })
+    api.on(`POST /api/v1/admin/people/${PERSON_ID}/invitation`, () =>
+      json({ account: wire({ status: 'invited' }), delivery: { status: 'failed' } }, 201),
+    )
+
+    await user.type(await screen.findByLabelText('Email address'), 'mia.member@example.org')
+    await user.click(screen.getByRole('button', { name: 'Invite to Commons' }))
+
+    expect(
+      await screen.findByText(
+        /The Account was created, but the invitation email could not be sent/,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the address-already-in-use refusal on the field, not as a page-level alert', async () => {
+    const user = userEvent.setup()
+    const api = await openDetailWithAccess(CAN_INVITE, { state: 'not_invited', can_invite: true })
+    api.on(`POST /api/v1/admin/people/${PERSON_ID}/invitation`, () =>
+      json({ message: 'x', code: 'email_already_in_use' }, 409),
+    )
+
+    await user.type(await screen.findByLabelText('Email address'), 'taken@example.org')
+    await user.click(screen.getByRole('button', { name: 'Invite to Commons' }))
+
+    expect(
+      await screen.findByText('An account already uses that email address.'),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Email address')).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('steps up, then waits for a deliberate second press instead of inviting on its own', async () => {
+    const user = userEvent.setup()
+    const api = await openDetailWithAccess(CAN_INVITE, { state: 'not_invited', can_invite: true })
+    api.on(`POST /api/v1/admin/people/${PERSON_ID}/invitation`, () => verificationRequired())
+    api.on('POST /api/v1/security/verify', () => new Response(null, { status: 204 }))
+
+    await user.type(await screen.findByLabelText('Email address'), 'mia.member@example.org')
+    await user.click(screen.getByRole('button', { name: 'Invite to Commons' }))
+    await prove(user)
+
+    expect(
+      await screen.findByText(/press “Invite to Commons” again to continue/),
+    ).toBeInTheDocument()
+    expect(api.callsTo(`POST /api/v1/admin/people/${PERSON_ID}/invitation`)).toHaveLength(1) // not repeated on its own
   })
 })

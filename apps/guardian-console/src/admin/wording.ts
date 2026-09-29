@@ -14,6 +14,8 @@ const conflicts: Record<string, string> = {
   invitation_not_issuable:
     'A new invitation can only be sent while the account is still invited. Reload to see its current state.',
   mfa_not_enrolled: 'That account has no two-step verification to reset.',
+  person_already_has_account:
+    'This person already has a Commons account. Reload to see its current state.',
 }
 
 const refusals: Record<string, string> = {

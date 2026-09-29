@@ -51,6 +51,13 @@ final readonly class DatabaseAccountDirectory implements AccountDirectory
         return $this->hydrate(array_values($rows))[0] ?? null;
     }
 
+    public function findByPersonId(PersonId $personId): ?ManagedAccount
+    {
+        $rows = $this->base()->where('a.person_id', $personId->value)->get()->all();
+
+        return $this->hydrate(array_values($rows))[0] ?? null;
+    }
+
     private function base(): Builder
     {
         return $this->database->table('accounts as a')

@@ -17,6 +17,13 @@ use DateTimeInterface;
  * capability, an Account id kept merely because it exists in the row, or a payment fact (ADR
  * 0029 — Membership carries none to disclose). `granted_by_account_id`/`revoked_by_account_id`
  * are provenance for an operator investigating a grant, not something this Phase-1 surface shows.
+ *
+ * Membership never discloses anything about a Commons Account at all — not even a coarse status —
+ * an invariant `MembershipDisclosureTest` (Work Package 7) checks by scanning every response this
+ * module returns for the literal word "account". Whether a Person has an Account yet is a
+ * different bounded context's fact (`Access\Http\ShowCommonsAccessController`, ADR 0032, Work
+ * Package 5), which the Console composes into the same page without either context's response
+ * knowing about the other's.
  */
 final readonly class MembershipPresenter
 {

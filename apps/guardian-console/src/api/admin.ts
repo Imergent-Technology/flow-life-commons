@@ -307,6 +307,81 @@ export function reissueInvitation(id: string): Promise<Result<InvitationOutcome>
   )
 }
 
+/**
+ * POST /admin/people/{person}/invitation (ADR 0032, Work Package 5): invites a Person who already exists —
+ * most likely one Membership registered with no Account — to a Commons Account. No new Person is created and
+ * no role is assigned; the response is the identical shape `inviteOperator`/`reissueInvitation` return.
+ */
+export function inviteExistingPerson(
+  personId: string,
+  email: string,
+): Promise<Result<InvitationOutcome>> {
+  return invitation(
+    requestJson(
+      {
+        method: 'POST',
+        path: `/api/v1/admin/people/${idPath(personId)}/invitation`,
+        authenticated: true,
+        body: { email },
+      },
+      isInvitationResult,
+    ),
+  )
+}
+
+/**
+ * Whether a Person has a Commons Account yet, and whether `inviteExistingPerson` may still be issued for them
+ * (ADR 0032, Work Package 5). `not_invited` is the one state with no Account counterpart; the rest mirror
+ * `AccountStatus`. Its own endpoint, entirely apart from `api/membership.ts`: Membership's own responses carry
+ * nothing about a Commons Account, ever (a backend test enforces it), so the Console composes the two on the
+ * page rather than looking for this on the Member record.
+ */
+export interface CommonsAccess {
+  state: 'not_invited' | AccountStatus
+  canInvite: boolean
+}
+
+interface WireCommonsAccess {
+  commons_access: { state: CommonsAccess['state']; can_invite: boolean }
+}
+
+function isWireCommonsAccess(value: unknown): value is WireCommonsAccess {
+  if (!isRecord(value)) return false
+  const inner = value.commons_access
+  return (
+    isRecord(inner) &&
+    (inner.state === 'not_invited' ||
+      inner.state === 'invited' ||
+      inner.state === 'active' ||
+      inner.state === 'disabled') &&
+    typeof inner.can_invite === 'boolean'
+  )
+}
+
+/** GET /admin/people/{person}/commons-access. 404 for a Person that does not exist at all. */
+export async function getCommonsAccess(
+  personId: string,
+  signal?: AbortSignal,
+): Promise<Result<CommonsAccess>> {
+  const result = await requestJson(
+    {
+      method: 'GET',
+      path: `/api/v1/admin/people/${idPath(personId)}/commons-access`,
+      authenticated: true,
+      ...(signal && { signal }),
+    },
+    isWireCommonsAccess,
+  )
+  if (!result.ok) return result
+  return {
+    ok: true,
+    value: {
+      state: result.value.commons_access.state,
+      canInvite: result.value.commons_access.can_invite,
+    },
+  }
+}
+
 function mutate(
   method: 'POST' | 'DELETE',
   path: `/api/v1/${string}`,

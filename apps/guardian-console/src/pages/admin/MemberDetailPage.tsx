@@ -5,13 +5,14 @@ import { getMember } from '../../api/membership.ts'
 import { useLoad } from '../../ui/useLoad.ts'
 import { accessThroughLabel, describeMembershipFailure } from '../../admin/wording.ts'
 import { useCurrentAccount } from '../../auth/auth-context.ts'
-import { hasCapability, MEMBERSHIP_MANAGE } from '../../auth/capabilities.ts'
+import { hasCapability, INVITATIONS_ISSUE, MEMBERSHIP_MANAGE } from '../../auth/capabilities.ts'
 import { useBreadcrumbLeaf } from '../../shell/breadcrumb-leaf.ts'
 import { Alert } from '../../ui/Alert.tsx'
 import { Page } from '../../ui/Page.tsx'
 import { PageHeader } from '../../ui/PageHeader.tsx'
 import { SkeletonRegion, SkeletonText } from '../../ui/Skeleton.tsx'
 import { TextLink } from '../../ui/TextLink.tsx'
+import { InviteToCommonsSection } from './InviteToCommonsSection.tsx'
 import { MembershipStateBadge } from './MembershipStateBadge.tsx'
 import { MembershipGrantsSection } from './MembershipGrantsSection.tsx'
 
@@ -68,6 +69,10 @@ export function MemberDetailPage() {
         mayManage={hasCapability(current, MEMBERSHIP_MANAGE)}
         refresh={refresh}
       />
+
+      {hasCapability(current, INVITATIONS_ISSUE) ? (
+        <InviteToCommonsSection personId={member.person.id} />
+      ) : null}
     </Page>
   )
 }

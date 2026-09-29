@@ -1360,6 +1360,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedValidationError'
+  /admin/people/{person}/commons-access:
+    get:
+      operationId: showCommonsAccess
+      summary: Whether a Person has a Commons Account yet
+      description: >-
+        Needs `identity.invitations.issue` — the same capability that governs actually inviting: the
+        one reason to ask this is deciding whether `POST /admin/people/{person}/invitation` may still
+        run for this Person, so nothing here is shown to anyone who could not act on it anyway.
+
+
+        A read, kept entirely apart from Membership's own responses on purpose (Membership discloses
+        nothing about a Commons Account, under any key, whatever the surface — an invariant a test
+        enforces): the Console's Member detail page composes this alongside the Membership record it
+        already shows, not inside it. Never an Account id, an email or a role — the coarse `state`
+        and the one derived fact (`can_invite`) an operator deciding whether to invite this Person
+        actually needs.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.invitations.issue
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+      responses:
+        '200':
+          description: This Person's Commons access.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommonsAccess'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
   /admin/accounts/{account}/disable:
     post:
       operationId: disableAccount
@@ -2338,6 +2386,26 @@ components:
               description: >-
                 Whether the mail system accepted the message. `failed` leaves the Account and its invitation committed;
                 issue a fresh invitation. The secret is never in this response.
+    CommonsAccess:
+      type: object
+      description: >-
+        Whether a Person has a Commons Account yet (ADR 0032, Work Package 5), and the one thing an
+        operator might do about it. Never an Account id, an email or a role.
+      required: [commons_access]
+      properties:
+        commons_access:
+          type: object
+          required: [state, can_invite]
+          properties:
+            state:
+              type: string
+              enum: [not_invited, invited, active, disabled]
+              description: >-
+                `not_invited`: no Commons Account exists yet. The other three mirror the Account's own
+                status once one does.
+            can_invite:
+              type: boolean
+              description: True exactly when `state` is `not_invited`. Derived, not an independent choice.
     LoginRequest:
       type: object
       required: [email, password]
