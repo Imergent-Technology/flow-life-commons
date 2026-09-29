@@ -1,6 +1,6 @@
 import { useCurrentAccount } from '../auth/auth-context.ts'
-import { MfaSection } from '../pages/MfaSection.tsx'
 import { ChangePasswordPanel } from '../ui/ChangePasswordPanel.tsx'
+import { MfaSection } from '../ui/MfaSection.tsx'
 import { Page } from '../ui/Page.tsx'
 import { PageHeader } from '../ui/PageHeader.tsx'
 import { Panel } from '../ui/Panel.tsx'

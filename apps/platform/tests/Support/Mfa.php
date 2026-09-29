@@ -109,6 +109,24 @@ final class Mfa
     }
 
     /**
+     * An ordinary Account signed in through the real two steps: NO role, so NO `console.access` — its
+     * authenticator exists only because it enrolled one, not because the Console policy required it
+     * (ADR 0023, `ConsoleMultiFactorPolicy`). Proves `mfa/recovery-codes` and `mfa/authenticator` are
+     * authenticated self-service (`auth:web` alone), not accidentally gated on Console access.
+     *
+     * @return array{Console, Account, array{secret: string, codes: list<string>}}
+     */
+    public static function signedInMember(string $email = 'ada@example.org', string $secret = Totp::SECRET): array
+    {
+        $account = Identity::savedActiveAccount($email); // holds no role: grants nothing, requires nothing
+        $factor = self::enroll($account, $secret);
+        $console = new Console;
+        $console->loginWithMfa($email, Identity::PASSWORD, $secret)->assertOk();
+
+        return [$console, $account, $factor];
+    }
+
+    /**
      * An operator: an active Account holding the administrator role, with an authenticator, signed in through the
      * real two steps. Their session was established WITH a second factor, so it is freshly verified.
      *

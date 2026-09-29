@@ -8,17 +8,17 @@ import {
   type FreshProof,
 } from '../api/auth.ts'
 import { useAuth, useCurrentAccount } from '../auth/auth-context.ts'
-import { Alert } from '../ui/Alert.tsx'
-import { Button } from '../ui/Button.tsx'
-import { AuthenticatorSetupDetails } from '../ui/AuthenticatorSetup.tsx'
-import { Panel } from '../ui/Panel.tsx'
-import { describeFailure, type Problem } from '../ui/problem.ts'
-import { ProofForm } from '../ui/ProofForm.tsx'
-import { Property, PropertyList } from '../ui/PropertyList.tsx'
-import { RecoveryCodes } from '../ui/RecoveryCodes.tsx'
-import { proofFrom, type FactorMode } from '../ui/factor.ts'
-import { SubmitButton } from '../ui/SubmitButton.tsx'
-import { TotpCodeField } from '../ui/TotpCodeField.tsx'
+import { Alert } from './Alert.tsx'
+import { AuthenticatorSetupDetails } from './AuthenticatorSetup.tsx'
+import { Button } from './Button.tsx'
+import { proofFrom, type FactorMode } from './factor.ts'
+import { Panel } from './Panel.tsx'
+import { describeFailure, type Problem } from './problem.ts'
+import { ProofForm } from './ProofForm.tsx'
+import { Property, PropertyList } from './PropertyList.tsx'
+import { RecoveryCodes } from './RecoveryCodes.tsx'
+import { SubmitButton } from './SubmitButton.tsx'
+import { TotpCodeField } from './TotpCodeField.tsx'
 
 type PanelState =
   | { kind: 'closed' }
@@ -36,9 +36,14 @@ type PanelState =
  * Nothing about the authenticator itself is shown: not its secret, not a code. A new secret and new recovery
  * codes are shown once, when generated, and held only in this component's state.
  *
- * There is no "not set up" state here, on purpose: this page is behind Console access, Console access needs a
- * second factor, and a sign-in (or a session that never proved one) cannot get past that without enrolling
- * first (ADR 0023). First-time enrolment is part of signing in (MfaEnrollment), not of this page.
+ * Shared by the Console's `AccountSecurityPage` and the Member `SecurityPage` alike (`ui/`, not `pages/`, so
+ * the Member surface may import it without crossing `src/member/import-boundary.test.ts`): every operation it
+ * calls (`mfa/recovery-codes`, `mfa/authenticator(/confirm)`) needs only `auth:web`, not `console.access`.
+ *
+ * There is no "not set up" state here, on purpose: EVERY caller renders this only once `current.mfa.enrolled`
+ * is already true (an Account reaching the Console always has one, since Console access needs a second
+ * factor, ADR 0023; a Member may or may not, and `SecurityPage` checks first). First-time enrolment is part
+ * of signing in (`MfaEnrollment`), not of this component, for either surface.
  */
 export function MfaSection() {
   const current = useCurrentAccount()

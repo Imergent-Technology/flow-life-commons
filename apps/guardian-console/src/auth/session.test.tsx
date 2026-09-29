@@ -101,6 +101,18 @@ describe('resolving who is signed in', () => {
     ).toBeVisible()
   })
 
+  it('names Flow Life Commons, not "the Console", on an unreachable API: this screen is shown on /my/ too', async () => {
+    api
+      .withSession(account, { email: EMAIL, password: PASSWORD })
+      .on('GET /api/v1/me', () => json({ message: 'down' }, 503))
+    api.install()
+    renderApp('/my')
+
+    expect(await screen.findByRole('heading', { name: 'Service unavailable' })).toBeVisible()
+    expect(screen.getByText(/Flow Life Commons could not reach the platform/)).toBeVisible()
+    expect(screen.queryByText(/the Console could not reach/i)).not.toBeInTheDocument()
+  })
+
   it('never polls: hours pass with no further requests', async () => {
     // Fake timers go in BEFORE the app renders, so any interval or timeout it creates is one we control.
     // (Installed afterwards they would never see a timer the app had already started.)

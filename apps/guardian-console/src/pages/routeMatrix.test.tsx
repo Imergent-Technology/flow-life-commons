@@ -148,3 +148,33 @@ describe('every full-page screen outside the shell', () => {
     await expectNoAxeViolations()
   })
 })
+
+describe('NotFoundPage sends each Account home to its OWN surface', () => {
+  it('offers a Guardian the Console, neutrally worded', async () => {
+    serveOperator(accountFor({ capabilities: ['console.access'] }))
+    renderApp('/no/such/page')
+
+    await screen.findByRole('heading', { level: 1, name: 'Page not found' })
+    const link = screen.getByRole('link', { name: 'Back to home' })
+    expect(link).toHaveAttribute('href', '/')
+    expect(screen.queryByText('Back to the Console')).not.toBeInTheDocument()
+  })
+
+  it('offers a non-Console Account /my/, not the Console it cannot use', async () => {
+    const api = new FakeApi()
+    api.on('GET /api/v1/me', () => json(accountFor({ capabilities: [] })))
+    api.on(
+      'GET /api/v1/health',
+      json({ status: 'ok', service: 's', api_version: 'v1', checks: {} }),
+    )
+    api.on(
+      'GET /api/v1/my/membership',
+      json({ active: false, current_access_ends_at: null, open_ended: false, grants: [] }),
+    )
+    api.install()
+    renderApp('/my/no/such/page')
+
+    await screen.findByRole('heading', { level: 1, name: 'Page not found' })
+    expect(screen.getByRole('link', { name: 'Back to home' })).toHaveAttribute('href', '/my')
+  })
+})

@@ -1,9 +1,9 @@
-import { Link, Outlet, useLocation } from 'react-router'
+import { Link, matchPath, Outlet, useLocation } from 'react-router'
 
 import { useCurrentAccount } from '../auth/auth-context.ts'
-import { Badge, Wordmark } from '../ui/Brand.tsx'
 import { AccountMenu } from '../ui/AccountMenu.tsx'
 import { Alert } from '../ui/Alert.tsx'
+import { Badge, Wordmark } from '../ui/Brand.tsx'
 import { cn, focusRing } from '../ui/cn.ts'
 import { useSignOut } from '../ui/useSignOut.ts'
 import { memberNavigation } from './navigation.ts'
@@ -54,15 +54,19 @@ export function MemberShell() {
         </div>
         <nav aria-label="Member" className="flex gap-1">
           {memberNavigation.map((item) => {
-            const current = pathname === item.to
+            // The router's own matcher (`shell/navigation.ts` uses the same one), not a hand-rolled
+            // `pathname === item.to`: its compiled pattern accepts an optional trailing slash, so `/my`
+            // still reads current at `/my/` — unlike a bare string comparison, which a trailing slash
+            // (however it got typed or landed on) would silently defeat.
+            const isCurrent = matchPath({ path: item.to, end: true }, pathname) !== null
             return (
               <Link
                 key={item.to}
                 to={item.to}
-                aria-current={current ? 'page' : undefined}
+                aria-current={isCurrent ? 'page' : undefined}
                 className={cn(
                   'rounded-sm px-2.5 py-1.5 text-label font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
-                  current && 'bg-nav-active text-nav-active-foreground hover:bg-nav-active',
+                  isCurrent && 'bg-nav-active text-nav-active-foreground hover:bg-nav-active',
                   focusRing,
                 )}
               >

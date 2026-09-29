@@ -55,6 +55,16 @@ describe('the Member frame', () => {
     expect(screen.getByRole('link', { name: 'Home' })).not.toHaveAttribute('aria-current')
   })
 
+  it('still marks Home current at /my/, the trailing-slash form of its own destination', async () => {
+    const { api } = memberApi()
+    api.install()
+    renderApp('/my/')
+
+    await screen.findByRole('heading', { level: 1, name: 'Home' })
+    expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Membership' })).not.toHaveAttribute('aria-current')
+  })
+
   it('moves between destinations by clicking the nav', async () => {
     const { api } = memberApi()
     api.install()

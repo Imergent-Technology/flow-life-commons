@@ -61,6 +61,17 @@ final class E2eAccountSeeder extends Seeder
 
     public const string NO_ACCESS_PASSWORD = 'e2e-noaccess-password-not-a-secret';
 
+    /**
+     * The Member self-service surface's own password-change journey (e2e/member.spec.ts), reset on every
+     * run like `UI_CHANGE_*` is for the Console's own change-password journey. It needs its own Account,
+     * separate from `NO_ACCESS_*`: changing a password ends every OTHER session on that Account, and
+     * `NO_ACCESS_*` is read by several spec files in parallel that must never have their sessions cut out
+     * from under them. No authenticator: the test it serves exercises an unenrolled Account.
+     */
+    public const string MEMBER_CHANGE_EMAIL = 'e2e.member.change@example.org';
+
+    public const string MEMBER_CHANGE_PASSWORD = 'e2e-member-change-password-not-a-secret';
+
     public const string UI_INVITEE_EMAIL = 'e2e.ui.invitee@example.org';
 
     public const string UI_INVITATION_TOKEN = 'e2e-ui-invitation-token-not-a-secret-000000';
@@ -258,6 +269,9 @@ final class E2eAccountSeeder extends Seeder
         // Signed in, but with nothing that grants Console access: the "forbidden" experience.
         $this->activeAccount($accounts, $people, $hasher, $now, self::NO_ACCESS_EMAIL, 'E2E No Access', self::NO_ACCESS_PASSWORD);
         $this->activeAccount($accounts, $people, $hasher, $now, self::SESSION_EMAIL, 'E2E Session', self::SESSION_PASSWORD);
+        // The Member surface's OWN password-change journey: never read by any other spec, so changing
+        // its password (which ends every other session on the Account) races no one.
+        $this->activeAccount($accounts, $people, $hasher, $now, self::MEMBER_CHANGE_EMAIL, 'E2E Member Change', self::MEMBER_CHANGE_PASSWORD);
 
         // Two pending invitations for the two ways a person reaches the acceptance page: typing the token,
         // and following a link that carries it in the fragment. Console users once they accept.

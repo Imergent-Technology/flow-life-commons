@@ -56,9 +56,18 @@ describe('safeReturnPath', () => {
 })
 
 describe('returnPathFrom', () => {
-  it('honors a safe internal path this Account can actually use', () => {
+  it('honors any safe internal path for console.access, unrestricted', () => {
     expect(returnPathFrom({ from: '/some/console/route' }, guardian)).toBe('/some/console/route')
-    expect(returnPathFrom({ from: '/my/membership' }, member)).toBe('/my/membership')
+    expect(returnPathFrom({ from: '/account/security' }, guardian)).toBe('/account/security')
+    expect(returnPathFrom({ from: '/admin/accounts' }, guardian)).toBe('/admin/accounts')
+    // Guardians may also use the Member surface as a return path: holding console.access refuses it nothing.
+    expect(returnPathFrom({ from: '/my/membership' }, guardian)).toBe('/my/membership')
+  })
+
+  it('honors /my and /my/... for an Account without console.access: its own surface, in full', () => {
+    for (const from of ['/my', '/my/', '/my/membership', '/my/security']) {
+      expect(returnPathFrom({ from }, member)).toBe(from)
+    }
   })
 
   it('falls back to this Account’s own default surface with no explicit request', () => {
@@ -74,16 +83,24 @@ describe('returnPathFrom', () => {
     expect(returnPathFrom({ from: 'https://evil.example' }, member)).toBe('/my')
   })
 
-  it('never sends an Account without console.access to a Guardian-only path: it falls back instead', () => {
-    expect(returnPathFrom({ from: '/account/security' }, member)).toBe('/my')
-    expect(returnPathFrom({ from: '/admin/accounts' }, member)).toBe('/my')
-    expect(returnPathFrom({ from: '/admin/accounts/01J0' }, member)).toBe('/my')
-    // A Guardian, who CAN use them, still gets them honored.
-    expect(returnPathFrom({ from: '/account/security' }, guardian)).toBe('/account/security')
-    expect(returnPathFrom({ from: '/admin/accounts' }, guardian)).toBe('/admin/accounts')
-  })
-
-  it('does not treat a merely similar path as Guardian-only: only the exact prefix counts', () => {
-    expect(returnPathFrom({ from: '/administrivia' }, member)).toBe('/administrivia')
-  })
+  it(
+    'falls back to /my for an Account without console.access: an ALLOW-list of its own surface, not a ' +
+      'deny-list of Guardian routes — so it need not name every Console route, present or future',
+    () => {
+      for (const from of [
+        '/account/security',
+        '/admin',
+        '/admin/accounts',
+        '/admin/accounts/01J0',
+        '/admin?x=1',
+        '/ADMIN/accounts', // React Router matches case-insensitively; this module must not assume otherwise
+        '/administrivia', // a merely similar path is not Guardian-only, but it is also not /my: same fallback
+        '/people', // no route exists yet, and this module must not need to know that
+        '/discussions',
+        '/some-future-console-route',
+      ]) {
+        expect(returnPathFrom({ from }, member)).toBe('/my')
+      }
+    },
+  )
 })

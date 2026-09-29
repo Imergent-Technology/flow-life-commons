@@ -331,6 +331,45 @@ it('gives a password-only session no way to replace or regenerate anything', fun
     expect(Mfa::factorRow($account))->toBeNull();
 });
 
+/*
+ * Pinned for the Member self-service surface (ADR 0032, Work Package 4, `/my/security`): these two routes
+ * are authenticated self-service (`auth:web` alone), never Guardian-only, whether or not the Account holds
+ * `console.access`. Nothing above this point exercises an enrolled Account that holds NO role at all —
+ * `Mfa::signedIn()` always grants `Role::Guardian` first — so this is the one case that actually pins it.
+ */
+it('is intentionally authenticated self-service, not accidentally Guardian-only: an enrolled, role-less Account manages its own MFA', function () {
+    [$console, $account, $factor] = Mfa::signedInMember();
+    expect(DB::table('role_assignments')->where('person_id', $account->personId->value)->exists())->toBeFalse();
+
+    // Regenerate recovery codes: the same fresh-proof success `ManagementTest`'s Guardian cases get.
+    $codes = Mfa::texts(
+        $console->post('/api/v1/mfa/recovery-codes', proof($factor['secret']))->assertOk()->json('recovery_codes'),
+    );
+    expect($codes)->toHaveCount(10);
+    expect(Mfa::remainingCodes($account))->toBe(10);
+
+    // Begin an authenticator replacement: fresh proof again, a new pending secret back, the same shape.
+    $console->post('/api/v1/mfa/authenticator', proof($factor['secret']))
+        ->assertOk()
+        ->assertJsonStructure(['secret', 'otpauth_uri', 'expires_at']);
+
+    // No authorization was added or weakened to make either call succeed: still no role, checked again.
+    expect(DB::table('role_assignments')->where('person_id', $account->personId->value)->exists())->toBeFalse();
+});
+
+it('still gives an UNENROLLED, role-less Account no first-time MFA seam of its own', function () {
+    $email = 'e2e.pin.unenrolled@example.org';
+    $account = Identity::savedActiveAccount($email);
+    $console = new Console;
+
+    // 200, not 202/"challenge": this sign-in never asks it to enrol. First-time enrolment stays tied to
+    // gaining console.access (SecondFactorRequirement/ConsoleMultiFactorPolicy, ADR 0023), not to reaching
+    // the Member surface — the same invariant `/my/security` (`SecurityPage.tsx`) relies on to show no
+    // "enable two-step verification" control for an unenrolled Account.
+    $console->login($email, Identity::PASSWORD)->assertOk();
+    expect(Mfa::isEnrolled($account))->toBeFalse();
+});
+
 it('gives no way to switch multi-factor authentication off', function () {
     // The absence of a route is the property: there is no disable, remove, reset or delete endpoint, and
     // nothing under /mfa or /security accepts anything but POST. This is about a person's OWN factor: the

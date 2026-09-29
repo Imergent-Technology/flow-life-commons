@@ -4,7 +4,7 @@
 
 import type { CurrentAccount } from '../api/auth.ts'
 import { CONSOLE_ACCESS, hasCapability } from './capabilities.ts'
-import { defaultDestination } from './destination.ts'
+import { defaultDestination, MEMBER_HOME } from './destination.ts'
 
 const HOME = '/'
 
@@ -18,12 +18,6 @@ const EXCLUDED = [
   '/reset-password',
   '/accept-invitation',
 ]
-
-// Guardian-only prefixes (ADR 0032): honoring one of these as a return path for an Account that cannot
-// enter the Console would only bounce it through Forbidden. Not a security boundary of its own —
-// RequireConsoleAccess and RequireCapability refuse these regardless of what this module decides — only
-// which DEFAULT this function chooses when the requested path is not one this Account can actually use.
-const CONSOLE_ONLY = ['/account/security', '/admin']
 
 export function safeReturnPath(candidate: unknown): string {
   if (typeof candidate !== 'string' || candidate.length > 2048) return HOME
@@ -50,8 +44,15 @@ export function safeReturnPath(candidate: unknown): string {
 
 /**
  * The return path carried in router state (`{ from }`), validated, honored only when this Account can
- * actually land on it. Anything else — no explicit request, an unsafe one, or a Guardian-only path for
- * an Account without `console.access` — falls back to this Account's own default surface.
+ * actually land on it. Anything else — no explicit request, an unsafe one, or (for an Account without
+ * `console.access`) a path outside its own `/my` surface — falls back to this Account's own default
+ * surface (ADR 0032).
+ *
+ * `console.access` honors any safe internal path unrestricted, exactly as before this Account-aware
+ * check existed: the Console's own route inventory keeps growing, and this module has no business
+ * naming each new one. An Account WITHOUT it is trusted with `/my` and `/my/...` alone — an allow-list
+ * of the one surface it actually has, rather than a deny-list of Guardian routes that would otherwise
+ * need a new entry every time a Console-only route is added.
  */
 export function returnPathFrom(state: unknown, current: CurrentAccount): string {
   const requested =
@@ -62,10 +63,8 @@ export function returnPathFrom(state: unknown, current: CurrentAccount): string 
   // either way, there is nothing specific to honor, so this Account's own default surface decides.
   if (requested === null || requested === HOME) return defaultDestination(current)
 
-  const consoleOnly = CONSOLE_ONLY.some(
-    (prefix) => requested === prefix || requested.startsWith(`${prefix}/`),
-  )
-  if (consoleOnly && !hasCapability(current, CONSOLE_ACCESS)) return defaultDestination(current)
+  if (hasCapability(current, CONSOLE_ACCESS)) return requested
 
-  return requested
+  const isMemberPath = requested === MEMBER_HOME || requested.startsWith(`${MEMBER_HOME}/`)
+  return isMemberPath ? requested : defaultDestination(current)
 }
