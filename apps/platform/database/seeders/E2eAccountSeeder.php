@@ -72,6 +72,20 @@ final class E2eAccountSeeder extends Seeder
 
     public const string MEMBER_CHANGE_PASSWORD = 'e2e-member-change-password-not-a-secret';
 
+    /**
+     * The member-foundation journey's OWN Account (e2e/member-foundation.spec.ts, Journey B): active, a known
+     * password, NO console.access and NO authenticator — a password-only session is legitimate for it exactly
+     * as `NO_ACCESS_*`'s and `SESSION_*`'s are. Unlike those two, this journey GRANTS it console.access mid-test
+     * and enrols an authenticator, which is why it needs its own Account rather than sharing one of theirs:
+     * `NO_ACCESS_*` and `SESSION_*` are read, unenrolled and without Console access, by several other spec files
+     * in parallel, and this journey's own mutations (a role assignment, then an authenticator) must not reach them.
+     * No TOTP secret constant: Journey B's authenticator is enrolled live in the browser, the same way any
+     * first-time Console enrolment is (its secret comes from the server at that moment, not from a fixture).
+     */
+    public const string PROMOTION_EMAIL = 'e2e.member.promotion@example.org';
+
+    public const string PROMOTION_PASSWORD = 'e2e-member-promotion-password-not-a-secret';
+
     public const string UI_INVITEE_EMAIL = 'e2e.ui.invitee@example.org';
 
     public const string UI_INVITATION_TOKEN = 'e2e-ui-invitation-token-not-a-secret-000000';
@@ -272,6 +286,9 @@ final class E2eAccountSeeder extends Seeder
         // The Member surface's OWN password-change journey: never read by any other spec, so changing
         // its password (which ends every other session on the Account) races no one.
         $this->activeAccount($accounts, $people, $hasher, $now, self::MEMBER_CHANGE_EMAIL, 'E2E Member Change', self::MEMBER_CHANGE_PASSWORD);
+        // The member-foundation journey's OWN Account (Journey B): also never read by any other spec, for the
+        // same reason MEMBER_CHANGE isn't — this one's mutations are bigger still (a role grant, then MFA).
+        $this->activeAccount($accounts, $people, $hasher, $now, self::PROMOTION_EMAIL, 'E2E Member Promotion', self::PROMOTION_PASSWORD);
 
         // Two pending invitations for the two ways a person reaches the acceptance page: typing the token,
         // and following a link that carries it in the fragment. Console users once they accept.
