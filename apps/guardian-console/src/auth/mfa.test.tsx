@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -523,11 +523,23 @@ describe('enrolling an authenticator on first sign-in', () => {
     await passwordStep(user)
     await user.click(await screen.findByRole('button', { name: 'Set up authenticator' }))
     await screen.findByText('JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP')
+    // The first key is not a "new" one: nothing to announce, and the older-entry advice is standing text.
+    expect(screen.queryByText(/A new setup key is ready/)).not.toBeInTheDocument()
+    expect(screen.getByText(/delete that older entry/)).toBeVisible()
+    await user.type(screen.getByLabelText('Authentication code'), '123456')
 
     await user.click(screen.getByRole('button', { name: 'Start over with a new key' }))
 
     expect(await screen.findByText('MFRG GZDF MZTW Q2LK NNWG 23TP OBYX E43U')).toBeVisible()
     expect(screen.queryByText('JBSW Y3DP EHPK 3PXP JBSW Y3DP EHPK 3PXP')).not.toBeInTheDocument()
+    // The swap is not silent, a code typed for the replaced key is gone, and the keyboard keeps its place.
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /A new setup key is ready.*Delete the earlier entry/,
+    )
+    expect(screen.getByLabelText('Authentication code')).toHaveValue('')
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Start over with a new key' })).toHaveFocus()
+    })
   })
 
   it('goes back to the password, with a message, if the sign-in expired before setup', async () => {

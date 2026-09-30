@@ -24,15 +24,23 @@ function clockTime(iso: string): string | null {
  * The key is shown in groups of four for reading but COPIED as the canonical ungrouped secret, and only when the
  * person asks: the copy is a clipboard write and nothing else (no request, no storage, no log).
  */
-export function AuthenticatorSetupDetails({ setup }: { setup: AuthenticatorSetup }) {
+export function AuthenticatorSetupDetails({
+  setup,
+  notice = '',
+}: {
+  setup: AuthenticatorSetup
+  /** Said in the same live region as the copy note, for something the page just did (a new key replacing the old). */
+  notice?: string
+}) {
   // Remembers WHICH key was copied, so a "copied" note never outlives the key it was about (a restart makes a new one).
   const [copy, setCopy] = useState<{ secret: string; ok: boolean } | null>(null)
-  const note =
+  const copyNote =
     copy?.secret !== setup.secret
       ? ''
       : copy.ok
         ? 'Setup key copied.'
         : 'Could not copy. Select the key and copy it by hand.'
+  const note = copyNote === '' ? notice : copyNote
   const expires = clockTime(setup.expiresAt)
 
   async function copyKey() {
@@ -79,7 +87,8 @@ export function AuthenticatorSetupDetails({ setup }: { setup: AuthenticatorSetup
       </ol>
       <p className="text-meta text-muted-foreground">
         {expires === null ? '' : `This setup key expires at ${expires}. `}
-        This key is shown once and cannot be retrieved later.
+        This key is shown once and cannot be retrieved later. If your app already lists this account
+        from an earlier attempt, delete that older entry: only the key on this page will work.
       </p>
     </div>
   )

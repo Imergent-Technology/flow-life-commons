@@ -1,4 +1,4 @@
-import { useRef, useState, type SyntheticEvent } from 'react'
+import { useEffect, useRef, useState, type SyntheticEvent } from 'react'
 
 import { beginEnrollment, confirmEnrollment, type AuthenticatorSetup } from '../api/auth.ts'
 import { useAuth } from '../auth/auth-context.ts'
@@ -31,17 +31,39 @@ export function MfaEnrollment() {
   const [pending, setPending] = useState(false)
   const [problem, setProblem] = useState<(Problem & { attempt: number }) | null>(null)
   const codeRef = useRef<HTMLInputElement>(null)
+  const startOverRef = useRef<HTMLButtonElement>(null)
+  const [notice, setNotice] = useState('')
+  const refocusStartOver = useRef(false)
+
+  // A restart disables its own button while the new key is fetched, which drops the keyboard's place. Give it back
+  // once, when that work is over, and only then: never after some later refusal, which puts focus on the code field.
+  useEffect(() => {
+    if (!pending && refocusStartOver.current) {
+      refocusStartOver.current = false
+      startOverRef.current?.focus()
+    }
+  }, [pending])
 
   const fail = (problem: Problem) => {
     setProblem((previous) => ({ ...problem, attempt: (previous?.attempt ?? 0) + 1 }))
   }
 
-  async function begin() {
+  async function begin(restart = false) {
     setPending(true)
     const result = await beginEnrollment()
     setPending(false)
     if (result.ok) {
       setProblem(null)
+      if (restart) {
+        // A code typed for the key being replaced means nothing now, and the swap must not be silent.
+        setCode('')
+        setNotice(
+          'A new setup key is ready. Delete the earlier entry from your authenticator app; only this one will work.',
+        )
+        refocusStartOver.current = true
+      } else {
+        setNotice('')
+      }
       setPhase({ kind: 'scan', setup: result.value })
       return
     }
@@ -116,7 +138,7 @@ export function MfaEnrollment() {
           }}
           className="flex flex-col gap-4"
         >
-          <AuthenticatorSetupDetails setup={phase.setup} />
+          <AuthenticatorSetupDetails setup={phase.setup} notice={notice} />
           <TotpCodeField
             ref={codeRef}
             label="Authentication code"
@@ -128,11 +150,12 @@ export function MfaEnrollment() {
             Verify and continue
           </SubmitButton>
           <Button
+            ref={startOverRef}
             variant="ghost"
             size="sm"
             disabled={pending}
             onClick={() => {
-              void begin()
+              void begin(true)
             }}
             className="self-start"
           >

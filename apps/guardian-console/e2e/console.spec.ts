@@ -311,7 +311,7 @@ test.describe('accepting an invitation', () => {
     await expect(
       page.getByRole('img', { name: 'QR code for your authenticator app' }),
     ).toBeVisible()
-    const secret = ((await page.locator('code').first().textContent()) ?? '').replace(/\s/g, '')
+    let secret = ((await page.locator('code').first().textContent()) ?? '').replace(/\s/g, '')
     expect(secret).toMatch(/^[A-Z2-7]{32}$/)
     expect(secret).toBe(issued.secret) // the key on the page is the one the server issued
     await expect(page.getByText(/This setup key expires at/)).toBeVisible()
@@ -333,6 +333,19 @@ test.describe('accepting an invitation', () => {
       /The code is not valid/,
     )
     expect(await meStatus(page)).toBe(401)
+
+    // Start over: a new key replaces the old one without silence. A code typed for the replaced key is gone, the change
+    // is announced, and the keyboard is given its place back (a disabled button drops focus in a real browser).
+    await page.getByLabel('Authentication code').fill('123456')
+    await page.getByRole('button', { name: 'Start over with a new key' }).click()
+    await expect(
+      page.getByRole('status').filter({ hasText: 'A new setup key is ready.' }),
+    ).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Start over with a new key' })).toBeFocused()
+    await expect(page.getByLabel('Authentication code')).toHaveValue('')
+    const restarted = ((await page.locator('code').first().textContent()) ?? '').replace(/\s/g, '')
+    expect(restarted).not.toBe(secret)
+    secret = restarted
 
     // A valid code from the secret enrols it, and the recovery codes appear ONCE.
     const valid = await nextCode(secret)
