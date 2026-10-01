@@ -19,7 +19,7 @@ enum Role: string
     /** Resolves to EVERY capability, present and future, and is the only role that does. */
     case PlatformAdministrator = 'platform_administrator';
 
-    /** The Console's ordinary user: may use it, and nothing more yet. */
+    /** The Console's ordinary user: may use it, and see and manage People (CRM). Nothing more yet. */
     case Guardian = 'guardian';
 
     /**
@@ -31,7 +31,8 @@ enum Role: string
             // Derived from the catalog, not listed, so adding a capability grants it to the
             // administrator without editing this definition. Nothing else works this way.
             self::PlatformAdministrator => Capability::cases(),
-            self::Guardian => [Capability::ConsoleAccess],
+            // The Guardian's CRM access is an accepted owner decision (ADR 0034), not a consequence of Console access.
+            self::Guardian => [Capability::ConsoleAccess, Capability::ViewPeople, Capability::ManagePeople],
         };
     }
 
@@ -48,7 +49,7 @@ enum Role: string
     {
         return match ($this) {
             self::PlatformAdministrator => 'Everything the platform can do, including administering other people\'s access.',
-            self::Guardian => 'May use the Guardian Console. Nothing more yet.',
+            self::Guardian => 'May use the Guardian Console and see and manage People (contacts, tags). Nothing more yet.',
         };
     }
 

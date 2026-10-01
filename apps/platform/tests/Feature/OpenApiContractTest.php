@@ -172,7 +172,8 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    expect($checked)->toBe(17);
+    // 17 administration operations before the People directory (ADR 0034) added 12.
+    expect($checked)->toBe(29);
 });
 
 it('never lets an administration schema name a secret', function () {
@@ -181,6 +182,8 @@ it('never lets an administration schema name a secret', function () {
     $names = [
         'ManagedAccount', 'ManagedAccountPage', 'RoleCatalog', 'InvitationResult', 'InviteOperatorRequest', 'GrantRoleRequest',
         'Member', 'MemberPage', 'MembershipGrant', 'MembershipGrantHistoryEntry', 'RegisterMemberRequest', 'GrantMembershipRequest',
+        'PersonRef', 'ContactProfile', 'ContactMethod', 'ContactTagRef', 'ContactTag', 'ContactTagList', 'PersonTagList', 'PersonRecord',
+        'PersonUpdate', 'PersonListing', 'PersonListingPage', 'NewContactMethod', 'RegisterPersonRequest', 'UpdatePersonRequest', 'PossibleDuplicate',
     ];
     $text = strtolower(json_encode(array_intersect_key($components['schemas'], array_flip($names)), JSON_THROW_ON_ERROR));
     $text = str_replace('never a password', '', $text); // the description says what is NOT there

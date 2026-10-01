@@ -15,11 +15,12 @@ Data mirrored to other systems (for example a WordPress user display name) is a 
 
 ## Current state
 
-Platform-owned tables exist for Identity, Access, Audit and Membership ([module map](module-map.md)):
+Platform-owned tables exist for Identity, Access, Audit, Membership and Crm ([module map](module-map.md)):
 
 - **Identity**: `people`, `accounts`, `account_invitations`, `sessions`, `account_totp_factors`, `account_recovery_codes`, `password_reset_tokens`.
 - **Access**: `role_assignments`.
 - **Audit**: `security_events`.
+- **Crm**: `contact_profiles`, `contact_methods`, `contact_tags`, `contact_tag_assignments` (ADR 0034). Keyed by `person_id` with `RESTRICT` cross-module foreign keys; `*_by_account_id` columns are provenance with none. Sparse: a Person has a `contact_profiles` row only once there is CRM data to hold, and it doubles as the per-Person write lock. No Account, role, Membership or status column.
 - **Membership**: `membership_grants`. Backend, an operator-only `/admin/members` HTTP surface (Work Package 5), and a Guardian Console administration UI (Work Package 6).
 
 Platform aggregates use application-generated ULID primary keys, per the principle above. Framework infrastructure created by Laravel's stock migrations — `migrations`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs` — keeps Laravel's default keys because it is not platform aggregate data. There is deliberately no `users` table: Identity's `people`/`accounts` split is the human registry ([authorization model](../security/authorization-model.md)).
@@ -42,4 +43,4 @@ Platform aggregates use application-generated ULID primary keys, per the princip
 
 - Soft deletes, retention and anonymisation policy for personal data. Anonymisation is designed as acting on the Person while preserving referential history, but the policy itself is undecided.
 - How the audit trail is protected from tampering by the modules it audits; append-only is currently a code convention, since triggers are barred by the portability rule.
-- ~~Contact data for People without an Account.~~ **Answered by [ADR 0034](../adr/0034-crm-enriches-identity-person.md):** CRM owns it, keyed by `person_id`; Person stays thin and carries no email. Contact methods are not unique across People, so matching a payment-provider email to a Person is possible but must fail closed when ambiguous ([ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). The `Crm` module is not built yet.
+- ~~Contact data for People without an Account.~~ **Answered by [ADR 0034](../adr/0034-crm-enriches-identity-person.md):** CRM owns it, keyed by `person_id`; Person stays thin and carries no email. Contact methods are not unique across People, so matching a payment-provider email to a Person is possible but must fail closed when ambiguous ([ADR 0029](../adr/0029-commerce-providers-own-payment-facts.md)). The `Crm` module's backend is built (WP2).

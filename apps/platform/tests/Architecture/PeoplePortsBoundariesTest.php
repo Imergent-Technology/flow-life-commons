@@ -15,25 +15,18 @@ use Tests\Support\SourceScan;
  * module composes. What can be read off the code without running it; the behaviour is in
  * tests/Feature/Modules/Identity/{SearchPeople,RenamePerson}Test.php.
  *
- * PHASE BOUNDARY, NOT A PERMANENT RULE: "no Crm module yet" is true until CRM Work Package 2 creates it. That
- * package is EXPECTED to delete the first rule below in the same change, and must add Crm's own boundary tests. The
- * other rules are durable.
+ * The WP1 phase rule "no Crm module yet" ended with CRM Work Package 2, which created the module; Crm's own
+ * boundaries are in CrmBoundariesTest. The rules here are durable.
  *
  * One subject per arch expectation (tests/Architecture/README.md). Every source scan has a positive control.
  */
 
 $identity = 'App\\Modules\\Identity';
 
-// --- Phase boundary ---------------------------------------------------------------------------------------------
-
-it('has no Crm module yet: ADR 0034 is a boundary, not an implementation', function () {
-    expect(is_dir(SourceScan::root().'/app/Modules/Crm'))->toBeFalse();
-});
-
 // --- Dependency direction ----------------------------------------------------------------------------------------
 
-arch('Identity does not depend on the future Crm module', function () use ($identity) {
-    // A vacuous pass today (there is no Crm), and the reason the rule is written now: CRM depends on Identity, never back.
+arch('Identity does not depend on Crm', function () use ($identity) {
+    // CRM depends on Identity, never back.
     expect($identity)->not->toUse('App\\Modules\\Crm');
 });
 

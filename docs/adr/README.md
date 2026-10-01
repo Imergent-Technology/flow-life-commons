@@ -47,7 +47,7 @@ Copy [template.md](template.md). Number sequentially (`NNNN-short-title.md`). St
 | [0031](0031-production-transactional-mail-uses-authenticated-smtp.md) | Production transactional mail uses authenticated SMTP | Accepted (transport hardened; provider/DNS activation not yet done) |
 | [0032](0032-members-use-a-commons-hosted-surface.md) | Members use a Commons-hosted surface | Accepted (Member foundation implemented; expansion parked) |
 | [0033](0033-service-identity-and-delegated-human-authority-are-distinct.md) | Service identity and delegated human authority are distinct | Accepted (direction; nothing implemented) |
-| [0034](0034-crm-enriches-identity-person.md) | CRM enriches Identity's Person | Accepted (Identity ports built; `Crm` module not) |
+| [0034](0034-crm-enriches-identity-person.md) | CRM enriches Identity's Person | Accepted (Identity ports and `Crm` backend built; notes and UI not) |
 
 Domain events and the transactional outbox are a documented *direction* ([integration model](../architecture/integration-model.md)), not yet a decision: they get an ADR when the first real consumer shapes the design.
 

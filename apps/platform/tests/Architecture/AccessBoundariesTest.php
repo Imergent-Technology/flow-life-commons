@@ -235,6 +235,8 @@ it('has an acyclic module graph limited to the frozen edges', function () {
         'Access' => ['Identity', 'Audit'], 'Identity' => ['Audit'], 'Audit' => [],
         'Health' => [], 'Security' => [], 'Release' => [],
         'Membership' => ['Access', 'Identity'],
+        // Crm -> Access, Identity (ADR 0034): the same two edges Membership has, and no Audit edge of its own.
+        'Crm' => ['Access', 'Identity'],
     ];
     foreach ($graph as $module => $edges) {
         if (! array_key_exists($module, $allowed)) {

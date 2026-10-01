@@ -1,6 +1,6 @@
 # ADR 0034: CRM enriches Identity's Person
 
-- **Status:** Accepted (Identity's People search and rename ports built; the `Crm` module is not)
+- **Status:** Accepted (implemented: Identity's People ports and the `Crm` backend, WP2; notes and the Console UI are not built)
 - **Date:** 2026-09-29
 - **Supersedes:** none
 - **Superseded by:** none
@@ -61,6 +61,21 @@ The risk to avoid is the one ADR 0015 named: Person becoming a god table, or CRM
 **Introduction of capabilities**
 
 21. Consistent with ADR 0017, capabilities are added by the package that first checks them. The `Crm` module's first package introduces **`crm.people.view` and `crm.people.manage`** and grants both to the Guardian role; the Platform Administrator receives them automatically. `manage` covers renaming.
+
+## Implementation notes (WP2, 2026-10-01)
+
+Recorded where the build made a call this ADR left open. None changes a decision above.
+
+- **Shape.** The `Crm` module is `Domain`, `Application`, `Infrastructure` (query builder, no Eloquent) and `Http`. Tables: `contact_profiles` (keyed by `person_id`), `contact_methods`, `contact_tags`, `contact_tag_assignments`. Routes are under `/api/v1/admin`: `people`, `people/{person}`, `people/{person}/contact-methods`, `people/{person}/tags`, `contact-tags`. The product word is People; the module is Crm because that is what it is.
+- **The profile row is also the lock.** A Person has a `contact_profiles` row once there is CRM data to hold, created empty by the first CRM write. Every CRM mutation for a Person takes it with `SELECT ... FOR UPDATE`, so "no duplicate method" and "one primary" are serialised identically on MariaDB and PostgreSQL; the unique indexes are the backstop. Reading never creates rows.
+- **One primary per kind, in the database.** `contact_methods.primary_kind` holds the kind when the row is the primary and NULL otherwise, with `unique(person_id, primary_kind)`. Both engines allow many NULLs, so no partial index or generated column is needed. The first method of a kind is that kind's primary; removing a primary promotes the earliest remaining one.
+- **Normalisation (decision 12, as built).** Email: trimmed for display, lower-cased for matching; no alias, plus-address or provider rules. Phone: trimmed and whitespace-collapsed for display; for matching, its digits with a leading plus kept. It infers no country code and claims no E.164 identity, so `+1 555 010 0100` and `555 010 0100` are different, and an extension's digits simply join the number. A phone is searched by digits only from three digits up. Accent sensitivity and non-ASCII order follow each engine's collation.
+- **Account login email is deliberately not checked for duplicates** when registering a Person (the option this ADR's disclosure rule left open). Saying "that address belongs to an Account" would let `crm.people.manage` probe data guarded by `identity.accounts.view`, and CRM may not read Account storage. Revisit only through an Identity seam that answers without disclosing.
+- **Duplicate advice** uses CRM emails and the exact display name (ignoring case), the latter by walking Identity's `SearchPeople` up to ten pages. Candidates are returned as id, display name and what matched: directory information. Today every role that may manage People may also view them; a future role that manages without viewing would have to gate the candidate detail.
+- **Routine maintenance asks for no recent verification.** [ADR 0024](0024-privileged-operator-administration.md)'s rule that every administration mutation needs recent verification governs operations that change authority. The People mutations change none, so they are exempt, by capability: `AdministrationRoutesTest` names `crm.people.manage` as the one exemption and pins that it covers exactly the Crm routes.
+- **Writes return what they wrote.** A mutation's response is the resource it changed, never a re-read of everything CRM holds, so a caller who may manage but not view learns nothing more from writing.
+- **Search bound.** The directory composes CRM's matches with Identity's search by passing id sets, bounded at 10,000 (`SearchTooBroad`, a 422, beyond it). A dedicated search read model is a later decision with its own trigger.
+- **Starter tags are not seeded.** The vocabulary is data a Guardian creates; the demo/e2e closeout (WP6) decides whether a demo seeder creates it. Notes and interactions (WP3) are not built, and their deletion mechanics are still open.
 
 ## Consequences
 

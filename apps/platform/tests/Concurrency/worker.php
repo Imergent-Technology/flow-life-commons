@@ -37,6 +37,16 @@ declare(strict_types=1);
 use App\Modules\Access\Application\DisableManagedAccount;
 use App\Modules\Access\Application\RevokeRole;
 use App\Modules\Access\Application\Role;
+use App\Modules\Crm\Application\AddContactMethod;
+use App\Modules\Crm\Application\CreateTag;
+use App\Modules\Crm\Application\DeleteTag;
+use App\Modules\Crm\Application\NewContactMethod;
+use App\Modules\Crm\Application\RegisterContact;
+use App\Modules\Crm\Application\SetPersonTags;
+use App\Modules\Crm\Application\UpdateContactMethod;
+use App\Modules\Crm\Domain\ContactMethodId;
+use App\Modules\Crm\Domain\ContactMethodKind;
+use App\Modules\Crm\Domain\ContactTagId;
 use App\Modules\Identity\Application\AcceptInvitation;
 use App\Modules\Identity\Application\AuthenticateAccount;
 use App\Modules\Identity\Application\AuthenticationStatus;
@@ -175,6 +185,31 @@ try {
         if ($app->make(EnableAccount::class)(AccountId::fromString($arg('account'))) !== ReactivationOutcome::Enabled) {
             throw new RuntimeException('the account was not disabled');
         }
+    } elseif ($operation === 'crm_add_method') {
+        $app->make(AddContactMethod::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            PersonId::fromString($arg('person')),
+            new NewContactMethod(ContactMethodKind::from($arg('kind')), $arg('value'), null, $arg('primary') === '1'),
+        );
+    } elseif ($operation === 'crm_set_primary') {
+        $app->make(UpdateContactMethod::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            PersonId::fromString($arg('person')), ContactMethodId::fromString($arg('method')), ['is_primary' => true],
+        );
+    } elseif ($operation === 'crm_create_tag') {
+        $app->make(CreateTag::class)(Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))), $arg('name'));
+    } elseif ($operation === 'crm_delete_tag') {
+        $app->make(DeleteTag::class)(Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))), ContactTagId::fromString($arg('tag')));
+    } elseif ($operation === 'crm_set_tags') {
+        $app->make(SetPersonTags::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            PersonId::fromString($arg('person')), [ContactTagId::fromString($arg('tag'))],
+        );
+    } elseif ($operation === 'crm_register') {
+        $app->make(RegisterContact::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            $arg('name'), null, null, [new NewContactMethod(ContactMethodKind::Email, $arg('email'))], false,
+        );
     } elseif ($operation === 'rename_person') {
         $app->make(RenamePerson::class)(PersonId::fromString($arg('person')), $arg('name'));
     } elseif ($operation === 'reissue') {

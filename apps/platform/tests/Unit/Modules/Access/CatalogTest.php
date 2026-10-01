@@ -20,6 +20,8 @@ it('has exactly the capability catalog, so adding one is a deliberate decision',
             'identity.accounts.view', 'identity.accounts.manage', 'identity.invitations.issue', 'identity.mfa.recover',
             // Membership Foundation (ADR 0028): each exists because a Membership use case checks it.
             'membership.records.view', 'membership.records.manage',
+            // The People directory and CRM data (ADR 0034).
+            'crm.people.view', 'crm.people.manage',
         ]);
 });
 
@@ -52,9 +54,12 @@ it('gives the platform administrator every capability, by derivation rather than
     }
 });
 
-it('gives the guardian the Console and nothing more', function () {
-    expect(Role::Guardian->capabilities())->toBe([Capability::ConsoleAccess])
+it('gives the guardian the Console and the People directory, and nothing more', function () {
+    // CRM access is an accepted owner decision (ADR 0034): both capabilities, deliberately listed, not derived.
+    expect(Role::Guardian->capabilities())->toBe([Capability::ConsoleAccess, Capability::ViewPeople, Capability::ManagePeople])
         ->and(Role::Guardian->grants(Capability::ConsoleAccess))->toBeTrue()
+        ->and(Role::Guardian->grants(Capability::ViewPeople))->toBeTrue()
+        ->and(Role::Guardian->grants(Capability::ManagePeople))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::AssignRoles))->toBeFalse();
 });
 

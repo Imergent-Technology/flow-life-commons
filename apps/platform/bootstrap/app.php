@@ -9,6 +9,17 @@ use App\Modules\Access\Application\MfaNotEnrolled;
 use App\Modules\Access\Application\UnknownPerson;
 use App\Modules\Access\Application\UnknownRole;
 use App\Modules\Access\Http\AdministrationProblems;
+use App\Modules\Crm\Application\ContactMethodNotFound;
+use App\Modules\Crm\Application\DuplicateContactMethod;
+use App\Modules\Crm\Application\DuplicateTag;
+use App\Modules\Crm\Application\PossibleDuplicate;
+use App\Modules\Crm\Application\SearchTooBroad;
+use App\Modules\Crm\Application\TagInUse;
+use App\Modules\Crm\Application\TagNotFound;
+use App\Modules\Crm\Application\UnknownPerson as UnknownCrmPerson;
+use App\Modules\Crm\Application\UnknownTags;
+use App\Modules\Crm\Domain\InvalidContactInput;
+use App\Modules\Crm\Http\CrmProblems;
 use App\Modules\Identity\Application\AccountNotFound;
 use App\Modules\Identity\Application\CompromisedPasswordCheckUnavailable;
 use App\Modules\Identity\Application\CurrentPasswordIncorrect;
@@ -204,6 +215,18 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (GrantNotFound $e) => MembershipProblems::grantNotFound());
         $exceptions->render(fn (GrantAlreadyRevoked $e) => MembershipProblems::grantAlreadyRevoked());
         $exceptions->render(fn (InvalidMembershipGrantTerm $e) => MembershipProblems::invalidMembershipTerm($e));
+
+        // The People directory and CRM data (ADR 0034).
+        $exceptions->render(fn (UnknownCrmPerson $e) => CrmProblems::personNotFound());
+        $exceptions->render(fn (ContactMethodNotFound $e) => CrmProblems::contactMethodNotFound());
+        $exceptions->render(fn (TagNotFound $e) => CrmProblems::tagNotFound());
+        $exceptions->render(fn (DuplicateContactMethod $e) => CrmProblems::duplicateContactMethod());
+        $exceptions->render(fn (DuplicateTag $e) => CrmProblems::duplicateTag());
+        $exceptions->render(fn (TagInUse $e) => CrmProblems::tagInUse());
+        $exceptions->render(fn (UnknownTags $e) => CrmProblems::unknownTags());
+        $exceptions->render(fn (SearchTooBroad $e) => CrmProblems::searchTooBroad());
+        $exceptions->render(fn (InvalidContactInput $e) => CrmProblems::invalidInput($e));
+        $exceptions->render(fn (PossibleDuplicate $e) => CrmProblems::possibleDuplicate($e));
 
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),

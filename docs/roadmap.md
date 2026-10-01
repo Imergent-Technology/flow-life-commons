@@ -20,6 +20,7 @@ This document tracks product sequencing and implementation status. ADRs and arch
 | Production transactional mail: authenticated-SMTP code foundation ([ADR 0031](adr/0031-production-transactional-mail-uses-authenticated-smtp.md)) | Complete (code) | No, on `main` only |
 | CRM / People architecture, WP0 ([ADR 0034](adr/0034-crm-enriches-identity-person.md)) | Complete | Docs only |
 | Identity People search and rename, WP1 | Complete | No, on `main` only. An Application seam with no route: nothing user-visible yet |
+| CRM backend, WP2: the People directory API, contact methods, tags, and the Guardian's `crm.people.view`/`manage` access | Complete | No, on `main` only. An API with no Console screen yet (WP4) |
 
 ## Current focus: G1 — CRM / People (Active)
 
@@ -29,8 +30,8 @@ Make Commons genuinely useful to Guardians as a people and contact system. The b
 | --- | --- | --- |
 | WP0 | CRM / Person architecture | Complete |
 | WP1 | Identity People search and rename | Complete |
-| WP2 | CRM profiles, contact methods and tags (introduces the CRM capabilities) | Next |
-| WP3 | Notes and interactions backend | Planned |
+| WP2 | CRM profiles, contact methods and tags (introduces the CRM capabilities) | Complete |
+| WP3 | Notes and interactions backend | Next |
 | WP4 | Guardian People UI | Planned |
 | WP5 | Notes timeline and tag-management UI | Planned |
 | WP6 | End-to-end proof and demo closeout | Planned |

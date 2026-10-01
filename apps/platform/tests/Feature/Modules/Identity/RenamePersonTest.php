@@ -197,9 +197,12 @@ it('adds no route: renaming is reachable from application code only', function (
 
     expect($actions)->not->toContain('RenamePerson')
         ->and($actions)->not->toContain('SearchPeople');
+    // The People routes belong to Access (the invitation, Commons access) and Crm (ADR 0034: the directory, which
+    // reaches RenamePerson only through its own authorized use case). None is an Identity route.
     foreach (Route::getRoutes()->getRoutes() as $route) {
         if (str_contains($route->uri(), 'people')) {
-            expect($route->uri())->toBeIn(['api/v1/admin/people/{person}/invitation', 'api/v1/admin/people/{person}/commons-access']);
+            expect($route->getActionName())->toStartWith('App\\Modules\\')
+                ->and($route->getActionName())->not->toStartWith('App\\Modules\\Identity\\');
         }
     }
 });

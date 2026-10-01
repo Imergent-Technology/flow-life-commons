@@ -41,4 +41,10 @@ enum Capability: string
 
     /** May register a Person for membership purposes and create or revoke membership access grants (ADR 0028). */
     case ManageMembershipRecords = 'membership.records.manage';
+
+    /** May see the People directory and what CRM holds about each Person: contact methods, profile, tags (ADR 0034). Changes nothing. */
+    case ViewPeople = 'crm.people.view';
+
+    /** May change what CRM holds about a Person, register a Person, manage tags, and correct a Person's display name (ADR 0034). Routine, so it asks for no fresh verification. */
+    case ManagePeople = 'crm.people.manage';
 }

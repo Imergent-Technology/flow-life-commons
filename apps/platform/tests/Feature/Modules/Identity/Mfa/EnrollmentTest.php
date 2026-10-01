@@ -158,7 +158,7 @@ it('enrols on a valid code, returns ten recovery codes once, and signs the perso
 
     // Signed in, with the second factor recorded.
     $me = $console->me()->assertOk();
-    expect($me->json('capabilities'))->toBe(['console.access'])
+    expect($me->json('capabilities'))->toBe(['console.access', 'crm.people.manage', 'crm.people.view'])
         ->and($me->json('mfa.enrolled'))->toBeTrue()
         ->and($me->json('mfa.recovery_codes_remaining'))->toBe(10)
         ->and($me->json('mfa.security_verified_until'))->toBe('2026-09-19T12:15:00Z');

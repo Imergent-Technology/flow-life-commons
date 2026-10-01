@@ -76,6 +76,26 @@ final class Console
      * @param  array<string, string>  $headers
      * @return TestResponse<Response>
      */
+    public function patch(string $path, array $data = [], array $headers = []): TestResponse
+    {
+        return $this->send('PATCH', $path, $data, $headers);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<string, string>  $headers
+     * @return TestResponse<Response>
+     */
+    public function put(string $path, array $data = [], array $headers = []): TestResponse
+    {
+        return $this->send('PUT', $path, $data, $headers);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<string, string>  $headers
+     * @return TestResponse<Response>
+     */
     public function delete(string $path, array $data = [], array $headers = []): TestResponse
     {
         return $this->send('DELETE', $path, $data, $headers);

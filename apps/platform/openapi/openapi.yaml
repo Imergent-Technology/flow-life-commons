@@ -21,7 +21,8 @@ info:
     step-up), and **operator administration** (`/admin/...`: Accounts, invitations, role
     assignments, disable and re-enable, recovery of a lost second factor, and membership records —
     listing, inspecting, registering a Person with an initial grant, granting an additional term,
-    and revoking a grant; ADR 0028).
+    and revoking a grant; ADR 0028), and the **People directory** (`/admin/people`, `/admin/contact-tags`:
+    every Person with the contact methods, profile and tags CRM holds about them; ADR 0034).
 
 
     ## Authorization
@@ -1965,6 +1966,667 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+  /admin/people:
+    get:
+      operationId: listPeople
+      summary: List the People directory
+      description: >-
+        Needs `crm.people.view`. EVERY Person Identity holds, whether or not CRM has anything about them (ADR 0034), ordered
+        by name and then id, a modest bounded page (25 by default, at most 100).
+
+        `q` matches the display name, an email address or phone number recorded in CRM (as a fragment, ignoring case; a phone
+        number by its digits, from three). It never matches an Account's login email: a Person found by their login address
+        alone is found only once that address is also recorded as a contact method. `tag` narrows to People holding that tag.
+        Accent sensitivity follows the database collation. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.view
+      x-requires-recent-verification: false
+      parameters:
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: tag
+          in: query
+          description: A tag's identifier. An unknown tag selects nobody.
+          schema: {type: string, pattern: '^[0-9a-z]{26}$'}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1}
+        - name: per_page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: A page of People.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonListingPage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    post:
+      operationId: registerPerson
+      summary: Add a Person to the directory
+      description: >-
+        Needs `crm.people.manage`, and nothing more: routine CRM maintenance changes no one's authority, so it does **not** ask for recent verification (ADR 0034).
+        In one transaction, creates a Person with no Account, no Membership and no access (ADR 0015) and records the given
+        profile fields and contact methods; if any part fails, nothing is committed. The first method of a kind is that kind's
+        primary.
+
+        Before creating anything the server looks for **possible duplicates** — a Person sharing an email recorded in CRM, or
+        the same display name ignoring case — and answers `409 possible_duplicate` with the candidates (id, display name and
+        what matched). That is advice, never a merge: send the same request with `confirm_distinct: true` to register a distinct
+        Person anyway. An Account's login email is deliberately not checked.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterPersonRequest'
+      responses:
+        '201':
+          description: The new Person, with what was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonRecord'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '409':
+          description: Possible duplicate (`possible_duplicate`, with `candidates`), or the same contact method twice in one request (`duplicate_contact_method`). Nothing was created.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PossibleDuplicate'
+                  - $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/people/{person}:
+    get:
+      operationId: getPerson
+      summary: Inspect a Person as CRM knows them
+      description: >-
+        Needs `crm.people.view`. The Person's id and display name (from Identity), CRM's profile, contact methods and tags.
+        Deliberately without Membership, Account or Commons-access state: those have their own endpoints and capabilities.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.view
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+      responses:
+        '200':
+          description: The Person's CRM record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonRecord'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+    patch:
+      operationId: updatePerson
+      summary: Correct a Person's name or profile
+      description: >-
+        Needs `crm.people.manage`, and nothing more: correcting a name or a note grants and removes no authority, so it does **not** ask for recent verification (ADR 0034).
+        Send any of `display_name`, `how_we_know`, `affiliation`: a field that is sent is changed, one that is not is left alone, and
+        a profile field set to null or blank is cleared. A name correction is made through Identity, which records it as a
+        `person.renamed` security event (without the names).
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePersonRequest'
+      responses:
+        '200':
+          description: The Person as now named, and their profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonUpdate'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/people/{person}/contact-methods:
+    post:
+      operationId: addContactMethod
+      summary: Record an email or phone number
+      description: >-
+        Needs `crm.people.manage`, and nothing more: routine CRM maintenance does **not** ask for recent verification (ADR 0034).
+        The value is stored as entered (trimmed); a separate lower-cased (email) or digits-only (phone) form is kept for matching
+        and never claims identity. Contact methods are not unique across People, only per Person. The first method of a kind
+        becomes that kind's primary; `is_primary: true` on a later one demotes the one before it.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewContactMethod'
+      responses:
+        '201':
+          description: The method as recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactMethod'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The Person already has that kind and value (`duplicate_contact_method`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/people/{person}/contact-methods/{method}:
+    patch:
+      operationId: updateContactMethod
+      summary: Change a contact method
+      description: >-
+        Needs `crm.people.manage`, and nothing more. Send any of `value`, `label`, `is_primary`. Making a method primary demotes the
+        one that was; clearing the flag on the primary leaves that kind with no primary. The kind of a method does not change.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/ContactMethodId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateContactMethodRequest'
+      responses:
+        '200':
+          description: The method as now recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactMethod'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`), or no such method for that Person (`contact_method_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The Person already has that kind and value (`duplicate_contact_method`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    delete:
+      operationId: removeContactMethod
+      summary: Remove a contact method
+      description: >-
+        Needs `crm.people.manage`, and nothing more. If it was the primary of its kind, the earliest remaining method of that kind
+        becomes the primary.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/ContactMethodId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`), or no such method for that Person (`contact_method_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/people/{person}/tags:
+    put:
+      operationId: setPersonTags
+      summary: Set a Person's tags
+      description: >-
+        Needs `crm.people.manage`, and nothing more. Makes the Person's tags EXACTLY the given set: tags not in it are removed, new
+        ones added; an empty list clears them. Tags are labels and carry no authority.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPersonTagsRequest'
+      responses:
+        '200':
+          description: The Person's tags afterwards.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonTagList'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/contact-tags:
+    get:
+      operationId: listContactTags
+      summary: List the tags
+      description: >-
+        Needs `crm.people.view`. Every tag by name, with how many People hold it. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.view
+      x-requires-recent-verification: false
+      responses:
+        '200':
+          description: The tags.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactTagList'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+    post:
+      operationId: createContactTag
+      summary: Create a tag
+      description: >-
+        Needs `crm.people.manage`, and nothing more. "Lead" and "lead" are one tag. A tag is a label only: it grants no capability and
+        establishes no Membership, Volunteer or Guardian status.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TagNameRequest'
+      responses:
+        '201':
+          description: The new tag.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactTag'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '409':
+          description: A tag with that name already exists (`duplicate_tag`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/contact-tags/{tag}:
+    patch:
+      operationId: renameContactTag
+      summary: Rename a tag
+      description: >-
+        Needs `crm.people.manage`, and nothing more. People who hold the tag keep it. Changing only the case of a name is allowed.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ContactTagId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TagNameRequest'
+      responses:
+        '200':
+          description: The tag as now named.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactTag'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such tag (`tag_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: Another tag already has that name (`duplicate_tag`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    delete:
+      operationId: deleteContactTag
+      summary: Delete an unused tag
+      description: >-
+        Needs `crm.people.manage`, and nothing more. A tag that is on any Person is refused, not stripped from them.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ContactTagId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such tag (`tag_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The tag is on at least one Person (`tag_in_use`). Nothing was changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
 components:
   securitySchemes:
     sessionCookie:
@@ -1996,6 +2658,22 @@ components:
       in: path
       required: true
       description: A membership grant's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    ContactMethodId:
+      name: method
+      in: path
+      required: true
+      description: A contact method's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    ContactTagId:
+      name: tag
+      in: path
+      required: true
+      description: A tag's identifier (a 26-character ULID).
       schema:
         type: string
         pattern: '^[0-9a-z]{26}$'
@@ -2240,6 +2918,193 @@ components:
           type: [string, 'null']
           format: date-time
           description: Null unless this grant was revoked. One-way; never becomes null again.
+    PersonRef:
+      type: object
+      required: [id, display_name]
+      properties:
+        id: {type: string}
+        display_name: {type: string}
+    ContactProfile:
+      type: object
+      description: >-
+        What CRM holds about a Person beyond their name. Both fields are free text and may be null; a Person CRM knows
+        nothing about reads as all nulls. `updated_at` is null when there is no profile row at all.
+      required: [how_we_know, affiliation, updated_at]
+      properties:
+        how_we_know: {type: [string, 'null'], maxLength: 2000}
+        affiliation: {type: [string, 'null'], maxLength: 255}
+        updated_at: {type: [string, 'null'], format: date-time}
+    ContactMethod:
+      type: object
+      description: >-
+        An email address or phone number recorded for a Person. `value` is as the human entered it. Not unique across
+        People; unique per Person by kind and normalised value. At most one method per kind is primary.
+      required: [id, kind, value, label, is_primary, created_at, updated_at]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [email, phone]}
+        value: {type: string}
+        label: {type: [string, 'null'], maxLength: 64}
+        is_primary: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ContactTagRef:
+      type: object
+      description: A tag as it appears on a Person. A label only.
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    ContactTag:
+      type: object
+      description: A user-managed label, with how many People hold it. It carries no authority and means nothing to the platform.
+      required: [id, name, person_count]
+      properties:
+        id: {type: string}
+        name: {type: string, maxLength: 64}
+        person_count: {type: integer}
+    ContactTagList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContactTag'
+    PersonTagList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContactTagRef'
+    PersonRecord:
+      type: object
+      description: >-
+        A Person as CRM knows them: their id and name (Identity's), and CRM's profile, contact methods and tags.
+        Deliberately without Membership, Account or Commons-access state.
+      required: [person, profile, contact_methods, tags]
+      properties:
+        person:
+          $ref: '#/components/schemas/PersonRef'
+        profile:
+          $ref: '#/components/schemas/ContactProfile'
+        contact_methods:
+          type: array
+          description: By kind, then when recorded.
+          items:
+            $ref: '#/components/schemas/ContactMethod'
+        tags:
+          type: array
+          description: By name.
+          items:
+            $ref: '#/components/schemas/ContactTagRef'
+    PersonUpdate:
+      type: object
+      required: [person, profile]
+      properties:
+        person:
+          $ref: '#/components/schemas/PersonRef'
+        profile:
+          $ref: '#/components/schemas/ContactProfile'
+    PersonListing:
+      type: object
+      description: One row of the People directory.
+      required: [id, display_name, primary_email, primary_phone, tags]
+      properties:
+        id: {type: string}
+        display_name: {type: string}
+        primary_email: {type: [string, 'null']}
+        primary_phone: {type: [string, 'null']}
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/ContactTagRef'
+    PersonListingPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersonListing'
+        meta:
+          type: object
+          required: [page, per_page, total, last_page]
+          properties:
+            page: {type: integer}
+            per_page: {type: integer}
+            total: {type: integer}
+            last_page: {type: integer}
+    NewContactMethod:
+      type: object
+      required: [kind, value]
+      properties:
+        kind: {type: string, enum: [email, phone]}
+        value: {type: string, maxLength: 255}
+        label: {type: [string, 'null'], maxLength: 64}
+        is_primary: {type: boolean}
+    UpdateContactMethodRequest:
+      type: object
+      description: At least one property.
+      properties:
+        value: {type: string, maxLength: 255}
+        label: {type: [string, 'null'], maxLength: 64}
+        is_primary: {type: boolean}
+    RegisterPersonRequest:
+      type: object
+      required: [display_name]
+      properties:
+        display_name: {type: string, minLength: 1, maxLength: 255}
+        how_we_know: {type: [string, 'null'], maxLength: 2000}
+        affiliation: {type: [string, 'null'], maxLength: 255}
+        contact_methods:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/NewContactMethod'
+        confirm_distinct:
+          type: boolean
+          description: Register this Person even though possible duplicates were reported. It skips only that advice, never validation.
+    UpdatePersonRequest:
+      type: object
+      description: At least one property. A name cannot be cleared; a profile field set to null or blank is.
+      properties:
+        display_name: {type: string, minLength: 1, maxLength: 255}
+        how_we_know: {type: [string, 'null'], maxLength: 2000}
+        affiliation: {type: [string, 'null'], maxLength: 255}
+    SetPersonTagsRequest:
+      type: object
+      required: [tag_ids]
+      properties:
+        tag_ids:
+          type: array
+          maxItems: 200
+          items: {type: string}
+    TagNameRequest:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+    PossibleDuplicate:
+      type: object
+      description: People who look like the one being registered. Directory information only (id and display name), plus what matched.
+      required: [message, code, candidates]
+      properties:
+        message: {type: string}
+        code: {type: string, enum: [possible_duplicate]}
+        candidates:
+          type: array
+          items:
+            type: object
+            required: [id, display_name, matched_on]
+            properties:
+              id: {type: string}
+              display_name: {type: string}
+              matched_on:
+                type: array
+                items: {type: string, enum: [email, display_name]}
     Member:
       type: object
       description: >-
