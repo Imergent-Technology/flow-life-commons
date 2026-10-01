@@ -248,8 +248,7 @@ it('Identity: the operator\'s password reset issues and delivers through the exi
     $code = SourceScan::code(SourceScan::read(SourceScan::root().'/app/Modules/Identity/Application/IssueAdministrativePasswordReset.php'));
 
     expect(preg_match($forbidden, $code))->toBe(0)
-        ->and($code)->toContain('$this->tokens->issue(', '$this->tokens->issuedRecently(', '$this->notifier->send(')
-        ->and('App\\Modules\\Identity\\Application\\IssueAdministrativePasswordReset')->toBeString();
+        ->and($code)->toContain('$this->tokens->issue(', '$this->tokens->issuedRecently(', '$this->notifier->send(');
 
     foreach (['$token = Str::random(64);', 'DB::table(\'password_reset_tokens\')->insert([]);', '$t = hash(\'sha256\', $x);', 'Mail::to($a)->send($m);', 'Password::broker()->createToken($u);'] as $planted) {
         expect(preg_match($forbidden, $planted))->toBe(1, $planted);

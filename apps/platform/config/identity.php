@@ -131,6 +131,14 @@ return [
             'per_ip' => (int) env('IDENTITY_REISSUE_MAX_PER_IP', 30),
             'per_identifier' => (int) env('IDENTITY_REISSUE_MAX_PER_ACCOUNT', 5),
         ],
+        // An operator sending an Account holder the password-reset email: the same reasoning and the same shape as
+        // invitation_reissue. The token store's one-a-minute rule bounds LIVE tokens, not mail (it would still allow
+        // about sixty messages an hour to one inbox), so this bounds what the recipient can be sent over the window.
+        // Keyed on the Account being recovered, so busy work on one person cannot delay another's.
+        'password_reset_by_operator' => [
+            'per_ip' => (int) env('IDENTITY_OPERATOR_RESET_MAX_PER_IP', 30),
+            'per_identifier' => (int) env('IDENTITY_OPERATOR_RESET_MAX_PER_ACCOUNT', 5),
+        ],
         // Completing a reset. The token has 256 bits, so this bounds volume (hashing work and audit
         // growth), not guessing. As with login, a caller can exhaust an identifier's allowance for one
         // window: the accepted trade for a small invite-only user base.

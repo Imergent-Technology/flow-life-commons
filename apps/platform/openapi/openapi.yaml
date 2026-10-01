@@ -1299,7 +1299,7 @@ paths:
         `password.reset_requested_by_operator`, and the message is sent after the commit. Only an Account that can sign in:
         an *invited* Account has no password to reset (`409 password_reset_account_invited`: send a new invitation) and a
         *disabled* one is not recovered (`409 password_reset_account_disabled`). The public one-a-minute rule applies
-        (`409 password_reset_recently_requested`). The request has no body.
+        (`409 password_reset_recently_requested`), and so does a per-Account limit on how many such emails one inbox can be sent over the window (`429`, like inviting again). The request has no body.
       tags: [Administration]
       security:
         - sessionCookie: []
@@ -1345,6 +1345,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+        '429':
+          description: Too many reset emails have been sent to this Account (or requested from this address) lately. Nothing was sent. This bounds the mail one inbox can receive, over and above the one-a-minute rule.
+          headers:
+            Retry-After:
+              description: Seconds until another request is accepted.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
   /admin/people/{person}/invitation:
     post:
       operationId: inviteExistingPerson

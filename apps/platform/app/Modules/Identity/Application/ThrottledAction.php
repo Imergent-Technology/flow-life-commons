@@ -25,4 +25,12 @@ enum ThrottledAction: string
      * does not own. Per TARGET Account, so one address cannot be flooded, and per source address.
      */
     case InvitationReissue = 'invitation_reissue';
+
+    /**
+     * An operator sending an Account holder the password-reset email. As with `InvitationReissue`, the caller is
+     * authenticated, holds a capability and has proved themselves recently, and what this bounds is MAIL to somebody
+     * else's inbox. It coexists with the token store's one-a-minute rule, which is about one live token, not about how
+     * much mail a person can be sent over an hour. Per TARGET Account, and per source address.
+     */
+    case PasswordResetByOperator = 'password_reset_by_operator';
 }

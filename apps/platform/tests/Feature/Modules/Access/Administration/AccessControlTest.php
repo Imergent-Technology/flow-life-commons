@@ -198,7 +198,7 @@ it('checks the capability again inside every use case, so no other caller can sk
         fn () => app(DisableManagedAccount::class)($actor, $id),
         fn () => app(EnableManagedAccount::class)($actor, $id),
         fn () => app(ResetManagedMfa::class)($actor, $id),
-        fn () => app(SendManagedPasswordReset::class)($actor, $id),
+        fn () => app(SendManagedPasswordReset::class)($actor, $id, new ClientContext('127.0.0.1', 'test')),
         fn () => app(GrantRoleToAccount::class)($actor, $id, 'guardian'),
         fn () => app(RevokeRoleFromAccount::class)($actor, $id, 'guardian'),
     ] as $call) {
