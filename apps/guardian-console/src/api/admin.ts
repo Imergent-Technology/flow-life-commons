@@ -395,6 +395,23 @@ function mutate(
   )
 }
 
+/**
+ * POST /admin/accounts/{id}/password-reset: the NORMAL password-reset email, sent to the Account holder. The response says
+ * whether it was sent and never carries the token or the link: the operator does not choose, see or receive the password.
+ */
+export function sendPasswordReset(id: string): Promise<Result<InvitationOutcome>> {
+  return invitation(
+    requestJson(
+      {
+        method: 'POST',
+        path: `/api/v1/admin/accounts/${idPath(id)}/password-reset`,
+        authenticated: true,
+      },
+      isInvitationResult,
+    ),
+  )
+}
+
 export const disableAccount = (id: string) =>
   mutate('POST', `/api/v1/admin/accounts/${idPath(id)}/disable`)
 export const enableAccount = (id: string) =>

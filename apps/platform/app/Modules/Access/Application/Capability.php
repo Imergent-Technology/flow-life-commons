@@ -27,7 +27,10 @@ enum Capability: string
     /** May list and inspect Accounts (and see the role catalog): administration's read side. Changes nothing. */
     case ViewAccounts = 'identity.accounts.view';
 
-    /** May disable and re-enable an Account. Ending someone's access is a materially bigger power than seeing it. */
+    /**
+     * May disable and re-enable an Account, and send its holder the normal password-reset email. Ending someone's access is
+     * a materially bigger power than seeing it; sending the reset email gives the operator nothing (no password, token or link).
+     */
     case ManageAccounts = 'identity.accounts.manage';
 
     /** May invite a new operator, and issue a fresh invitation for one who is still invited. */

@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+use Tests\Support\SourceScan;
 
 /*
  * Identity-specific boundaries (docs/architecture/identity-and-access.md, "Layer
@@ -225,4 +226,51 @@ it('Identity: a raw invitation or reset secret is revealed only by the two mail 
 
 arch('Identity: an invitation channel is a sealed enum, and only EMAIL proves the mailbox', function () use ($identity) {
     expect("{$identity}\\Domain\\InvitationChannel")->toBeEnum();
+});
+
+arch('Identity: only the reset use cases and the pruner use the reset-token store', function () use ($identity) {
+    // The operator's "send a password reset email" is the SAME mechanism as "I forgot my password": it issues through this
+    // port and no other. A new user of the port is a decision, made here.
+    expect("{$identity}\\Application\\PasswordResetTokens")->toOnlyBeUsedIn([
+        "{$identity}\\Application\\RequestPasswordReset",
+        "{$identity}\\Application\\IssueAdministrativePasswordReset",
+        "{$identity}\\Application\\ResetPassword",
+        "{$identity}\\Application\\PruneTransientState",
+        "{$identity}\\Infrastructure",
+    ]);
+});
+
+it('Identity: the operator\'s password reset issues and delivers through the existing ports, with no token implementation of its own', function () {
+    // Source scan, with positive controls. A second ad-hoc token (random bytes, a hash, a raw table or Laravel's broker, or
+    // a mailer of its own) would be a second reset mechanism that the token store's one-live-token, hashing and expiry
+    // rules do not cover.
+    $forbidden = '/Str::random|random_bytes|random_int|openssl_random|Hash::|hash\s*\(|password_hash|Password::|password_reset_tokens|DB::|->table\s*\(|Mail::|Mailable|Notification::/i';
+    $code = SourceScan::code(SourceScan::read(SourceScan::root().'/app/Modules/Identity/Application/IssueAdministrativePasswordReset.php'));
+
+    expect(preg_match($forbidden, $code))->toBe(0)
+        ->and($code)->toContain('$this->tokens->issue(', '$this->tokens->issuedRecently(', '$this->notifier->send(')
+        ->and('App\\Modules\\Identity\\Application\\IssueAdministrativePasswordReset')->toBeString();
+
+    foreach (['$token = Str::random(64);', 'DB::table(\'password_reset_tokens\')->insert([]);', '$t = hash(\'sha256\', $x);', 'Mail::to($a)->send($m);', 'Password::broker()->createToken($u);'] as $planted) {
+        expect(preg_match($forbidden, $planted))->toBe(1, $planted);
+    }
+});
+
+arch('Identity: the operator\'s password reset uses the reset ports', function () use ($identity) {
+    expect("{$identity}\\Application\\IssueAdministrativePasswordReset")->toUse([
+        "{$identity}\\Application\\PasswordResetTokens",
+        "{$identity}\\Application\\PasswordResetNotifier",
+    ]);
+});
+
+it('Access: the operator\'s password reset never sees a secret: neither use case nor controller reveals the token', function () {
+    $offenders = [];
+    foreach (['Access/Application/SendManagedPasswordReset.php', 'Access/Application/ManagedPasswordReset.php', 'Access/Http/SendPasswordResetController.php', 'Identity/Application/IssueAdministrativePasswordReset.php'] as $file) {
+        $code = SourceScan::code(SourceScan::read(SourceScan::root().'/app/Modules/'.$file));
+        if (preg_match('/revealToken|IssuedPasswordReset|->token\b|\bexpiresAt\b/', $code) === 1) {
+            $offenders[] = $file;
+        }
+    }
+
+    expect($offenders)->toBe([]);
 });

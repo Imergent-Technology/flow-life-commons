@@ -13,6 +13,7 @@ use App\Modules\Access\Http\ReissueInvitationController;
 use App\Modules\Access\Http\ResetMfaController;
 use App\Modules\Access\Http\RevokeRoleController;
 use App\Modules\Access\Http\RoleCatalogController;
+use App\Modules\Access\Http\SendPasswordResetController;
 use App\Modules\Access\Http\ShowCommonsAccessController;
 use Illuminate\Support\Facades\Route;
 
@@ -62,6 +63,8 @@ Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin
     Route::middleware('can:identity.accounts.manage')->group(function () use ($account): void {
         Route::post('accounts/{account}/disable', DisableAccountController::class)->where('account', $account)->middleware('security.verified')->name('api.v1.admin.accounts.disable');
         Route::post('accounts/{account}/enable', EnableAccountController::class)->where('account', $account)->middleware('security.verified')->name('api.v1.admin.accounts.enable');
+        // The normal password-reset email, sent to the Account holder: the operator never sees or sets anything.
+        Route::post('accounts/{account}/password-reset', SendPasswordResetController::class)->where('account', $account)->middleware('security.verified')->name('api.v1.admin.accounts.password-reset');
     });
 
     Route::middleware('can:identity.mfa.recover')->group(function () use ($account): void {

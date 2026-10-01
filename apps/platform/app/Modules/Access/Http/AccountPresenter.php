@@ -7,6 +7,7 @@ namespace App\Modules\Access\Http;
 use App\Modules\Access\Application\AccountView;
 use App\Modules\Access\Application\CommonsAccessView;
 use App\Modules\Access\Application\ManagedAccountsPage;
+use App\Modules\Access\Application\ManagedPasswordReset;
 use App\Modules\Access\Application\OperatorInvitation;
 use App\Modules\Access\Application\RoleAssignmentView;
 use App\Modules\Access\Application\RoleDescriptor;
@@ -63,6 +64,12 @@ final readonly class AccountPresenter
     public function invitation(OperatorInvitation $invitation): array
     {
         return ['account' => $this->account($invitation->account), 'delivery' => ['status' => $invitation->delivery->value]];
+    }
+
+    /** @return array<string, mixed> */
+    public function passwordReset(ManagedPasswordReset $reset): array
+    {
+        return ['account' => $this->account($reset->account), 'delivery' => ['status' => $reset->delivery->value]];
     }
 
     /** @return array<string, mixed> */

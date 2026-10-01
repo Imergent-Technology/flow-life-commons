@@ -29,6 +29,7 @@ import { AccountMembershipSection } from './AccountMembershipSection.tsx'
 import { AccountStatusSection } from './AccountStatusSection.tsx'
 import { InvitationSection } from './InvitationSection.tsx'
 import { MfaRecoverySection } from './MfaRecoverySection.tsx'
+import { PasswordRecoverySection } from './PasswordRecoverySection.tsx'
 
 /**
  * One Account, and what an operator may do to it. Each control appears only if the signed-in operator holds the capability
@@ -101,6 +102,10 @@ export function AccountDetailPage() {
           mayAssign={hasCapability(current, ROLES_ASSIGN)}
           onChanged={replace}
         />
+
+        {hasCapability(current, ACCOUNTS_MANAGE) ? (
+          <PasswordRecoverySection account={account} own={own} />
+        ) : null}
 
         <MfaRecoverySection
           account={account}

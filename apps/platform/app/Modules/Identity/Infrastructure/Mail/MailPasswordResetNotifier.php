@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Identity\Infrastructure\Mail;
 
 use App\Modules\Identity\Application\IssuedPasswordReset;
+use App\Modules\Identity\Application\PasswordResetDelivery;
 use App\Modules\Identity\Application\PasswordResetNotifier;
 use App\Modules\Identity\Domain\EmailAddress;
 use Illuminate\Contracts\Config\Repository as Config;
@@ -17,10 +18,9 @@ use Throwable;
  * configures (Mailpit in development; production's is host-supplied configuration, and no provider is
  * baked in here).
  *
- * It never throws. The public answer to "I forgot my password" is the same whether or not a message
- * went out, so a delivery failure is recorded in the log (the failure's class and message, never the
- * link or token) and the caller carries on. The token stays valid, and the owner can ask again after
- * the one-a-minute throttle.
+ * It never throws. A delivery failure is logged (the failure's class and message, never the link or token) and
+ * reported as `Failed`; the public flow ignores that, the operator flow shows it. The token stays valid, and a new
+ * request can be made after the one-a-minute limit.
  */
 final readonly class MailPasswordResetNotifier implements PasswordResetNotifier
 {
@@ -29,7 +29,7 @@ final readonly class MailPasswordResetNotifier implements PasswordResetNotifier
         private LoggerInterface $log,
     ) {}
 
-    public function send(EmailAddress $to, IssuedPasswordReset $reset): void
+    public function send(EmailAddress $to, IssuedPasswordReset $reset): PasswordResetDelivery
     {
         $fragment = http_build_query(['token' => $reset->revealToken(), 'email' => $to->value], '', '&', PHP_QUERY_RFC3986);
         $link = rtrim($this->config->string('app.url'), '/').$this->config->string('identity.password_reset.console_path').'#'.$fragment;
@@ -39,6 +39,10 @@ final readonly class MailPasswordResetNotifier implements PasswordResetNotifier
             Mail::to($to->value)->send(new PasswordResetMail($link, $minutes));
         } catch (Throwable $e) {
             $this->log->error('A password reset message could not be sent.', ['exception' => $e::class, 'message' => $e->getMessage()]);
+
+            return PasswordResetDelivery::Failed;
         }
+
+        return PasswordResetDelivery::Sent;
     }
 }

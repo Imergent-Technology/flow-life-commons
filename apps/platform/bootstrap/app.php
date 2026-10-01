@@ -29,6 +29,7 @@ use App\Modules\Identity\Application\InvitationNotIssuable;
 use App\Modules\Identity\Application\InvitationRejected;
 use App\Modules\Identity\Application\NoLongerAuthenticated;
 use App\Modules\Identity\Application\PasswordRejected;
+use App\Modules\Identity\Application\PasswordResetNotIssuable;
 use App\Modules\Identity\Application\PersonHasAccount;
 use App\Modules\Identity\Application\PersonNotFound;
 use App\Modules\Identity\Application\ResetRejected;
@@ -194,6 +195,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (AccountNotDisabled $e) => AdministrationProblems::conflict('account_not_disabled', $e->getMessage()));
         $exceptions->render(fn (EmailAlreadyInUse $e) => AdministrationProblems::conflict('email_already_in_use', 'An account already uses that email address.'));
         $exceptions->render(fn (InvitationNotIssuable $e) => AdministrationProblems::conflict('invitation_not_issuable', $e->getMessage()));
+        $exceptions->render(fn (PasswordResetNotIssuable $e) => AdministrationProblems::conflict('password_reset_'.$e->reason->value, $e->getMessage()));
         $exceptions->render(fn (PersonNotFound $e) => AdministrationProblems::personNotFound());
         $exceptions->render(fn (PersonHasAccount $e) => AdministrationProblems::conflict('person_already_has_account', $e->getMessage()));
         $exceptions->render(fn (MfaNotEnrolled $e) => AdministrationProblems::conflict('mfa_not_enrolled', $e->getMessage()));

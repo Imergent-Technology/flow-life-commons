@@ -172,15 +172,15 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    // 17 administration operations before the People directory (ADR 0034) added 12.
-    expect($checked)->toBe(29);
+    // 17 administration operations before the People directory (ADR 0034) added 12, and the operator's password reset one more.
+    expect($checked)->toBe(30);
 });
 
 it('never lets an administration schema name a secret', function () {
     $components = openApiSpec()['components'];
     assert(is_array($components) && is_array($components['schemas']));
     $names = [
-        'ManagedAccount', 'ManagedAccountPage', 'RoleCatalog', 'InvitationResult', 'InviteOperatorRequest', 'GrantRoleRequest',
+        'ManagedAccount', 'ManagedAccountPage', 'RoleCatalog', 'InvitationResult', 'PasswordResetResult', 'InviteOperatorRequest', 'GrantRoleRequest',
         'Member', 'MemberPage', 'MembershipGrant', 'MembershipGrantHistoryEntry', 'RegisterMemberRequest', 'GrantMembershipRequest',
         'PersonRef', 'ContactProfile', 'ContactMethod', 'ContactTagRef', 'ContactTag', 'ContactTagList', 'PersonTagList', 'PersonRecord',
         'PersonUpdate', 'PersonListing', 'PersonListingPage', 'NewContactMethod', 'RegisterPersonRequest', 'UpdatePersonRequest', 'PossibleDuplicate',

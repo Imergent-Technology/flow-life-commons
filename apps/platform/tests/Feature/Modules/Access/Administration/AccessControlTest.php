@@ -13,6 +13,7 @@ use App\Modules\Access\Application\ListRoleCatalog;
 use App\Modules\Access\Application\ReissueOperatorInvitation;
 use App\Modules\Access\Application\ResetManagedMfa;
 use App\Modules\Access\Application\RevokeRoleFromAccount;
+use App\Modules\Access\Application\SendManagedPasswordReset;
 use App\Modules\Access\Application\ShowManagedAccount;
 use App\Modules\Identity\Application\AccountSearch;
 use App\Modules\Identity\Application\ClientContext;
@@ -64,6 +65,7 @@ function adminOperations(): array
         ['POST', '/api/v1/admin/accounts/{a}/disable', []],
         ['POST', '/api/v1/admin/accounts/{a}/enable', []],
         ['POST', '/api/v1/admin/accounts/{a}/mfa/reset', []],
+        ['POST', '/api/v1/admin/accounts/{a}/password-reset', []],
         ['POST', '/api/v1/admin/accounts/{a}/assignments', ['key' => 'guardian']],
         ['DELETE', '/api/v1/admin/accounts/{a}/assignments/guardian', []],
     ];
@@ -196,6 +198,7 @@ it('checks the capability again inside every use case, so no other caller can sk
         fn () => app(DisableManagedAccount::class)($actor, $id),
         fn () => app(EnableManagedAccount::class)($actor, $id),
         fn () => app(ResetManagedMfa::class)($actor, $id),
+        fn () => app(SendManagedPasswordReset::class)($actor, $id),
         fn () => app(GrantRoleToAccount::class)($actor, $id, 'guardian'),
         fn () => app(RevokeRoleFromAccount::class)($actor, $id, 'guardian'),
     ] as $call) {
@@ -216,6 +219,7 @@ it('binds each operation to ITS capability, in the route and in the use case', f
         'api.v1.admin.people.invitation.store' => ['identity.invitations.issue', InviteExistingPerson::class, 'IssueInvitations'],
         'api.v1.admin.accounts.disable' => ['identity.accounts.manage', DisableManagedAccount::class, 'ManageAccounts'],
         'api.v1.admin.accounts.enable' => ['identity.accounts.manage', EnableManagedAccount::class, 'ManageAccounts'],
+        'api.v1.admin.accounts.password-reset' => ['identity.accounts.manage', SendManagedPasswordReset::class, 'ManageAccounts'],
         'api.v1.admin.mfa.reset' => ['identity.mfa.recover', ResetManagedMfa::class, 'RecoverMfa'],
         'api.v1.admin.assignments.store' => ['access.roles.assign', GrantRoleToAccount::class, 'AssignRoles'],
         'api.v1.admin.assignments.destroy' => ['access.roles.assign', RevokeRoleFromAccount::class, 'AssignRoles'],

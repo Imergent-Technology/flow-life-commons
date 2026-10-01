@@ -224,6 +224,14 @@ final class E2eAccountSeeder extends Seeder
 
     public const string STALE_TARGET_PASSWORD = 'e2e-admin-target-password-not-a-secret';
 
+    /**
+     * An ordinary active Account that holds no access, and the one an operator sends a password reset email to
+     * (e2e/password-recovery.spec.ts). Its OWN fixture: a reset token is per-Account state, so no other journey reads it.
+     */
+    public const string RESET_TARGET_EMAIL = 'e2e.admin.resettarget@example.org';
+
+    public const string RESET_TARGET_PASSWORD = 'e2e-admin-resettarget-password-not-a-secret';
+
     /** A Console user with a known second factor, whose second factor the recovery journey resets. */
     public const string RECOVER_TARGET_EMAIL = 'e2e.admin.recovertarget@example.org';
 
@@ -362,6 +370,7 @@ final class E2eAccountSeeder extends Seeder
         }
 
         $this->activeAccount($accounts, $people, $hasher, $now, self::STALE_TARGET_EMAIL, 'E2E Stale Target', self::STALE_TARGET_PASSWORD);
+        $this->activeAccount($accounts, $people, $hasher, $now, self::RESET_TARGET_EMAIL, 'E2E Reset Target', self::RESET_TARGET_PASSWORD);
     }
 
     /** An active Account with a known password, created afresh (a previous run's copy is removed first). */

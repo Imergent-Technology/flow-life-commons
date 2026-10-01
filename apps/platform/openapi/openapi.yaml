@@ -1287,6 +1287,64 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+  /admin/accounts/{account}/password-reset:
+    post:
+      operationId: sendPasswordReset
+      summary: Send a password reset email
+      description: >-
+        Needs `identity.accounts.manage` **and recent verification**. Sends the Account holder the SAME password-reset email
+        they would get from "I forgot my password", so they can set their own password: the operator never chooses, sees or
+        receives the password, the reset token or the link, and this does not reset the authenticator. It issues through the
+        existing reset mechanism (one live token per Account, the usual lifetime, the usual reset page), is audited as
+        `password.reset_requested_by_operator`, and the message is sent after the commit. Only an Account that can sign in:
+        an *invited* Account has no password to reset (`409 password_reset_account_invited`: send a new invitation) and a
+        *disabled* one is not recovered (`409 password_reset_account_disabled`). The public one-a-minute rule applies
+        (`409 password_reset_recently_requested`). The request has no body.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: identity.accounts.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The Account, and whether the message was sent. `failed` means the mail system did not accept it; send again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasswordResetResult'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationRequiredOrDenied'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Account (`account_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The Account is invited (`password_reset_account_invited`) or disabled (`password_reset_account_disabled`), or was sent a reset a moment ago (`password_reset_recently_requested`). Nothing was sent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
   /admin/people/{person}/invitation:
     post:
       operationId: inviteExistingPerson
@@ -3253,6 +3311,22 @@ components:
               description: >-
                 Whether the mail system accepted the message. `failed` leaves the Account and its invitation committed;
                 issue a fresh invitation. The secret is never in this response.
+    PasswordResetResult:
+      type: object
+      required: [account, delivery]
+      properties:
+        account:
+          $ref: '#/components/schemas/ManagedAccount'
+        delivery:
+          type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [sent, failed]
+              description: >-
+                Whether the mail system accepted the message. It says nothing about the inbox. The reset link and everything
+                needed to build one reach only the Account holder's address, never this response.
     CommonsAccess:
       type: object
       description: >-

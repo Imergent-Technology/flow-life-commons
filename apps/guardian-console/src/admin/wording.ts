@@ -14,6 +14,12 @@ const conflicts: Record<string, string> = {
   invitation_not_issuable:
     'A new invitation can only be sent while the account is still invited. Reload to see its current state.',
   mfa_not_enrolled: 'That account has no two-step verification to reset.',
+  password_reset_account_invited:
+    'This account has not accepted its invitation yet, so it has no password to reset. Send a new invitation instead.',
+  password_reset_account_disabled:
+    'This account is disabled. Enable it before sending a password reset email.',
+  password_reset_recently_requested:
+    'A password reset email was sent to this account a moment ago. Wait a minute before sending another.',
   person_already_has_account:
     'This person already has a Commons account. Reload to see its current state.',
 }

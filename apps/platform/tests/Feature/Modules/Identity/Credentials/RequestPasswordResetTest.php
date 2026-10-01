@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Modules\Identity\Application\ClientContext;
 use App\Modules\Identity\Application\IssuedPasswordReset;
+use App\Modules\Identity\Application\PasswordResetDelivery;
 use App\Modules\Identity\Application\PasswordResetNotifier;
 use App\Modules\Identity\Application\RequestPasswordReset;
 use App\Modules\Identity\Domain\Account;
@@ -274,9 +275,11 @@ it('sends the message only after its own transaction has committed', function ()
         /** @param  list<int>  $depths */
         public function __construct(public array &$depths) {}
 
-        public function send(EmailAddress $to, IssuedPasswordReset $reset): void
+        public function send(EmailAddress $to, IssuedPasswordReset $reset): PasswordResetDelivery
         {
             $this->depths[] = DB::transactionLevel();
+
+            return PasswordResetDelivery::Sent;
         }
     });
     Identity::savedActiveAccount('ada@example.org');
