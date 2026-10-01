@@ -35,7 +35,8 @@ trait DeclaresContactMethods
             ContactMethodKind::from(is_string($kind) ? $kind : ''),
             is_string($value) ? $value : '',
             is_string($label) ? $label : null,
-            ($data['is_primary'] ?? false) === true,
+            // The conversion Laravel's own `boolean()` uses, so create and update read the flag the same way (the `boolean` rule admits 1 and "1", not only true).
+            filter_var($data['is_primary'] ?? false, FILTER_VALIDATE_BOOL),
         );
     }
 }

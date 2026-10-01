@@ -11,8 +11,11 @@ use Illuminate\Support\Facades\Schema;
  * never grants a capability or establishes Membership, Volunteer status or Guardian access. The starter vocabulary is
  * data, never an enum.
  *
- * - `name_canonical` carries the uniqueness (lower-cased, whitespace collapsed), for the same reason Identity keeps
- *   `email_canonical`: the engines collate a plain VARCHAR differently, so uniqueness must not depend on collation.
+ * - `name_canonical` carries the uniqueness (lower-cased, whitespace collapsed), as Identity's `email_canonical` does, so
+ *   that ASCII and case behave identically on both engines whatever a column's collation does with case. It is NOT
+ *   collation-independent for non-ASCII text: on MariaDB the column is `utf8mb4_unicode_ci`, which also folds accents
+ *   (`Café` and `Cafe` are one tag there, two on PostgreSQL). No accent folding is promised; the difference is pinned
+ *   by CrmCollationTest.
  * - An assignment is unique per (person_id, tag_id). tag_id -> contact_tags.id is within Crm and RESTRICT, so a tag
  *   that is still in use cannot be deleted out from under its assignments. person_id -> people.id is a cross-module
  *   foreign key, RESTRICT (ADR 0021). created_by / assigned_by are provenance with NO foreign key.

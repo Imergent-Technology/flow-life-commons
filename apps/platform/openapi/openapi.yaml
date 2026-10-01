@@ -2017,7 +2017,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '422':
-          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          description: A malformed query. Ordinary request validation gives per-field messages under `errors` with no `code`; a text or tag that selects too many People to use as a search gives `search_too_broad` as well.
           content:
             application/json:
               schema:
@@ -2084,7 +2084,7 @@ paths:
                   - $ref: '#/components/schemas/PossibleDuplicate'
                   - $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives `invalid_contact_input` as well.
           content:
             application/json:
               schema:
@@ -2184,7 +2184,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives `invalid_contact_input` as well.
           content:
             application/json:
               schema:
@@ -2252,7 +2252,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives `invalid_contact_input` as well.
           content:
             application/json:
               schema:
@@ -2265,7 +2265,9 @@ paths:
       summary: Change a contact method
       description: >-
         Needs `crm.people.manage`, and nothing more. Send any of `value`, `label`, `is_primary`. Making a method primary demotes the
-        one that was; clearing the flag on the primary leaves that kind with no primary. The kind of a method does not change.
+        one that was, atomically: a Person with any method of a kind has exactly one primary of it, so `is_primary: false` on the
+        current primary is refused with `422 invalid_contact_input` on `is_primary` (make another method primary instead). The
+        kind of a method does not change.
       tags: [Administration]
       security:
         - sessionCookie: []
@@ -2319,7 +2321,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives `invalid_contact_input` as well (including turning off `is_primary` on the current primary, which is refused on `is_primary`).
           content:
             application/json:
               schema:
@@ -2421,7 +2423,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a tag id that names no tag gives `unknown_tag` as well, and nothing is changed.
           content:
             application/json:
               schema:
@@ -2509,7 +2511,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives `invalid_contact_input` as well.
           content:
             application/json:
               schema:
@@ -2574,7 +2576,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives a stable `code` as well (`invalid_contact_input`, `unknown_tag`, `search_too_broad`).
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives `invalid_contact_input` as well.
           content:
             application/json:
               schema:

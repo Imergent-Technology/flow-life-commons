@@ -10,6 +10,7 @@ use App\Modules\Crm\Application\DuplicateTag;
 use App\Modules\Crm\Application\NewContactMethod;
 use App\Modules\Crm\Application\RegisterContact;
 use App\Modules\Crm\Application\SetPersonTags;
+use App\Modules\Crm\Application\TagNotFound;
 use App\Modules\Crm\Application\UnknownTags;
 use App\Modules\Crm\Application\UpdateContactMethod;
 use App\Modules\Crm\Domain\ContactMethodKind;
@@ -146,6 +147,53 @@ it('never loses an assignment to a tag deleted at the same moment: the assignmen
         ->and($race['class'])->toBe(UnknownTags::class)
         ->and(DB::table('contact_tags')->count())->toBe(0)
         ->and(DB::table('contact_tag_assignments')->count())->toBe(0);
+});
+
+it('lets two first writes to a Person with no CRM row both succeed: one primary, no false duplicate', function () {
+    $by = Crm::manager();
+    $ada = Identity::savedPerson('Ada');
+    expect(DB::table('contact_profiles')->count())->toBe(0); // nothing to lock yet: the lock row itself must be created safely
+
+    // Both writers see "no profile, no email" and would each make their own address the first, primary one, if nothing serialised them.
+    $race = Race::against(
+        function (Closure $pause) use ($by, $ada) {
+            DB::transaction(function () use ($by, $ada, $pause) {
+                app(AddContactMethod::class)($by, $ada->id, new NewContactMethod(ContactMethodKind::Email, 'first@example.org'));
+                $pause();
+            });
+        },
+        null, 'crm_add_method', [...crmActorArgs($by), 'person' => $ada->id->value, 'kind' => 'email', 'value' => 'second@example.org', 'primary' => '0'],
+    );
+
+    $rows = DB::table('contact_methods')->where('person_id', $ada->id->value)->orderBy('created_at')->orderBy('id')->get();
+    expect($race['blocked'])->toBeTrue('the second first-write did not wait for the first to commit')
+        ->and($race['exit'])->toBe(0)
+        ->and($race['class'])->toBeNull() // in particular, never DuplicateContactMethod
+        ->and($rows->pluck('search_value')->sort()->values()->all())->toBe(['first@example.org', 'second@example.org'])
+        ->and($rows->whereNotNull('primary_kind')->pluck('search_value')->all())->toBe(['first@example.org']) // the first committed is the primary
+        ->and(DB::table('contact_profiles')->where('person_id', $ada->id->value)->count())->toBe(1)
+        ->and(DB::table('people')->where('id', $ada->id->value)->count())->toBe(1);
+});
+
+it('never reports a rename of a tag that a concurrent delete removed: the rename waits, then finds no tag', function () {
+    $by = Crm::manager();
+    $tag = Crm::tag($by, 'Doomed');
+
+    // The delete has removed the tag and has not committed when the rename arrives.
+    $race = Race::against(
+        function (Closure $pause) use ($by, $tag) {
+            DB::transaction(function () use ($by, $tag, $pause) {
+                app(DeleteTag::class)($by, $tag);
+                $pause();
+            });
+        },
+        null, 'crm_rename_tag', [...crmActorArgs($by), 'tag' => $tag->value, 'name' => 'Renamed'],
+    );
+
+    expect($race['blocked'])->toBeTrue('the rename did not wait for the delete to commit')
+        ->and($race['exit'])->toBe(2)
+        ->and($race['class'])->toBe(TagNotFound::class) // not a silent success on a tag that no longer exists
+        ->and(DB::table('contact_tags')->count())->toBe(0);
 });
 
 it('lets two registrations of the same email both succeed as distinct Persons: duplicate advice is advice, and neither is lost', function () {

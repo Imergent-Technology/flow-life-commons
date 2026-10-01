@@ -139,14 +139,36 @@ it('leaves a field that is not sent alone, and clears a label sent as null', fun
     expect($unchanged->label)->toBe('home')->and($cleared->label)->toBeNull()->and($cleared->value)->toBe('a@example.org');
 });
 
-it('can leave a kind with no primary by clearing the flag, and never has two', function () {
+it('refuses to un-set the primary of a kind: exactly one stays primary while any method of the kind exists', function () {
     $by = Crm::manager();
     $ada = Identity::savedPerson('Ada');
-    $only = Crm::email($by, $ada->id, 'a@example.org');
+    $first = Crm::email($by, $ada->id, 'a1@example.org');
+    $second = Crm::email($by, $ada->id, 'a2@example.org');
 
-    app(UpdateContactMethod::class)($by, $ada->id, $only->id, ['is_primary' => false]);
+    // Another method of the kind remains: the current primary cannot simply be demoted.
+    $demote = fn () => app(UpdateContactMethod::class)($by, $ada->id, $first->id, ['is_primary' => false, 'label' => 'ignored']);
+    expect($demote)->toThrow(InvalidContactInput::class, 'Make another contact method primary instead.');
+    try {
+        $demote();
+    } catch (InvalidContactInput $e) {
+        expect($e->field)->toBe('is_primary');
+    }
+    expect(methodsOf($ada->id, 'email'))->toBe([['a1@example.org', true], ['a2@example.org', false]]);
+    expect(DB::table('contact_methods')->where('id', $first->id->value)->value('label'))->toBeNull(); // nothing was partly applied
 
-    expect(DB::table('contact_methods')->where('person_id', $ada->id->value)->whereNotNull('primary_kind')->count())->toBe(0);
+    // The only method of its kind is the primary, and stays so.
+    $solo = Crm::phone($by, $ada->id, '555 010 0100');
+    expect(fn () => app(UpdateContactMethod::class)($by, $ada->id, $solo->id, ['is_primary' => false]))->toThrow(InvalidContactInput::class);
+    expect(methodsOf($ada->id, 'phone'))->toBe([['555 010 0100', true]]);
+
+    // Promoting the other one is how the primary moves: atomic, still exactly one.
+    app(UpdateContactMethod::class)($by, $ada->id, $second->id, ['is_primary' => true]);
+    expect(methodsOf($ada->id, 'email'))->toBe([['a1@example.org', false], ['a2@example.org', true]]);
+
+    // Sending the value it already has is not a demotion, and a non-primary may be sent false.
+    app(UpdateContactMethod::class)($by, $ada->id, $second->id, ['is_primary' => true, 'label' => 'work']);
+    app(UpdateContactMethod::class)($by, $ada->id, $first->id, ['is_primary' => false, 'label' => 'home']);
+    expect(methodsOf($ada->id, 'email'))->toBe([['a1@example.org', false], ['a2@example.org', true]]);
 });
 
 it('refuses to change a method into one the Person already has', function () {

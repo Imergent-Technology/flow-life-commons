@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Identity\Application\FindPeopleNamed;
 use App\Modules\Identity\Application\PeopleDirectory;
 use App\Modules\Identity\Application\PeoplePage;
 use App\Modules\Identity\Application\PeopleQuery;
@@ -79,7 +80,7 @@ function publicSurfaceTypes(string $class, bool $callerConstructs = true): array
 
 it('exposes no Identity Domain type through SearchPeople, RenamePerson and their query and result types', function () {
     $leaks = [];
-    $callerBuilt = [PeopleQuery::class => true, PeoplePage::class => true, SearchPeople::class => false, PeopleDirectory::class => false, RenamePerson::class => false];
+    $callerBuilt = [PeopleQuery::class => true, PeoplePage::class => true, SearchPeople::class => false, FindPeopleNamed::class => false, PeopleDirectory::class => false, RenamePerson::class => false];
     foreach ($callerBuilt as $class => $callerConstructs) {
         foreach (publicSurfaceTypes($class, $callerConstructs) as $type) {
             if (str_starts_with($type, 'App\\Modules\\Identity\\Domain\\')) {
@@ -160,11 +161,16 @@ arch('the People directory depends only on the People ports, the id type and the
     ]);
 });
 
+arch('the exact-name lookup is used by Crm\'s Application layer and Identity, and by nothing else', function () {
+    expect(FindPeopleNamed::class)->toOnlyBeUsedIn(['App\\Modules\\Crm\\Application', 'App\\Modules\\Identity']);
+});
+
 it('gives the People directory no way to ask about Accounts', function () {
     $applicationTypes = array_merge(
         publicSurfaceTypes(PeopleDirectory::class),
         publicSurfaceTypes(PeopleQuery::class),
         publicSurfaceTypes(PeoplePage::class),
+        publicSurfaceTypes(FindPeopleNamed::class),
     );
 
     expect(array_filter($applicationTypes, fn (string $t): bool => preg_match('/Account|Managed/', $t) === 1))->toBe([]);
@@ -176,7 +182,7 @@ const AUTHORITY_GATE = '/SecurityProof|VerifySecurityAccess|RequireRecentSecurit
 
 it('does not gate renaming or searching on recent verification or on a capability', function () {
     $offenders = [];
-    foreach (['SearchPeople', 'RenamePerson', 'PeopleQuery', 'PeoplePage', 'PeopleDirectory'] as $name) {
+    foreach (['SearchPeople', 'FindPeopleNamed', 'RenamePerson', 'PeopleQuery', 'PeoplePage', 'PeopleDirectory'] as $name) {
         $code = SourceScan::code(SourceScan::read(SourceScan::root()."/app/Modules/Identity/Application/{$name}.php"));
         if (preg_match(AUTHORITY_GATE, $code) === 1) {
             $offenders[] = $name;

@@ -45,6 +45,13 @@ enum Capability: string
     /** May see the People directory and what CRM holds about each Person: contact methods, profile, tags (ADR 0034). Changes nothing. */
     case ViewPeople = 'crm.people.view';
 
-    /** May change what CRM holds about a Person, register a Person, manage tags, and correct a Person's display name (ADR 0034). Routine, so it asks for no fresh verification. */
+    /**
+     * May change what CRM holds about a Person, register a Person, manage tags, and correct a Person's display name (ADR 0034).
+     *
+     * For ROUTINE CRM maintenance only, which is why its mutations ask for no recent verification: the step-up exemption in
+     * the administration route table is this capability and nothing else. A materially security-sensitive operation (merging
+     * Persons, a bulk export, a destructive Account or security action) must get its own capability, protected as such, and
+     * must not be put behind this one to inherit the exemption.
+     */
     case ManagePeople = 'crm.people.manage';
 }

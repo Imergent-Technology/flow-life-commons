@@ -21,8 +21,8 @@ use Illuminate\Database\UniqueConstraintViolationException;
 
 /**
  * Changes a contact method's value, label or primary flag. Needs `crm.people.manage`. A field not in `$changes` is
- * left alone. Making a method primary demotes the one that was; clearing the flag on the primary leaves the kind with
- * no primary (the invariant is "at most one").
+ * left alone. Making a method primary demotes the one that was, atomically. A Person with any method of a kind has exactly
+ * ONE primary of it, so the current primary cannot simply be un-set: make another method primary instead.
  */
 final readonly class UpdateContactMethod
 {
@@ -75,10 +75,12 @@ final readonly class UpdateContactMethod
                 $changed = $changed->withLabel($changes['label'], $now);
             }
             if (array_key_exists('is_primary', $changes) && $changes['is_primary'] !== $method->isPrimary) {
-                if ($changes['is_primary']) {
-                    $this->methods->clearPrimary($personId, $method->kind);
+                if (! $changes['is_primary']) {
+                    // Exactly one primary per kind while any method of the kind exists: promoting another is the only way to demote this one.
+                    throw new InvalidContactInput('is_primary', 'Make another contact method primary instead.');
                 }
-                $changed = $changed->withPrimary($changes['is_primary'], $now);
+                $this->methods->clearPrimary($personId, $method->kind);
+                $changed = $changed->withPrimary(true, $now);
             }
 
             try {

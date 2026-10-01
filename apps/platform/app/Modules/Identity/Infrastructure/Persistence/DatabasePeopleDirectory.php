@@ -49,6 +49,22 @@ final readonly class DatabasePeopleDirectory implements PeopleDirectory
         return new PeoplePage($summaries, $query->page, $query->perPage, $total);
     }
 
+    public function named(string $name, int $limit): array
+    {
+        $rows = $this->database->table('people')
+            ->whereRaw('lower(display_name) = ?', [mb_strtolower($name)])
+            ->orderBy('id')->limit(max(1, $limit))
+            ->get(['id', 'display_name']);
+
+        $summaries = [];
+        foreach ($rows as $row) {
+            assert(is_string($row->id) && is_string($row->display_name));
+            $summaries[] = new PersonSummary(PersonId::fromString($row->id), $row->display_name);
+        }
+
+        return $summaries;
+    }
+
     private function narrow(Builder $people, PeopleQuery $query): void
     {
         $fragment = $query->text === null ? '' : trim($query->text);

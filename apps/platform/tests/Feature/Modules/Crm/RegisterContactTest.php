@@ -118,6 +118,33 @@ it('does not take a name that merely CONTAINS the new one as a duplicate, nor a 
     expect($record->person->displayName)->toBe('Ada Lovelace');
 });
 
+it('finds an exact same-name Person wherever the name sorts: no bounded walk of contains-matches can miss it', function () {
+    // 1,001 names that CONTAIN "Ann" and sort BEFORE it ("aann 0000" < "ann"): a walk of the first 1,000 contains-matches
+    // would never reach the real Ann.
+    $rows = [];
+    for ($i = 0; $i <= 1000; $i++) {
+        $rows[] = ['id' => PersonId::generate()->value, 'display_name' => sprintf('Aann %04d', $i), 'created_at' => '2026-10-01 12:00:00', 'updated_at' => '2026-10-01 12:00:00'];
+    }
+    foreach (array_chunk($rows, 200) as $chunk) {
+        DB::table('people')->insert($chunk);
+    }
+    $ann = Identity::savedPerson('Ann');
+
+    try {
+        register('ann');
+        Assert::fail('expected a possible duplicate');
+    } catch (PossibleDuplicate $e) {
+        expect($e->candidates)->toHaveCount(1)
+            ->and($e->candidates[0]->person->id->equals($ann->id))->toBeTrue()
+            ->and($e->candidates[0]->matchedOn)->toBe(['display_name']);
+    }
+    expect(DB::table('people')->whereRaw('lower(display_name) = ?', ['ann'])->count())->toBe(1); // nothing was created
+
+    // Advice only: told the Person is distinct, it registers.
+    expect(register('ann', confirm: true)->person->displayName)->toBe('ann')
+        ->and(DB::table('people')->whereRaw('lower(display_name) = ?', ['ann'])->count())->toBe(2);
+});
+
 it('does NOT consult Account login emails: an Account\'s address is not advice to a CRM user (accepted Phase 1 behaviour)', function () {
     $by = Crm::manager();
     Identity::savedActiveAccount('login.address@example.org', name: 'Account Holder');

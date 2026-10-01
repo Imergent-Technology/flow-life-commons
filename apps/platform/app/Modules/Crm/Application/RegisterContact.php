@@ -11,6 +11,7 @@ use App\Modules\Crm\Domain\ContactMethodKind;
 use App\Modules\Crm\Domain\ContactMethodRepository;
 use App\Modules\Crm\Domain\ContactProfileRepository;
 use App\Modules\Crm\Domain\InvalidContactInput;
+use App\Modules\Identity\Application\FindPeopleNamed;
 use App\Modules\Identity\Application\PeopleQuery;
 use App\Modules\Identity\Application\PersonSummary;
 use App\Modules\Identity\Application\RegisterPerson;
@@ -37,13 +38,11 @@ use InvalidArgumentException;
  */
 final readonly class RegisterContact
 {
-    /** How far down the contains-matches for the display name the exact-name check looks (pages of 100). */
-    private const int NAME_PAGES = 10;
-
     public function __construct(
         private AuthorizeAction $authorize,
         private RegisterPerson $registerPerson,
         private SearchPeople $search,
+        private FindPeopleNamed $named,
         private ContactProfileRepository $profiles,
         private ContactMethodRepository $methods,
         private ContactMethodWriter $writer,
@@ -147,19 +146,9 @@ final readonly class RegisterContact
             }
         }
 
-        $name = mb_strtolower(trim($displayName));
-        if ($name !== '') {
-            for ($pageNumber = 1; $pageNumber <= self::NAME_PAGES; $pageNumber++) {
-                $page = ($this->search)(new PeopleQuery($name, null, null, $pageNumber, PeopleQuery::MAX_PER_PAGE));
-                foreach ($page->people as $person) {
-                    if (mb_strtolower(trim($person->displayName)) === $name) {
-                        $found[$person->id->value] = ['person' => $person, 'on' => ($found[$person->id->value]['on'] ?? []) + ['display_name' => true]];
-                    }
-                }
-                if ($pageNumber >= $page->lastPage()) {
-                    break;
-                }
-            }
+        // The same name, ignoring case: an exact lookup in Identity, so no result can be missed by where it sorts.
+        foreach (($this->named)($displayName) as $person) {
+            $found[$person->id->value] = ['person' => $person, 'on' => ($found[$person->id->value]['on'] ?? []) + ['display_name' => true]];
         }
 
         $candidates = [];

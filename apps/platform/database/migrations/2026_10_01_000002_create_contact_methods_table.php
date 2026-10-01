@@ -12,7 +12,10 @@ use Illuminate\Support\Facades\Schema;
  * - NOT unique across Persons: a shared household or organisational address is legitimate. Uniqueness is per Person
  *   only: `unique(person_id, kind, search_value)`, so the same value cannot be recorded twice for one Person.
  * - `value` is what the human entered (trimmed); `search_value` is a conservative normalisation for matching and
- *   search only, never an identity (an email is lower-cased; a phone number keeps its digits and a leading plus).
+ *   search only, never an identity (an email is lower-cased; a phone number keeps its digits and a leading plus). The
+ *   normalisation is portable for ASCII and case; for non-ASCII text, equality follows the column's collation
+ *   (`utf8mb4_unicode_ci` on MariaDB folds accents, so `josé@x.org` and `jose@x.org` are one value there and two on
+ *   PostgreSQL). No accent folding is promised, and CrmCollationTest pins the difference.
  * - "At most one primary per kind per Person" is enforced by the database, not by check-then-write: `primary_kind`
  *   holds the kind when the row is the primary and NULL otherwise, and `unique(person_id, primary_kind)` allows any
  *   number of NULLs and one of each kind on both MariaDB and PostgreSQL. No partial index, no generated column.

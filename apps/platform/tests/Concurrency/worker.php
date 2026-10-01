@@ -42,6 +42,7 @@ use App\Modules\Crm\Application\CreateTag;
 use App\Modules\Crm\Application\DeleteTag;
 use App\Modules\Crm\Application\NewContactMethod;
 use App\Modules\Crm\Application\RegisterContact;
+use App\Modules\Crm\Application\RenameTag;
 use App\Modules\Crm\Application\SetPersonTags;
 use App\Modules\Crm\Application\UpdateContactMethod;
 use App\Modules\Crm\Domain\ContactMethodId;
@@ -200,6 +201,8 @@ try {
         $app->make(CreateTag::class)(Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))), $arg('name'));
     } elseif ($operation === 'crm_delete_tag') {
         $app->make(DeleteTag::class)(Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))), ContactTagId::fromString($arg('tag')));
+    } elseif ($operation === 'crm_rename_tag') {
+        $app->make(RenameTag::class)(Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))), ContactTagId::fromString($arg('tag')), $arg('name'));
     } elseif ($operation === 'crm_set_tags') {
         $app->make(SetPersonTags::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),

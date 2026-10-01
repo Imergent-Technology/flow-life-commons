@@ -11,12 +11,17 @@ use App\Modules\Crm\Domain\ContactTagId;
 use App\Modules\Crm\Domain\ContactTagRepository;
 use App\Modules\Crm\Domain\InvalidContactInput;
 use App\Shared\Domain\Actor;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\UniqueConstraintViolationException;
 
 /** Renames a tag; People who hold it keep it. Needs `crm.people.manage`. Changing only the case of a name is allowed. */
 final readonly class RenameTag
 {
-    public function __construct(private AuthorizeAction $authorize, private ContactTagRepository $tags) {}
+    public function __construct(
+        private AuthorizeAction $authorize,
+        private ContactTagRepository $tags,
+        private ConnectionInterface $database,
+    ) {}
 
     /**
      * @throws AccessDenied
@@ -28,19 +33,23 @@ final readonly class RenameTag
     {
         ($this->authorize)($actor, Capability::ManagePeople);
 
-        $tag = $this->tags->find($tagId) ?? throw new TagNotFound;
-        $renamed = $tag->renamed($name);
+        // One transaction with the tag's row locked: a delete that commits first is seen as TagNotFound, never as a rename
+        // of a tag that is gone; one that arrives later waits for this to commit.
+        return $this->database->transaction(function () use ($tagId, $name): TagWithCount {
+            $tag = $this->tags->findForUpdate($tagId) ?? throw new TagNotFound;
+            $renamed = $tag->renamed($name);
 
-        $other = $this->tags->findByCanonical($renamed->canonical);
-        if ($other !== null && ! $other->id->equals($tag->id)) {
-            throw new DuplicateTag;
-        }
-        try {
-            $this->tags->save($renamed);
-        } catch (UniqueConstraintViolationException) {
-            throw new DuplicateTag;
-        }
+            $other = $this->tags->findByCanonical($renamed->canonical);
+            if ($other !== null && ! $other->id->equals($tag->id)) {
+                throw new DuplicateTag;
+            }
+            try {
+                $this->tags->save($renamed);
+            } catch (UniqueConstraintViolationException) {
+                throw new DuplicateTag;
+            }
 
-        return new TagWithCount($renamed, $this->tags->assignmentCount($tagId));
+            return new TagWithCount($renamed, $this->tags->assignmentCount($tagId));
+        }, 3);
     }
 }

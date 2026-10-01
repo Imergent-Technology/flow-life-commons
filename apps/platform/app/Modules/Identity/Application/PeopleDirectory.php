@@ -16,4 +16,11 @@ interface PeopleDirectory
 {
     /** The query arrives already bounded. */
     public function search(PeopleQuery $query): PeoplePage;
+
+    /**
+     * People whose display name equals this (already trimmed, non-empty) name, ignoring case, by id, at most `$limit`.
+     *
+     * @return list<PersonSummary>
+     */
+    public function named(string $name, int $limit): array;
 }

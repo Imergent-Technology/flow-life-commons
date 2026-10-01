@@ -28,6 +28,13 @@ final readonly class DatabaseContactTagRepository implements ContactTagRepositor
         return $row === null ? null : self::toDomain($row);
     }
 
+    public function findForUpdate(ContactTagId $id): ?ContactTag
+    {
+        $row = $this->database->table(self::TAGS)->where('id', $id->value)->lockForUpdate()->first();
+
+        return $row === null ? null : self::toDomain($row);
+    }
+
     public function findByCanonical(string $canonical): ?ContactTag
     {
         $row = $this->database->table(self::TAGS)->where('name_canonical', $canonical)->first();
@@ -46,7 +53,7 @@ final readonly class DatabaseContactTagRepository implements ContactTagRepositor
         $tags = [];
         foreach ($this->database->table(self::TAGS)->orderBy('name_canonical')->orderBy('id')->get() as $row) {
             $tag = self::toDomain($row);
-            $tags[] = ['tag' => $tag, 'people' => $counts[$tag->id->value] ?? 0];
+            $tags[] = ['tag' => $tag, 'holders' => $counts[$tag->id->value] ?? 0];
         }
 
         return $tags;

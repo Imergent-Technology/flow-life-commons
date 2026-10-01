@@ -31,8 +31,11 @@ use Illuminate\Support\Facades\Route;
  *   know someone, a phone number, a tag or a typo in a name is routine maintenance, and making it a step-up would
  *   only make it unusable. A test names this exemption, so it cannot spread to another surface by accident.
  *
- * Mutating responses return the resource that was written, never a re-read of everything CRM holds, so a caller who
- * may manage but not view learns nothing more from writing than from not writing.
+ * Mutating responses return the resource that was written, not a re-read of everything CRM holds. That is NOT a
+ * disclosure boundary: a write can still reveal CRM data (a profile update returns both profile fields, a refused
+ * registration names duplicate candidates, a duplicate method or tag in use says it exists). The platform's real
+ * answer is that every role granting `crm.people.manage` also grants `crm.people.view` (pinned in CatalogTest, ADR 0034);
+ * the capabilities are still checked independently, and there is no manage-only role.
  */
 Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin')->group(function (): void {
     // Exactly what `Str::isUlid` accepts, in the lowercase form ids are held in (see Membership's routes).

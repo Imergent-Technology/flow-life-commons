@@ -124,3 +124,19 @@ it('has no revoked state, history or scope: a row is an active grant', function 
 
     expect($properties)->toEqualCanonicalizing(['id', 'personId', 'roleKey', 'grantedByAccountId', 'grantedAt']);
 });
+
+it('gives every role that may manage People the right to view them: there is no manage-only role', function () {
+    // The People write responses reveal CRM data (profile fields, duplicate candidates, whether a method or tag exists), so
+    // the platform's protection is that nobody who may write cannot also read (ADR 0034). The capabilities stay independent
+    // checks; this pins the ROLE POLICY. A role that manages without viewing needs the candidate and write-response
+    // disclosure designed first, then this test changed deliberately.
+    $managers = [];
+    foreach (Role::cases() as $role) {
+        if ($role->grants(Capability::ManagePeople)) {
+            $managers[] = $role->value;
+            expect($role->grants(Capability::ViewPeople))->toBeTrue("{$role->value} grants crm.people.manage without crm.people.view (ADR 0034)");
+        }
+    }
+
+    expect($managers)->toBe(['platform_administrator', 'guardian']); // positive control: the loop really covered the managers
+});

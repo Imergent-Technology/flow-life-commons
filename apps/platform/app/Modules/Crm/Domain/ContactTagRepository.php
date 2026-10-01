@@ -12,12 +12,15 @@ interface ContactTagRepository
 {
     public function find(ContactTagId $id): ?ContactTag;
 
+    /** As `find`, but LOCKS the tag's row until the caller's transaction ends. Inside a transaction only. */
+    public function findForUpdate(ContactTagId $id): ?ContactTag;
+
     public function findByCanonical(string $canonical): ?ContactTag;
 
     /**
      * Every tag by canonical name, with how many People hold it.
      *
-     * @return list<array{tag: ContactTag, people: int}>
+     * @return list<array{tag: ContactTag, holders: int}>
      */
     public function allWithCounts(): array;
 

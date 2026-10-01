@@ -45,9 +45,10 @@ final readonly class ContactTag
     }
 
     /**
-     * What tag names are compared as: lower-cased, so "Lead" and "lead" are one tag. Whitespace is already collapsed
-     * by `clean`. This is deliberately NOT accent folding: that would be the engines' collation business, and
-     * uniqueness must not depend on it.
+     * What tag names are compared as: lower-cased, so "Lead" and "lead" are one tag on both engines. Whitespace is
+     * already collapsed by `clean`. This is deliberately NOT accent folding, and it is portable for ASCII and case only:
+     * for non-ASCII text the database column's collation decides what is equal (MariaDB's `utf8mb4_unicode_ci` treats
+     * "Café" and "Cafe" as one tag, PostgreSQL as two). CrmCollationTest pins that difference.
      */
     public static function canonical(string $cleanName): string
     {

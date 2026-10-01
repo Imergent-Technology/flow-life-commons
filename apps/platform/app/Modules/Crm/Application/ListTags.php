@@ -25,7 +25,7 @@ final readonly class ListTags
         ($this->authorize)($actor, Capability::ViewPeople);
 
         return array_map(
-            static fn (array $row): TagWithCount => new TagWithCount($row['tag'], $row['people']),
+            static fn (array $row): TagWithCount => new TagWithCount($row['tag'], $row['holders']),
             $this->tags->allWithCounts(),
         );
     }

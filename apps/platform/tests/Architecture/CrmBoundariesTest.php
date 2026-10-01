@@ -108,38 +108,78 @@ arch('Crm authorizes only through AuthorizeAction, never by inspecting capabilit
 // --- Tables: CRM reads and writes its own, and nothing of Identity's ---------------------------------------------------
 
 /**
- * The tables Crm's source hands to the query builder (`table`, `from`, `join`) that CRM does not own. Read off the
- * code with comments removed, so a docblock that names `people` to say CRM never touches it trips nothing, and a route
- * path or an array key called "people" is not a table.
+ * Every table the platform's migrations create that is not CRM's own: the persistence CRM must never name. Read from
+ * the migrations themselves, so a table added by a later module is protected without editing this test.
  *
  * @return list<string>
  */
-function foreignTableLiterals(string $source): array
+function foreignTables(): array
 {
-    preg_match_all('/->(?:table|from|join|leftJoin|rightJoin|crossJoin)\(\s*[\'"]([^\'"]+)[\'"]/', SourceScan::code($source), $matches);
+    $tables = [];
+    foreach (glob(SourceScan::root().'/database/migrations/*.php') ?: [] as $migration) {
+        preg_match_all('/Schema::create\(\s*[\'"]([a-z_]+)[\'"]/', SourceScan::read($migration), $matches);
+        foreach ($matches[1] as $table) {
+            if (! str_starts_with($table, 'contact_')) {
+                $tables[] = $table;
+            }
+        }
+    }
 
-    return array_values(array_filter(
-        $matches[1],
-        static fn (string $table): bool => preg_match('/^(people|accounts?|account_[a-z_]+|role_assignments|membership_grants|security_events|sessions|password_reset_tokens|jobs|cache)(\s+as\s+\w+)?$/i', $table) === 1,
-    ));
+    return array_values(array_unique($tables));
+}
+
+/**
+ * The string literals in this source that name one of `$tables`, however they reach the database: as a bare literal
+ * (`->table('people')`, `const TABLE = 'people'`, an `'accounts as a'` alias, an array of names) or inside raw SQL
+ * (`from accounts`, `join role_assignments`, a subquery in a `whereRaw`). Read from the tokenizer, so a comment that
+ * names a table to explain why CRM never touches it trips nothing. Not a SQL parser: it recognises the table positions
+ * (`from`, `join`, `into`, `update`, `table`) and a literal that IS a table name.
+ *
+ * @param  list<string>  $tables
+ * @return list<string>
+ */
+function foreignTableLiterals(string $source, array $tables): array
+{
+    $names = implode('|', array_map(static fn (string $t): string => preg_quote($t, '/'), $tables));
+    $found = [];
+    foreach (SourceScan::stringLiterals($source) as $literal) {
+        if (preg_match('/^\s*(?:'.$names.')(?:\s+as\s+\w+)?\s*$/i', $literal) === 1
+            || preg_match('/\b(?:from|join|into|update|table|truncate)\s+["`]?(?:'.$names.')\b/i', $literal) === 1) {
+            $found[] = $literal;
+        }
+    }
+
+    return $found;
 }
 
 it('names no table that is not CRM\'s own: it never queries or writes people, Accounts, roles, Membership or the audit trail', function () {
+    $tables = foreignTables();
+
+    // The protected set is real and complete enough to mean something: Identity's, Access's, Membership's and Audit's.
+    expect($tables)->toContain('people', 'accounts', 'account_invitations', 'role_assignments', 'membership_grants', 'security_events', 'sessions')
+        ->and($tables)->not->toContain('contact_methods', 'contact_profiles', 'contact_tags', 'contact_tag_assignments');
+
     $offenders = [];
-    foreach (SourceScan::phpFiles(['app/Modules/Crm']) as $path) {
-        foreach (foreignTableLiterals(SourceScan::read($path)) as $literal) {
+    foreach (SourceScan::phpFiles(['app/Modules/Crm/Domain', 'app/Modules/Crm/Application', 'app/Modules/Crm/Infrastructure']) as $path) {
+        foreach (foreignTableLiterals(SourceScan::read($path), $tables) as $literal) {
             $offenders[] = SourceScan::relative($path).": {$literal}";
         }
     }
 
     expect($offenders)->toBe([]);
 
-    // Positive controls: the scan finds the real tables where they ARE named, and each form a planted offender could take.
-    expect(foreignTableLiterals(SourceScan::read(SourceScan::root().'/app/Modules/Identity/Infrastructure/Persistence/DatabasePeopleDirectory.php')))->toContain('people')
-        ->and(foreignTableLiterals("<?php \$db->table('people')->update(['display_name' => 'x']);"))->toBe(['people'])
-        ->and(foreignTableLiterals("<?php \$db->table('accounts as a')->get();"))->toBe(['accounts as a'])
-        ->and(foreignTableLiterals("<?php \$db->table('role_assignments')->get();"))->toBe(['role_assignments'])
-        ->and(foreignTableLiterals("<?php \$db->table('contact_methods')->get(); echo 'no such people';"))->toBe([]);
+    // Positive controls: the scan finds the real table where it IS named, and every form a planted offender could take.
+    expect(foreignTableLiterals(SourceScan::read(SourceScan::root().'/app/Modules/Identity/Infrastructure/Persistence/DatabasePeopleDirectory.php'), $tables))->toContain('people')
+        ->and(foreignTableLiterals("<?php \$db->table('people')->update(['display_name' => 'x']);", $tables))->toBe(['people'])
+        ->and(foreignTableLiterals("<?php private const string TABLE = 'people'; \$db->table(self::TABLE)->get();", $tables))->toBe(['people'])
+        ->and(foreignTableLiterals("<?php \$db->table('accounts as a')->get();", $tables))->toBe(['accounts as a'])
+        ->and(foreignTableLiterals("<?php \$db->table(self::T.' as a')->join('membership_grants as g', 'g.person_id', '=', 'a.person_id');", $tables))->toBe(['membership_grants as g'])
+        ->and(foreignTableLiterals("<?php \$db->select('select email from accounts where id = ?', [\$id]);", $tables))->toHaveCount(1)
+        ->and(foreignTableLiterals("<?php \$q->whereRaw('person_id in (select person_id from role_assignments)');", $tables))->toHaveCount(1)
+        ->and(foreignTableLiterals('<?php $db->statement("delete from security_events where id = {$id}");', $tables))->toHaveCount(1)
+        ->and(foreignTableLiterals('<?php $db->statement("update people set display_name = ?");', $tables))->toHaveCount(1)
+        // ...and does not trip on what is not a table reference: CRM's own tables, an alias, a comment, a word in prose.
+        ->and(foreignTableLiterals("<?php \$db->table('contact_methods')->get(); \$db->selectRaw('count(*) as people'); echo 'no such people'; // table('people')", $tables))->toBe([]);
 });
 
 it('names only the four tables CRM owns', function () {

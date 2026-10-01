@@ -138,6 +138,53 @@ it('discloses nothing about Accounts, access, Membership or security, even for a
     expect((string) $bodies[0])->toContain('different.contact@example.org'); // what CRM holds IS shown
 });
 
+it('discloses nothing about Accounts, access, Membership or security in WRITE responses either, nor in a duplicate or error answer', function () {
+    [$console] = Mfa::signedIn();
+    $operator = Identity::savedActiveAccount('operator.login@example.org', name: 'Operator Person');
+    Access::grant($operator, Role::Guardian);
+    Membership::savedGrant($operator->personId);
+    Mfa::enroll($operator);
+    $person = $operator->personId->value;
+    $tag = Api::string($console->post('/api/v1/admin/contact-tags', ['name' => 'Partner'])->assertCreated()->json('id'));
+
+    $first = $console->post("/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'email', 'value' => 'different.contact@example.org'])->assertCreated();
+    $method = Api::string($first->json('id'));
+
+    $responses = [
+        'POST contact method 201' => $first,
+        'PATCH contact method 200' => $console->patch("/api/v1/admin/people/{$person}/contact-methods/{$method}", ['label' => 'work']),
+        'PATCH person 200' => $console->patch("/api/v1/admin/people/{$person}", ['display_name' => 'Operator Person', 'how_we_know' => 'Colleague', 'affiliation' => 'Guild']),
+        'PUT tags 200' => $console->put("/api/v1/admin/people/{$person}/tags", ['tag_ids' => [$tag]]),
+        'PATCH tag 200' => $console->patch("/api/v1/admin/contact-tags/{$tag}", ['name' => 'Partners']),
+        'POST /people 201' => $console->post('/api/v1/admin/people', ['display_name' => 'Brand New', 'how_we_know' => 'Market', 'contact_methods' => [['kind' => 'email', 'value' => 'brand.new@example.org']]]),
+        // The candidates ARE the Account-holding Person, by name and by CRM email.
+        'POST /people possible_duplicate by name 409' => $console->post('/api/v1/admin/people', ['display_name' => 'operator person']),
+        'POST /people possible_duplicate by email 409' => $console->post('/api/v1/admin/people', ['display_name' => 'Someone Else', 'contact_methods' => [['kind' => 'email', 'value' => 'Different.Contact@example.org']]]),
+        'POST duplicate method 409' => $console->post("/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'email', 'value' => 'DIFFERENT.contact@example.org']),
+        'DELETE tag in use 409' => $console->delete("/api/v1/admin/contact-tags/{$tag}"),
+        'POST invalid method 422' => $console->post("/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'email', 'value' => 'nope']),
+        'PATCH un-set primary 422' => $console->patch("/api/v1/admin/people/{$person}/contact-methods/{$method}", ['is_primary' => false]),
+    ];
+
+    expect($responses['POST /people possible_duplicate by name 409']->json('code'))->toBe('possible_duplicate')
+        ->and($responses['POST /people possible_duplicate by email 409']->json('code'))->toBe('possible_duplicate')
+        ->and($responses['POST /people possible_duplicate by name 409']->json('candidates.0.id'))->toBe($person); // positive control: the Account holder is in the answer
+
+    $leaks = [];
+    foreach ($responses as $label => $response) {
+        $text = strtolower((string) $response->getContent());
+        foreach (['operator.login@example.org' => 'the Account login email', $operator->id->value => 'the Account id'] as $needle => $what) {
+            if (str_contains($text, (string) $needle)) {
+                $leaks[] = "{$label}: {$what}";
+            }
+        }
+        if (preg_match('/account|role|capabilit|guardian|mfa|totp|recovery|invitation|session|generation|membership|grant|status|password|secret|token/', $text, $word) === 1) {
+            $leaks[] = "{$label}: mentions '{$word[0]}'";
+        }
+    }
+    expect($leaks)->toBe([]);
+});
+
 it('does not find a Person by their Account login email through HTTP either', function () {
     [$console] = Mfa::signedIn();
     Identity::savedActiveAccount('hidden.login@example.org', name: 'Someone');
@@ -250,6 +297,53 @@ it('answers 422 with per-field errors for malformed requests', function () {
     foreach ($cases as [$response, $field]) {
         expect($response->status())->toBe(422)->and(Api::map($response->json('errors')))->toHaveKey($field);
     }
+});
+
+it('reads is_primary the same way on create, in a registration and on update: every representation Laravel\'s boolean rule admits', function () {
+    [$console, $person] = crmWorld();
+
+    // Adding with a truthy flag makes it the primary (demoting the one before); a falsy one does not.
+    $truthy = [true, 1, '1'];
+    foreach ($truthy as $i => $flag) {
+        $added = $console->post("/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'email', 'value' => "t{$i}@example.org", 'is_primary' => $flag])->assertCreated();
+        expect($added->json('is_primary'))->toBeTrue('create with '.var_export($flag, true));
+    }
+    foreach ([false, 0, '0'] as $i => $flag) {
+        $added = $console->post("/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'email', 'value' => "f{$i}@example.org", 'is_primary' => $flag])->assertCreated();
+        expect($added->json('is_primary'))->toBeFalse('create with '.var_export($flag, true));
+    }
+    expect(DB::table('contact_methods')->where('person_id', $person)->where('kind', 'email')->whereNotNull('primary_kind')->count())->toBe(1);
+
+    // The same flag over update promotes.
+    $other = Api::string($console->post("/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'phone', 'value' => '555 010 0199'])->assertCreated()->json('id'));
+    foreach ([1, '1', true] as $flag) {
+        $console->patch("/api/v1/admin/people/{$person}/contact-methods/{$other}", ['is_primary' => $flag])->assertOk()->assertJsonPath('is_primary', true);
+    }
+
+    // Inside a registration the first of a kind is primary anyway; a later one is only if asked, in any admitted form.
+    foreach ([1, '1', true] as $i => $flag) {
+        $registered = $console->post('/api/v1/admin/people', ['display_name' => "Reg {$i}", 'contact_methods' => [
+            ['kind' => 'email', 'value' => "r{$i}a@example.org"], ['kind' => 'email', 'value' => "r{$i}b@example.org", 'is_primary' => $flag],
+        ]])->assertCreated();
+        expect(Api::strings(array_map(fn ($m) => Api::map($m)['is_primary'] ? Api::string(Api::map($m)['value']) : '', Api::rows($registered->json('contact_methods')))))->toBe(['', "r{$i}b@example.org"]);
+    }
+
+    // Laravel's contract is not broadened: a word is still not a boolean.
+    $console->post("/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'email', 'value' => 'word@example.org', 'is_primary' => 'yes'])->assertStatus(422);
+});
+
+it('refuses to un-set a primary contact method over HTTP, and promotes another instead', function () {
+    [$console, $person, $primary] = crmWorld();
+    $other = Api::string($console->post("/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'email', 'value' => 'second@example.org'])->assertCreated()->json('id'));
+
+    $refused = $console->patch("/api/v1/admin/people/{$person}/contact-methods/{$primary}", ['is_primary' => false]);
+    expect($refused->status())->toBe(422)
+        ->and($refused->json('code'))->toBe('invalid_contact_input')
+        ->and(Api::strings(Api::map($refused->json('errors'))['is_primary']))->toBe(['Make another contact method primary instead.'])
+        ->and(DB::table('contact_methods')->where('id', $primary)->whereNotNull('primary_kind')->exists())->toBeTrue();
+
+    $console->patch("/api/v1/admin/people/{$person}/contact-methods/{$other}", ['is_primary' => true])->assertOk()->assertJsonPath('is_primary', true);
+    expect(DB::table('contact_methods')->where('person_id', $person)->where('kind', 'email')->whereNotNull('primary_kind')->pluck('id')->all())->toBe([$other]);
 });
 
 it('clears a profile field sent as null, and corrects a name, in one PATCH', function () {
