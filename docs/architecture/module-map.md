@@ -83,7 +83,8 @@ Working titles to frame discussion. **They are not commitments and no folders ex
 | Candidate | Likely concern |
 | --- | --- |
 | ~~CRM~~ | **Now `Crm` (G1), above.** Profiles, contact methods, tags (WP2), and notes and interactions (WP3) are built; the Console's People, notes and tag screens (WP4, WP5) are built too |
-| Discussions, Events, Publishing, Knowledge | Planned Guardian domains (G2–G5, in that order). Each gets its own design gate; no boundaries are fixed here |
+| Discussions | **Designed, not created (G2, [ADR 0035](../adr/0035-guardian-discussions-are-durable-asynchronous-threads.md)).** A dedicated `Discussions` module will own `discussions` and `discussion_messages`, depend only on `Access\Application`, `Identity\Application` (`FindPeople`) and `Shared`, and serve `/api/v1/admin/discussions` behind `discussions.view`/`discussions.participate` with no `security.verified`. Not CRM, Identity, Access or Membership; no generic comment framework. The folder is created by WP1 |
+| Events, Publishing, Knowledge | Planned Guardian domains (G3–G5, in that order). Each gets its own design gate; no boundaries are fixed here |
 | Volunteering | Volunteers are Members with elevated duties and privileges, not a second identity and not merely an Access role. The domain model (lifecycle, assignments, duties, history) is undecided |
 | Workflow | Approval/workflow, separate from authorization ([ADR 0009](../adr/0009-authorization-separate-from-approval.md)) |
 
