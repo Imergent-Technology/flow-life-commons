@@ -117,6 +117,8 @@ services:
 
   mailpit:
     image: axllent/mailpit:v1.31.2
+    ports:
+      - "127.0.0.1:${FLOW_MAILPIT_WEB_PORT:-18025}:8025"
 
   # ---- Optional profiles -------------------------------------------------
 
