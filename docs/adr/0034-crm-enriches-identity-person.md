@@ -1,6 +1,6 @@
 # ADR 0034: CRM enriches Identity's Person
 
-- **Status:** Accepted (implemented: Identity's People ports, the `Crm` backend (WP2) and notes and interactions (WP3); the Console UI is not built)
+- **Status:** Accepted (implemented: Identity's People ports, the `Crm` backend (WP2) notes and interactions (WP3) and the Console's People screens (WP4); the notes and tag screens are not built)
 - **Date:** 2026-09-29
 - **Supersedes:** none
 - **Superseded by:** none
@@ -88,6 +88,17 @@ Where building notes and interactions settled what decision 17 left open. None c
 - **Removal.** Hard delete, the convention contact methods already follow. No soft delete or versioning: nothing in Phase 1 needs one, and erasure policy remains an open question (see Consequences). A note removed is gone.
 - **No audit entry.** Recording, editing and removing write nothing to `security_events`: it is not the CRM activity log (decision 17), and ordinary business content is not over-audited into the security subsystem.
 - **No lock.** A note has no uniqueness or "exactly one" rule, so it does not take the Person's profile-row lock and does not create the profile row. Edit re-reads after writing (an unchanged row reports zero affected rows on MariaDB), so a note removed in between is reported gone rather than returned as if it still existed.
+
+## Implementation notes (WP4, 2026-10-02)
+
+Where building the Guardian People screens settled what this ADR left to the UI. None changes a decision above.
+
+- **Surface.** A People section in the Console's rail (`/people`, `/people/new`, `/people/:personId`), shown by `crm.people.view` and `crm.people.manage` independently: view reaches the directory and the record, manage alone reaches "Add a person". The Console never treats one capability as the other, and the server decides every request.
+- **What a record shows.** The Person's name, CRM's profile (how we know them, affiliation) and contact methods. Nothing from an Account, Membership or security appears, and the record's `tags` are returned by the API but not read: tags and notes are WP5.
+- **Search** is submitted rather than run on every keystroke, and a new search returns to page 1. The server owns order, search and paging.
+- **Edits send only what changed.** The API is a partial update, so a field the form did not touch is never sent and cannot overwrite what someone else changed since the page loaded.
+- **Duplicate advice is advice.** A `409 possible_duplicate` is shown with the candidates and what matched, and nothing is created. The Guardian either opens a candidate or states that this is a different person, which resends the same request with `confirm_distinct`. Nothing is merged or adopted.
+- **The server decides which contact method is primary.** After every contact-method change the Console re-reads the record rather than keeping its own idea of the primary; "make primary" is its own action, so the Console never asks to un-set a primary.
 
 ## Consequences
 

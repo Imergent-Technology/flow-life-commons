@@ -66,6 +66,21 @@ describe('request forgery token', () => {
     expect(api.callsTo('POST /api/v1/logout')[0]?.headers['X-XSRF-TOKEN']).toBe('tok=en/1')
   })
 
+  it('echoes it on PATCH as on any other change (the People edits are PATCH requests)', async () => {
+    setXsrfCookie('tok%3Den%2F1')
+    api.on('PATCH /api/v1/admin/people/x', empty()).install()
+
+    await requestVoid({
+      method: 'PATCH',
+      path: '/api/v1/admin/people/x',
+      body: { affiliation: null },
+    })
+
+    const [call] = api.callsTo('PATCH /api/v1/admin/people/x')
+    expect(call?.headers['X-XSRF-TOKEN']).toBe('tok=en/1')
+    expect(call?.body).toEqual({ affiliation: null })
+  })
+
   it('sends no token header when there is no cookie (the browser marks the request same-origin)', async () => {
     api.on('POST /api/v1/logout', empty()).install()
     await logout()
@@ -132,6 +147,19 @@ describe('failures', () => {
       { kind: 'conflict', code: 'last_administrator_required' },
     ],
     [409, { message: 'x' }, {}, { kind: 'conflict', code: '' }],
+    // People (ADR 0034): a possible-duplicate 409 carries its candidates; a body without any adds nothing to the failure.
+    [
+      409,
+      { message: 'x', code: 'possible_duplicate', candidates: [{ id: 'a' }] },
+      {},
+      { kind: 'conflict', code: 'possible_duplicate', candidates: [{ id: 'a' }] },
+    ],
+    [
+      409,
+      { message: 'x', code: 'possible_duplicate', candidates: 'no' },
+      {},
+      { kind: 'conflict', code: 'possible_duplicate' },
+    ],
   ]
 
   it.each(cases)('classifies HTTP %i', async (status, body, headers, expected) => {

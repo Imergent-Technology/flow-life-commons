@@ -17,6 +17,10 @@ export const ROLES_ASSIGN = 'access.roles.assign'
 export const MEMBERSHIP_VIEW = 'membership.records.view'
 export const MEMBERSHIP_MANAGE = 'membership.records.manage'
 
+// People (CRM, ADR 0034). Independent: manage does not imply view, and the Console never treats one as the other.
+export const PEOPLE_VIEW = 'crm.people.view'
+export const PEOPLE_MANAGE = 'crm.people.manage'
+
 export function hasCapability(current: CurrentAccount, capability: string): boolean {
   return current.capabilities.includes(capability)
 }

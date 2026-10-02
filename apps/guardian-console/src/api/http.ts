@@ -27,8 +27,12 @@ export type Failure =
   | { kind: 'verification-required' }
   /** 404: what was asked about no longer exists. */
   | { kind: 'not-found' }
-  /** 409: the request was understood and refused because of the state of things; `code` is the stable reason. */
-  | { kind: 'conflict'; code: string }
+  /**
+   * 409: the request was understood and refused because of the state of things; `code` is the stable reason. `candidates`
+   * is present only when the refusal carries a list the person must see (the People registration's possible duplicates);
+   * it is untrusted and the caller must check its shape.
+   */
+  | { kind: 'conflict'; code: string; candidates?: unknown[] }
   /** 419: the request-forgery check refused even after a fresh token was fetched. */
   | { kind: 'csrf' }
   /** 422: the request was refused and nothing changed; `errors` is keyed by request field. */
@@ -45,7 +49,7 @@ export type Failure =
 export type Result<T> = { ok: true; value: T } | { ok: false; failure: Failure }
 
 export interface RequestOptions {
-  method: 'GET' | 'POST' | 'DELETE'
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
   path: ApiPath
   /** JSON body. Never logged, and never placed in a URL. */
   body?: object
@@ -175,6 +179,10 @@ function failureFor(reply: Reply | null): Failure {
       return {
         kind: 'conflict',
         code: isRecord(reply.body) && typeof reply.body.code === 'string' ? reply.body.code : '',
+        ...(isRecord(reply.body) &&
+          Array.isArray(reply.body.candidates) && {
+            candidates: reply.body.candidates as unknown[],
+          }),
       }
     case 419:
       return { kind: 'csrf' }

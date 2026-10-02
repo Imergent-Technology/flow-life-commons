@@ -175,6 +175,11 @@ type NavSection = { id: string; label: string; drawerTitle?: string; icon: IconN
 
 export const sections: NavSection[] = [
   { id: 'overview', label: 'Overview', icon: 'home', to: '/' },
+  { id: 'people', label: 'People', icon: 'contacts', groups: [
+    { label: 'People', items: [
+      { label: 'All people',   to: '/people',     capability: PEOPLE_VIEW,
+        detail: { pattern: '/people/:personId', label: 'Person' } },
+      { label: 'Add a person', to: '/people/new', capability: PEOPLE_MANAGE } ] } ] },
   { id: 'admin', label: 'Admin', icon: 'people', groups: [
     { label: 'Accounts', items: [
       { label: 'All accounts',       to: '/admin/accounts',        capability: ACCOUNTS_VIEW,

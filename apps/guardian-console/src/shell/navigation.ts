@@ -5,6 +5,8 @@ import {
   INVITATIONS_ISSUE,
   MEMBERSHIP_MANAGE,
   MEMBERSHIP_VIEW,
+  PEOPLE_MANAGE,
+  PEOPLE_VIEW,
 } from '../auth/capabilities.ts'
 
 /**
@@ -13,7 +15,7 @@ import {
  * capabilities (a presentation courtesy: the server decides every request, and RequireCapability still guards
  * each route). Account security is not here on purpose: it belongs to the person, and lives in the account menu.
  */
-export type IconName = 'home' | 'people'
+export type IconName = 'home' | 'people' | 'contacts'
 
 export interface NavItem {
   label: string
@@ -43,6 +45,25 @@ export interface NavSection {
 
 export const navigation: readonly NavSection[] = [
   { id: 'overview', label: 'Overview', icon: 'home', to: '/' },
+  {
+    id: 'people',
+    label: 'People',
+    icon: 'contacts',
+    groups: [
+      {
+        label: 'People',
+        items: [
+          {
+            label: 'All people',
+            to: '/people',
+            capability: PEOPLE_VIEW,
+            detail: { pattern: '/people/:personId', label: 'Person' },
+          },
+          { label: 'Add a person', to: '/people/new', capability: PEOPLE_MANAGE },
+        ],
+      },
+    ],
+  },
   {
     id: 'admin',
     label: 'Admin',

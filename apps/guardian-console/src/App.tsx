@@ -6,6 +6,8 @@ import {
   INVITATIONS_ISSUE,
   MEMBERSHIP_MANAGE,
   MEMBERSHIP_VIEW,
+  PEOPLE_MANAGE,
+  PEOPLE_VIEW,
 } from './auth/capabilities.ts'
 import { RequireAuthentication } from './auth/RequireAuthentication.tsx'
 import { RequireCapability } from './auth/RequireCapability.tsx'
@@ -21,6 +23,9 @@ import { InviteOperatorPage } from './pages/admin/InviteOperatorPage.tsx'
 import { MemberDetailPage } from './pages/admin/MemberDetailPage.tsx'
 import { MembersPage } from './pages/admin/MembersPage.tsx'
 import { RegisterMemberPage } from './pages/admin/RegisterMemberPage.tsx'
+import { PeoplePage } from './pages/people/PeoplePage.tsx'
+import { PersonDetailPage } from './pages/people/PersonDetailPage.tsx'
+import { RegisterPersonPage } from './pages/people/RegisterPersonPage.tsx'
 import { AccountSecurityPage } from './pages/AccountSecurityPage.tsx'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
@@ -67,6 +72,30 @@ function App() {
               <Route element={<ConsoleShell />}>
                 <Route index element={<OverviewPage />} />
                 <Route path="account/security" element={<AccountSecurityPage />} />
+                <Route
+                  path="people"
+                  element={
+                    <RequireCapability capability={PEOPLE_VIEW}>
+                      <PeoplePage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="people/new"
+                  element={
+                    <RequireCapability capability={PEOPLE_MANAGE}>
+                      <RegisterPersonPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="people/:personId"
+                  element={
+                    <RequireCapability capability={PEOPLE_VIEW}>
+                      <PersonDetailPage />
+                    </RequireCapability>
+                  }
+                />
                 <Route
                   path="admin/accounts"
                   element={

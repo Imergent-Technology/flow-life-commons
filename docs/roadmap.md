@@ -20,8 +20,9 @@ This document tracks product sequencing and implementation status. ADRs and arch
 | Production transactional mail: authenticated-SMTP code foundation ([ADR 0031](adr/0031-production-transactional-mail-uses-authenticated-smtp.md)) | Complete (code) | No, on `main` only |
 | CRM / People architecture, WP0 ([ADR 0034](adr/0034-crm-enriches-identity-person.md)) | Complete | Docs only |
 | Identity People search and rename, WP1 | Complete | No, on `main` only. An Application seam with no route: nothing user-visible yet |
-| CRM backend, WP2: the People directory API, contact methods, tags, and the Guardian's `crm.people.view`/`manage` access | Complete | No, on `main` only. An API with no Console screen yet (WP4) |
-| CRM notes and interactions backend, WP3: record, list, correct and remove a Person's notes | Complete | No, on `main` only. An API with no Console screen yet (WP5) |
+| CRM backend, WP2: the People directory API, contact methods, tags, and the Guardian's `crm.people.view`/`manage` access | Complete | No, on `main` only. Its Console screens are WP4 (People, contact methods) and WP5 (tags) |
+| CRM notes and interactions backend, WP3: record, list, correct and remove a Person's notes | Complete | No, on `main` only. An API whose Console screen is WP5 |
+| Guardian People UI, WP4: the People directory, a Person's record, adding a person, editing their profile and managing their contact methods | Complete | No, on `main` only. Notes and tags in the Console are WP5 |
 
 ## Current focus: G1 — CRM / People (Active)
 
@@ -33,7 +34,7 @@ Make Commons genuinely useful to Guardians as a people and contact system. The b
 | WP1 | Identity People search and rename | Complete |
 | WP2 | CRM profiles, contact methods and tags (introduces the CRM capabilities) | Complete |
 | WP3 | Notes and interactions backend | Complete |
-| WP4 | Guardian People UI | Planned |
+| WP4 | Guardian People UI | Complete |
 | WP5 | Notes timeline and tag-management UI | Planned |
 | WP6 | End-to-end proof and demo closeout | Planned |
 

@@ -5,6 +5,8 @@ import {
   INVITATIONS_ISSUE,
   MEMBERSHIP_MANAGE,
   MEMBERSHIP_VIEW,
+  PEOPLE_MANAGE,
+  PEOPLE_VIEW,
 } from '../auth/capabilities.ts'
 import {
   breadcrumbs,
@@ -16,7 +18,14 @@ import {
   type NavSection,
 } from './navigation.ts'
 
-const everything = [ACCOUNTS_VIEW, INVITATIONS_ISSUE, MEMBERSHIP_VIEW, MEMBERSHIP_MANAGE]
+const everything = [
+  ACCOUNTS_VIEW,
+  INVITATIONS_ISSUE,
+  MEMBERSHIP_VIEW,
+  MEMBERSHIP_MANAGE,
+  PEOPLE_VIEW,
+  PEOPLE_MANAGE,
+]
 const having = (...held: string[]) => visibleNavigation(navigation, (c) => held.includes(c))
 const labels = (sections: NavSection[]) =>
   sections.flatMap((s) => [
@@ -28,6 +37,9 @@ describe('visibleNavigation', () => {
   it('shows every page to someone who holds every capability', () => {
     expect(labels(having(...everything))).toEqual([
       'Overview',
+      'People',
+      'All people',
+      'Add a person',
       'Admin',
       'All accounts',
       'Invite an operator',
@@ -49,6 +61,17 @@ describe('visibleNavigation', () => {
     const sections = having(MEMBERSHIP_VIEW)
     const admin = sections.find((s) => s.id === 'admin')
     expect(admin?.groups?.map((g) => g.label)).toEqual(['Members'])
+  })
+
+  it('shows the People section by its own capabilities, independent of Admin', () => {
+    expect(labels(having(PEOPLE_VIEW))).toEqual(['Overview', 'People', 'All people'])
+    expect(labels(having(ACCOUNTS_VIEW))).not.toContain('People')
+  })
+
+  it('never infers People view from People manage', () => {
+    const sections = having(PEOPLE_MANAGE)
+    expect(labels(sections)).toEqual(['Overview', 'People', 'Add a person'])
+    expect(labels(sections)).not.toContain('All people')
   })
 
   it('never infers view from manage', () => {
@@ -80,6 +103,9 @@ describe('locate', () => {
 
   it.each([
     ['/', { section: 'overview', item: undefined, detail: false }],
+    ['/people', { section: 'people', item: 'All people', detail: false }],
+    ['/people/new', { section: 'people', item: 'Add a person', detail: false }],
+    ['/people/01J000', { section: 'people', item: 'All people', detail: true }],
     ['/admin/accounts', { section: 'admin', item: 'All accounts', detail: false }],
     ['/admin/accounts/invite', { section: 'admin', item: 'Invite an operator', detail: false }],
     ['/admin/accounts/01J000', { section: 'admin', item: 'All accounts', detail: true }],
@@ -149,8 +175,9 @@ describe('breadcrumbs', () => {
 
 describe('firstDestination', () => {
   it('leads to the section itself, or to the first page beneath it', () => {
-    const [overview, admin] = having(...everything).map(firstDestination)
+    const [overview, people, admin] = having(...everything).map(firstDestination)
     expect(overview).toBe('/')
+    expect(people).toBe('/people')
     expect(admin).toBe('/admin/accounts')
   })
 
@@ -160,7 +187,7 @@ describe('firstDestination', () => {
 })
 
 describe('currentMarker', () => {
-  const admin = having(...everything)[1]
+  const admin = having(...everything).find((s) => s.id === 'admin')
   const accounts = admin?.groups?.[0]?.items[0]
   const invite = admin?.groups?.[0]?.items[1]
   const at = (pathname: string) => locate(having(...everything), pathname)

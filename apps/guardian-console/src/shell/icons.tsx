@@ -22,6 +22,16 @@ function Svg({ children, className }: { children: ReactNode; className?: string 
 }
 
 export function SectionIcon({ name }: { name: IconName }) {
+  if (name === 'contacts') {
+    return (
+      <Svg>
+        <rect x="3.5" y="5" width="17" height="14" rx="2" />
+        <circle cx="9" cy="10.5" r="2" />
+        <path d="M5.8 16c.4-1.6 1.6-2.4 3.2-2.4s2.8.8 3.2 2.4" />
+        <path d="M14.5 10h3.5M14.5 13.5H18" />
+      </Svg>
+    )
+  }
   return name === 'home' ? (
     <Svg>
       <path d="M4 11 12 4l8 7" />
