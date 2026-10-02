@@ -79,8 +79,10 @@ arch('Audit does not depend on Crm', function () {
     expect('App\\Modules\\Audit')->not->toUse('App\\Modules\\Crm');
 });
 
-arch('nothing outside Crm uses Crm', function () use ($crm) {
-    expect($crm)->toOnlyBeUsedIn($crm);
+arch('nothing outside Crm uses Crm, but the development-only demo seeder, which uses its public use cases as an operator would', function () use ($crm) {
+    // The one exception is `Database\Seeders\CrmDemoSeeder`: opt-in, refused outside local and testing, and referenced by
+    // nothing in the application (CrmDemoSeederTest pins each). It writes through Crm's own use cases (its one direct write is repairing provenance that names a Person who no longer exists).
+    expect($crm)->toOnlyBeUsedIn([$crm, 'Database\\Seeders\\CrmDemoSeeder']);
 });
 
 // --- Layers -------------------------------------------------------------------------------------------------------

@@ -24,8 +24,9 @@ This document tracks product sequencing and implementation status. ADRs and arch
 | CRM notes and interactions backend, WP3: record, list, correct and remove a Person's notes | Complete | No, on `main` only. Its Console screen is WP5 |
 | Guardian People UI, WP4: the People directory, a Person's record, adding a person, editing their profile and managing their contact methods | Complete | No, on `main` only |
 | Guardian notes and tag UI, WP5: a Person's notes and interactions (record, correct, remove), their tags, and the Tags page for the list of tags | Complete | No, on `main` only |
+| CRM end-to-end proof and demo closeout, WP6: a repeatable demo dataset and the browser coverage of the whole Phase 1 workflow | Complete | No, on `main` only. Closes G1 |
 
-## Current focus: G1 — CRM / People (Active)
+## Most recent milestone: G1 — CRM / People (Complete)
 
 Make Commons genuinely useful to Guardians as a people and contact system. The boundary and owner decisions are in [ADR 0034](adr/0034-crm-enriches-identity-person.md); the module's design is not repeated here.
 
@@ -37,7 +38,7 @@ Make Commons genuinely useful to Guardians as a people and contact system. The b
 | WP3 | Notes and interactions backend | Complete |
 | WP4 | Guardian People UI | Complete |
 | WP5 | Notes timeline and tag-management UI | Complete |
-| WP6 | End-to-end proof and demo closeout | Planned |
+| WP6 | End-to-end proof and demo closeout | Complete |
 
 ## Near-term usability and operations
 
@@ -59,7 +60,7 @@ Domain ownership rule: Commons domains own durable business state and rules; the
 
 | Milestone | Goal | Status |
 | --- | --- | --- |
-| **G1 — CRM / People** | A Guardian people and contact system that enriches Identity's Person | Active |
+| **G1 — CRM / People** | A Guardian people and contact system that enriches Identity's Person | Complete |
 | **G2 — Guardian Discussions** | A Guardian-focused discussion capability owned by Commons; later projection to Members or Volunteers stays possible | Planned |
 | **G3 — Event Planning** | Practical Guardian operational planning for Flow Life events | Planned |
 | **G4 — Announcements / Publishing** | Guardian-authored announcements with outward publication targets to follow; timing may depend on production mail | Planned |

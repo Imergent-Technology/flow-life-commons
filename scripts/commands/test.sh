@@ -109,6 +109,8 @@ test_e2e() {
     # by the platform's own sign-in, in-process, so no journey spends the public login rate budget just to get started. The
     # file holds live (if worthless) session cookies: it is git-ignored, and rewritten on every run.
     php_run php artisan db:seed --class=E2eSessionSeeder --force --no-interaction
+    step "Seeding the CRM demo data (development only, repeatable: it adds nothing that is already there)"
+    php_run php artisan db:seed --class=CrmDemoSeeder --force --no-interaction
     mkdir -p apps/guardian-console/e2e/.fixtures
     cp apps/platform/storage/app/private/e2e-sessions.json apps/guardian-console/e2e/.fixtures/sessions.json
     php_run php artisan cache:clear --no-interaction

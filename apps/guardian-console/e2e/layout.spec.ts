@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { aMemberId, apiFrom, signedInAs } from './support.ts'
+import { aDemoPersonId, aMemberId, apiFrom, signedInAs } from './support.ts'
 
 /**
  * The layout at the widths where it changes, and the sizes and motion an accessible interface promises
@@ -45,6 +45,8 @@ test.describe('no page scrolls sideways, and the shell changes where it says it 
       const listed = await apiFrom(admin, 'GET', '/api/v1/admin/accounts?q=e2e.admin.read@')
       const accountId = (listed.body as { data: { id: string }[] }).data[0]?.id ?? ''
       const memberId = await aMemberId(admin)
+      const personId = await aDemoPersonId(admin, 'Marguerite Hale')
+      const longNotePersonId = await aDemoPersonId(admin, 'Daniel Okoye')
       await admin.setViewportSize({ width, height: 800 })
 
       const routes = [
@@ -56,6 +58,11 @@ test.describe('no page scrolls sideways, and the shell changes where it says it 
         '/admin/members',
         '/admin/members/new',
         `/admin/members/${memberId}`,
+        '/people',
+        '/people/new',
+        '/people/tags',
+        `/people/${personId}`, // a paged history and a tag collection
+        `/people/${longNotePersonId}`, // one very long note
         '/no/such/page',
       ]
       for (const route of routes) {

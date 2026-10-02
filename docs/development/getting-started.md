@@ -47,6 +47,8 @@ Idempotent and safe to re-run. It creates `.env` (with your UID/GID) and `apps/p
 
 A fresh development database has no accounts. `identity:create-administrator` creates the first administrator and prints a one-time invitation token (see the [runbook](../runbooks/administrator-bootstrap.md)). To use it: open the Console's `/accept-invitation` page, paste the token and choose a password, then sign in. An administrator can use the Console only with a second factor ([ADR 0023](../adr/0023-multi-factor-authentication.md)), so your first sign-in walks you through setting up an authenticator app and saving ten recovery codes (shown once). Mailpit shows the password-recovery email if you need it. `./flow test e2e` seeds separate development-only fixture accounts (some already enrolled with a known authenticator secret) instead.
 
+**CRM demo data.** To review People, tags and notes without typing them in, seed the demo dataset once an administrator or Guardian exists: `./flow artisan db:seed --class=CrmDemoSeeder`. It is opt-in, refuses to run outside local development and testing, writes through the CRM's own use cases as the first one or two active operators, creates no Account, and is safe to run again (it adds nothing that is already there; see [ADR 0034](../adr/0034-crm-enriches-identity-person.md)). `./flow test e2e` runs it for you.
+
 ## Local URLs
 
 | URL | What |

@@ -1,8 +1,7 @@
-import { readFileSync } from 'node:fs'
-
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
-import { aMemberId, apiFrom, signedInAs } from './support.ts'
+import { axeViolations, inTheme, THEMES, type Theme } from './axe.ts'
+import { aDemoPersonId, aMemberId, apiFrom, signedInAs } from './support.ts'
 
 /**
  * The production-readiness accessibility pass.
@@ -23,8 +22,6 @@ import { aMemberId, apiFrom, signedInAs } from './support.ts'
  * screen-reader behaviour, which no automated check establishes, explicitly unverified.
  */
 
-const AXE = readFileSync('node_modules/axe-core/axe.min.js', 'utf8')
-
 // Injecting axe and running the full WCAG rule set over a page takes seconds, and these journeys do it
 // several times each. The default 30 s is a suite-wide figure for journeys that do not.
 test.describe.configure({ timeout: 120_000 })
@@ -33,39 +30,6 @@ const ADMIN = {
   email: 'e2e.admin.read@example.org',
   password: 'e2e-admin-read-password-not-a-secret',
   secret: 'OXYIMCFIPNZB575Y7MZF7OBR26YHQGEY',
-}
-
-interface AxeViolation {
-  id: string
-  help: string
-  nodes: { target: string[] }[]
-}
-
-/** Runs axe over the current page, with colour contrast ON, and returns readable violations. */
-async function axeViolations(page: Page): Promise<string[]> {
-  await page.addScriptTag({ content: AXE })
-  const violations = await page.evaluate(async () => {
-    const runner = (globalThis as unknown as { axe: { run: (o: unknown) => Promise<unknown> } }).axe
-    const results = (await runner.run({
-      runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] },
-    })) as { violations: AxeViolation[] }
-    return results.violations.map(
-      (v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target.join(' ')).join('; ')})`,
-    )
-  })
-  return violations
-}
-
-const THEMES = ['light', 'dark'] as const
-type Theme = (typeof THEMES)[number]
-
-/** Seeds the one approved preference key before any page script runs, so the page boots in that theme. */
-async function inTheme(page: Page, theme: Theme): Promise<void> {
-  await page.context().addInitScript((value) => {
-    ;(
-      globalThis as unknown as { localStorage: { setItem: (k: string, v: string) => void } }
-    ).localStorage.setItem('flowlife.console.ui', JSON.stringify({ v: 1, theme: value }))
-  }, theme)
 }
 
 async function resolvedTheme(page: Page): Promise<string | undefined> {
@@ -140,6 +104,8 @@ for (const theme of THEMES) {
       const listed = await apiFrom(admin, 'GET', '/api/v1/admin/accounts?q=e2e.admin.read@')
       const id = (listed.body as { data: { id: string }[] }).data[0]?.id ?? ''
       const memberId = await aMemberId(admin)
+      const personId = await aDemoPersonId(admin, 'Marguerite Hale')
+      const longNotePersonId = await aDemoPersonId(admin, 'Daniel Okoye')
 
       for (const path of [
         '/',
@@ -150,6 +116,11 @@ for (const theme of THEMES) {
         '/admin/members',
         '/admin/members/new',
         `/admin/members/${memberId}`,
+        '/people',
+        '/people/new',
+        '/people/tags',
+        `/people/${personId}`,
+        `/people/${longNotePersonId}`,
         '/no/such/page',
       ]) {
         expect(await auditRoute(admin, path, theme), path).toEqual([])

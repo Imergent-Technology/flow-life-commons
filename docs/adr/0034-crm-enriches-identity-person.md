@@ -1,6 +1,6 @@
 # ADR 0034: CRM enriches Identity's Person
 
-- **Status:** Accepted (implemented: Identity's People ports, the `Crm` backend (WP2) notes and interactions (WP3) and the Console's People, notes and tag screens (WP4, WP5))
+- **Status:** Accepted (implemented: Identity's People ports, the `Crm` backend (WP2) notes and interactions (WP3), the Console's People, notes and tag screens (WP4, WP5) and the end-to-end and demo closeout (WP6))
 - **Date:** 2026-09-29
 - **Supersedes:** none
 - **Superseded by:** none
@@ -75,7 +75,7 @@ Recorded where the build made a call this ADR left open. None changes a decision
 - **Routine maintenance asks for no recent verification.** [ADR 0024](0024-privileged-operator-administration.md)'s rule that every administration mutation needs recent verification governs operations that change authority. The People mutations change none, so they are exempt, by capability: `AdministrationRoutesTest` names `crm.people.manage` as the one exemption and pins that it covers exactly the Crm routes.
 - **Writes return what they wrote**, not a re-read of everything CRM holds. That is not a disclosure boundary: a write can still reveal CRM data (a profile update returns both profile fields, a duplicate candidate list names People, a duplicate method or a tag in use says it exists). The protection is the role invariant above (manage implies view, in every role), not the response shape.
 - **Search bound.** The directory composes CRM's matches with Identity's search by passing id sets, bounded at 10,000 (`SearchTooBroad`, a 422, beyond it). A dedicated search read model is a later decision with its own trigger.
-- **Starter tags are not seeded.** The vocabulary is data a Guardian creates; the demo/e2e closeout (WP6) decides whether a demo seeder creates it.
+- **Starter tags are not seeded.** The vocabulary is data a Guardian creates; WP6 added an opt-in demo seeder for development (see the WP6 notes), and nothing production-side creates a tag.
 
 ## Implementation notes (WP3, 2026-10-02)
 
@@ -110,6 +110,18 @@ Where building the notes and tag screens settled what this ADR left to the UI. N
 - **Removal is permanent and says so.** A confirmation names the note, states that it cannot be restored, and has Cancel first. Nothing is retained, and nothing in the Console speaks of undo or history.
 - **A tag is only a label.** It is shown as words, with no colour, status or grouping, and no part of the Console reads a tag's name to decide anything. A Person's tags are saved as the whole chosen set, which is what the API takes. A tag still held by anyone cannot be deleted: the Console shows the server's refusal and keeps the tag, and never changes anyone's tags to make a deletion succeed.
 - **No tag is built in.** The Console holds no list of tag names; the starter vocabulary is data a Guardian creates (WP6 decides whether a demo seeder does).
+
+## Implementation notes (WP6, 2026-10-02)
+
+Where closing the milestone settled what this ADR left to demonstration and proof. None changes a decision above.
+
+- **A demo dataset, opt-in and development-only.** `CrmDemoSeeder` (`./flow artisan db:seed --class=CrmDemoSeeder`) makes eight People, the seven example tags and twenty-three notes, so a Guardian can review the CRM without typing it in. It is not part of `DatabaseSeeder`, refuses to run outside `local` and `testing`, and nothing in the application refers to it. It writes through the CRM's own use cases as real operator Accounts, so it obeys the rules a Guardian's own entries do; it creates no Account, role or Membership, and records no Account's login as a contact method. The tag names are demo labels: nothing reads them, and a Guardian can rename or delete any of them like any other tag.
+- **Repeatable.** A Person is recognised by their exact display name and a tag by its name; one that exists is left as it is (with whatever a Guardian has done to it), and a Person's notes are written only when the run creates the Person. A note's author and last editor are provenance with no foreign key (ADR 0021), so when the operators they were written as are replaced (the browser suite recreates its fixture Accounts, and their Persons, on every run) the next run points such notes at the current operators and touches nothing else.
+- **What the dataset exercises.** A Person with no CRM data at all, one with an email only, a phone only, both, and two emails; People with several tags and with none; every kind of note; a Person with twelve notes (more than a page) with two authors and a corrected note; a Person with one long note; and a Person whose CRM email is the deterministic target of the duplicate-advice case.
+- **The duplicate-advice case is advice, demonstrated end to end.** Registering anyone with the demo Person's email, or the same name in any case, meets her as a candidate; nothing is created until the Guardian says the person is distinct, and nothing is merged or adopted. The browser journey puts the shared email back afterwards, so the case is the same on every run.
+- **What the browser suite now proves.** The working journeys (`people.spec.ts`); the demo data read as a Guardian reads it, a real history's paging by keyboard, the duplicate case against the demo Person, what each capability sees, what the wire carries, the keyboard and focus behaviour of confirmations and refusals, and a 320px screen (`people-closeout.spec.ts`); and the People routes in the real-browser axe pass in both themes and the sideways-scroll pass at every width (`accessibility.spec.ts`, `layout.spec.ts`).
+- **What a browser can and cannot show about capabilities.** The Console shows what `/me` reports and the server decides every request. No role holds one CRM capability without the other, so the browser journeys for view without manage and manage without view are TOLD that by `/me` (the Account's real capabilities untouched); the server's own refusals, one capability at a time, remain proved by `PeopleAccessControlTest`. A real Account with no CRM access is proved in the browser against the real server.
+- **Disclosure is checked by shape, not by search.** The record, the history, the directory and the tag list are asserted to carry exactly their documented keys at every depth, and none of any real Account's login or id appears in them. No endpoint offers the security audit trail as CRM history.
 
 ## Consequences
 

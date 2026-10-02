@@ -374,3 +374,18 @@ export async function aMemberId(admin: Page): Promise<string> {
   // `registerMember` operation names `Member` as its 201 schema, not a page of them).
   return (created.body as { person: { id: string } }).person.id
 }
+
+/**
+ * The id of a People demo Person (`CrmDemoSeeder`, which `./flow test e2e` runs first), found by the directory's own search. Read-only
+ * journeys use these; any journey that CHANGES something makes its own Person with a random name instead.
+ */
+export async function aDemoPersonId(admin: Page, name: string): Promise<string> {
+  const found = await apiFrom(admin, 'GET', `/api/v1/admin/people?q=${encodeURIComponent(name)}`)
+  const rows = (found.body as { data: { id: string; display_name: string }[] }).data
+  const match = rows.find((row) => row.display_name === name)
+  if (match === undefined)
+    throw new Error(
+      `The demo Person "${name}" is not in the directory. Run ./flow test e2e (it seeds the CRM demo data).`,
+    )
+  return match.id
+}
