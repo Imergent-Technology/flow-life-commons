@@ -68,7 +68,7 @@ it('reports a guardian\'s Console access and nothing else', function () {
     $console = new Console;
     $console->loginWithMfa('ada@example.org', Identity::PASSWORD)->assertOk();
 
-    expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view']);
+    expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view']);
 });
 
 it('derives capabilities fresh on every request, so a revoked role disappears without signing in again', function () {
@@ -83,7 +83,7 @@ it('derives capabilities fresh on every request, so a revoked role disappears wi
     expect(capabilitiesOfMe($console))->toBe([]);
 
     Access::grant($account, Role::Guardian);
-    expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view']);
+    expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view']);
 });
 
 it('reports the same list whatever order the roles were assigned in', function () {

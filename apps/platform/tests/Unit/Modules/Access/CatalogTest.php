@@ -22,6 +22,8 @@ it('has exactly the capability catalog, so adding one is a deliberate decision',
             'membership.records.view', 'membership.records.manage',
             // The People directory and CRM data (ADR 0034).
             'crm.people.view', 'crm.people.manage',
+            // Guardian Discussions (ADR 0035): read, and take part. There is deliberately no discussions.manage.
+            'discussions.view', 'discussions.participate',
         ]);
 });
 
@@ -54,9 +56,14 @@ it('gives the platform administrator every capability, by derivation rather than
     }
 });
 
-it('gives the guardian the Console and the People directory, and nothing more', function () {
-    // CRM access is an accepted owner decision (ADR 0034): both capabilities, deliberately listed, not derived.
-    expect(Role::Guardian->capabilities())->toBe([Capability::ConsoleAccess, Capability::ViewPeople, Capability::ManagePeople])
+it('gives the guardian the Console, the People directory and Guardian Discussions, and nothing more', function () {
+    // CRM access (ADR 0034) and Discussions access (ADR 0035) are accepted owner decisions: each pair deliberately listed, not derived.
+    expect(Role::Guardian->capabilities())->toBe([
+        Capability::ConsoleAccess, Capability::ViewPeople, Capability::ManagePeople,
+        Capability::ViewDiscussions, Capability::ParticipateInDiscussions,
+    ])
+        ->and(Role::Guardian->grants(Capability::ViewDiscussions))->toBeTrue()
+        ->and(Role::Guardian->grants(Capability::ParticipateInDiscussions))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ConsoleAccess))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ViewPeople))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ManagePeople))->toBeTrue()
@@ -139,4 +146,29 @@ it('gives every role that may manage People the right to view them: there is no 
     }
 
     expect($managers)->toBe(['platform_administrator', 'guardian']); // positive control: the loop really covered the managers
+});
+
+it('gives every role that may participate in discussions the right to view them: there is no participate-only role', function () {
+    // Discussion writes return what they wrote (a reply returns the message, a resolution the discussion), so, as with CRM,
+    // the platform's protection is that nobody who may write cannot also read (ADR 0035). The capabilities stay independent
+    // checks; this pins the ROLE POLICY. A role that participates without viewing needs those write responses designed
+    // first, then this test changed deliberately.
+    $participants = [];
+    foreach (Role::cases() as $role) {
+        if ($role->grants(Capability::ParticipateInDiscussions)) {
+            $participants[] = $role->value;
+            expect($role->grants(Capability::ViewDiscussions))->toBeTrue("{$role->value} grants discussions.participate without discussions.view (ADR 0035)");
+        }
+    }
+
+    expect($participants)->toBe(['platform_administrator', 'guardian']); // positive control: the loop really covered the participants
+});
+
+it('has no discussions.manage capability and no moderation capability: participating never means editing anyone\'s words', function () {
+    $discussionCapabilities = array_values(array_filter(
+        array_map(fn (Capability $c): string => $c->value, Capability::cases()),
+        fn (string $value): bool => str_starts_with($value, 'discussions.'),
+    ));
+
+    expect($discussionCapabilities)->toBe(['discussions.view', 'discussions.participate']);
 });

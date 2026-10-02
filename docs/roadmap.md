@@ -26,6 +26,7 @@ This document tracks product sequencing and implementation status. ADRs and arch
 | Guardian notes and tag UI, WP5: a Person's notes and interactions (record, correct, remove), their tags, and the Tags page for the list of tags | Complete | No, on `main` only |
 | CRM end-to-end proof and demo closeout, WP6: a repeatable demo dataset and the browser coverage of the whole Phase 1 workflow | Complete | No, on `main` only. Closes G1 |
 | Guardian Discussions architecture, G2 WP0 ([ADR 0035](adr/0035-guardian-discussions-are-durable-asynchronous-threads.md)) | Complete | Docs only |
+| Guardian Discussions backend, G2 WP1: the `Discussions` module, its tables, the `discussions.view`/`participate` capabilities and the `/admin/discussions` API | Complete | No, on `main` only. Its Console screens are WP2 |
 
 ## Most recent milestone: G1 — CRM / People (Complete)
 
@@ -41,15 +42,15 @@ Make Commons genuinely useful to Guardians as a people and contact system. The b
 | WP5 | Notes timeline and tag-management UI | Complete |
 | WP6 | End-to-end proof and demo closeout | Complete |
 
-## Next milestone: G2 — Guardian Discussions
+## Active milestone: G2 — Guardian Discussions
 
 A durable place for Guardians' asynchronous coordination: a topic, an opening message and flat chronological replies, Open or Resolved, with authorship that never changes, author-only editing that is visibly marked, and removal that leaves a tombstone. Not chat, and not a generic comment framework. The decisions and the Phase 1 contract (schema, capabilities, routes, ordering) are [ADR 0035](adr/0035-guardian-discussions-are-durable-asynchronous-threads.md) and are not repeated here.
 
 | Package | Scope | Validation boundary | Status |
 | --- | --- | --- | --- |
 | WP0 | Product and architecture design gate | ADR 0035 accepted | Complete |
-| WP1 | Discussions backend: the `Discussions` module, `discussions` and `discussion_messages`, the `discussions.view`/`participate` capabilities granted to the Guardian, every use case and route in the ADR, OpenAPI, and the step-up exemption extended to exactly two pinned capabilities | `./flow check --pgsql` green; module-boundary, route-table and role-catalog tests; ownership, tombstone and disclosure-by-shape tests; a two-process race test (reply against resolve) on both engines, mutation-checked by dropping the lock | Next |
-| WP2 | Guardian Discussions UI: the list (state filter, title search, paging), a discussion (messages, tombstones, edited marks, reply), start, edit and remove own messages, retitle, resolve and reopen, each shown by capability | Vitest, typecheck, lint; the axe and sideways-scroll passes cover the new routes | Planned |
+| WP1 | Discussions backend: the `Discussions` module, `discussions` and `discussion_messages`, the `discussions.view`/`participate` capabilities granted to the Guardian, every use case and route in the ADR, OpenAPI, and the step-up exemption extended to exactly two pinned capabilities | `./flow check --pgsql` green; module-boundary, route-table and role-catalog tests; ownership, tombstone and disclosure-by-shape tests; a two-process race test (reply against resolve) on both engines, mutation-checked by dropping the lock | Complete |
+| WP2 | Guardian Discussions UI: the list (state filter, title search, paging), a discussion (messages, tombstones, edited marks, reply), start, edit and remove own messages, retitle, resolve and reopen, each shown by capability | Vitest, typecheck, lint; the axe and sideways-scroll passes cover the new routes | Next |
 | WP3 | End-to-end proof and demo closeout: an opt-in development demo dataset written through the use cases, and browser journeys for the whole Phase 1 workflow, two Guardians, and each capability | `./flow test e2e` green with `--workers=4`; closes G2 | Planned |
 
 The backend is one package rather than two (CRM split its backend because notes arrived after the directory): two tables and nine use cases share one lock and one ownership rule, and splitting lifecycle from messages would test the reply-against-resolve invariant only after both halves exist.
@@ -75,7 +76,7 @@ Domain ownership rule: Commons domains own durable business state and rules; the
 | Milestone | Goal | Status |
 | --- | --- | --- |
 | **G1 — CRM / People** | A Guardian people and contact system that enriches Identity's Person | Complete |
-| **G2 — Guardian Discussions** | Durable asynchronous Guardian threads owned by Commons ([ADR 0035](adr/0035-guardian-discussions-are-durable-asynchronous-threads.md)); later projection to Members or Volunteers stays possible | Next (design gate complete; WP1 next) |
+| **G2 — Guardian Discussions** | Durable asynchronous Guardian threads owned by Commons ([ADR 0035](adr/0035-guardian-discussions-are-durable-asynchronous-threads.md)); later projection to Members or Volunteers stays possible | Active (WP0 and WP1 complete; WP2 next) |
 | **G3 — Event Planning** | Practical Guardian operational planning for Flow Life events | Planned |
 | **G4 — Announcements / Publishing** | Guardian-authored announcements with outward publication targets to follow; timing may depend on production mail | Planned |
 | **G5 — Knowledge / Resources** | SOPs, policies, training material, reference resources and curated links | Planned |

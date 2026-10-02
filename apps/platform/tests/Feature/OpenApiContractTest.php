@@ -172,8 +172,8 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, and notes (WP3) four.
-    expect($checked)->toBe(34);
+    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, and Guardian Discussions (ADR 0035) ten.
+    expect($checked)->toBe(44);
 });
 
 it('never lets an administration schema name a secret', function () {
@@ -184,6 +184,7 @@ it('never lets an administration schema name a secret', function () {
         'Member', 'MemberPage', 'MembershipGrant', 'MembershipGrantHistoryEntry', 'RegisterMemberRequest', 'GrantMembershipRequest',
         'PersonRef', 'ContactProfile', 'ContactMethod', 'ContactTagRef', 'ContactTag', 'ContactTagList', 'PersonTagList', 'PersonRecord',
         'PersonUpdate', 'PersonListing', 'PersonListingPage', 'NewContactMethod', 'RegisterPersonRequest', 'UpdatePersonRequest', 'PossibleDuplicate',
+        'DiscussionPerson', 'Discussion', 'DiscussionPage', 'NewDiscussion', 'RetitleRequest', 'NewMessage', 'DiscussionMessage', 'LiveMessage', 'RemovedMessage', 'MessagePage',
     ];
     $text = strtolower(json_encode(array_intersect_key($components['schemas'], array_flip($names)), JSON_THROW_ON_ERROR));
     $text = str_replace('never a password', '', $text); // the description says what is NOT there

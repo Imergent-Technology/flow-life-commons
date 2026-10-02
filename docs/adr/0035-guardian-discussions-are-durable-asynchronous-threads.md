@@ -1,6 +1,6 @@
 # ADR 0035: Guardian Discussions are durable asynchronous threads
 
-- **Status:** Accepted (design gate; nothing implemented)
+- **Status:** Accepted (implemented: the `Discussions` backend, WP1; the Console screens and the end-to-end proof are not)
 - **Date:** 2026-10-02
 - **Supersedes:** none
 - **Superseded by:** none
@@ -214,6 +214,23 @@ None of these is designed here, and nothing is built for any of them.
 | Member or Volunteer participation | A projection of Commons-owned discussions onto `/my/` later; the Guardian Console surface is not reused for it |
 | Body search, a search index | Decision 33 |
 | Resolution history, edit history, discussion deletion | Decisions 9, 16 and 13 |
+
+## Implementation notes (WP1, 2026-10-02)
+
+Where building the backend made a call this ADR left open, or measured something it asserted. None changes a decision above.
+
+- **Shape.** The `Discussions` module is `Domain` (`Discussion`, `DiscussionMessage`, `DiscussionState`, `DiscussionTitle`, `MessageBody`, the two ports), `Application`, `Infrastructure` (query builder, no Eloquent) and `Http`. Migrations `2026_10_02_000002_create_discussions_table` and `2026_10_02_000003_create_discussion_messages_table` create the two tables exactly as the contract above states, with the indexes it names and no others. The use cases are `PageDiscussions`, `GetDiscussion`, `PageDiscussionMessages`, `StartDiscussion`, `ReplyToDiscussion`, `EditOwnMessage`, `RemoveOwnMessage`, `RetitleOwnDiscussion`, `ResolveDiscussion` and `ReopenDiscussion`, and the ten routes are as tabled, named `api.v1.admin.discussions.*`.
+- **The repository writes only the columns a change owns.** A reply writes the count and activity time, a retitle the title, a resolution the state columns, an edit the text and edit provenance, a removal the tombstone columns. That is what lets retitle, edit and removal take no lock without overwriting a counter a concurrent reply moved, and it is a second reason a title correction can never count as activity: the activity column is not in its write.
+- **Edit and removal are conditional writes, re-read afterwards.** `UPDATE ... WHERE removed_at IS NULL` (and, for an edit, `AND author_person_id = ?`), then the use case re-reads, because MariaDB reports an unchanged row as zero affected rows. An edit that lost a race with a removal is reported `message_removed` and has changed nothing. Removing a removed message succeeds, keeps the first removal time, and returns the tombstone.
+- **Where the locking is the point, measured.** Reply, resolve and reopen take `SELECT ... FOR UPDATE` on the discussion row. With the lock removed, the reply-behind-resolution, reply-behind-reopening and simultaneous-replies race tests fail on both MariaDB and PostgreSQL. The resolve-behind-reply test still passes without it, correctly: the reply's own row update already blocks the resolver, so only the read-then-decide cases need the explicit lock. With the edit's `removed_at IS NULL` condition removed, the edit-versus-removal test fails on both engines.
+- **Messages are presented in one of two shapes**, keyed by `removed`. A live message has `body`, `edited_at` and `edited_by`. A tombstone has `removed: true` and `removed_at` and **no `body` key at all**, and does not say whether it was ever edited. Both carry the author.
+- **An author Identity cannot resolve** is `{ "id": ..., "display_name": null }`, as decision 25 says: the id stays, so a client can still tell whose it was, and nobody can ever be that Person.
+- **What each write returns.** Starting a discussion returns the header (201); a reply returns the message (201); an edit and a removal return the message (200, the tombstone for a removal); retitling, resolving and reopening return the header (200). The header carries `title`, `state`, `creator`, `message_count`, `last_activity_at`, `created_at`, `resolved_at` and `resolved_by`, and not `updated_at`.
+- **Which refusal comes first.** The route's capability check answers first (a plain 403 with no code). Request *shape* (a missing or non-string field, a bad `state`, an out-of-range page) is validated by the request class before the controller runs, so it answers 422 before a 404 or `not_author`, as every other administration surface does. The *domain* rules (a blank or over-long title, control characters) are judged inside the use case after existence, authorship and state, so an author editing a removed message with a bad body hears `message_removed`, and a reply to a resolved discussion hears `discussion_resolved`, not `invalid_discussion_input`.
+- **Search** trims `q`, treats a blank one as none, takes `%` and `_` literally, and folds case as CRM's does. Listing and paging take the existing `page`/`per_page` convention, with `per_page` at most 100 and a `COUNT` for `total`.
+- **The step-up exemption is a list of exactly two**, `crm.people.manage` pinned to `Crm\Http` and `discussions.participate` pinned to `Discussions\Http`, in `AdministrationRoutesTest`. A route-table test also pins every Discussions route to the Console boundary and exactly one capability (view for reads, participate for changes).
+- **`FindPeople` has a third consumer.** The architecture test that names who may use Identity's batched read port now lists `Discussions\Application`, beside Membership, Access and CRM. Discussions reads no table of Identity's.
+- **The Guardian role's `/me` list** is now `console.access`, `crm.people.manage`, `crm.people.view`, `discussions.participate`, `discussions.view`. The Console reads none of the new capabilities until WP2.
 
 ## Consequences
 

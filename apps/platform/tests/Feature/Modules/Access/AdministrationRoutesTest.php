@@ -11,12 +11,17 @@ use Tests\Support\Api;
  */
 
 /**
- * The ONE capability whose mutations are exempt from recent verification (ADR 0034): routine CRM maintenance (a note
- * about how we know someone, a phone number, a tag, a typo in a name) grants and removes no authority, so a fresh password
- * and second factor for it would only make it unusable. Every other administration mutation still needs the proof. The
- * exemption is by capability, and a test below pins that it covers exactly the CRM routes and nothing else.
+ * The capabilities whose mutations are exempt from recent verification, each pinned to the one module whose routes it may
+ * cover. Routine maintenance and discussion (a note about how we know someone, a phone number, a tag, a typo in a name, a
+ * reply in a thread) grants and removes no authority, so a fresh password and second factor for it would only make it
+ * unusable: CRM's by ADR 0034, Discussions' by ADR 0035. Every other administration mutation still needs the proof. The
+ * exemption is by capability AND by module, and a test below pins that each covers exactly its own module's routes and nothing
+ * else. It is a short list on purpose: adding to it is a decision, not a convenience.
  */
-const STEP_UP_EXEMPT_CAPABILITY = 'can:crm.people.manage';
+const STEP_UP_EXEMPT = [
+    'can:crm.people.manage' => 'App\\Modules\\Crm\\Http\\',
+    'can:discussions.participate' => 'App\\Modules\\Discussions\\Http\\',
+];
 
 /**
  * What is wrong with an administration route's middleware, for the table walk below.
@@ -40,7 +45,7 @@ function adminRouteProblems(array $middleware, array $methods): array
         $problems[] = 'does not name exactly one capability from the catalog';
     }
 
-    $exempt = ($capabilities[0] ?? null) === STEP_UP_EXEMPT_CAPABILITY;
+    $exempt = array_key_exists($capabilities[0] ?? '', STEP_UP_EXEMPT);
     if (array_diff($methods, ['GET', 'HEAD']) !== [] && ! $exempt) {
         $verified = array_search('security.verified', $middleware, true);
         $capability = $capabilities === [] ? false : array_search($capabilities[0], $middleware, true);
@@ -72,13 +77,15 @@ it('gives every administration route authentication, the Console boundary, exact
         ->and(adminRouteProblems(['stateful', 'can:console.access', 'can:identity.accounts.view'], ['GET']))->toBe(['lacks auth:web'])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'security.verified', 'can:identity.accounts.manage'], ['POST']))->toBe(['asks for the proof BEFORE the capability'])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:made.up'], ['GET']))->toContain('does not name exactly one capability from the catalog')
-        // The exemption is for CRM maintenance alone: the same mutation under any other capability is still refused.
+        // The exemption is for CRM maintenance and discussion alone: the same mutation under any other capability is still refused.
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:crm.people.manage'], ['PATCH']))->toBe([])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:discussions.participate'], ['POST']))->toBe([])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:discussions.view'], ['POST']))->toBe(['changes something without security.verified'])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:crm.people.view'], ['PATCH']))->toBe(['changes something without security.verified'])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:membership.records.manage'], ['POST']))->toBe(['changes something without security.verified']);
 });
 
-it('exempts exactly the CRM maintenance mutations from recent verification, and no other administration mutation', function () {
+it('exempts exactly the CRM and Discussions mutations from recent verification, each only on its own module\'s routes, and no other administration mutation', function () {
     $unverified = [];
     foreach (collect(app('router')->getRoutes()->getRoutes())->filter(fn ($route) => str_starts_with($route->uri(), 'api/v1/admin/')) as $route) {
         $middleware = Api::strings($route->gatherMiddleware());
@@ -87,9 +94,32 @@ it('exempts exactly the CRM maintenance mutations from recent verification, and 
         }
     }
 
-    expect($unverified)->not->toBe([]); // positive control: the CRM routes really are here
+    $seen = [];
     foreach ($unverified as [$uri, $action, $middleware]) {
-        expect(in_array(STEP_UP_EXEMPT_CAPABILITY, $middleware, true))->toBeTrue("{$uri} changes something without recent verification and is not CRM maintenance")
-            ->and($action)->toStartWith('App\\Modules\\Crm\\Http\\', "{$uri} is exempt but is not a Crm route");
+        $exemptions = array_values(array_intersect(array_keys(STEP_UP_EXEMPT), $middleware));
+        expect($exemptions)->toHaveCount(1, "{$uri} changes something without recent verification and holds no exempt capability");
+        expect($action)->toStartWith(STEP_UP_EXEMPT[$exemptions[0]], "{$uri} holds {$exemptions[0]} but is not that module's route");
+        $seen[$exemptions[0]] = true;
     }
+
+    // Positive control: both exempt surfaces really are here, and the list is exactly these two.
+    expect(array_keys($seen))->toEqualCanonicalizing(['can:crm.people.manage', 'can:discussions.participate'])
+        ->and(array_keys(STEP_UP_EXEMPT))->toBe(['can:crm.people.manage', 'can:discussions.participate']);
+});
+
+it('keeps every Discussions route under the Console boundary, one catalog capability, and no recent-verification middleware', function () {
+    $routes = collect(app('router')->getRoutes()->getRoutes())->filter(fn ($route) => str_starts_with($route->uri(), 'api/v1/admin/discussions'));
+    $capabilities = [];
+    foreach ($routes as $route) {
+        $middleware = Api::strings($route->gatherMiddleware());
+        expect($middleware)->toContain('stateful', 'auth:web', 'can:console.access')
+            ->and($middleware)->not->toContain('security.verified');
+        $isRead = array_diff(Api::strings($route->methods()), ['GET', 'HEAD', 'OPTIONS']) === [];
+        $capability = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:discussions.')));
+        // Reads need view and only view; every change needs participate and only participate.
+        expect($capability)->toBe([$isRead ? 'can:discussions.view' : 'can:discussions.participate'], $route->uri());
+        $capabilities[$route->uri().implode('|', Api::strings($route->methods()))] = $capability[0];
+    }
+
+    expect($routes)->toHaveCount(10);
 });

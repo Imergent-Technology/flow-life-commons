@@ -15,13 +15,13 @@ Data mirrored to other systems (for example a WordPress user display name) is a 
 
 ## Current state
 
-Platform-owned tables exist for Identity, Access, Audit, Membership and Crm ([module map](module-map.md)):
+Platform-owned tables exist for Identity, Access, Audit, Membership, Crm and Discussions ([module map](module-map.md)):
 
 - **Identity**: `people`, `accounts`, `account_invitations`, `sessions`, `account_totp_factors`, `account_recovery_codes`, `password_reset_tokens`.
 - **Access**: `role_assignments`.
 - **Audit**: `security_events`.
 - **Crm**: `contact_profiles`, `contact_methods`, `contact_tags`, `contact_tag_assignments` (ADR 0034). Keyed by `person_id` with `RESTRICT` cross-module foreign keys; `*_by_account_id` columns are provenance with none. Sparse: a Person has a `contact_profiles` row only once there is CRM data to hold, and it doubles as the per-Person write lock. No Account, role, Membership or status column.
-- **Discussions** (designed in [ADR 0035](../adr/0035-guardian-discussions-are-durable-asynchronous-threads.md), not yet created): `discussions` and `discussion_messages`. Authors, editors and resolvers are Person ids with no foreign key (provenance); the only foreign key is a message's discussion, within the module. A removed message keeps its place and author but its text is set to NULL, not retained elsewhere; edits overwrite with no history. Not `security_events`.
+- **Discussions** ([ADR 0035](../adr/0035-guardian-discussions-are-durable-asynchronous-threads.md); backend built): `discussions` and `discussion_messages`. Authors, editors and resolvers are Person ids with no foreign key (provenance); the only foreign key is a message's discussion, within the module. A removed message keeps its place and author but its text is set to NULL, not retained elsewhere; edits overwrite with no history. Not `security_events`.
 - **Membership**: `membership_grants`. Backend, an operator-only `/admin/members` HTTP surface (Work Package 5), and a Guardian Console administration UI (Work Package 6).
 
 Platform aggregates use application-generated ULID primary keys, per the principle above. Framework infrastructure created by Laravel's stock migrations — `migrations`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs` — keeps Laravel's default keys because it is not platform aggregate data. There is deliberately no `users` table: Identity's `people`/`accounts` split is the human registry ([authorization model](../security/authorization-model.md)).

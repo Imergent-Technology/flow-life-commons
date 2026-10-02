@@ -21,6 +21,13 @@ use App\Modules\Crm\Application\UnknownPerson as UnknownCrmPerson;
 use App\Modules\Crm\Application\UnknownTags;
 use App\Modules\Crm\Domain\InvalidContactInput;
 use App\Modules\Crm\Http\CrmProblems;
+use App\Modules\Discussions\Application\DiscussionNotFound;
+use App\Modules\Discussions\Application\DiscussionResolved;
+use App\Modules\Discussions\Application\MessageNotFound;
+use App\Modules\Discussions\Application\MessageRemoved;
+use App\Modules\Discussions\Application\NotAuthor;
+use App\Modules\Discussions\Domain\InvalidDiscussionInput;
+use App\Modules\Discussions\Http\DiscussionsProblems;
 use App\Modules\Identity\Application\AccountNotFound;
 use App\Modules\Identity\Application\CompromisedPasswordCheckUnavailable;
 use App\Modules\Identity\Application\CurrentPasswordIncorrect;
@@ -231,6 +238,14 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (SearchTooBroad $e) => CrmProblems::searchTooBroad());
         $exceptions->render(fn (InvalidContactInput $e) => CrmProblems::invalidInput($e));
         $exceptions->render(fn (PossibleDuplicate $e) => CrmProblems::possibleDuplicate($e));
+
+        // Guardian Discussions (ADR 0035).
+        $exceptions->render(fn (DiscussionNotFound $e) => DiscussionsProblems::discussionNotFound());
+        $exceptions->render(fn (MessageNotFound $e) => DiscussionsProblems::messageNotFound());
+        $exceptions->render(fn (NotAuthor $e) => DiscussionsProblems::notAuthor());
+        $exceptions->render(fn (DiscussionResolved $e) => DiscussionsProblems::discussionResolved());
+        $exceptions->render(fn (MessageRemoved $e) => DiscussionsProblems::messageRemoved());
+        $exceptions->render(fn (InvalidDiscussionInput $e) => DiscussionsProblems::invalidInput($e));
 
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),

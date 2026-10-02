@@ -2914,6 +2914,547 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+  /admin/discussions:
+    get:
+      operationId: listDiscussions
+      summary: List Guardian discussions
+      description: >-
+        Needs `discussions.view`. Most recently active first: by last activity, then id, so the order is total. **Activity is posting a
+        message** (starting the discussion, or a reply); an edit, a removal, a new title, resolving and reopening do not move a discussion.
+        Optionally `state` (`open` or `resolved`; both when absent) and `q`, a case-insensitive match on the title only (message text is
+        not searched). A modest bounded page (25 by default, at most 100). Every discussion is visible to everyone who may view
+        discussions: there are no private threads. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.view
+      x-requires-recent-verification: false
+      parameters:
+        - name: state
+          in: query
+          schema: {type: string, enum: [open, resolved]}
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 200}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1}
+        - name: per_page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: A page of discussions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscussionPage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: A malformed query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+    post:
+      operationId: startDiscussion
+      summary: Start a discussion
+      description: >-
+        Needs `discussions.participate`, and nothing more: it asks for no recent verification (ADR 0035). Creates the discussion and its
+        opening message (sequence 1) together. The author is the signed-in caller and cannot be sent. The title is trimmed, one line, at
+        most 200 characters; the text follows the message rules. Writes nothing to the security audit trail.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.participate
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewDiscussion'
+      responses:
+        '201':
+          description: The discussion as started.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discussion'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a Discussions rule gives `invalid_discussion_input` as well (a blank or over-long title or text, control characters).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/discussions/{discussion}:
+    get:
+      operationId: getDiscussion
+      summary: Show a discussion
+      description: >-
+        Needs `discussions.view`. The discussion's header, open or resolved: title, state, who started it, how many messages it holds
+        (removed ones included), when it was last active, and who resolved it. Its messages are `/messages`. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.view
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/DiscussionId'
+      responses:
+        '200':
+          description: The discussion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discussion'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such discussion (`discussion_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+    patch:
+      operationId: retitleDiscussion
+      summary: Correct a discussion's title
+      description: >-
+        Needs `discussions.participate` **and** having started the discussion (written its opening message): anyone else is refused
+        `not_author`. Allowed while resolved. Not activity: the discussion does not move in the list. Asks for no recent verification.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.participate
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/DiscussionId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetitleRequest'
+      responses:
+        '200':
+          description: The discussion as now titled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discussion'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console) — a plain `message`; or the capability is held but the caller did not write that (`not_author`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Message'
+                  - $ref: '#/components/schemas/CodedMessage'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such discussion (`discussion_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a Discussions rule gives `invalid_discussion_input` as well (a blank or over-long title or text, control characters).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/discussions/{discussion}/resolve:
+    post:
+      operationId: resolveDiscussion
+      summary: Mark a discussion resolved
+      description: >-
+        Needs `discussions.participate`; any participant may, because resolving destroys nothing and is undone by reopening. A resolved
+        discussion stays readable and takes no new replies (`discussion_resolved`); authors may still correct or remove their own
+        messages. Records who resolved it and when. Idempotent: resolving a resolved discussion succeeds and keeps the original resolver
+        and time. Serialised against replies by the discussion's row lock, so a reply is never committed into a discussion already
+        resolved. Not activity.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.participate
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/DiscussionId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The discussion, resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discussion'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such discussion (`discussion_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/discussions/{discussion}/reopen:
+    post:
+      operationId: reopenDiscussion
+      summary: Reopen a resolved discussion
+      description: >-
+        Needs `discussions.participate`. Clears who resolved it and when, so replies are accepted again. Idempotent: reopening an open
+        discussion succeeds and changes nothing. Not activity.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.participate
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/DiscussionId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The discussion, open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Discussion'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such discussion (`discussion_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/discussions/{discussion}/messages:
+    get:
+      operationId: listDiscussionMessages
+      summary: List a discussion's messages
+      description: >-
+        Needs `discussions.view`. Oldest first by `sequence`, which is per discussion, starts at 1 for the opening message and is never
+        reused or renumbered. A removed message appears in its place as a tombstone (`removed: true`, no `body`). A modest bounded page
+        (25 by default, at most 100). Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.view
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/DiscussionId'
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1}
+        - name: per_page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: A page of messages.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagePage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such discussion (`discussion_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+    post:
+      operationId: replyToDiscussion
+      summary: Reply to a discussion
+      description: >-
+        Needs `discussions.participate`; asks for no recent verification. Refused with `discussion_resolved` if the discussion is
+        resolved. The reply takes the next sequence, and counts as activity. The author is the signed-in caller and cannot be sent.
+        Checks run in order: capability, the discussion exists, it is open, then the text.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.participate
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/DiscussionId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewMessage'
+      responses:
+        '201':
+          description: The message as posted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscussionMessage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such discussion (`discussion_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The discussion is resolved (`discussion_resolved`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a Discussions rule gives `invalid_discussion_input` as well (a blank or over-long title or text, control characters).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/discussions/{discussion}/messages/{message}:
+    patch:
+      operationId: editDiscussionMessage
+      summary: Edit your own message
+      description: >-
+        Needs `discussions.participate` **and** having written the message. Nobody can edit another Person's words, whatever their
+        capabilities (`not_author`). Allowed while the discussion is resolved. Marks the message edited (`edited_at`, `edited_by`);
+        there is no edit history, and an edit that leaves the text as it was changes nothing. A removed message cannot be edited
+        (`message_removed`), including when the removal wins a race with this edit. Checks run in order: capability, existence, authorship,
+        removal, then the text. Not activity.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.participate
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/DiscussionId'
+        - $ref: '#/components/parameters/DiscussionMessageId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewMessage'
+      responses:
+        '200':
+          description: The message as now written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscussionMessage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console) — a plain `message`; or the capability is held but the caller did not write that (`not_author`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Message'
+                  - $ref: '#/components/schemas/CodedMessage'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such discussion (`discussion_not_found`), or no such message in that discussion (`message_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: The message has been removed (`message_removed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a Discussions rule gives `invalid_discussion_input` as well (a blank or over-long title or text, control characters).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    delete:
+      operationId: removeDiscussionMessage
+      summary: Remove your own message
+      description: >-
+        Needs `discussions.participate` **and** having written the message (`not_author` otherwise). The message is not deleted: it
+        stays in its place as a tombstone with its author and times, and its text is gone from the database, not hidden. This cannot be
+        undone and nothing retains the text. Allowed while the discussion is resolved. Removing a removed message succeeds and changes
+        nothing. Returns the tombstone. Not activity.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: discussions.participate
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/DiscussionId'
+        - $ref: '#/components/parameters/DiscussionMessageId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: The message as it now stands, a tombstone.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscussionMessage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console) — a plain `message`; or the capability is held but the caller did not write that (`not_author`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Message'
+                  - $ref: '#/components/schemas/CodedMessage'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such discussion (`discussion_not_found`), or no such message in that discussion (`message_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
 components:
   securitySchemes:
     sessionCookie:
@@ -2969,6 +3510,22 @@ components:
       in: path
       required: true
       description: A tag's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    DiscussionId:
+      name: discussion
+      in: path
+      required: true
+      description: A discussion's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    DiscussionMessageId:
+      name: message
+      in: path
+      required: true
+      description: A discussion message's identifier (a 26-character ULID).
       schema:
         type: string
         pattern: '^[0-9a-z]{26}$'
@@ -3888,3 +4445,124 @@ components:
               type: string
               format: date-time
               description: The latest this session can live, whatever its activity. Inactivity can end it sooner.
+
+    DiscussionPerson:
+      type: object
+      description: >-
+        Who wrote, edited or resolved something: a Person's id and CURRENT display name, so a rename shows on what they wrote. The
+        name is null only when Identity no longer holds the Person; the words stay and the author is shown as unknown. No Account,
+        login email, role or security state is ever exposed.
+      required: [id, display_name]
+      properties:
+        id: {type: string}
+        display_name: {type: [string, 'null']}
+    Discussion:
+      type: object
+      description: >-
+        A discussion's header. `creator` is the author of its opening message. `message_count` is the last allocated sequence and
+        includes removed messages. `last_activity_at` is when a message was last posted. `resolved_at` and `resolved_by` are null while open.
+      required: [id, title, state, creator, message_count, last_activity_at, created_at, resolved_at, resolved_by]
+      properties:
+        id: {type: string}
+        title: {type: string, minLength: 1, maxLength: 200}
+        state: {type: string, enum: [open, resolved]}
+        creator:
+          oneOf:
+            - $ref: '#/components/schemas/DiscussionPerson'
+            - type: 'null'
+        message_count: {type: integer, minimum: 1}
+        last_activity_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        resolved_at: {type: [string, 'null'], format: date-time}
+        resolved_by:
+          oneOf:
+            - $ref: '#/components/schemas/DiscussionPerson'
+            - type: 'null'
+    DiscussionPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Discussion'
+        meta:
+          type: object
+          required: [page, per_page, total, last_page]
+          properties:
+            page: {type: integer}
+            per_page: {type: integer}
+            total: {type: integer}
+            last_page: {type: integer}
+    NewDiscussion:
+      type: object
+      required: [title, body]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200, description: 'Trimmed. One line: control characters and line or paragraph separators are refused.'}
+        body: {type: string, minLength: 1, maxLength: 10000, description: 'The opening message. Trimmed. Line endings (CRLF, lone CR) become LF. Newlines and tabs are kept; other control characters (Unicode Cc) are refused, while formatting characters such as ZWNJ and ZWJ are ordinary text.'}
+    RetitleRequest:
+      type: object
+      required: [title]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+    NewMessage:
+      type: object
+      required: [body]
+      properties:
+        body: {type: string, minLength: 1, maxLength: 10000, description: 'Trimmed. Line endings (CRLF, lone CR) become LF. Newlines and tabs are kept; other control characters (Unicode Cc) are refused, while formatting characters such as ZWNJ and ZWJ are ordinary text.'}
+    DiscussionMessage:
+      oneOf:
+        - $ref: '#/components/schemas/LiveMessage'
+        - $ref: '#/components/schemas/RemovedMessage'
+      discriminator:
+        propertyName: removed
+        mapping:
+          'false': '#/components/schemas/LiveMessage'
+          'true': '#/components/schemas/RemovedMessage'
+    LiveMessage:
+      type: object
+      description: >-
+        A message with its text. `edited_at` and `edited_by` are null until its author changes the text. There is no history of
+        earlier text.
+      required: [id, sequence, author, created_at, removed, body, edited_at, edited_by]
+      properties:
+        id: {type: string}
+        sequence: {type: integer, minimum: 1}
+        author: {$ref: '#/components/schemas/DiscussionPerson'}
+        created_at: {type: string, format: date-time}
+        removed: {type: boolean, const: false}
+        body: {type: string, minLength: 1, maxLength: 10000}
+        edited_at: {type: [string, 'null'], format: date-time}
+        edited_by:
+          oneOf:
+            - $ref: '#/components/schemas/DiscussionPerson'
+            - type: 'null'
+    RemovedMessage:
+      type: object
+      description: >-
+        A tombstone: the message's place, its author and when it was written and removed. It has no `body` (the text is gone from
+        the database) and does not say whether it was ever edited.
+      required: [id, sequence, author, created_at, removed, removed_at]
+      properties:
+        id: {type: string}
+        sequence: {type: integer, minimum: 1}
+        author: {$ref: '#/components/schemas/DiscussionPerson'}
+        created_at: {type: string, format: date-time}
+        removed: {type: boolean, const: true}
+        removed_at: {type: string, format: date-time}
+    MessagePage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiscussionMessage'
+        meta:
+          type: object
+          required: [page, per_page, total, last_page]
+          properties:
+            page: {type: integer}
+            per_page: {type: integer}
+            total: {type: integer}
+            last_page: {type: integer}

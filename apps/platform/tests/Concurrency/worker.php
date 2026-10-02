@@ -28,6 +28,8 @@ declare(strict_types=1);
  *   php worker.php reissue '{"account":"..."}'
  *   php worker.php invite '{"email":"...","name":"..."}'
  *   php worker.php invite_existing_person '{"person":"...","email":"..."}'
+ *   php worker.php discussion_reply|discussion_resolve|discussion_reopen '{"actor_account":"...","actor_person":"...","discussion":"..."[,"body":"..."]}'
+ *   php worker.php discussion_edit|discussion_remove '{"actor_account":"...","actor_person":"...","discussion":"...","message":"..."[,"body":"..."]}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
  * the operation succeeded, 2 when it was refused or failed. It refuses to run against any
@@ -48,6 +50,13 @@ use App\Modules\Crm\Application\UpdateContactMethod;
 use App\Modules\Crm\Domain\ContactMethodId;
 use App\Modules\Crm\Domain\ContactMethodKind;
 use App\Modules\Crm\Domain\ContactTagId;
+use App\Modules\Discussions\Application\EditOwnMessage;
+use App\Modules\Discussions\Application\RemoveOwnMessage;
+use App\Modules\Discussions\Application\ReopenDiscussion;
+use App\Modules\Discussions\Application\ReplyToDiscussion;
+use App\Modules\Discussions\Application\ResolveDiscussion;
+use App\Modules\Discussions\Domain\DiscussionId;
+use App\Modules\Discussions\Domain\DiscussionMessageId;
 use App\Modules\Identity\Application\AcceptInvitation;
 use App\Modules\Identity\Application\AuthenticateAccount;
 use App\Modules\Identity\Application\AuthenticationStatus;
@@ -212,6 +221,25 @@ try {
         $app->make(RegisterContact::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
             $arg('name'), null, null, [new NewContactMethod(ContactMethodKind::Email, $arg('email'))], false,
+        );
+    } elseif ($operation === 'discussion_reply') {
+        $app->make(ReplyToDiscussion::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            DiscussionId::fromString($arg('discussion')), $arg('body'),
+        );
+    } elseif ($operation === 'discussion_resolve') {
+        $app->make(ResolveDiscussion::class)(Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))), DiscussionId::fromString($arg('discussion')));
+    } elseif ($operation === 'discussion_reopen') {
+        $app->make(ReopenDiscussion::class)(Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))), DiscussionId::fromString($arg('discussion')));
+    } elseif ($operation === 'discussion_edit') {
+        $app->make(EditOwnMessage::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            DiscussionId::fromString($arg('discussion')), DiscussionMessageId::fromString($arg('message')), $arg('body'),
+        );
+    } elseif ($operation === 'discussion_remove') {
+        $app->make(RemoveOwnMessage::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            DiscussionId::fromString($arg('discussion')), DiscussionMessageId::fromString($arg('message')),
         );
     } elseif ($operation === 'rename_person') {
         $app->make(RenamePerson::class)(PersonId::fromString($arg('person')), $arg('name'));

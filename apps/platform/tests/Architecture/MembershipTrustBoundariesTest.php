@@ -198,6 +198,8 @@ arch('Membership composes a display name only through Identity\'s Application re
         'App\\Modules\\Access\\Application',
         // CRM composes the same names for the People directory and a Person's record (ADR 0034).
         'App\\Modules\\Crm\\Application',
+        // Discussions composes author names for its messages the same way (ADR 0035), through Application only.
+        'App\\Modules\\Discussions\\Application',
         'App\\Modules\\Identity',
     ]);
 });

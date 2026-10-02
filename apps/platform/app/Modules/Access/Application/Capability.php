@@ -57,4 +57,19 @@ enum Capability: string
      * must not be put behind this one to inherit the exemption.
      */
     case ManagePeople = 'crm.people.manage';
+
+    /** May list and read Guardian discussions and their messages (ADR 0035). Changes nothing. */
+    case ViewDiscussions = 'discussions.view';
+
+    /**
+     * May take part in Guardian discussions: start one, reply while it is open, resolve and reopen, and edit or remove
+     * THEIR OWN messages and correct the title of a discussion THEY started (ADR 0035). Ownership is a separate rule the use
+     * cases check after this capability; it never means changing another Person's words. There is deliberately no
+     * `discussions.manage`.
+     *
+     * Like `crm.people.manage`, it is for ROUTINE work that grants and removes no authority, so its mutations ask for no
+     * recent verification: the step-up exemption in the administration route table names this capability and CRM's, and
+     * each only for its own module's routes.
+     */
+    case ParticipateInDiscussions = 'discussions.participate';
 }

@@ -74,7 +74,7 @@ it('completes the sign-in with a valid code: a fresh session, provenance, and th
 
     $response = $console->challenge($factor['secret'])->assertOk()
         ->assertJsonPath('account.email', 'ada@example.org')
-        ->assertJsonPath('capabilities', ['console.access', 'crm.people.manage', 'crm.people.view'])
+        ->assertJsonPath('capabilities', ['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view'])
         ->assertJsonPath('session.absolute_expires_at', '2026-09-20T00:00:00Z')
         ->assertJsonPath('mfa.enrolled', true)
         ->assertJsonPath('mfa.recovery_codes_remaining', 10);
