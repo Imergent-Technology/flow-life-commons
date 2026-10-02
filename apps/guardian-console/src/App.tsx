@@ -25,6 +25,7 @@ import { MembersPage } from './pages/admin/MembersPage.tsx'
 import { RegisterMemberPage } from './pages/admin/RegisterMemberPage.tsx'
 import { PeoplePage } from './pages/people/PeoplePage.tsx'
 import { PersonDetailPage } from './pages/people/PersonDetailPage.tsx'
+import { TagsPage } from './pages/people/TagsPage.tsx'
 import { RegisterPersonPage } from './pages/people/RegisterPersonPage.tsx'
 import { AccountSecurityPage } from './pages/AccountSecurityPage.tsx'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.tsx'
@@ -85,6 +86,14 @@ function App() {
                   element={
                     <RequireCapability capability={PEOPLE_MANAGE}>
                       <RegisterPersonPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="people/tags"
+                  element={
+                    <RequireCapability capability={PEOPLE_VIEW}>
+                      <TagsPage />
                     </RequireCapability>
                   }
                 />

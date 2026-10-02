@@ -6,6 +6,7 @@ import { operator, serveOperator } from '../../test/admin.ts'
 import { expectNoAxeViolations } from '../../test/a11y.ts'
 import { json } from '../../test/fakeApi.ts'
 import {
+  interactionsPage,
   invalidContactInput,
   METHOD_EMAIL_ID,
   METHOD_EMAIL2_ID,
@@ -31,6 +32,7 @@ const MANAGE = ['console.access', 'crm.people.view', 'crm.people.manage']
 const LIST = 'GET /api/v1/admin/people' as const
 const RECORD = `GET /api/v1/admin/people/${PERSON_ID}` as const
 const PATCH_PERSON = `PATCH /api/v1/admin/people/${PERSON_ID}` as const
+const INTERACTIONS = `GET /api/v1/admin/people/${PERSON_ID}/interactions` as const
 const METHODS = `POST /api/v1/admin/people/${PERSON_ID}/contact-methods` as const
 
 /** The item at `index`, or a failure that says so (the repository allows neither a cast nor a non-null assertion). */
@@ -251,11 +253,10 @@ describe("a Person's record", () => {
     expect(within(nth(rows, 2)).getByText('Primary')).toBeInTheDocument() // one per kind
   })
 
-  it('shows nothing about an Account, access, Membership or security, nor about tags or notes', async () => {
+  it('shows nothing about an Account, access, Membership or security', async () => {
     await openRecord()
 
     expect(pageText()).not.toMatch(FORBIDDEN_WORDS)
-    expect(pageText()).not.toMatch(/Partner|\btags?\b|notes?\b|interaction/i)
   })
 
   it('says "Not recorded" for a sparse record rather than inventing content', async () => {
@@ -337,6 +338,7 @@ describe('editing the profile', () => {
     const user = userEvent.setup()
     const api = serveOperator(operator(MANAGE))
     api.on(RECORD, () => json(wirePerson()))
+    api.on(INTERACTIONS, json(interactionsPage([])))
     renderApp(`/people/${PERSON_ID}`)
     await screen.findByRole('heading', { level: 1, name: 'Ada Lovelace' })
     await user.click(screen.getByRole('button', { name: 'Edit profile' }))
@@ -386,7 +388,7 @@ describe('editing the profile', () => {
     expect(await screen.findByText('Difference Engine Co')).toBeInTheDocument()
     expect(api.callsTo(PATCH_PERSON)).toHaveLength(1)
     expect(api.callsTo(PATCH_PERSON)[0]?.body).toEqual({ affiliation: 'Difference Engine Co' }) // no display_name, no how_we_know
-    expect(screen.getByRole('status')).toHaveTextContent('Saved.')
+    expect(screen.getByText('Saved.')).toBeInTheDocument()
   })
 
   it("sends a renamed Person's name through the same request, and shows the new name", async () => {
@@ -470,6 +472,7 @@ describe('contact methods', () => {
     const user = userEvent.setup()
     const api = serveOperator(operator(MANAGE))
     api.on(RECORD, () => json(record))
+    api.on(INTERACTIONS, json(interactionsPage([])))
     renderApp(`/people/${PERSON_ID}`)
     await screen.findByRole('heading', { level: 1, name: 'Ada Lovelace' })
     return { user, api }

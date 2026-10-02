@@ -114,4 +114,91 @@ test.describe('people', () => {
     await guardian.getByRole('button', { name: 'This is a different person: add anyway' }).click()
     await expect(guardian.getByRole('heading', { level: 1, name: 'Person added' })).toBeVisible()
   })
+
+  test('a Guardian records, corrects and removes a note, and creates, assigns, and cannot delete in-use tags', async ({
+    browser,
+    baseURL,
+  }) => {
+    const guardian = await signedInAs(browser, baseURL ?? '', 'plain-guardian')
+    const tag = crypto.randomUUID().slice(0, 8)
+    const name = `E2E Notes ${tag}`
+    const tagName = `E2E Tag ${tag}`
+
+    await guardian.goto('/people/new')
+    await guardian.getByLabel('Display name').fill(name)
+    await guardian.getByRole('button', { name: 'Add person' }).click()
+    await guardian.getByRole('link', { name: 'Open the person' }).click()
+    await expect(guardian.getByRole('heading', { level: 1, name })).toBeVisible()
+    await expect(guardian.getByText('No notes or interactions yet.')).toBeVisible()
+    await expect(guardian.getByText('No tags.')).toBeVisible()
+
+    // Record: the ordinary path is one box. The author is the signed-in Guardian, taken by the server.
+    await guardian.getByRole('button', { name: 'Record a note' }).click()
+    await guardian
+      .getByRole('textbox', { name: 'Details' })
+      .fill('Met at the market; wants the newsletter.')
+    await guardian
+      .getByRole('form', { name: 'Record a note' })
+      .getByRole('button', { name: 'Record' })
+      .click()
+    await expect(guardian.getByText('Recorded.')).toBeVisible()
+    const history = guardian.getByRole('list', { name: 'Notes and interactions' })
+    await expect(history.getByText('Met at the market; wants the newsletter.')).toBeVisible()
+    await expect(history.getByText(/Recorded by/)).toBeVisible()
+    await expect(history.getByText(/Last edited/)).toHaveCount(0)
+
+    // Correct: only the text and the kind change; the page then says who last edited it.
+    await guardian.getByRole('button', { name: /^Edit the note from / }).click()
+    await guardian.getByRole('combobox', { name: 'Kind' }).selectOption('call')
+    await guardian.getByRole('textbox', { name: 'Details' }).fill('Rang about the newsletter.')
+    await guardian
+      .getByRole('form', { name: 'Edit this note' })
+      .getByRole('button', { name: 'Save' })
+      .click()
+    await expect(guardian.getByText('Saved.')).toBeVisible()
+    await expect(history.getByText('Rang about the newsletter.')).toBeVisible()
+    await expect(history.getByText('Call', { exact: true })).toBeVisible()
+    await expect(history.getByText(/Last edited by/)).toBeVisible()
+
+    // Tags: create one on the Tags page, assign it here, and see it refused for deletion while it is held.
+    await guardian.getByRole('link', { name: 'Manage the list of tags' }).click()
+    await expect(guardian.getByRole('heading', { level: 1, name: 'Tags' })).toBeVisible()
+    await guardian.getByRole('textbox', { name: 'New tag' }).fill(tagName)
+    await guardian.getByRole('button', { name: 'Add tag' }).click()
+    await expect(guardian.getByText(`The tag “${tagName}” was created.`)).toBeVisible()
+
+    await guardian.goBack()
+    await guardian.getByRole('button', { name: 'Edit tags' }).click()
+    await guardian.getByRole('checkbox', { name: tagName }).check()
+    await guardian.getByRole('button', { name: 'Save tags' }).click()
+    await expect(guardian.getByText('Tags saved.')).toBeVisible()
+    await expect(guardian.getByRole('list', { name: 'Tags' }).getByText(tagName)).toBeVisible()
+
+    await guardian.getByRole('link', { name: 'Manage the list of tags' }).click()
+    await guardian.getByRole('button', { name: `Delete ${tagName}` }).click()
+    await guardian.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
+    await expect(guardian.getByRole('dialog').getByRole('alert')).toContainText('was not deleted')
+    await guardian.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click()
+    await expect(guardian.getByRole('list', { name: 'Tags' }).getByText(tagName)).toBeVisible() // kept
+
+    // Remove the tag from the person; now it can be deleted.
+    await guardian.goBack()
+    await guardian.getByRole('button', { name: 'Edit tags' }).click()
+    await guardian.getByRole('checkbox', { name: tagName }).uncheck()
+    await guardian.getByRole('button', { name: 'Save tags' }).click()
+    await expect(guardian.getByText('No tags.')).toBeVisible()
+    await guardian.getByRole('link', { name: 'Manage the list of tags' }).click()
+    await guardian.getByRole('button', { name: `Delete ${tagName}` }).click()
+    await guardian.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
+    await expect(guardian.getByText(`The tag “${tagName}” was deleted.`)).toBeVisible()
+
+    // Remove the note, permanently, after a confirmation that says so.
+    await guardian.goBack()
+    await guardian.getByRole('button', { name: /^Remove the call from / }).click()
+    const dialog = guardian.getByRole('dialog', { name: 'Remove this call?' })
+    await expect(dialog).toContainText('It cannot be restored.')
+    await dialog.getByRole('button', { name: 'Remove' }).click()
+    await expect(guardian.getByText('The call was removed.')).toBeVisible()
+    await expect(guardian.getByText('No notes or interactions yet.')).toBeVisible()
+  })
 })

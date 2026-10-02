@@ -60,6 +60,7 @@ export const navigation: readonly NavSection[] = [
             detail: { pattern: '/people/:personId', label: 'Person' },
           },
           { label: 'Add a person', to: '/people/new', capability: PEOPLE_MANAGE },
+          { label: 'Tags', to: '/people/tags', capability: PEOPLE_VIEW },
         ],
       },
     ],

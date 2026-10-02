@@ -49,7 +49,7 @@ export type Failure =
 export type Result<T> = { ok: true; value: T } | { ok: false; failure: Failure }
 
 export interface RequestOptions {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   path: ApiPath
   /** JSON body. Never logged, and never placed in a URL. */
   body?: object

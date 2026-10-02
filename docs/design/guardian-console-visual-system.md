@@ -179,7 +179,8 @@ export const sections: NavSection[] = [
     { label: 'People', items: [
       { label: 'All people',   to: '/people',     capability: PEOPLE_VIEW,
         detail: { pattern: '/people/:personId', label: 'Person' } },
-      { label: 'Add a person', to: '/people/new', capability: PEOPLE_MANAGE } ] } ] },
+      { label: 'Add a person', to: '/people/new', capability: PEOPLE_MANAGE },
+      { label: 'Tags',         to: '/people/tags', capability: PEOPLE_VIEW } ] } ] },
   { id: 'admin', label: 'Admin', icon: 'people', groups: [
     { label: 'Accounts', items: [
       { label: 'All accounts',       to: '/admin/accounts',        capability: ACCOUNTS_VIEW,

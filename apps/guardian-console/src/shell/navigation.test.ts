@@ -40,6 +40,7 @@ describe('visibleNavigation', () => {
       'People',
       'All people',
       'Add a person',
+      'Tags',
       'Admin',
       'All accounts',
       'Invite an operator',
@@ -64,7 +65,7 @@ describe('visibleNavigation', () => {
   })
 
   it('shows the People section by its own capabilities, independent of Admin', () => {
-    expect(labels(having(PEOPLE_VIEW))).toEqual(['Overview', 'People', 'All people'])
+    expect(labels(having(PEOPLE_VIEW))).toEqual(['Overview', 'People', 'All people', 'Tags'])
     expect(labels(having(ACCOUNTS_VIEW))).not.toContain('People')
   })
 
@@ -105,6 +106,7 @@ describe('locate', () => {
     ['/', { section: 'overview', item: undefined, detail: false }],
     ['/people', { section: 'people', item: 'All people', detail: false }],
     ['/people/new', { section: 'people', item: 'Add a person', detail: false }],
+    ['/people/tags', { section: 'people', item: 'Tags', detail: false }],
     ['/people/01J000', { section: 'people', item: 'All people', detail: true }],
     ['/admin/accounts', { section: 'admin', item: 'All accounts', detail: false }],
     ['/admin/accounts/invite', { section: 'admin', item: 'Invite an operator', detail: false }],

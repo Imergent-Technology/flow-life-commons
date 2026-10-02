@@ -1,6 +1,6 @@
 # ADR 0034: CRM enriches Identity's Person
 
-- **Status:** Accepted (implemented: Identity's People ports, the `Crm` backend (WP2) notes and interactions (WP3) and the Console's People screens (WP4); the notes and tag screens are not built)
+- **Status:** Accepted (implemented: Identity's People ports, the `Crm` backend (WP2) notes and interactions (WP3) and the Console's People, notes and tag screens (WP4, WP5))
 - **Date:** 2026-09-29
 - **Supersedes:** none
 - **Superseded by:** none
@@ -99,6 +99,17 @@ Where building the Guardian People screens settled what this ADR left to the UI.
 - **Edits send only what changed.** The API is a partial update, so a field the form did not touch is never sent and cannot overwrite what someone else changed since the page loaded.
 - **Duplicate advice is advice.** A `409 possible_duplicate` is shown with the candidates and what matched, and nothing is created. The Guardian either opens a candidate or states that this is a different person, which resends the same request with `confirm_distinct`. Nothing is merged or adopted.
 - **The server decides which contact method is primary.** After every contact-method change the Console re-reads the record rather than keeping its own idea of the primary; "make primary" is its own action, so the Console never asks to un-set a primary.
+
+## Implementation notes (WP5, 2026-10-02)
+
+Where building the notes and tag screens settled what this ADR left to the UI. None changes a decision above.
+
+- **Surface.** A Person's record gains a Tags panel and a Notes and interactions panel. The list of tags (the vocabulary) is its own small page, `/people/tags`, in the People section: a Person's tags are chosen from it, and renaming or deleting a tag affects everyone who holds it, so it is not a per-Person control. Seeing any of this needs `crm.people.view`; recording, correcting and removing notes, assigning tags and managing the list need `crm.people.manage`, and the Console never treats one as the other.
+- **Notes are for everyone who can view people.** The panel says so once, in the words decision 17 uses ("write them as though the person could one day ask to read them"), and offers no private or confidential option. It does not claim the Person can read them today.
+- **The ordinary note is one box.** The kind defaults to a note and the time to now; the author is never asked for or sent (the server takes it from the session). A correction sends only the fields that changed and nothing if none did. Authors appear as the API's minimal Person projection, and the page says who last edited a note without implying any earlier version exists.
+- **Removal is permanent and says so.** A confirmation names the note, states that it cannot be restored, and has Cancel first. Nothing is retained, and nothing in the Console speaks of undo or history.
+- **A tag is only a label.** It is shown as words, with no colour, status or grouping, and no part of the Console reads a tag's name to decide anything. A Person's tags are saved as the whole chosen set, which is what the API takes. A tag still held by anyone cannot be deleted: the Console shows the server's refusal and keeps the tag, and never changes anyone's tags to make a deletion succeed.
+- **No tag is built in.** The Console holds no list of tag names; the starter vocabulary is data a Guardian creates (WP6 decides whether a demo seeder does).
 
 ## Consequences
 

@@ -1,10 +1,11 @@
 // The People (CRM) endpoints the Console uses (openapi/openapi.yaml is the contract, ADR 0034). The wire is snake_case; the
 // Console's own types are camelCase. Only what CRM owns plus the Person's id and name is ever here: the contract carries no
-// Account, role, Membership or security data, and nothing in this file asks for any. Tags and interactions (WP5) are
-// deliberately not read: the record's `tags` are ignored, not parsed. A contact method's `kind` is read back as plain `string`,
+// Account, role, Membership or security data, and nothing in this file asks for any. Interactions have their own
+// endpoints (api/interactions.ts) and tags theirs (api/tags.ts). A contact method's `kind` is read back as plain `string`,
 // never the input union: a future kind the server holds but this Console does not yet know must be shown, not crash the page.
 
 import { requestJson, requestVoid, type Failure, type Result } from './http.ts'
+import { isTagRef, type TagRef } from './tags.ts'
 
 /** Kinds this Console's forms may choose. */
 export type ContactMethodKind = 'email' | 'phone'
@@ -32,6 +33,8 @@ export interface PersonRecord {
   person: PersonRef
   profile: PersonProfile
   contactMethods: ContactMethod[]
+  /** Labels only: a tag carries no authority, Membership or Volunteer meaning. */
+  tags: TagRef[]
 }
 
 export interface PersonListing {
@@ -68,6 +71,7 @@ interface WirePersonRecord {
   person: { id: string; display_name: string }
   profile: { how_we_know: string | null; affiliation: string | null }
   contact_methods: WireContactMethod[]
+  tags: TagRef[]
 }
 
 const isString = (value: unknown): value is string => typeof value === 'string'
@@ -98,7 +102,9 @@ function isWirePersonRecord(value: unknown): value is WirePersonRecord {
     isPersonRef(value.person) &&
     isWireProfile(value.profile) &&
     Array.isArray(value.contact_methods) &&
-    value.contact_methods.every(isWireContactMethod)
+    value.contact_methods.every(isWireContactMethod) &&
+    Array.isArray(value.tags) &&
+    value.tags.every(isTagRef)
   )
 }
 
@@ -117,6 +123,7 @@ function recordFrom(wire: WirePersonRecord): PersonRecord {
     person: { id: wire.person.id, displayName: wire.person.display_name },
     profile: { howWeKnow: wire.profile.how_we_know, affiliation: wire.profile.affiliation },
     contactMethods: wire.contact_methods.map(methodFrom),
+    tags: wire.tags.map((tag) => ({ id: tag.id, name: tag.name })),
   }
 }
 

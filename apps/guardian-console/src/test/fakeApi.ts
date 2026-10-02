@@ -11,7 +11,7 @@ export interface RecordedCall {
 }
 
 type Handler = (call: RecordedCall) => Response | Promise<Response>
-type Route = `${'GET' | 'POST' | 'PATCH' | 'DELETE'} /api/v1/${string}`
+type Route = `${'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'} /api/v1/${string}`
 
 export function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return Response.json(body, { status, headers })

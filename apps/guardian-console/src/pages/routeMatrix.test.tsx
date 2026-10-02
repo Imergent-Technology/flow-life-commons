@@ -6,7 +6,14 @@ import { expectNoAxeViolations } from '../test/a11y.ts'
 import { accountFor, FakeApi, json } from '../test/fakeApi.ts'
 import { ADMIN_CAPABILITIES, page, serveOperator, TARGET_ID, wire } from '../test/admin.ts'
 import { membersPage, PERSON_ID, wireMember } from '../test/membership.ts'
-import { peoplePage, PERSON_ID as CRM_PERSON, wireListing, wirePerson } from '../test/people.ts'
+import {
+  interactionsPage,
+  peoplePage,
+  PERSON_ID as CRM_PERSON,
+  wireListing,
+  wirePerson,
+  wireTag,
+} from '../test/people.ts'
 import { renderApp } from '../test/renderApp.tsx'
 
 // Every Console route and full-page screen, rendered for real: one h1, the document named for it, the width
@@ -38,6 +45,8 @@ function serveAll() {
   api.on('GET /api/v1/admin/members/01J000000000000000TARGETPRS', json(wireMember()))
   api.on('GET /api/v1/admin/people', json(peoplePage([wireListing()])))
   api.on(`GET /api/v1/admin/people/${CRM_PERSON}`, json(wirePerson()))
+  api.on(`GET /api/v1/admin/people/${CRM_PERSON}/interactions`, json(interactionsPage([])))
+  api.on('GET /api/v1/admin/contact-tags', json({ data: [wireTag()] }))
   return api
 }
 
@@ -52,6 +61,7 @@ const consoleRoutes: { path: string; h1: string; width: PageWidth }[] = [
   { path: `/admin/members/${PERSON_ID}`, h1: 'Mia Member', width: 'detail' },
   { path: '/people', h1: 'People', width: 'wide' },
   { path: '/people/new', h1: 'Add a person', width: 'form' },
+  { path: '/people/tags', h1: 'Tags', width: 'detail' },
   { path: `/people/${CRM_PERSON}`, h1: 'Ada Lovelace', width: 'detail' },
   { path: '/no/such/page', h1: 'Page not found', width: 'prose' },
 ]

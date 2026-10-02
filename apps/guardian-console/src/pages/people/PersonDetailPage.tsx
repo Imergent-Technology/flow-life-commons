@@ -13,10 +13,13 @@ import { SkeletonRegion, SkeletonText } from '../../ui/Skeleton.tsx'
 import { TextLink } from '../../ui/TextLink.tsx'
 import { useLoad } from '../../ui/useLoad.ts'
 import { ContactMethodsSection } from './ContactMethodsSection.tsx'
+import { InteractionsSection } from './InteractionsSection.tsx'
 import { ProfileSection } from './ProfileSection.tsx'
+import { TagsSection } from './TagsSection.tsx'
 
 /**
- * One Person as CRM knows them: their name, the profile CRM holds about them, and their contact methods (ADR 0034). Nothing
+ * One Person as CRM knows them: their name, the profile CRM holds about them, their contact methods, their tags and the notes
+ * recorded about them (ADR 0034). Nothing
  * about an Account, access, Membership or security belongs here: those have their own pages, behind their own capabilities.
  * What a Guardian may CHANGE follows `crm.people.manage`, which is separate from the `crm.people.view` that got them here.
  */
@@ -62,6 +65,12 @@ export function PersonDetailPage() {
       <PageHeader title={record.person.displayName} />
       <ProfileSection record={record} mayManage={mayManage} refresh={refresh} />
       <ContactMethodsSection record={record} mayManage={mayManage} refresh={refresh} />
+      <TagsSection record={record} mayManage={mayManage} refresh={refresh} />
+      <InteractionsSection
+        personId={record.person.id}
+        personName={record.person.displayName}
+        mayManage={mayManage}
+      />
     </Page>
   )
 }
