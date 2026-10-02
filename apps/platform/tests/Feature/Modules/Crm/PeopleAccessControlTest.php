@@ -27,7 +27,7 @@ function crmGate(bool $answer, string ...$abilities): void
 }
 
 /** @return list<array{string, string, array<string, mixed>}> every operation: method, path, a valid body */
-function crmOperations(string $person, string $method, string $tag): array
+function crmOperations(string $person, string $method, string $tag, string $note): array
 {
     return [
         ['GET', '/api/v1/admin/people', []],
@@ -37,6 +37,10 @@ function crmOperations(string $person, string $method, string $tag): array
         ['POST', "/api/v1/admin/people/{$person}/contact-methods", ['kind' => 'email', 'value' => 'new@example.org']],
         ['PATCH', "/api/v1/admin/people/{$person}/contact-methods/{$method}", ['label' => 'work']],
         ['DELETE', "/api/v1/admin/people/{$person}/contact-methods/{$method}", []],
+        ['GET', "/api/v1/admin/people/{$person}/interactions", []],
+        ['POST', "/api/v1/admin/people/{$person}/interactions", ['body' => 'A new note']],
+        ['PATCH', "/api/v1/admin/people/{$person}/interactions/{$note}", ['body' => 'Corrected']],
+        ['DELETE', "/api/v1/admin/people/{$person}/interactions/{$note}", []],
         ['PUT', "/api/v1/admin/people/{$person}/tags", ['tag_ids' => []]],
         ['GET', '/api/v1/admin/contact-tags', []],
         ['POST', '/api/v1/admin/contact-tags', ['name' => 'Fresh']],
@@ -61,34 +65,36 @@ function crmCall(Console $console, string $verb, string $path, array $body): Tes
     };
 }
 
-/** @return array{string, string, string} a Person, one of their contact methods, and an unused tag */
+/** @return array{string, string, string, string} a Person, one of their contact methods, an unused tag, and one of their notes */
 function crmFixtures(): array
 {
     $by = Crm::manager('fixture.manager@example.org');
     $person = Identity::savedPerson('Subject');
     $method = Crm::email($by, $person->id, 'subject@example.org');
 
-    return [$person->id->value, $method->id->value, Crm::tag($by, 'Unused')->value];
+    $note = Crm::interaction($by, $person->id, 'An existing note');
+
+    return [$person->id->value, $method->id->value, Crm::tag($by, 'Unused')->value, $note->interaction->id->value];
 }
 
 it('refuses every operation to someone who is not signed in', function () {
-    [$person, $method, $tag] = crmFixtures();
+    [$person, $method, $tag, $note] = crmFixtures();
     $guest = new Console;
 
-    foreach (crmOperations($person, $method, $tag) as [$verb, $path, $body]) {
+    foreach (crmOperations($person, $method, $tag, $note) as [$verb, $path, $body]) {
         expect(crmCall($guest, $verb, $path, $body)->status())->toBe(401, "{$verb} {$path}");
     }
 });
 
 it('refuses every operation to a signed-in Account without Console access, before the capability is even asked', function () {
-    [$person, $method, $tag] = crmFixtures();
+    [$person, $method, $tag, $note] = crmFixtures();
     [$member] = Mfa::signedInMember();
 
-    foreach (crmOperations($person, $method, $tag) as [$verb, $path, $body]) {
+    foreach (crmOperations($person, $method, $tag, $note) as [$verb, $path, $body]) {
         $response = crmCall($member, $verb, $path, $body);
         expect($response->status())->toBe(403, "{$verb} {$path}")->and($response->json('verification_required'))->toBeNull();
     }
-    expect(DB::table('contact_methods')->count())->toBe(1);
+    expect(DB::table('contact_methods')->count())->toBe(1)->and(DB::table('contact_interactions')->count())->toBe(1);
 });
 
 it('lets a Guardian, who holds both CRM capabilities, read AND write', function () {
@@ -128,10 +134,10 @@ it('asks for no fresh proof: a CRM mutation succeeds long after sign-in, where a
 
 it('stops a mutation at the HTTP layer alone: capability refused at the route, although the use case would allow it', function () {
     [$console] = Mfa::signedIn();
-    [$person, $method, $tag] = crmFixtures();
+    [$person, $method, $tag, $note] = crmFixtures();
     crmGate(false, 'crm.people.manage'); // view stays real (granted), manage is refused at the route only
 
-    foreach (crmOperations($person, $method, $tag) as [$verb, $path, $body]) {
+    foreach (crmOperations($person, $method, $tag, $note) as [$verb, $path, $body]) {
         if ($verb === 'GET') {
             expect(crmCall($console, $verb, $path, $body)->status())->toBe(200, "{$verb} {$path}"); // a view-only operator still reads
         } else {
@@ -139,15 +145,16 @@ it('stops a mutation at the HTTP layer alone: capability refused at the route, a
             expect($response->status())->toBe(403, "{$verb} {$path}")->and($response->json('verification_required'))->toBeNull();
         }
     }
-    expect(DB::table('contact_methods')->count())->toBe(1)->and(DB::table('contact_tags')->count())->toBe(1);
+    expect(DB::table('contact_methods')->count())->toBe(1)->and(DB::table('contact_tags')->count())->toBe(1)
+        ->and(DB::table('contact_interactions')->count())->toBe(1)->and(DB::table('contact_interactions')->value('body'))->toBe('An existing note');
 });
 
 it('stops a read at the HTTP layer alone, and does not make reading a precondition of writing', function () {
     [$console] = Mfa::signedIn();
-    [$person, $method, $tag] = crmFixtures();
+    [$person, $method, $tag, $note] = crmFixtures();
     crmGate(false, 'crm.people.view'); // manage stays real, view is refused at the route only
 
-    foreach (crmOperations($person, $method, $tag) as [$verb, $path, $body]) {
+    foreach (crmOperations($person, $method, $tag, $note) as [$verb, $path, $body]) {
         $response = crmCall($console, $verb, $path, $body);
         if ($verb === 'GET') {
             expect($response->status())->toBe(403, "{$verb} {$path}");
@@ -159,15 +166,16 @@ it('stops a read at the HTTP layer alone, and does not make reading a preconditi
 });
 
 it('stops every operation at the Application layer alone: the route lets a signed-in Account through, the use case refuses', function () {
-    [$person, $method, $tag] = crmFixtures();
+    [$person, $method, $tag, $note] = crmFixtures();
     [$member] = Mfa::signedInMember('plain@example.org');
     crmGate(true, 'console.access', 'crm.people.view', 'crm.people.manage'); // every route-level check passes; the Account holds nothing
 
-    foreach (crmOperations($person, $method, $tag) as [$verb, $path, $body]) {
+    foreach (crmOperations($person, $method, $tag, $note) as [$verb, $path, $body]) {
         $response = crmCall($member, $verb, $path, $body);
         expect($response->status())->toBe(403, "{$verb} {$path}");
     }
     expect(DB::table('contact_methods')->count())->toBe(1)->and(DB::table('contact_tags')->count())->toBe(1)
+        ->and(DB::table('contact_interactions')->count())->toBe(1)->and(DB::table('contact_interactions')->value('body'))->toBe('An existing note')
         ->and(DB::table('people')->where('display_name', 'Fresh Face')->exists())->toBeFalse();
 });
 

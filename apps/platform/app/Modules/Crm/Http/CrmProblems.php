@@ -24,6 +24,11 @@ final class CrmProblems
         return response()->json(['message' => 'There is no such contact method for that Person.', 'code' => 'contact_method_not_found'], 404);
     }
 
+    public static function interactionNotFound(): JsonResponse
+    {
+        return response()->json(['message' => 'There is no such interaction for that Person.', 'code' => 'interaction_not_found'], 404);
+    }
+
     public static function tagNotFound(): JsonResponse
     {
         return response()->json(['message' => 'There is no such tag.', 'code' => 'tag_not_found'], 404);

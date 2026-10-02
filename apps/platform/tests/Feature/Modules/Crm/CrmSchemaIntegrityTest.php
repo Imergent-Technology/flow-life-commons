@@ -41,6 +41,16 @@ function methodRow(PersonId $person, string $kind, string $search, ?string $prim
 }
 
 /** @return array<string, mixed> */
+function interactionRow(PersonId $person, ?PersonId $author = null): array
+{
+    return [
+        'id' => strtolower((string) Str::ulid()), 'person_id' => $person->value, 'kind' => 'note', 'body' => 'A note',
+        'occurred_at' => '2026-10-01 12:00:00', 'author_person_id' => ($author ?? $person)->value, 'updated_by_person_id' => null,
+        'created_at' => '2026-10-01 12:00:00', 'updated_at' => '2026-10-01 12:00:00',
+    ];
+}
+
+/** @return array<string, mixed> */
 function tagRow(string $name, string $canonical): array
 {
     return ['id' => strtolower((string) Str::ulid()), 'name' => $name, 'name_canonical' => $canonical, 'created_by_account_id' => null, 'created_at' => '2026-10-01 12:00:00'];
@@ -113,6 +123,7 @@ it('never lets a Person be deleted out from under CRM data about them (RESTRICT,
         default => throw new InvalidArgumentException($table),
         'contact_profiles' => DB::table($table)->insert(['person_id' => $ada->id->value, 'how_we_know' => null, 'affiliation' => null, 'updated_by_account_id' => null, 'created_at' => $now, 'updated_at' => $now]),
         'contact_methods' => DB::table($table)->insert(methodRow($ada->id, 'email', 'a@example.org')),
+        'contact_interactions' => DB::table($table)->insert(interactionRow($ada->id)),
         'contact_tag_assignments' => (function () use ($ada, $now) {
             $tag = tagRow('Lead', 'lead');
             DB::table('contact_tags')->insert($tag);
@@ -122,10 +133,20 @@ it('never lets a Person be deleted out from under CRM data about them (RESTRICT,
 
     refuses(fn () => DB::table('people')->where('id', $ada->id->value)->delete(), QueryException::class);
     expect(DB::table('people')->where('id', $ada->id->value)->exists())->toBeTrue();
-})->with(['contact_profiles', 'contact_methods', 'contact_tag_assignments']);
+})->with(['contact_profiles', 'contact_methods', 'contact_tag_assignments', 'contact_interactions']);
 
 it('refuses CRM data about a Person that does not exist', function () {
     refuses(fn () => DB::table('contact_methods')->insert(methodRow(PersonId::generate(), 'email', 'a@example.org')), QueryException::class);
+});
+
+it('refuses a note about a Person that does not exist, but keeps who wrote it as provenance with no foreign key (ADR 0021)', function () {
+    $ada = Identity::savedPerson('Ada');
+
+    refuses(fn () => DB::table('contact_interactions')->insert(interactionRow(PersonId::generate())), QueryException::class);
+
+    // The author is provenance: no foreign key, so a stale or unknown author id is stored rather than refused.
+    DB::table('contact_interactions')->insert(interactionRow($ada->id, PersonId::generate()));
+    expect(DB::table('contact_interactions')->count())->toBe(1);
 });
 
 it('has the indexes the queries rely on, by name, on both engines', function () {
@@ -139,6 +160,7 @@ it('has the indexes the queries rely on, by name, on both engines', function () 
     };
 
     expect($names('contact_methods'))->toContain('contact_methods_person_kind_value_unique', 'contact_methods_one_primary_per_kind_unique', 'contact_methods_kind_search_value_index')
+        ->and($names('contact_interactions'))->toContain('contact_interactions_person_occurred_index')
         ->and($names('contact_tags'))->toContain('contact_tags_name_canonical_unique')
         ->and($names('contact_tag_assignments'))->toContain('contact_tag_assignments_tag_id_index');
 });
@@ -146,7 +168,7 @@ it('has the indexes the queries rely on, by name, on both engines', function () 
 it('stores no status, Account, role or Membership column in any CRM table', function () {
     /** @var list<string> $columns */
     $columns = [];
-    foreach (['contact_profiles', 'contact_methods', 'contact_tags', 'contact_tag_assignments'] as $table) {
+    foreach (['contact_profiles', 'contact_methods', 'contact_tags', 'contact_tag_assignments', 'contact_interactions'] as $table) {
         foreach (Schema::getColumnListing($table) as $column) {
             $columns[] = Api::string($column);
         }

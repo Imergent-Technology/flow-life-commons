@@ -12,6 +12,7 @@ use App\Modules\Access\Http\AdministrationProblems;
 use App\Modules\Crm\Application\ContactMethodNotFound;
 use App\Modules\Crm\Application\DuplicateContactMethod;
 use App\Modules\Crm\Application\DuplicateTag;
+use App\Modules\Crm\Application\InteractionNotFound;
 use App\Modules\Crm\Application\PossibleDuplicate;
 use App\Modules\Crm\Application\SearchTooBroad;
 use App\Modules\Crm\Application\TagInUse;
@@ -221,6 +222,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // The People directory and CRM data (ADR 0034).
         $exceptions->render(fn (UnknownCrmPerson $e) => CrmProblems::personNotFound());
         $exceptions->render(fn (ContactMethodNotFound $e) => CrmProblems::contactMethodNotFound());
+        $exceptions->render(fn (InteractionNotFound $e) => CrmProblems::interactionNotFound());
         $exceptions->render(fn (TagNotFound $e) => CrmProblems::tagNotFound());
         $exceptions->render(fn (DuplicateContactMethod $e) => CrmProblems::duplicateContactMethod());
         $exceptions->render(fn (DuplicateTag $e) => CrmProblems::duplicateTag());

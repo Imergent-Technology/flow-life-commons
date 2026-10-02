@@ -1,6 +1,6 @@
 # ADR 0034: CRM enriches Identity's Person
 
-- **Status:** Accepted (implemented: Identity's People ports and the `Crm` backend, WP2; notes and the Console UI are not built)
+- **Status:** Accepted (implemented: Identity's People ports, the `Crm` backend (WP2) and notes and interactions (WP3); the Console UI is not built)
 - **Date:** 2026-09-29
 - **Supersedes:** none
 - **Superseded by:** none
@@ -75,7 +75,19 @@ Recorded where the build made a call this ADR left open. None changes a decision
 - **Routine maintenance asks for no recent verification.** [ADR 0024](0024-privileged-operator-administration.md)'s rule that every administration mutation needs recent verification governs operations that change authority. The People mutations change none, so they are exempt, by capability: `AdministrationRoutesTest` names `crm.people.manage` as the one exemption and pins that it covers exactly the Crm routes.
 - **Writes return what they wrote**, not a re-read of everything CRM holds. That is not a disclosure boundary: a write can still reveal CRM data (a profile update returns both profile fields, a duplicate candidate list names People, a duplicate method or a tag in use says it exists). The protection is the role invariant above (manage implies view, in every role), not the response shape.
 - **Search bound.** The directory composes CRM's matches with Identity's search by passing id sets, bounded at 10,000 (`SearchTooBroad`, a 422, beyond it). A dedicated search read model is a later decision with its own trigger.
-- **Starter tags are not seeded.** The vocabulary is data a Guardian creates; the demo/e2e closeout (WP6) decides whether a demo seeder creates it. Notes and interactions (WP3) are not built, and their deletion mechanics are still open.
+- **Starter tags are not seeded.** The vocabulary is data a Guardian creates; the demo/e2e closeout (WP6) decides whether a demo seeder creates it.
+
+## Implementation notes (WP3, 2026-10-02)
+
+Where building notes and interactions settled what decision 17 left open. None changes a decision above.
+
+- **Shape.** One concrete table, `contact_interactions` (no generic activity framework): `kind` (`note`, `call`, `email`, `meeting`), `body`, `occurred_at`, the author, the last editor, and created/updated times. Routes: `GET`/`POST /admin/people/{person}/interactions`, `PATCH`/`DELETE /admin/people/{person}/interactions/{interaction}`. Reads need `crm.people.view`, every change `crm.people.manage`, none asks for recent verification.
+- **Author attribution.** The author and the last editor are held as Person ids (`author_person_id`, `updated_by_person_id`), provenance with no foreign key (ADR 0021). They are Persons, not Accounts: the Person is the stable anchor, a reader needs only a name, and CRM responses never carry an Account id. Names are resolved live through Identity's `FindPeople` (one batched query per page), so a rename shows on notes already written.
+- **Chronology.** `occurred_at` is when the contact happened, defaults to now, and may not be in the future (five minutes of clock difference allowed). The list is `occurred_at`, then `created_at`, then id, all descending: a total order, so a page boundary is never ambiguous. Offset paging like the directory (`page`, `per_page` at most 100, with `total`).
+- **Edit.** In place, by anyone holding `crm.people.manage` (there is no per-author ownership in Phase 1). The row records who last changed it and when; there is no edit history. The author and the Person never change.
+- **Removal.** Hard delete, the convention contact methods already follow. No soft delete or versioning: nothing in Phase 1 needs one, and erasure policy remains an open question (see Consequences). A note removed is gone.
+- **No audit entry.** Recording, editing and removing write nothing to `security_events`: it is not the CRM activity log (decision 17), and ordinary business content is not over-audited into the security subsystem.
+- **No lock.** A note has no uniqueness or "exactly one" rule, so it does not take the Person's profile-row lock and does not create the profile row. Edit re-reads after writing (an unchanged row reports zero affected rows on MariaDB), so a note removed in between is reported gone rather than returned as if it still existed.
 
 ## Consequences
 

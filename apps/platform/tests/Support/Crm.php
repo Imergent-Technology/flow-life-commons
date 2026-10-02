@@ -7,16 +7,21 @@ namespace Tests\Support;
 use App\Modules\Access\Application\Role;
 use App\Modules\Crm\Application\AddContactMethod;
 use App\Modules\Crm\Application\CreateTag;
+use App\Modules\Crm\Application\InteractionView;
 use App\Modules\Crm\Application\NewContactMethod;
+use App\Modules\Crm\Application\NewInteraction;
+use App\Modules\Crm\Application\RecordInteraction;
 use App\Modules\Crm\Application\SetPersonTags;
 use App\Modules\Crm\Domain\ContactMethod;
 use App\Modules\Crm\Domain\ContactMethodKind;
 use App\Modules\Crm\Domain\ContactTagId;
+use App\Modules\Crm\Domain\InteractionKind;
 use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Identity\Domain\EmailAddress;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
+use DateTimeImmutable;
 
 /** Builders shared by the CRM tests: everything goes through the real use cases, as an Actor who may manage People. */
 final class Crm
@@ -77,5 +82,10 @@ final class Crm
     public static function tagPerson(Actor $by, PersonId $person, array $tags): void
     {
         app(SetPersonTags::class)($by, $person, $tags);
+    }
+
+    public static function interaction(Actor $by, PersonId $person, string $body, ?string $occurredAt = null, InteractionKind $kind = InteractionKind::Note): InteractionView
+    {
+        return app(RecordInteraction::class)($by, $person, new NewInteraction($kind, $body, $occurredAt === null ? null : new DateTimeImmutable($occurredAt)));
     }
 }

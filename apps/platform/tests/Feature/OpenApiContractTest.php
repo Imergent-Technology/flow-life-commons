@@ -172,8 +172,8 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    // 17 administration operations before the People directory (ADR 0034) added 12, and the operator's password reset one more.
-    expect($checked)->toBe(30);
+    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, and notes (WP3) four.
+    expect($checked)->toBe(34);
 });
 
 it('never lets an administration schema name a secret', function () {

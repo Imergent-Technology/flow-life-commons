@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\Role;
+use App\Modules\Crm\Domain\Interaction;
+use App\Modules\Crm\Domain\InteractionKind;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
@@ -36,6 +38,10 @@ it('serves exactly the documented People routes, each behind the Console boundar
         'POST api/v1/admin/people/{person}/contact-methods' => 'crm.people.manage',
         'PATCH api/v1/admin/people/{person}/contact-methods/{method}' => 'crm.people.manage',
         'DELETE api/v1/admin/people/{person}/contact-methods/{method}' => 'crm.people.manage',
+        'GET api/v1/admin/people/{person}/interactions' => 'crm.people.view',
+        'POST api/v1/admin/people/{person}/interactions' => 'crm.people.manage',
+        'PATCH api/v1/admin/people/{person}/interactions/{interaction}' => 'crm.people.manage',
+        'DELETE api/v1/admin/people/{person}/interactions/{interaction}' => 'crm.people.manage',
         'PUT api/v1/admin/people/{person}/tags' => 'crm.people.manage',
         'GET api/v1/admin/contact-tags' => 'crm.people.view',
         'POST api/v1/admin/contact-tags' => 'crm.people.manage',
@@ -433,6 +439,14 @@ it('serves responses matching their OpenAPI schemas', function () {
     expectCrmBody(Api::rows($console->get('/api/v1/admin/contact-tags')->json('data'))[0], 'ContactTag');
     expectCrmBody($console->post('/api/v1/admin/contact-tags', ['name' => 'Lead'])->assertCreated()->json(), 'ContactTag');
 
+    $note = $console->post("/api/v1/admin/people/{$person}/interactions", ['body' => 'Met at the market', 'kind' => 'meeting'])->assertCreated()->json();
+    expectCrmBody($note, 'Interaction');
+    expectCrmBody($console->patch("/api/v1/admin/people/{$person}/interactions/".Api::string(Api::map($note)['id']), ['body' => 'Met again'])->assertOk()->json(), 'Interaction');
+    $interactions = Api::map($console->get("/api/v1/admin/people/{$person}/interactions")->assertOk()->json());
+    expectCrmBody($interactions, 'InteractionPage');
+    expectCrmBody(Api::rows($interactions['data'])[0], 'Interaction');
+    expectCrmBody(Api::map(Api::rows($interactions['data'])[0])['author'], 'PersonRef');
+
     $duplicate = $console->post('/api/v1/admin/people', ['display_name' => 'Ada Lovelace'])->assertStatus(409)->json();
     expectCrmBody($duplicate, 'PossibleDuplicate');
     $candidate = Api::rows(Api::map($duplicate)['candidates'])[0];
@@ -446,6 +460,9 @@ it('points each response location at the schema that describes it', function () 
         ->and(crmResponseRef('/admin/people/{person}', 'patch', '200'))->toBe('PersonUpdate')
         ->and(crmResponseRef('/admin/people/{person}/contact-methods', 'post', '201'))->toBe('ContactMethod')
         ->and(crmResponseRef('/admin/people/{person}/contact-methods/{method}', 'patch', '200'))->toBe('ContactMethod')
+        ->and(crmResponseRef('/admin/people/{person}/interactions', 'get', '200'))->toBe('InteractionPage')
+        ->and(crmResponseRef('/admin/people/{person}/interactions', 'post', '201'))->toBe('Interaction')
+        ->and(crmResponseRef('/admin/people/{person}/interactions/{interaction}', 'patch', '200'))->toBe('Interaction')
         ->and(crmResponseRef('/admin/people/{person}/tags', 'put', '200'))->toBe('PersonTagList')
         ->and(crmResponseRef('/admin/contact-tags', 'get', '200'))->toBe('ContactTagList')
         ->and(crmResponseRef('/admin/contact-tags', 'post', '201'))->toBe('ContactTag')
@@ -465,4 +482,9 @@ it('documents the request schemas with the limits the runtime enforces', functio
         ->and($tag['maxLength'])->toBe(64)
         ->and(Api::map($method['label'])['maxLength'])->toBe(64)
         ->and(Api::map($method['kind'])['enum'])->toBe(['email', 'phone']);
+
+    $interaction = Api::map(crmSchema('NewInteraction')['properties']);
+    expect(Api::map($interaction['body'])['maxLength'])->toBe(Interaction::MAX_BODY_LENGTH)
+        ->and(Api::map($interaction['kind'])['enum'])->toBe(array_map(fn (InteractionKind $k): string => $k->value, InteractionKind::cases()))
+        ->and(Api::map(Api::map(crmSchema('EditInteractionRequest')['properties'])['body'])['maxLength'])->toBe(Interaction::MAX_BODY_LENGTH);
 });

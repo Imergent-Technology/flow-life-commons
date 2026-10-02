@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Crm\Http;
 
+use App\Modules\Crm\Application\InteractionPage;
+use App\Modules\Crm\Application\InteractionView;
 use App\Modules\Crm\Application\PeopleDirectoryPage;
 use App\Modules\Crm\Application\PersonListing;
 use App\Modules\Crm\Application\PersonRecord;
@@ -59,6 +61,32 @@ final readonly class CrmPresenter
             'is_primary' => $method->isPrimary,
             'created_at' => $this->instant($method->createdAt),
             'updated_at' => $this->instant($method->updatedAt),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function interactions(InteractionPage $page): array
+    {
+        return [
+            'data' => array_map($this->interaction(...), $page->interactions),
+            'meta' => ['page' => $page->page, 'per_page' => $page->perPage, 'total' => $page->total, 'last_page' => $page->lastPage()],
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    public function interaction(InteractionView $view): array
+    {
+        $interaction = $view->interaction;
+
+        return [
+            'id' => $interaction->id->value,
+            'kind' => $interaction->kind->value,
+            'body' => $interaction->body,
+            'occurred_at' => $this->instant($interaction->occurredAt),
+            'author' => $view->author === null ? null : $this->person($view->author),
+            'updated_by' => $view->updatedBy === null ? null : $this->person($view->updatedBy),
+            'created_at' => $this->instant($interaction->createdAt),
+            'updated_at' => $this->instant($interaction->updatedAt),
         ];
     }
 

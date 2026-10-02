@@ -2439,6 +2439,222 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+  /admin/people/{person}/interactions:
+    get:
+      operationId: listInteractions
+      summary: List a Person's notes and interactions
+      description: >-
+        Needs `crm.people.view`. Newest first by `occurred_at` (when the contact happened), then by when it was recorded, then id, so
+        the order is total. A modest bounded page (25 by default, at most 100). Everyone who may view CRM data sees every note:
+        Phase 1 has no private notes, so a note is written as though the Person could one day ask to read it. Read-only.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.view
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1}
+        - name: per_page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: A page of interactions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InteractionPage'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+    post:
+      operationId: recordInteraction
+      summary: Record a note or interaction
+      description: >-
+        Needs `crm.people.manage`, and nothing more: routine CRM maintenance does **not** ask for recent verification (ADR 0034). The
+        author is the signed-in caller and cannot be sent. `kind` defaults to `note`; `occurred_at` defaults to now and may not be in the
+        future (a few minutes of clock difference are allowed). It is CRM business data and writes nothing to the security audit trail.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewInteraction'
+      responses:
+        '201':
+          description: The interaction as recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Interaction'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives `invalid_contact_input` as well (a time in the future, a body that is blank, too long or has control characters).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/people/{person}/interactions/{interaction}:
+    patch:
+      operationId: editInteraction
+      summary: Correct a note or interaction
+      description: >-
+        Needs `crm.people.manage`, and nothing more. Send any of `kind`, `body`, `occurred_at`; one not sent is left alone. It is changed
+        in place and there is no edit history: `updated_by` and `updated_at` say who last changed it and when. Anyone who may manage
+        People may correct any note. The author and the Person never change.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/InteractionId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EditInteractionRequest'
+      responses:
+        '200':
+          description: The interaction as now recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Interaction'
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`), or no such interaction for that Person (`interaction_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: A malformed request. Ordinary request validation gives per-field messages under `errors` with no `code`; a CRM rule gives `invalid_contact_input` as well (a time in the future, a body that is blank, too long or has control characters).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    delete:
+      operationId: removeInteraction
+      summary: Remove a note or interaction
+      description: >-
+        Needs `crm.people.manage`, and nothing more. Removes it outright: there is no soft delete and no history, as with a contact
+        method. Nothing is written to the security audit trail.
+      tags: [Administration]
+      security:
+        - sessionCookie: []
+      x-required-capability: crm.people.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+        - $ref: '#/components/parameters/InteractionId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '204':
+          description: Removed.
+        '401':
+          description: Not signed in, the session has expired, or the account can no longer sign in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but the account does not hold the required capability (or cannot use the Console).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: Missing or invalid CSRF token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: No such Person (`person_not_found`), or no such interaction for that Person (`interaction_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
   /admin/people/{person}/tags:
     put:
       operationId: setPersonTags
@@ -2737,6 +2953,14 @@ components:
       in: path
       required: true
       description: A contact method's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    InteractionId:
+      name: interaction
+      in: path
+      required: true
+      description: A note or interaction's identifier (a 26-character ULID).
       schema:
         type: string
         pattern: '^[0-9a-z]{26}$'
@@ -3108,6 +3332,61 @@ components:
             per_page: {type: integer}
             total: {type: integer}
             last_page: {type: integer}
+    Interaction:
+      type: object
+      description: >-
+        A note about a Person, or a record of a conversation with them. `occurred_at` is when the contact happened; `created_at` is
+        when it was recorded. `author` is who recorded it; `updated_by` is who last corrected it, and is null until someone does. Both
+        are Persons, shown by their current name, and are null only if Identity no longer holds that Person. No Account is exposed.
+      required: [id, kind, body, occurred_at, author, updated_by, created_at, updated_at]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [note, call, email, meeting]}
+        body: {type: string, minLength: 1, maxLength: 5000}
+        occurred_at: {type: string, format: date-time}
+        author:
+          oneOf:
+            - $ref: '#/components/schemas/PersonRef'
+            - type: 'null'
+        updated_by:
+          oneOf:
+            - $ref: '#/components/schemas/PersonRef'
+            - type: 'null'
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    InteractionPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Interaction'
+        meta:
+          type: object
+          required: [page, per_page, total, last_page]
+          properties:
+            page: {type: integer}
+            per_page: {type: integer}
+            total: {type: integer}
+            last_page: {type: integer}
+    NewInteraction:
+      type: object
+      required: [body]
+      properties:
+        kind: {type: string, enum: [note, call, email, meeting], default: note}
+        body: {type: string, minLength: 1, maxLength: 5000, description: Trimmed. Newlines and tabs are kept; other control characters are refused.}
+        occurred_at:
+          type: [string, 'null']
+          format: date-time
+          description: ISO 8601 with a UTC offset (`Z` allowed). Null or absent means now. Not in the future.
+    EditInteractionRequest:
+      type: object
+      description: At least one property.
+      properties:
+        kind: {type: string, enum: [note, call, email, meeting]}
+        body: {type: string, minLength: 1, maxLength: 5000}
+        occurred_at: {type: string, format: date-time}
     NewContactMethod:
       type: object
       required: [kind, value]

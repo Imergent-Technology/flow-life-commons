@@ -157,7 +157,7 @@ it('names no table that is not CRM\'s own: it never queries or writes people, Ac
 
     // The protected set is real and complete enough to mean something: Identity's, Access's, Membership's and Audit's.
     expect($tables)->toContain('people', 'accounts', 'account_invitations', 'role_assignments', 'membership_grants', 'security_events', 'sessions')
-        ->and($tables)->not->toContain('contact_methods', 'contact_profiles', 'contact_tags', 'contact_tag_assignments');
+        ->and($tables)->not->toContain('contact_methods', 'contact_profiles', 'contact_tags', 'contact_tag_assignments', 'contact_interactions');
 
     $offenders = [];
     foreach (SourceScan::phpFiles(['app/Modules/Crm/Domain', 'app/Modules/Crm/Application', 'app/Modules/Crm/Infrastructure']) as $path) {
@@ -182,7 +182,7 @@ it('names no table that is not CRM\'s own: it never queries or writes people, Ac
         ->and(foreignTableLiterals("<?php \$db->table('contact_methods')->get(); \$db->selectRaw('count(*) as people'); echo 'no such people'; // table('people')", $tables))->toBe([]);
 });
 
-it('names only the four tables CRM owns', function () {
+it('names only the five tables CRM owns', function () {
     $tables = [];
     foreach (SourceScan::phpFiles(['app/Modules/Crm/Infrastructure']) as $path) {
         foreach (SourceScan::stringLiterals(SourceScan::read($path)) as $literal) {
@@ -192,7 +192,7 @@ it('names only the four tables CRM owns', function () {
         }
     }
 
-    expect(array_values(array_unique($tables)))->toEqualCanonicalizing(['contact_profiles', 'contact_methods', 'contact_tags', 'contact_tag_assignments']);
+    expect(array_values(array_unique($tables)))->toEqualCanonicalizing(['contact_profiles', 'contact_methods', 'contact_tags', 'contact_tag_assignments', 'contact_interactions']);
 });
 
 // --- Tags are labels ----------------------------------------------------------------------------------------------
@@ -257,6 +257,7 @@ it('has every read ask for crm.people.view alone and every change ask for crm.pe
         'RegisterContact' => 'ManagePeople', 'UpdatePerson' => 'ManagePeople', 'AddContactMethod' => 'ManagePeople',
         'UpdateContactMethod' => 'ManagePeople', 'RemoveContactMethod' => 'ManagePeople', 'SetPersonTags' => 'ManagePeople',
         'CreateTag' => 'ManagePeople', 'RenameTag' => 'ManagePeople', 'DeleteTag' => 'ManagePeople',
+        'ListInteractions' => 'ViewPeople', 'RecordInteraction' => 'ManagePeople', 'EditInteraction' => 'ManagePeople', 'RemoveInteraction' => 'ManagePeople',
     ];
 
     $actual = [];
