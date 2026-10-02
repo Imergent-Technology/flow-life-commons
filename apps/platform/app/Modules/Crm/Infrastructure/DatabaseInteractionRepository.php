@@ -56,15 +56,24 @@ final readonly class DatabaseInteractionRepository implements InteractionReposit
         ]);
     }
 
-    public function save(Interaction $interaction): void
+    public function save(Interaction $interaction, array $fields): void
     {
-        $this->database->table(self::TABLE)->where('id', $interaction->id->value)->update([
-            'kind' => $interaction->kind->value,
-            'body' => $interaction->body,
-            'occurred_at' => SqlTime::to($interaction->occurredAt),
-            'updated_by_person_id' => $interaction->updatedByPersonId?->value,
-            'updated_at' => SqlTime::to($interaction->updatedAt),
-        ]);
+        $columns = [];
+        foreach ($fields as $field) {
+            $columns[$field] = match ($field) {
+                'kind' => $interaction->kind->value,
+                'body' => $interaction->body,
+                'occurred_at' => SqlTime::to($interaction->occurredAt),
+            };
+        }
+
+        $this->database->table(self::TABLE)
+            ->where('id', $interaction->id->value)->where('person_id', $interaction->personId->value)
+            ->update([
+                ...$columns,
+                'updated_by_person_id' => $interaction->updatedByPersonId?->value,
+                'updated_at' => SqlTime::to($interaction->updatedAt),
+            ]);
     }
 
     public function remove(PersonId $personId, InteractionId $id): bool

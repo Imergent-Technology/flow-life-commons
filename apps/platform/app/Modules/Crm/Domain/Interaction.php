@@ -87,14 +87,16 @@ final readonly class Interaction
     /** @throws InvalidContactInput */
     private static function body(string $body): string
     {
-        $body = trim(str_replace("\r\n", "\n", $body));
+        $body = trim(str_replace(["\r\n", "\r"], "\n", $body)); // CRLF, then a lone CR, become LF
         if ($body === '') {
             throw new InvalidContactInput('body', 'Write something to record.');
         }
         if (mb_strlen($body) > self::MAX_BODY_LENGTH) {
             throw new InvalidContactInput('body', 'That is limited to '.self::MAX_BODY_LENGTH.' characters.');
         }
-        if (preg_match('/[^\P{C}\n\t]/u', $body) === 1) {
+        // Control characters only (Cc), other than LF and TAB. Formatting characters (Cf: ZWNJ, ZWJ, direction marks) are
+        // ordinary text in many languages and in emoji sequences, so they are allowed.
+        if (preg_match('/[^\P{Cc}\n\t]/u', $body) === 1) {
             throw new InvalidContactInput('body', 'That may not contain control characters.');
         }
 

@@ -51,7 +51,9 @@ final readonly class EditInteraction
             throw new InteractionNotFound;
         }
 
-        $this->interactions->save($interaction->with($changes, $actor->personId, DateTimeImmutable::createFromInterface(now())));
+        // Only the fields the caller sent are written (not the whole row read above), so a concurrent edit of another
+        // field is never reverted by this one.
+        $this->interactions->save($interaction->with($changes, $actor->personId, DateTimeImmutable::createFromInterface(now())), array_keys($changes));
 
         // Re-read rather than trusting an affected-row count (MariaDB reports unchanged rows as 0): a note removed
         // between the two steps is reported as gone, never returned as though it still existed.

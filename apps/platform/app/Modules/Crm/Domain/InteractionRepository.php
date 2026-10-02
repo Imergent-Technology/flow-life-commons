@@ -26,8 +26,14 @@ interface InteractionRepository
 
     public function add(Interaction $interaction): void;
 
-    /** Writes the changeable fields (kind, body, occurred_at, last editor, update time). */
-    public function save(Interaction $interaction): void;
+    /**
+     * Writes ONLY the named business fields of the interaction (`kind`, `body`, `occurred_at`), with the last editor and
+     * update time, to the row of that id AND that Person. A field not named is never written, so an edit cannot revert
+     * what a concurrent edit changed in a field it did not send; the Person and the author are never written at all.
+     *
+     * @param  list<'kind'|'body'|'occurred_at'>  $fields
+     */
+    public function save(Interaction $interaction, array $fields): void;
 
     /** Removes the Person's interaction; false when there is no such interaction for that Person. */
     public function remove(PersonId $personId, InteractionId $id): bool;

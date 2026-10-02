@@ -14,6 +14,7 @@ use App\Modules\Crm\Application\UnknownPerson;
 use App\Modules\Crm\Domain\Interaction;
 use App\Modules\Crm\Domain\InteractionId;
 use App\Modules\Crm\Domain\InteractionKind;
+use App\Modules\Crm\Domain\InteractionRepository;
 use App\Modules\Crm\Domain\InvalidContactInput;
 use App\Shared\Domain\PersonId;
 use Illuminate\Support\Carbon;
@@ -274,4 +275,128 @@ it('shows the author\'s current name, so a rename is reflected on notes already 
     $page = app(ListInteractions::class)($by, $ada->id, 1, 25);
 
     expect($page->interactions[0]->author?->displayName)->toBe('Zz Renamed');
+});
+
+it('keeps ordinary Unicode: formatting characters in Persian text and joined emoji are text, not control characters', function () {
+    $by = Crm::manager();
+    $ada = Identity::savedPerson('Ada');
+    $persian = "می\u{200C}خواهم یک جلسه"; // ZWNJ (U+200C) is how Persian is written
+    $family = "Met the \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} family"; // ZWJ (U+200D) joins one emoji
+    $marked = "Said \u{200F}shalom\u{200E} and left"; // direction marks
+
+    foreach ([$persian, $family, $marked] as $body) {
+        expect(Crm::interaction($by, $ada->id, $body)->interaction->body)->toBe($body);
+    }
+    expect(DB::table('contact_interactions')->orderBy('created_at')->orderBy('id')->pluck('body')->sort()->values()->all())->toBe(collect([$persian, $family, $marked])->sort()->values()->all());
+});
+
+it('normalises every line ending to LF, and still refuses real control characters', function () {
+    $by = Crm::manager();
+    $ada = Identity::savedPerson('Ada');
+
+    $view = Crm::interaction($by, $ada->id, "one\rtwo\r\nthree\nfour\ttab");
+
+    expect($view->interaction->body)->toBe("one\ntwo\nthree\nfour\ttab");
+    foreach (["bell\x07", "nul\x00byte", "del\x7F", "next\u{0085}line", "esc\x1B[0m"] as $body) {
+        expect(fn () => Crm::interaction($by, $ada->id, $body))->toThrow(InvalidContactInput::class);
+    }
+    expect(DB::table('contact_interactions')->count())->toBe(1);
+});
+
+/**
+ * Runs `$competitor` to completion in the middle of `$edit`: after the edit has READ the note and before it writes, which is
+ * the interleaving of two overlapping requests that no lock-free implementation may lose a change to.
+ */
+function editOverlapping(Closure $edit, Closure $competitor): void
+{
+    $real = app(InteractionRepository::class);
+    $once = false;
+    app()->instance(InteractionRepository::class, new class($real, function () use (&$once, $competitor): void {
+        if (! $once) {
+            $once = true;
+            $competitor();
+        }
+    }) implements InteractionRepository
+    {
+        public function __construct(private InteractionRepository $inner, private Closure $afterFirstRead) {}
+
+        public function find(InteractionId $id): ?Interaction
+        {
+            $found = $this->inner->find($id);
+            ($this->afterFirstRead)();
+
+            return $found;
+        }
+
+        public function page(PersonId $personId, int $page, int $perPage): array
+        {
+            return $this->inner->page($personId, $page, $perPage);
+        }
+
+        public function count(PersonId $personId): int
+        {
+            return $this->inner->count($personId);
+        }
+
+        public function add(Interaction $interaction): void
+        {
+            $this->inner->add($interaction);
+        }
+
+        public function save(Interaction $interaction, array $fields): void
+        {
+            $this->inner->save($interaction, $fields);
+        }
+
+        public function remove(PersonId $personId, InteractionId $id): bool
+        {
+            return $this->inner->remove($personId, $id);
+        }
+    });
+    $edit();
+}
+
+it('does not let an edit revert a field a concurrent edit changed and this one did not send', function () {
+    $by = Crm::manager();
+    $ada = Identity::savedPerson('Ada');
+    $note = Crm::interaction($by, $ada->id, 'original', '2026-09-01 10:00:00');
+    $id = $note->interaction->id;
+    $competing = app(EditInteraction::class);
+
+    // A sends only the body; while it is between reading and writing, B (complete) changes the kind and the time.
+    editOverlapping(
+        fn () => app(EditInteraction::class)($by, $ada->id, $id, ['body' => 'corrected body']),
+        fn () => $competing($by, $ada->id, $id, ['kind' => InteractionKind::Meeting, 'occurred_at' => new DateTimeImmutable('2026-09-05 10:00:00')]),
+    );
+
+    $row = DB::table('contact_interactions')->where('id', $id->value)->first();
+    assert($row instanceof stdClass);
+    expect($row->body)->toBe('corrected body')                     // A's change
+        ->and($row->kind)->toBe('meeting')                          // B's change, not reverted by A's stale snapshot
+        ->and($row->occurred_at)->toBe('2026-09-05 10:00:00')       // B's change
+        ->and($row->person_id)->toBe($ada->id->value)               // never changes
+        ->and($row->author_person_id)->toBe($by->personId->value)   // never changes
+        ->and($row->updated_by_person_id)->toBe($by->personId->value);
+});
+
+it('keeps the edit/delete race correct: an edit whose note is removed in between is reported gone, and writes nothing back', function () {
+    $by = Crm::manager();
+    $ada = Identity::savedPerson('Ada');
+    $id = Crm::interaction($by, $ada->id, 'doomed')->interaction->id;
+    $removing = app(RemoveInteraction::class);
+
+    $outcome = null;
+    editOverlapping(
+        function () use ($by, $ada, $id, &$outcome): void {
+            try {
+                app(EditInteraction::class)($by, $ada->id, $id, ['body' => 'too late']);
+                $outcome = 'edited';
+            } catch (InteractionNotFound) {
+                $outcome = 'not found';
+            }
+        },
+        fn () => $removing($by, $ada->id, $id),
+    );
+
+    expect($outcome)->toBe('not found')->and(DB::table('contact_interactions')->count())->toBe(0); // no resurrection
 });

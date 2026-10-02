@@ -3375,7 +3375,7 @@ components:
       required: [body]
       properties:
         kind: {type: string, enum: [note, call, email, meeting], default: note}
-        body: {type: string, minLength: 1, maxLength: 5000, description: Trimmed. Newlines and tabs are kept; other control characters are refused.}
+        body: {type: string, minLength: 1, maxLength: 5000, description: 'Trimmed. Line endings (CRLF, lone CR) become LF. Newlines and tabs are kept; other control characters (Unicode Cc) are refused, while formatting characters such as ZWNJ and ZWJ are ordinary text.'}
         occurred_at:
           type: [string, 'null']
           format: date-time
