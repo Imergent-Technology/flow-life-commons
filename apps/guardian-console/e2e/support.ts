@@ -389,3 +389,43 @@ export async function aDemoPersonId(admin: Page, name: string): Promise<string> 
     )
   return match.id
 }
+
+const threads = new Map<string, string>()
+
+/**
+ * A discussion made through the API by the signed-in persona (so its controls show for them), for the read-only audits: a
+ * title and a message with no break in them to prove nothing overflows, an edited message and a tombstone, and, for 'resolved',
+ * a resolution. One per worker per kind: the audits only look at it, and each run's fixture Accounts are new.
+ */
+export async function aThreadId(page: Page, kind: 'open' | 'resolved'): Promise<string> {
+  const known = threads.get(kind)
+  if (known !== undefined) return known
+  const unbroken = 'Unbroken'.repeat(14)
+  const started = await apiFrom(page, 'POST', '/api/v1/admin/discussions', {
+    title: `E2E ${kind} thread ${unbroken} ${crypto.randomUUID().slice(0, 8)}`,
+    body: `An opening message with a long word: ${unbroken}${unbroken}`,
+  })
+  const id = (started.body as { id: string }).id
+  const edited = await apiFrom(page, 'POST', `/api/v1/admin/discussions/${id}/messages`, {
+    body: 'A reply to be edited',
+  })
+  const gone = await apiFrom(page, 'POST', `/api/v1/admin/discussions/${id}/messages`, {
+    body: 'A reply to be removed',
+  })
+  await apiFrom(
+    page,
+    'PATCH',
+    `/api/v1/admin/discussions/${id}/messages/${(edited.body as { id: string }).id}`,
+    {
+      body: 'A reply that was edited',
+    },
+  )
+  await apiFrom(
+    page,
+    'DELETE',
+    `/api/v1/admin/discussions/${id}/messages/${(gone.body as { id: string }).id}`,
+  )
+  if (kind === 'resolved') await apiFrom(page, 'POST', `/api/v1/admin/discussions/${id}/resolve`)
+  threads.set(kind, id)
+  return id
+}

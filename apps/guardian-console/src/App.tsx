@@ -3,6 +3,8 @@ import { Route, Routes } from 'react-router'
 import { AuthProvider } from './auth/AuthProvider.tsx'
 import {
   ACCOUNTS_VIEW,
+  DISCUSSIONS_PARTICIPATE,
+  DISCUSSIONS_VIEW,
   INVITATIONS_ISSUE,
   MEMBERSHIP_MANAGE,
   MEMBERSHIP_VIEW,
@@ -23,6 +25,9 @@ import { InviteOperatorPage } from './pages/admin/InviteOperatorPage.tsx'
 import { MemberDetailPage } from './pages/admin/MemberDetailPage.tsx'
 import { MembersPage } from './pages/admin/MembersPage.tsx'
 import { RegisterMemberPage } from './pages/admin/RegisterMemberPage.tsx'
+import { DiscussionPage } from './pages/discussions/DiscussionPage.tsx'
+import { DiscussionsPage } from './pages/discussions/DiscussionsPage.tsx'
+import { StartDiscussionPage } from './pages/discussions/StartDiscussionPage.tsx'
 import { PeoplePage } from './pages/people/PeoplePage.tsx'
 import { PersonDetailPage } from './pages/people/PersonDetailPage.tsx'
 import { TagsPage } from './pages/people/TagsPage.tsx'
@@ -102,6 +107,30 @@ function App() {
                   element={
                     <RequireCapability capability={PEOPLE_VIEW}>
                       <PersonDetailPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="discussions"
+                  element={
+                    <RequireCapability capability={DISCUSSIONS_VIEW}>
+                      <DiscussionsPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="discussions/new"
+                  element={
+                    <RequireCapability capability={DISCUSSIONS_PARTICIPATE}>
+                      <StartDiscussionPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="discussions/:discussionId"
+                  element={
+                    <RequireCapability capability={DISCUSSIONS_VIEW}>
+                      <DiscussionPage />
                     </RequireCapability>
                   }
                 />

@@ -140,6 +140,9 @@ describe('failures', () => {
     // Administration (ADR 0024): a stale proof is told apart from a plain refusal, and a conflict carries its stable code.
     [403, { message: 'x', verification_required: true }, {}, { kind: 'verification-required' }],
     [403, { message: 'x', verification_required: false }, {}, { kind: 'forbidden' }],
+    // Discussions (ADR 0035): holding the capability is not owning the words, and the 403 says which one was missing.
+    [403, { message: 'x', code: 'not_author' }, {}, { kind: 'forbidden', code: 'not_author' }],
+    [403, { message: 'x', code: 7 }, {}, { kind: 'forbidden' }],
     [
       409,
       { message: 'x', code: 'last_administrator_required' },

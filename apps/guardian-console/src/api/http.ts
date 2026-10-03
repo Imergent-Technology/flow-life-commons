@@ -18,8 +18,11 @@ export type FieldErrors = Record<string, string[]>
 export type Failure =
   /** 401: no session, or the one held has ended. */
   | { kind: 'unauthenticated' }
-  /** 403: signed in, but not permitted. */
-  | { kind: 'forbidden' }
+  /**
+   * 403: signed in, but not permitted. `code` is present only when the server gave a stable reason beyond "not permitted"
+   * (Discussions' `not_author`: the capability is held, but the words are someone else's).
+   */
+  | { kind: 'forbidden'; code?: string }
   /**
    * 403 with `verification_required: true`: the account may do this, but its last password-and-second-factor
    * proof is too old. Prove again (`POST /security/verify`), then ask again; nothing is retried automatically.
@@ -172,7 +175,11 @@ function failureFor(reply: Reply | null): Failure {
     case 403:
       return isRecord(reply.body) && reply.body.verification_required === true
         ? { kind: 'verification-required' }
-        : { kind: 'forbidden' }
+        : {
+            kind: 'forbidden',
+            ...(isRecord(reply.body) &&
+              typeof reply.body.code === 'string' && { code: reply.body.code }),
+          }
     case 404:
       return { kind: 'not-found' }
     case 409:

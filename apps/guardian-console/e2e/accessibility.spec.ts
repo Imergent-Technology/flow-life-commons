@@ -1,7 +1,7 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
 import { axeViolations, inTheme, THEMES, type Theme } from './axe.ts'
-import { aDemoPersonId, aMemberId, apiFrom, signedInAs } from './support.ts'
+import { aDemoPersonId, aMemberId, aThreadId, apiFrom, signedInAs } from './support.ts'
 
 /**
  * The production-readiness accessibility pass.
@@ -106,6 +106,8 @@ for (const theme of THEMES) {
       const memberId = await aMemberId(admin)
       const personId = await aDemoPersonId(admin, 'Marguerite Hale')
       const longNotePersonId = await aDemoPersonId(admin, 'Daniel Okoye')
+      const openThread = await aThreadId(admin, 'open')
+      const resolvedThread = await aThreadId(admin, 'resolved')
 
       for (const path of [
         '/',
@@ -121,6 +123,10 @@ for (const theme of THEMES) {
         '/people/tags',
         `/people/${personId}`,
         `/people/${longNotePersonId}`,
+        '/discussions',
+        '/discussions/new',
+        `/discussions/${openThread}`,
+        `/discussions/${resolvedThread}`,
         '/no/such/page',
       ]) {
         expect(await auditRoute(admin, path, theme), path).toEqual([])

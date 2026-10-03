@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { aDemoPersonId, aMemberId, apiFrom, signedInAs } from './support.ts'
+import { aDemoPersonId, aMemberId, aThreadId, apiFrom, signedInAs } from './support.ts'
 
 /**
  * The layout at the widths where it changes, and the sizes and motion an accessible interface promises
@@ -47,6 +47,8 @@ test.describe('no page scrolls sideways, and the shell changes where it says it 
       const memberId = await aMemberId(admin)
       const personId = await aDemoPersonId(admin, 'Marguerite Hale')
       const longNotePersonId = await aDemoPersonId(admin, 'Daniel Okoye')
+      const openThread = await aThreadId(admin, 'open')
+      const resolvedThread = await aThreadId(admin, 'resolved')
       await admin.setViewportSize({ width, height: 800 })
 
       const routes = [
@@ -63,6 +65,10 @@ test.describe('no page scrolls sideways, and the shell changes where it says it 
         '/people/tags',
         `/people/${personId}`, // a paged history and a tag collection
         `/people/${longNotePersonId}`, // one very long note
+        '/discussions',
+        '/discussions/new',
+        `/discussions/${openThread}`, // an unbroken title and message, an edit and a tombstone
+        `/discussions/${resolvedThread}`,
         '/no/such/page',
       ]
       for (const route of routes) {

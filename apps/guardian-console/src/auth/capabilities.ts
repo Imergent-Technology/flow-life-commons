@@ -21,6 +21,11 @@ export const MEMBERSHIP_MANAGE = 'membership.records.manage'
 export const PEOPLE_VIEW = 'crm.people.view'
 export const PEOPLE_MANAGE = 'crm.people.manage'
 
+// Guardian Discussions (ADR 0035). Independent: participate does not imply view, and the Console never treats one as the other.
+// There is deliberately no discussions.manage: taking part never means changing another person's words.
+export const DISCUSSIONS_VIEW = 'discussions.view'
+export const DISCUSSIONS_PARTICIPATE = 'discussions.participate'
+
 export function hasCapability(current: CurrentAccount, capability: string): boolean {
   return current.capabilities.includes(capability)
 }

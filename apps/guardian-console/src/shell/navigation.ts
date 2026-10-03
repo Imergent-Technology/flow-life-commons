@@ -2,6 +2,8 @@ import { matchPath } from 'react-router'
 
 import {
   ACCOUNTS_VIEW,
+  DISCUSSIONS_PARTICIPATE,
+  DISCUSSIONS_VIEW,
   INVITATIONS_ISSUE,
   MEMBERSHIP_MANAGE,
   MEMBERSHIP_VIEW,
@@ -15,7 +17,7 @@ import {
  * capabilities (a presentation courtesy: the server decides every request, and RequireCapability still guards
  * each route). Account security is not here on purpose: it belongs to the person, and lives in the account menu.
  */
-export type IconName = 'home' | 'people' | 'contacts'
+export type IconName = 'home' | 'people' | 'contacts' | 'discussions'
 
 export interface NavItem {
   label: string
@@ -61,6 +63,29 @@ export const navigation: readonly NavSection[] = [
           },
           { label: 'Add a person', to: '/people/new', capability: PEOPLE_MANAGE },
           { label: 'Tags', to: '/people/tags', capability: PEOPLE_VIEW },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'discussions',
+    label: 'Discussions',
+    icon: 'discussions',
+    groups: [
+      {
+        label: 'Discussions',
+        items: [
+          {
+            label: 'All discussions',
+            to: '/discussions',
+            capability: DISCUSSIONS_VIEW,
+            detail: { pattern: '/discussions/:discussionId', label: 'Discussion' },
+          },
+          {
+            label: 'Start a discussion',
+            to: '/discussions/new',
+            capability: DISCUSSIONS_PARTICIPATE,
+          },
         ],
       },
     ],

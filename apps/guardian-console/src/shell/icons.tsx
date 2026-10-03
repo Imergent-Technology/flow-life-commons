@@ -32,6 +32,14 @@ export function SectionIcon({ name }: { name: IconName }) {
       </Svg>
     )
   }
+  if (name === 'discussions') {
+    return (
+      <Svg>
+        <path d="M4.5 6.5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H11l-4 3.5v-3.5H6.5a2 2 0 0 1-2-2z" />
+        <path d="M8.5 8.5h7M8.5 11.5h4.5" />
+      </Svg>
+    )
+  }
   return name === 'home' ? (
     <Svg>
       <path d="M4 11 12 4l8 7" />
