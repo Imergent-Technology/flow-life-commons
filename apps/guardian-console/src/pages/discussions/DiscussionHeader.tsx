@@ -113,7 +113,9 @@ export function DiscussionHeader({
         </p>
       ) : null}
       {feedback !== null ? (
-        <Alert key={feedback.attempt} tone={feedback.tone} focusOnMount={feedback.tone === 'error'}>
+        // Every outcome here follows a control that is disabled while it works (resolve, reopen) or that goes (the title form),
+        // either of which would drop keyboard focus to the top of the page: the outcome takes it instead.
+        <Alert key={feedback.attempt} tone={feedback.tone} focusOnMount>
           {feedback.text}
         </Alert>
       ) : null}

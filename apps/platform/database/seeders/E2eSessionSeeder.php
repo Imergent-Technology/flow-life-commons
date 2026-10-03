@@ -49,16 +49,19 @@ final class E2eSessionSeeder extends Seeder
     private const int RECOVERY_INDEX = 9;
 
     /**
-     * name => [email, password, recovery-code tag (see E2eAccountSeeder::recoveryCodes), minutes since the last proof].
+     * name => [email, password, recovery-code tag (see E2eAccountSeeder::recoveryCodes), minutes since the last proof, index of
+     * the recovery code to sign in with (a code works once, so a second session of one Account needs another)].
      *
-     * @var array<string, array{string, string, string, int}>
+     * @var array<string, array{string, string, string, int, int}>
      */
     private const array SESSIONS = [
-        'admin-read' => [E2eAccountSeeder::ADMIN_READ_EMAIL, E2eAccountSeeder::ADMIN_READ_PASSWORD, 'H', 0],
-        'admin-stale' => [E2eAccountSeeder::ADMIN_STALE_EMAIL, E2eAccountSeeder::ADMIN_STALE_PASSWORD, 'J', 16],
-        'admin-story' => [E2eAccountSeeder::ADMIN_STORY_EMAIL, E2eAccountSeeder::ADMIN_STORY_PASSWORD, 'N', 0],
-        'admin-recover' => [E2eAccountSeeder::ADMIN_RECOVER_EMAIL, E2eAccountSeeder::ADMIN_RECOVER_PASSWORD, 'Q', 0],
-        'plain-guardian' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 0],
+        'admin-read' => [E2eAccountSeeder::ADMIN_READ_EMAIL, E2eAccountSeeder::ADMIN_READ_PASSWORD, 'H', 0, self::RECOVERY_INDEX],
+        'admin-stale' => [E2eAccountSeeder::ADMIN_STALE_EMAIL, E2eAccountSeeder::ADMIN_STALE_PASSWORD, 'J', 16, self::RECOVERY_INDEX],
+        'admin-story' => [E2eAccountSeeder::ADMIN_STORY_EMAIL, E2eAccountSeeder::ADMIN_STORY_PASSWORD, 'N', 0, self::RECOVERY_INDEX],
+        'admin-recover' => [E2eAccountSeeder::ADMIN_RECOVER_EMAIL, E2eAccountSeeder::ADMIN_RECOVER_PASSWORD, 'Q', 0, self::RECOVERY_INDEX],
+        // A stale session of its own for the Discussions closeout: the administration journey uses (and rotates) 'admin-stale'.
+        'discussions-stale' => [E2eAccountSeeder::ADMIN_STORY_EMAIL, E2eAccountSeeder::ADMIN_STORY_PASSWORD, 'N', 16, 8],
+        'plain-guardian' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 0, self::RECOVERY_INDEX],
     ];
 
     /** @var array<string, string> the cookie jar of the sign-in in progress: name => value as the server sent it */
@@ -71,8 +74,8 @@ final class E2eSessionSeeder extends Seeder
         }
 
         $minted = [];
-        foreach (self::SESSIONS as $name => [$email, $password, $tag, $minutesSinceProof]) {
-            $minted[$name] = $this->mint($email, $password, E2eAccountSeeder::recoveryCodes($tag)[self::RECOVERY_INDEX], $minutesSinceProof);
+        foreach (self::SESSIONS as $name => [$email, $password, $tag, $minutesSinceProof, $codeIndex]) {
+            $minted[$name] = $this->mint($email, $password, E2eAccountSeeder::recoveryCodes($tag)[$codeIndex], $minutesSinceProof);
         }
 
         File::ensureDirectoryExists(dirname(storage_path(self::FILE)));

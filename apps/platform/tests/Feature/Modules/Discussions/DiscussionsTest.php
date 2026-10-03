@@ -332,6 +332,24 @@ it('judges an edit in the documented order: capability, existence, authorship, r
         ->and(fn () => $edit($dee, $id, $mine->message->id, "bad\x07"))->toThrow(InvalidDiscussionInput::class);
 });
 
+it('decides ownership by Person and never by name: two Persons with the same display name cannot change each other\'s words or title', function () {
+    $first = Discussions::participant('twin.one@example.org', 'Sam Twin');
+    $second = Discussions::participant('twin.two@example.org', 'Sam Twin');
+    $started = Discussions::start($first, 'Twins');
+    $id = $started->discussion->id;
+    $theirs = Discussions::reply($second, $started, 'The second twin wrote this');
+    $opening = DiscussionMessageId::fromString(Api::string(DB::table('discussion_messages')->where('discussion_id', $id->value)->where('sequence', 1)->value('id')));
+
+    expect($first->personId->equals($second->personId))->toBeFalse()
+        ->and(fn () => app(EditOwnMessage::class)($second, $id, $opening, 'Rewritten by the namesake'))->toThrow(NotAuthor::class)
+        ->and(fn () => app(RemoveOwnMessage::class)($first, $id, $theirs->message->id))->toThrow(NotAuthor::class)
+        ->and(fn () => app(RetitleOwnDiscussion::class)($second, $id, 'Renamed by the namesake'))->toThrow(NotAuthor::class);
+
+    expect(messageRow($opening->value)->body)->toBe('The opening words')
+        ->and(messageRow($theirs->message->id->value)->body)->toBe('The second twin wrote this')
+        ->and(discussionRow($id)->title)->toBe('Twins');
+});
+
 it('treats a message addressed through the wrong discussion as not found', function () {
     $dee = Discussions::participant();
     $one = Discussions::start($dee, 'One');

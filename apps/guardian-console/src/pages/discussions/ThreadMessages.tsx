@@ -23,6 +23,8 @@ const PER_PAGE = 25
 interface Feedback {
   tone: 'success' | 'error'
   text: string
+  /** Whether the outcome takes keyboard focus (an error always does). */
+  focus: boolean
   attempt: number
 }
 
@@ -67,8 +69,10 @@ export function ThreadMessages({
   const reload = () => {
     setReloads((n) => n + 1)
   }
-  const say = (tone: Feedback['tone'], text: string) => {
-    setFeedback((previous) => ({ tone, text, attempt: (previous?.attempt ?? 0) + 1 }))
+  // `focus`: an outcome that follows a control which then goes (the edit form closes, a removed message loses its buttons) takes
+  // focus, so a keyboard user is not dropped at the top of the page. "Reply posted." leaves it where it is: the box is still there.
+  const say = (tone: Feedback['tone'], text: string, focus = tone === 'error') => {
+    setFeedback((previous) => ({ tone, text, focus, attempt: (previous?.attempt ?? 0) + 1 }))
   }
 
   /** A message changed under the writer: say so, close what was open on it and re-read both the thread and the header. */
@@ -84,7 +88,7 @@ export function ThreadMessages({
     const result = await removeMessage(discussion.id, removing.id)
     if (result.ok) {
       setRemoving(null)
-      say('success', 'Your message was removed.')
+      say('success', 'Your message was removed.', true)
       reload()
       return { kind: 'done' }
     }
@@ -102,11 +106,7 @@ export function ThreadMessages({
       <Panel title="Messages">
         <div className="flex flex-col gap-4">
           {feedback !== null ? (
-            <Alert
-              key={feedback.attempt}
-              tone={feedback.tone}
-              focusOnMount={feedback.tone === 'error'}
-            >
+            <Alert key={feedback.attempt} tone={feedback.tone} focusOnMount={feedback.focus}>
               {feedback.text}
             </Alert>
           ) : null}
@@ -148,7 +148,7 @@ export function ThreadMessages({
                           }}
                           onEdited={() => {
                             setEditingId(null)
-                            say('success', 'Saved.')
+                            say('success', 'Saved.', true)
                             reload()
                           }}
                           onCancelEdit={() => {

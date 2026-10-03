@@ -100,8 +100,11 @@ arch('Shared does not depend on Discussions', function () {
     expect('App\\Shared')->not->toUse('App\\Modules\\Discussions');
 });
 
-arch('nothing outside Discussions uses Discussions', function () use ($discussions) {
-    expect($discussions)->toOnlyBeUsedIn($discussions);
+arch('nothing outside Discussions uses Discussions, but the development-only demo seeder, which uses its public use cases as an operator would', function () use ($discussions) {
+    // The one exception is `Database\Seeders\DiscussionsDemoSeeder`: opt-in, refused outside local and testing, and referenced by
+    // nothing in the application (DiscussionsDemoSeederTest pins each). It writes through Discussions' own use cases; its only
+    // direct writes are two documented provenance updates to Discussions' own tables (also pinned there).
+    expect($discussions)->toOnlyBeUsedIn([$discussions, 'Database\\Seeders\\DiscussionsDemoSeeder']);
 });
 
 // --- Layers ------------------------------------------------------------------------------------------------------------

@@ -241,7 +241,12 @@ export async function apiFrom(
 
 /** The sessions `./flow test e2e` mints before the run, one per journey that needs one. */
 export type FixtureSession =
-  'admin-read' | 'admin-stale' | 'admin-story' | 'admin-recover' | 'plain-guardian'
+  | 'admin-read'
+  | 'admin-stale'
+  | 'admin-story'
+  | 'admin-recover'
+  | 'plain-guardian'
+  | 'discussions-stale'
 
 interface MintedSession {
   session: string

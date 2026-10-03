@@ -332,6 +332,8 @@ describe('replying', () => {
     expect(screen.getByRole('textbox', { name: 'Your reply' })).toHaveValue('')
     expect(screen.getByRole('status', { name: '' })).toBeDefined()
     expect(pageText()).toContain('Reply posted.')
+    // ...but a reply leaves focus where it is: the box is still there for the next one.
+    expect(screen.getByText('Reply posted.').closest('[role="status"]')).not.toHaveFocus()
     expect(articles()).toHaveLength(4)
   })
 
@@ -467,6 +469,10 @@ describe('editing your own message', () => {
     expect(article(/Message 2/)).toHaveTextContent('Edited')
     expect(screen.queryByRole('form', { name: /Edit your message/ })).not.toBeInTheDocument()
     expect(within(article(/Message 2/)).getByText(/Hone|Gwen/)).toHaveTextContent('Gwen Guardian') // the author is unchanged
+    // The control that was used has gone or is disabled, so the outcome takes keyboard focus rather than dropping it to the page top.
+    await waitFor(() => {
+      expect(screen.getByText('Saved.').closest('[role="status"]')).toHaveFocus()
+    })
   })
 
   it('sends nothing at all when the text is as it was', async () => {
@@ -598,6 +604,10 @@ describe('removing your own message', () => {
     expect(screen.queryByText('My own reply.')).not.toBeInTheDocument()
     expect(pageText()).toContain('Your message was removed.')
     expect(within(article(/Message 2, removed/)).queryByRole('button')).not.toBeInTheDocument() // and there is no undo
+    // The control that was used has gone or is disabled, so the outcome takes keyboard focus rather than dropping it to the page top.
+    await waitFor(() => {
+      expect(screen.getByText('Your message was removed.').closest('[role="status"]')).toHaveFocus()
+    })
     expect(api.callsTo(REMOVE(MESSAGE2_ID))).toHaveLength(1)
   })
 
@@ -679,6 +689,10 @@ describe('correcting the title', () => {
     ).toBeInTheDocument()
     expect(api.callsTo(RETITLE)[0]?.body).toEqual({ title: 'Where shall we meet?' })
     expect(pageText()).toContain('Title saved.')
+    // The control that was used has gone or is disabled, so the outcome takes keyboard focus rather than dropping it to the page top.
+    await waitFor(() => {
+      expect(screen.getByText('Title saved.').closest('[role="status"]')).toHaveFocus()
+    })
     expect(screen.queryByRole('form', { name: 'Edit the title' })).not.toBeInTheDocument()
   })
 
@@ -742,6 +756,10 @@ describe('resolving and reopening', () => {
       await screen.findByText('Resolved by Gwen Guardian', { exact: false }),
     ).toBeInTheDocument()
     expect(pageText()).toContain('Marked as resolved.')
+    // The control that was used has gone or is disabled, so the outcome takes keyboard focus rather than dropping it to the page top.
+    await waitFor(() => {
+      expect(screen.getByText('Marked as resolved.').closest('[role="status"]')).toHaveFocus()
+    })
     expect(screen.getByRole('button', { name: 'Reopen discussion' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Mark as resolved' })).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: 'Your reply' })).not.toBeInTheDocument()
@@ -759,6 +777,10 @@ describe('resolving and reopening', () => {
 
     expect(await screen.findByRole('textbox', { name: 'Your reply' })).toBeInTheDocument()
     expect(pageText()).toContain('Reopened.')
+    // The control that was used has gone or is disabled, so the outcome takes keyboard focus rather than dropping it to the page top.
+    await waitFor(() => {
+      expect(screen.getByText('Reopened.').closest('[role="status"]')).toHaveFocus()
+    })
     expect(pageText()).not.toContain('Resolved by')
     expect(screen.getByRole('button', { name: 'Mark as resolved' })).toBeInTheDocument()
   })
