@@ -4,6 +4,7 @@
 - **Date:** 2026-09-19
 - **Supersedes:** none
 - **Superseded by:** none
+- **Amended by:** [ADR 0037](0037-resources-are-audience-targeted-packs-of-cards.md) (decision 55: `Resources` also calls the seam, synchronously and in-transaction as below, for exactly two events, the permanent deletion of a Resource Pack or Card, recording the action and actor and never the deleted content. The seam itself is unchanged)
 
 ## Context
 

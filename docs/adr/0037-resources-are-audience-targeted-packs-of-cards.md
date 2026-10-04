@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (design gate; nothing implemented)
 - **Date:** 2026-10-04
+- **Amended:** 2026-10-04, before implementation: permanent deletion of a Pack or Card now records a security event (decision 55). Nothing else changed
 - **Supersedes:** none
 - **Superseded by:** none
 - **Related:** [ADR 0005](0005-mariadb-with-postgresql-portability.md), [ADR 0017](0017-capabilities-and-roles-in-code.md), [ADR 0019](0019-security-event-auditing-seam.md), [ADR 0021](0021-cross-module-referential-integrity.md), [ADR 0023](0023-multi-factor-authentication.md), [ADR 0026](0026-production-browser-security-policy.md), [ADR 0027](0027-release-and-deployment-model.md), [ADR 0028](0028-membership-grants-derived-at-query-time.md), [ADR 0035](0035-guardian-discussions-are-durable-asynchronous-threads.md), [ADR 0036](0036-business-relationships-are-independent-and-not-access-roles.md)
@@ -26,6 +27,7 @@ Repository facts that shaped it, checked on `main` at `957fd05` (measurements we
 - **Column types, measured on both engines** with Laravel's schema builder: `json()` becomes `longtext` on MariaDB but `json` on PostgreSQL (divergent semantics); `mediumText()` becomes `mediumtext` and `text`, and both held a 70,000-character value (MariaDB `text` stops at 65,535 bytes). A unique index over a nullable column accepted two rows with `NULL` and the same position on **both** engines.
 - **Dependencies, resolved against a scratch copy of the real lockfile.** `symfony/html-sanitizer`'s newest line requires PHP ≥ 8.4.1; under the repository's PHP 8.3 platform pin Composer resolves **v7.4.20**, the same 7.4 LTS line as the installed Symfony components, adding one transitive package (`masterminds/html5`); `league/uri`, which it also needs, is already locked. `ueberdosis/tiptap-php` hard-requires `spatie/shiki-php`, a Node-backed highlighter, and production has no Node. On npm, Tiptap is at 3.31.4 (MIT), including `@tiptap/static-renderer`.
 - **Timestamps are second-precision** and ULIDs are minted before commit ([ADR 0035](0035-guardian-discussions-are-durable-asynchronous-threads.md)), so neither can be an ordering.
+- **The audit seam** is `Audit\Application\RecordSecurityEvent`, called synchronously inside the transaction of the change it records, so an event exists if and only if the change committed ([ADR 0019](0019-security-event-auditing-seam.md)). Event types are module-owned dotted names (`role.granted`, `password.reset_requested_by_operator`, `mfa.recovery_code_used`); operator events carry the acting Account and a small flat context. Precedent for what context holds: `person.renamed` records `{"changed": "display_name"}`, never the old or new name. Today only Identity and Access call the seam: an architecture test (`MembershipTrustBoundariesTest`) pins `RecordSecurityEvent` to Identity, Access and Audit, and CRM, Membership and Discussions each pin that they do not use Audit at all.
 - **No member-facing authorization consumer exists.** ADR 0028's Access-defined, Membership-implemented capability port is still unbuilt, by design, until a consumer needs it.
 
 ## Decision
@@ -33,7 +35,7 @@ Repository facts that shaped it, checked on `main` at `957fd05` (measurements we
 ### Vocabulary and ownership
 
 1. **Terms** (Q1). *Resources* is the user-facing feature and the module. A *Category* is global organizational metadata. A *Resource Pack* ("Pack" in code and the Console) is the shareable unit. A *Card* is one complete resource inside a Pack. A *Card Type* selects how a Card presents and integrates. Code names: `ResourceCategory`, `ResourcePack`, `ResourceCard`, `CardType`, `Audience`. The working title "Knowledge" is retired. Not "deck", "collection", "course" or "lesson".
-2. **A new `Resources` module owns all of it** (Q35): Categories, Packs, Cards, their rich content, audience targeting, publication, ordering, and the managed files that File Cards own. It depends only on `Access\Application` (authorization), `Identity\Application` (`FindPeople`, for provenance names in management responses) and `Shared`. It has no `Audit`, `Crm`, `Discussions` or `Membership` dependency in Phase 1 (decision 44 says when `Membership` arrives), it queries no table it does not own, and nothing depends on it.
+2. **A new `Resources` module owns all of it** (Q35): Categories, Packs, Cards, their rich content, audience targeting, publication, ordering, and the managed files that File Cards own. It depends only on `Access\Application` (authorization), `Identity\Application` (`FindPeople`, for provenance names in management responses), `Audit\Application` (`RecordSecurityEvent`, for the two permanent-deletion events of decision 55 and nothing else) and `Shared`. It has no `Crm`, `Discussions` or `Membership` dependency in Phase 1 (decision 44 says when `Membership` arrives), it queries no table it does not own, and nothing depends on it.
 3. **Resources owns which audiences content targets, never the facts that put a Person in an audience** ([ADR 0036](0036-business-relationships-are-independent-and-not-access-roles.md)). It stores no membership, volunteer, partner, vendor, artist, enrollment or role state, and no copy of any.
 4. **Managed files live inside Resources in Phase 1** (Q14, Q35): a `resource_assets` table and a `ResourceFileStore` port, implemented in `Resources\Infrastructure` over a dedicated private Laravel disk. Laravel's filesystem is the storage abstraction; nothing is added to `Shared`, which stays the tiny kernel the charter describes, and no `Files` or `Media` module is created for one consumer. The trigger to extract one is a second module needing managed files (Discussion attachments, say); that is its own design gate, and the port makes it a move rather than a rewrite.
 5. **No generic CMS.** No page builder, content-type registry, polymorphic content item, workflow engine or plugin mechanism. Card Types are a closed enum in code.
@@ -124,9 +126,15 @@ Repository facts that shaped it, checked on `main` at `957fd05` (measurements we
 
     Both are granted to the **Guardian** role, as CRM's and Discussions' capabilities are: Guardians are peers, and organizational content is not owned by its author (decision 54). The Platform Administrator holds them by derivation. A role-catalog test pins that every role granting `resources.manage` also grants `resources.view`; the two are still checked independently. A narrower editorial role, if one is wanted later, is a role-catalog change that moves `resources.manage` out of Guardian.
 52. **Routine management needs no recent verification.** The step-up exemption list becomes exactly three: `resources.manage` pinned to `Resources\Http`, beside CRM's and Discussions'. Creating, editing, ordering, targeting, publishing, previewing, deleting an empty Category and replacing a file are routine.
-53. **Permanent deletion of a Card or a Pack needs `resources.manage` and recent verification** (Q6): the two `DELETE` routes carry `security.verified` after the capability, which the route-table test already accepts on an exempt capability. A Resources route-table test pins that exactly those two routes carry it. The Console asks for explicit confirmation first, and for a Pack it states that every Card in it and every file they own will be permanently deleted. There is no Trash, Restore or Archive.
+53. **Permanent deletion of a Card or a Pack needs `resources.manage` and recent verification** (Q6): the two `DELETE` routes carry `security.verified` after the capability, which the route-table test already accepts on an exempt capability. A Resources route-table test pins that exactly those two routes carry it. The Console asks for explicit confirmation first, and for a Pack it states that every Card in it and every file they own will be permanently deleted. There is no Trash, Restore or Archive. A successful permanent deletion is recorded as a security event (decision 55).
 54. **Organizational content has no owner** (provenance). Anyone holding `resources.manage` may edit any Category, Pack or Card; there is no author-only rule, deliberately unlike Discussions. Provenance is recorded and never confers authority: `created_by_person_id`, `created_at`, `updated_by_person_id` and `updated_at` on Categories, Packs and Cards, and `uploaded_by_person_id` on assets, all Person ids with no foreign key (provenance, ADR 0021), resolved to display names by `FindPeople` in management responses only.
-55. **No security events** for Resources (ADR 0019's scope is identity and access), including for deletion, as for CRM and Discussions. Phase 1 therefore keeps no record of who deleted what (see Consequences).
+55. **Permanent deletion, and only permanent deletion, is audited** (Q6). Deleting a Pack or a Card is a privileged destructive action behind recent verification, and afterwards the thing deleted no longer exists to say anything about itself; so the action leaves a durable record of what happened and who did it. **Resources owns Resource business state; the audit seam records the privileged destructive action.** The record outlives its subject exactly as a role grant's does after the Account is gone, and it is not Resources' history.
+    - **Events.** `resource.pack_deleted` and `resource.card_deleted` (the `area.thing_verb` pattern of `mfa.recovery_code_used`), defined in a Resources-owned event enum and recorded through `Audit\Application\RecordSecurityEvent` with outcome `success`, **inside the deletion's own transaction** (ADR 0019). An event therefore exists if and only if the deletion committed; if the transaction fails, neither the deletion nor the event happens, and if the event cannot be written, the deletion fails.
+    - **What an event holds.** The acting Account (the session's Actor, as every operator event records it); no subject Person or Account, since the subject is not a person; no IP address or user agent, as role grants record none; and a flat context. For `resource.pack_deleted`: `pack_id`, `cards_deleted` and `files_deleted` (counts). For `resource.card_deleted`: `card_id`, `pack_id` and `card_type`. The occurrence time is the seam's own. A Pack deletion records one event; the Cards it removes are counted in it, not recorded one by one.
+    - **What an event never holds**: a title or other snapshot (the `person.renamed` precedent: the record says what kind of thing changed, never the text); summaries; the rich-content document or any part of it; a URI; a filename, file contents, digest or any copy of an asset; audience or category data; or anything that could reconstruct or restore the deleted Resource. Ids are enough to correlate with backups and logs when an investigation needs to.
+    - **Refusals record nothing.** A deletion refused for want of the capability, for want of recent verification, because the Pack or Card does not exist, or by a domain rule (`409 published_pack_requirement`) emits no event of either kind. Deleting something already gone is a `404`, not a second event.
+    - **Nothing else in Resources is audited.** Creating, editing, ordering, targeting, publishing, unpublishing, previewing, replacing a file and deleting an empty Category record no security event, as CRM's and Discussions' routine work records none.
+    - **The boundary change this needs.** Resources becomes the first module outside Identity and Access to call the seam. The WP1 package that implements it revises `MembershipTrustBoundariesTest`'s list of `RecordSecurityEvent` users deliberately, naming this ADR, and gives Resources its own boundary test pinning that it uses `Audit\Application` only (never `Audit\Domain` or `Audit\Infrastructure`) and only from the two deletion use cases.
 
 ### Concurrency
 
@@ -135,8 +143,8 @@ Repository facts that shaped it, checked on `main` at `957fd05` (measurements we
 
 ### Deletion
 
-58. **Deleting a Card** (Q6, Q15), under its Pack's lock: refused if it would leave a Published Pack with no Published Card (decision 14); otherwise its audience rows, the Card and its asset row are deleted in one transaction, and its file is removed after commit.
-59. **Deleting a Pack**, under its Category's lock (if any) and its own: its Cards' audience rows, its Cards, their asset rows, its audience rows and the Pack are deleted in one transaction, then the files are removed after commit. A Published Pack may be deleted directly; confirmation and recent verification are the safeguard.
+58. **Deleting a Card** (Q6, Q15), under its Pack's lock: refused if it would leave a Published Pack with no Published Card (decision 14); otherwise its audience rows, the Card and its asset row are deleted and `resource.card_deleted` is recorded, in one transaction, and its file is removed after commit.
+59. **Deleting a Pack**, under its Category's lock (if any) and its own: its Cards' audience rows, its Cards, their asset rows, its audience rows and the Pack are deleted and `resource.pack_deleted` is recorded, in one transaction, then the files are removed after commit. A Published Pack may be deleted directly; confirmation and recent verification are the safeguard.
 60. **Foreign keys within the module are `RESTRICT`, and deletion is an explicit use case** that removes children first, as everywhere else in the platform. There is no cascading delete: the use case must enumerate the assets anyway to remove their files.
 61. **Files are removed after the database commits, never before.** Deleting a file first would leave a row pointing at nothing if the transaction then rolled back. A file whose removal fails afterwards (or one written for an upload whose transaction failed) is an orphan: referenced by no row, so never servable, because every download is resolved through a row. Failures are logged, and `resources:assets:prune` removes files that no row references and that are older than a grace period.
 
@@ -237,8 +245,8 @@ All take the `Actor`. Management use cases ask for `resources.manage`, delivery 
 | Area | Use cases |
 | --- | --- |
 | Categories | `ListCategories`, `CreateCategory`, `RenameCategory`, `DeleteCategory` (empty only), `ReorderCategories` |
-| Packs | `PageManagedPacks` (filters: Category, audience, state, Card Type, title text), `GetManagedPack`, `CreatePack`, `UpdatePack` (authored fields and Category, with revision), `SetPackAudiences`, `PublishPack`, `UnpublishPack`, `ReorderPacks`, `DeletePack`, `PreviewPack` |
-| Cards | `GetManagedCard`, `CreateCard`, `UpdateCard` (with revision), `SetCardAudiences`, `PublishCard`, `UnpublishCard`, `ReorderCards`, `DeleteCard` |
+| Packs | `PageManagedPacks` (filters: Category, audience, state, Card Type, title text), `GetManagedPack`, `CreatePack`, `UpdatePack` (authored fields and Category, with revision), `SetPackAudiences`, `PublishPack`, `UnpublishPack`, `ReorderPacks`, `DeletePack` (records `resource.pack_deleted`), `PreviewPack` |
+| Cards | `GetManagedCard`, `CreateCard`, `UpdateCard` (with revision), `SetCardAudiences`, `PublishCard`, `UnpublishCard`, `ReorderCards`, `DeleteCard` (records `resource.card_deleted`) |
 | Files (asset package) | `ReplaceCardFile`, `DownloadManagedFile`, `DownloadResourceFile` |
 | Delivery | `BrowseResourceLibrary` (optional Category and search text; Categories in order, each with its visible Packs' titles, summaries, Series flag and visible Card counts), `GetResourcePack` (the Pack and its visible Cards with content) |
 
@@ -276,6 +284,18 @@ Under `/api/v1/admin`, behind `stateful`, `auth:web` and `can:console.access`, w
 
 Refusals, in the order checked: no capability, `403`; for the two deletions, no recent verification, the existing step-up refusal; an unknown Category, Pack or Card, or a Card not in that Pack, `404` (on delivery, also every invisible one, decision 46); request shape, `422`; then the domain: `409 stale_revision`, `409 order_mismatch`, `409 pack_not_publishable`, `409 published_pack_requirement`, `409 card_audience_conflict`, `409 category_not_empty`, `409 card_limit_reached` (adding a 101st Card to a Pack), `422 card_audience_not_subset`, `422 invalid_content`, `422 invalid_uri`, and, for files, `422 file_type_not_allowed`, `413 file_too_large`, `404 asset_unavailable`.
 
+### Deletion audit: what WP1 must prove
+
+WP1 implements decision 55 and proves it, on both engines, with tests that fail when the property is broken:
+
+- a successful permanent Pack deletion records exactly one `resource.pack_deleted`, with the acting Account and the context of decision 55, and no `resource.card_deleted` for the Cards it removed;
+- a successful permanent Card deletion records exactly one `resource.card_deleted`;
+- a deletion refused for want of `resources.manage`, for want of recent verification, for a missing Pack or Card, or by `409 published_pack_requirement` records no deletion event;
+- a deletion whose transaction fails (a forced failure after the rows are deleted) leaves the rows in place and records no event, and a failure to write the event leaves the Pack or Card undeleted;
+- no deleted content reaches the event: the context's keys are exactly those listed, and a Pack and Card seeded with unique marker words in their titles, summaries, content, URI and filename produce events in which none of those words appears;
+- every other Resources mutation (create, edit, reorder, audiences, publish, unpublish, file replacement, Category deletion) records no security event;
+- the boundary tests of decision 55: Resources uses `Audit\Application` only, and only from the two deletion use cases.
+
 A delivered Pack is its id, title, summary, Series flag, Category (id and name), the visible Card count and its visible Cards in order, each with its id, visible index, title, summary, Type, content (`format`, `version`, `document`), and its link (`uri`) or file (name, media type, size, download path). Nothing else.
 
 ## Architecture and security review
@@ -293,6 +313,7 @@ A delivered Pack is its id, title, summary, Series flag, Category (id and name),
 | Lost updates between editors | Decision 56 |
 | Publish/delete and audience races | Decision 57, with two-process race tests on both engines |
 | Destructive deletion without proof | Decision 53: capability, then recent verification, then confirmation; pinned by a route-table test |
+| Untraceable destructive deletion, or the audit trail becoming a copy of deleted content | Decision 55: one event per successful deletion, in the same transaction, holding ids and counts only; tested by marker words |
 | A role or capability standing in for a relationship | Decisions 42–43 and ADR 0036 |
 | Editor broken by the production CSP | Decision 28: `injectCSS: false`, no resizable columns, proved in real Chromium under the production policy |
 | Lost files on restore | Decisions 66 and 68 |
@@ -307,7 +328,7 @@ A delivered Pack is its id, title, summary, Series flag, Category (id and name),
 | Q3 Card lifecycle | `draft` ↔ `published`, independent of the Pack; unpublish is the archive | 22 |
 | Q4 Pack publish validation | Title, Category, at least one audience, at least one Published Card; held while Published | 13, 14 |
 | Q5 Card publish validation | Title, plus per Type: text content, valid URI, or asset | 23 |
-| Q6 Permanent deletion | Card and Pack only; `resources.manage` + recent verification + confirmation; transactional rows, files after commit | 53, 58–61 |
+| Q6 Permanent deletion | Card and Pack only; `resources.manage` + recent verification + confirmation; transactional rows, files after commit; a `resource.pack_deleted` or `resource.card_deleted` security event recorded in the same transaction, holding ids and counts, never content | 53, 55, 58–61 |
 | Q7–Q9 Ordering | Explicit positions per sibling set; reorder by full list under the parent's lock; no unique index | 8–10 |
 | Q10 One vs multi-Card | From the viewer's visible Card count, not stored | 47 |
 | Q11 Series | A presentation flag only | 16 |
@@ -339,7 +360,7 @@ A delivered Pack is its id, title, summary, Series flag, Category (id and name),
 | Added: concurrent editors | `revision` and `409 stale_revision` on authored fields | 56 |
 | Added: Card Type changes | Not in Phase 1; Type is fixed at creation | 19 |
 | Added: who manages | All Guardians (`resources.manage` to the Guardian role) | 51 |
-| Added: deletion record | None in Phase 1 (no security event, no log table) | 55 |
+| Added: deletion record | A security event for each successful permanent deletion (action and actor only); nothing else in Resources is audited, and no deleted content is retained anywhere | 55 |
 | Added: server fetching | None in Phase 1 | 24 |
 
 ## Package sequence (Q36)
@@ -362,7 +383,7 @@ None of these is designed here, and nothing is built for any of them.
 | Shared asset or media library, cross-Card reuse, asset versions, image handling in content | Decision 4: extraction gate when a second module needs files |
 | Full-text search of Card content, a search index | Decision 48 |
 | Changing a Card's Type | Decision 19 |
-| A deletion log or Trash | Decision 55 and the deletion decisions |
+| Trash, Restore, soft deletion, or any retained copy or history of deleted or edited content | Deliberately absent: unpublishing is the reversible path, and decision 55's event records the deletion, not the content |
 | Multi-Category membership, tags | Decision 6 |
 | Discussions using the editor | Decision 33 |
 | Generic SaaS or multi-tenant extraction | Not designed; boundaries above are kept clean only where cheap |
@@ -373,7 +394,7 @@ None of these is designed here, and nothing is built for any of them.
 - Member-targeted content can be authored, targeted and previewed in Phase 1 but is delivered nowhere until the community surface exists; a Pack targeted only at Members appears in no Guardian's library. That is the intended consequence of keeping the Console Guardian-focused.
 - The step-up exemption list grows to three, still each pinned to its own module, and Resources is the first exempt module with routes that still require the proof.
 - Rich content costs the Console a sizeable dependency (Tiptap and ProseMirror); the editor should be loaded only where it is used, and its output stays the platform's own documented format rather than HTML.
-- Phase 1 keeps no record of who permanently deleted a Pack or Card, or what it contained. Deletion requires a fresh second factor, but if the owner later wants traceability, it is a Resources-owned deletion record, not `security_events`.
+- Phase 1 records who permanently deleted which Pack or Card, and when, in `security_events`, and never what it contained: once deleted, a Resource's text and files are gone from Commons except in backups. The audit seam gains its first caller outside Identity and Access, for exactly two event types, and the architecture tests that pin who may call it are revised deliberately to say so.
 - Files become data of record: backups, restores and host disk quota now cover them, and the host's PHP upload limits become a production-check item.
 - Because summaries are stored, a change to the derived length applies gradually, Card by Card, as content changes.
 - Organizational content has no owner: any Guardian can change or unpublish another's work. That is the product decision; revision tokens and provenance make it visible and safe, not restricted.
@@ -397,4 +418,9 @@ None of these is designed here, and nothing is built for any of them.
 - **Treating `console.access` as the Guardian audience.** Rejected: it means "may use the Console", which an operator-only role could hold without being a Guardian; `resources.view` is the capability that defines this surface.
 - **Last-write-wins for Card edits**, as Discussions does. Rejected (decision 56): Discussions edits are self-concurrent; Resources edits are deliberately multi-editor.
 - **Owner-only editing, as Discussions does.** Rejected by the product owner: Resources are organizational content.
+- **No record of permanent deletion.** The original ruling of this gate; reversed before implementation. The action is privileged and irreversible, and without a record nobody could later say who removed a Pack or when.
+- **A Resources-owned deletion log.** Rejected: it would be a second audit mechanism beside ADR 0019's, and a business table of deleted things invites keeping more of them. The seam already records privileged actions durably and outlives its subjects.
+- **A title snapshot in the event.** Rejected: the platform's precedent (`person.renamed`) records that something changed, not the text; a title is authored content, and ids correlate with backups when needed.
+- **Soft deletion so the audit can point at a row.** Rejected: deletion is permanent by product decision, and the audit records the action, so it needs no surviving row.
+- **Audit every Resources mutation.** Rejected: routine content work grants and removes no authority, and CRM and Discussions record none of theirs.
 - **One backend package including files.** Rejected for the sequence: uploads and file serving are a separate security surface with host-sensitive limits, and are additive to the Card model.
