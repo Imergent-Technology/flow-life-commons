@@ -24,14 +24,32 @@ export function editorContent(document: ContentDocument): JSONContent {
  * @throws ContentRefusal when the editor holds something outside the profile (too long, too deep)
  */
 export function documentFromEditor(editor: Editor): ContentDocument {
-  const json = editor.getJSON()
+  const json = withoutHardBreakMarks(editor.getJSON())
   // A document always holds a block, so the editor's JSON always has content.
-  const [only, ...rest] = json.content
+  const [only, ...rest] = json.content ?? []
   if (rest.length === 0 && only?.type === 'paragraph' && only.content === undefined) {
     return { type: 'doc', content: [] }
   }
 
   return canonicalDocument(json)
+}
+
+/**
+ * The editor's JSON with no marks on any hard break. Tiptap lets a mark sit on a hard break (a pasted
+ * `<strong>one<br>two</strong>` is one, and so is anything a command or a drop puts there), but the profile has
+ * none: the server refuses a `marks` key on a hard break rather than drop it. A mark on a line break has no
+ * meaning (it draws nothing), so it is removed here, on the way out, and only here: every path that can put one in
+ * the editor comes out through this function, and the marks of the text either side of the break are untouched.
+ */
+function withoutHardBreakMarks(node: JSONContent): JSONContent {
+  const content = node.content?.map(withoutHardBreakMarks)
+  if (node.type === 'hardBreak') {
+    const plain = { ...node }
+    delete plain.marks
+    return content === undefined ? plain : { ...plain, content }
+  }
+
+  return content === undefined ? node : { ...node, content }
 }
 
 /**

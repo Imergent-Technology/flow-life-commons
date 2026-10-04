@@ -1,8 +1,10 @@
-import { mergeAttributes, type Extensions } from '@tiptap/core'
+import { Extension, mergeAttributes, type Extensions } from '@tiptap/core'
 import { CodeBlock } from '@tiptap/extension-code-block'
 import { Link } from '@tiptap/extension-link'
 import { OrderedList } from '@tiptap/extension-ordered-list'
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table'
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
+import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 
 import { MAX_SPAN, normaliseLinkHref } from './contract.ts'
@@ -167,6 +169,57 @@ const ProfileTable = Table.extend({
   },
 }).configure({ resizable: false, View: null })
 
+/** Whether a table sits anywhere below a table cell or header in `doc`: the one thing the schema cannot say. */
+function hasNestedTable(doc: ProseMirrorNode): boolean {
+  let nested = false
+  doc.descendants((node) => {
+    if (nested) return false
+    if (node.type.name === 'tableCell' || node.type.name === 'tableHeader') {
+      node.descendants((inner) => {
+        if (inner.type.name === 'table') nested = true
+        return !nested
+      })
+      return false
+    }
+    return true
+  })
+  return nested
+}
+
+/** Whether a step of the transaction brings a table in (a paste, a drop, inserted content). */
+function insertsTable(transaction: Transaction): boolean {
+  return transaction.steps.some((step) => {
+    const slice = (step as { slice?: { content: ProseMirrorNode } }).slice
+    let found = false
+    slice?.content.descendants((node) => {
+      if (node.type.name === 'table') found = true
+      return !found
+    })
+    return found
+  })
+}
+
+/**
+ * No table anywhere below a table cell or header (ADR 0037, decision 26: no nested tables, at any depth). The
+ * schema cannot say it: a cell may not hold a table directly, but it may hold a blockquote or a list, and those may
+ * hold one, so ProseMirror will happily wrap a pasted table in a quote to make it fit. This refuses any transaction
+ * that would leave one, whole: nothing of that paste, drop or insert goes in, so the editor never holds a document
+ * the profile (and the server) would refuse at save. Only a transaction that brings a table in is examined, so
+ * ordinary typing costs nothing.
+ */
+const NoNestedTables = Extension.create({
+  name: 'noNestedTables',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('noNestedTables'),
+        filterTransaction: (transaction) =>
+          !(transaction.docChanged && insertsTable(transaction) && hasNestedTable(transaction.doc)),
+      }),
+    ]
+  },
+})
+
 /**
  * The editor profile for a list of features. The base (document, paragraph, text) is always present;
  * every other node, mark and command is there only because a feature names it, so a profile can never
@@ -213,6 +266,7 @@ export function createEditorProfile(
       TableRow,
       TableHeader.extend({ content, addAttributes: () => cellAttributes }),
       TableCell.extend({ content, addAttributes: () => cellAttributes }),
+      NoNestedTables,
     )
   }
 

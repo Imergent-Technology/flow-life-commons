@@ -102,3 +102,49 @@ it('is a pure function: validating the same input twice gives the same result an
 
     expect($messages)->toHaveCount(2)->and($messages[0])->toBe($messages[1]);
 });
+
+/**
+ * @param  list<array<string, mixed>>  $blocks
+ * @return array<string, mixed> a one-cell table whose cell holds `$blocks`
+ */
+function tableHolding(array $blocks, string $cell = 'tableCell'): array
+{
+    return ['type' => 'table', 'content' => [['type' => 'tableRow', 'content' => [['type' => $cell, 'content' => $blocks]]]]];
+}
+
+it('refuses a table anywhere below a table cell or header, at any depth, and keeps ordinary tables and cell content', function () {
+    $paragraph = ['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'x']]];
+    $inner = tableHolding([$paragraph]);
+    $store = fn (array $blocks) => ContentDocument::fromArray(['type' => 'doc', 'content' => $blocks]);
+
+    // Refused: directly in a cell, behind a blockquote, behind a list, and deeper still (ancestry, not the parent).
+    $nested = [
+        'directly' => tableHolding([$paragraph, $inner]),
+        'behind a blockquote' => tableHolding([['type' => 'blockquote', 'content' => [$inner]]]),
+        'behind a list' => tableHolding([['type' => 'bulletList', 'content' => [['type' => 'listItem', 'content' => [$paragraph, $inner]]]]]),
+        'behind an ordered list in a header' => tableHolding([['type' => 'orderedList', 'content' => [['type' => 'listItem', 'content' => [$paragraph, ['type' => 'blockquote', 'content' => [$inner]]]]]]], 'tableHeader'),
+    ];
+    foreach ($nested as $where => $table) {
+        expect(fn () => $store([$table]))->toThrow(InvalidResourceInput::class, 'is not allowed here');
+        $thrown = null;
+        try {
+            $store([$table]);
+        } catch (InvalidResourceInput $e) {
+            $thrown = $e;
+        }
+        expect($thrown?->problem)->toBe('invalid_content', $where);
+    }
+
+    // Kept: a table at the top level, in a quote or a list outside any cell, two tables side by side, and a cell holding
+    // quotes, lists and code (everything but a table).
+    $quote = ['type' => 'blockquote', 'content' => [$inner]];
+    $list = ['type' => 'bulletList', 'content' => [['type' => 'listItem', 'content' => [$paragraph, $inner]]]];
+    $richCell = tableHolding([
+        $paragraph, ['type' => 'blockquote', 'content' => [$paragraph]],
+        ['type' => 'bulletList', 'content' => [['type' => 'listItem', 'content' => [$paragraph, ['type' => 'bulletList', 'content' => [['type' => 'listItem', 'content' => [$paragraph]]]]]]]],
+        ['type' => 'codeBlock', 'content' => [['type' => 'text', 'text' => 'code']]],
+    ]);
+    foreach ([[$inner], [$quote], [$list], [$inner, $inner], [$richCell]] as $blocks) {
+        expect(fn () => $store($blocks))->not->toThrow(InvalidResourceInput::class);
+    }
+});

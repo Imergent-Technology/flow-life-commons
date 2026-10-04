@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { expectNoAxeViolations } from '../test/a11y'
+import { pasteInto } from '../test/paste'
 import { validFixtures } from '../test/resourceFixtures'
 import { watchStyleWrites } from '../test/styleWatch'
 import { ContentRefusal, type ContentDocument } from './contract'
@@ -781,4 +782,31 @@ describe('accessibility (axe)', () => {
 
     await expectNoAxeViolations(container)
   })
+})
+
+describe('pasting a line break inside bold or linked text', () => {
+  it.each([
+    ['bold', '<p><strong>one<br>two</strong></p>'],
+    ['a link', '<p><a href="https://example.com">one<br>two</a></p>'],
+  ])(
+    'is an edit like any other for %s: onChange gets the canonical document, onRefusal is silent',
+    async (_what, html) => {
+      const { onChange, onRefusal } = setup({}, { type: 'doc', content: [] })
+
+      await act_(() => {
+        editorOf(surface()).commands.focus()
+        pasteInto(editorOf(surface()), { html })
+      })
+
+      expect(onRefusal).not.toHaveBeenCalled()
+      expect(onChange).toHaveBeenCalled()
+      const sent = onChange.mock.lastCall?.[0]
+      expect(sent?.content[0]?.content?.map((node) => node.type)).toEqual([
+        'text',
+        'hardBreak',
+        'text',
+      ])
+      expect(JSON.stringify(sent)).not.toMatch(/"hardBreak","marks"/)
+    },
+  )
 })

@@ -99,7 +99,7 @@ export function canonicalDocument(input: unknown): ContentDocument {
   }
   onlyKeys(input, ['type', 'content'], 'content')
 
-  const content = children(input, 'content', 'doc', 1)
+  const content = children(input, 'content', 'doc', 1, false)
   const document: ContentDocument = { type: 'doc', content }
 
   if (new TextEncoder().encode(JSON.stringify(document)).length > MAX_BYTES) {
@@ -162,7 +162,13 @@ function validPort(port: string | undefined): boolean {
   return port === undefined || port === '' || (Number(port) >= 1 && Number(port) <= 65_535)
 }
 
-function node(input: Json, path: string, parent: string, depth: number): ContentNode {
+function node(
+  input: Json,
+  path: string,
+  parent: string,
+  depth: number,
+  inCell: boolean,
+): ContentNode {
   if (depth > MAX_DEPTH) throw refuse(path, 'is nested too deeply')
   const type = input.type
   if (typeof type !== 'string') throw refuse(path, 'has no type')
@@ -177,12 +183,12 @@ function node(input: Json, path: string, parent: string, depth: number): Content
     case 'listItem':
     case 'table':
     case 'tableRow':
-      return container(input, path, type, parent, {}, depth)
+      return container(input, path, type, parent, {}, depth, inCell)
     case 'orderedList':
-      return container(input, path, type, parent, orderedStart(input, path), depth)
+      return container(input, path, type, parent, orderedStart(input, path), depth, inCell)
     case 'tableHeader':
     case 'tableCell':
-      return container(input, path, type, parent, spans(input, path, type), depth)
+      return container(input, path, type, parent, spans(input, path, type), depth, inCell)
     case 'horizontalRule':
       return leaf(input, path, type, parent)
     case 'codeBlock':
@@ -209,7 +215,7 @@ function textBlock(
   if (type === 'paragraph') noAttributes(input, path, type) // a heading's `level` was read by the caller
   const out: ContentNode = { type }
   if (Object.keys(attrs).length > 0) out.attrs = attrs
-  const kids = children(input, path, type, depth + 1)
+  const kids = children(input, path, type, depth + 1, false)
   if (kids.length > 0) out.content = kids
 
   return out
@@ -222,11 +228,22 @@ function container(
   parent: string,
   attrs: Record<string, number>,
   depth: number,
+  inCell: boolean,
 ): ContentNode {
   place(type, parent, path)
+  // Nowhere below a table cell or header, at any depth: ancestry, not just the parent (the server's rule).
+  if (type === 'table' && inCell) {
+    throw refuse(path, 'is not allowed here: a table cannot sit anywhere below a table cell')
+  }
   onlyKeys(input, ['type', 'attrs', 'content'], path)
   if (!['orderedList', 'tableHeader', 'tableCell'].includes(type)) noAttributes(input, path, type)
-  const kids = children(input, path, type, depth + 1)
+  const kids = children(
+    input,
+    path,
+    type,
+    depth + 1,
+    inCell || type === 'tableCell' || type === 'tableHeader',
+  )
   const first = kids[0]
   if (first === undefined) throw refuse(path, 'must not be empty')
   if (type === 'listItem' && first.type !== 'paragraph') {
@@ -355,12 +372,21 @@ function spans(input: Json, path: string, type: string): Record<string, number> 
   return out
 }
 
-/** The children of a node, validated against what its parent type may hold. */
-function children(input: Json, path: string, parent: string, depth: number): ContentNode[] {
+/**
+ * The children of a node, validated against what its parent type may hold. `inCell` is whether the
+ * parent is, or sits below, a table cell or header.
+ */
+function children(
+  input: Json,
+  path: string,
+  parent: string,
+  depth: number,
+  inCell: boolean,
+): ContentNode[] {
   return list(input, 'content', path).map((child, i) => {
     const at = `${path}.content[${String(i)}]`
     if (!isObject(child)) throw refuse(at, 'must be an object')
-    return node(child, at, parent, depth)
+    return node(child, at, parent, depth, inCell)
   })
 }
 

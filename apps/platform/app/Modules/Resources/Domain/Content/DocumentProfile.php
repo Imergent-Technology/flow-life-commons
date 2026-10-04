@@ -21,6 +21,10 @@ use App\Modules\Resources\Domain\InvalidResourceInput;
  *   Marks    bold, italic, underline, code, and link (an href that passes ExternalUri, with mailto allowed).
  *   Limits   256 KiB of canonical JSON, nesting depth 24; control characters only as a tab, and a line feed only in a codeBlock.
  *
+ * No table anywhere below a table cell or header, at any depth: a cell may not hold a table, and neither may a blockquote or list
+ * inside one (ADR 0037, decision 26). `$inCell` carries that ancestry down the recursion, so the rule is about the whole path, not the
+ * parent.
+ *
  * Attributes the configured editor always emits at one fixed default (a link's `target`, `rel` and `class`, a codeBlock's
  * `language`, an orderedList's `type`, a cell's `colwidth`) are accepted at that default and NOT stored: how a thing renders
  * is the renderer's decision, never the document's. Any other attribute, node, mark or key is refused. Returns the document in
@@ -67,7 +71,7 @@ final class DocumentProfile
         }
         self::onlyKeys($document, ['type', 'content'], 'content');
 
-        $children = self::children($document, 'content', 'doc', 1);
+        $children = self::children($document, 'content', 'doc', 1, false);
 
         return ['type' => 'doc', 'content' => $children];
     }
@@ -76,7 +80,7 @@ final class DocumentProfile
      * @param  array<mixed>  $node
      * @return array<string, mixed>
      */
-    private static function node(array $node, string $path, string $parent, int $depth): array
+    private static function node(array $node, string $path, string $parent, int $depth, bool $inCell): array
     {
         if ($depth > self::MAX_DEPTH) {
             throw self::refuse($path, 'is nested too deeply');
@@ -92,16 +96,16 @@ final class DocumentProfile
         return match ($type) {
             'paragraph' => self::textBlock($node, $path, 'paragraph', $parent, [], $depth),
             'heading' => self::textBlock($node, $path, 'heading', $parent, ['level' => self::level($node, $path)], $depth),
-            'bulletList' => self::container($node, $path, 'bulletList', $parent, [], $depth),
-            'orderedList' => self::container($node, $path, 'orderedList', $parent, self::orderedStart($node, $path), $depth),
-            'blockquote' => self::container($node, $path, 'blockquote', $parent, [], $depth),
-            'listItem' => self::container($node, $path, 'listItem', $parent, [], $depth),
+            'bulletList' => self::container($node, $path, 'bulletList', $parent, [], $depth, $inCell),
+            'orderedList' => self::container($node, $path, 'orderedList', $parent, self::orderedStart($node, $path), $depth, $inCell),
+            'blockquote' => self::container($node, $path, 'blockquote', $parent, [], $depth, $inCell),
+            'listItem' => self::container($node, $path, 'listItem', $parent, [], $depth, $inCell),
             'horizontalRule' => self::leaf($node, $path, 'horizontalRule', $parent),
             'codeBlock' => self::codeBlock($node, $path, $parent),
-            'table' => self::container($node, $path, 'table', $parent, [], $depth),
-            'tableRow' => self::container($node, $path, 'tableRow', $parent, [], $depth),
-            'tableHeader' => self::container($node, $path, 'tableHeader', $parent, self::spans($node, $path, 'tableHeader'), $depth),
-            'tableCell' => self::container($node, $path, 'tableCell', $parent, self::spans($node, $path, 'tableCell'), $depth),
+            'table' => self::container($node, $path, 'table', $parent, [], $depth, $inCell),
+            'tableRow' => self::container($node, $path, 'tableRow', $parent, [], $depth, $inCell),
+            'tableHeader' => self::container($node, $path, 'tableHeader', $parent, self::spans($node, $path, 'tableHeader'), $depth, $inCell),
+            'tableCell' => self::container($node, $path, 'tableCell', $parent, self::spans($node, $path, 'tableCell'), $depth, $inCell),
             'text' => self::text($node, $path, $parent),
             'hardBreak' => self::hardBreak($node, $path, $parent),
             default => throw self::refuse($path, 'has a node type the profile does not allow'),
@@ -124,7 +128,7 @@ final class DocumentProfile
         if ($attrs !== []) {
             $out['attrs'] = $attrs;
         }
-        $children = self::children($node, $path, $type, $depth + 1);
+        $children = self::children($node, $path, $type, $depth + 1, false);
         if ($children !== []) {
             $out['content'] = $children;
         }
@@ -137,14 +141,17 @@ final class DocumentProfile
      * @param  array<string, int>  $attrs
      * @return array<string, mixed>
      */
-    private static function container(array $node, string $path, string $type, string $parent, array $attrs, int $depth): array
+    private static function container(array $node, string $path, string $type, string $parent, array $attrs, int $depth, bool $inCell): array
     {
         self::place($type, $parent, $path);
+        if ($type === 'table' && $inCell) {
+            throw self::refuse($path, 'is not allowed here: a table cannot sit anywhere below a table cell');
+        }
         self::onlyKeys($node, ['type', 'attrs', 'content'], $path);
         if (! in_array($type, ['orderedList', 'tableHeader', 'tableCell'], true)) {
             self::noAttributes($node, $path, $type); // those three read their own attributes; every other container has none
         }
-        $children = self::children($node, $path, $type, $depth + 1);
+        $children = self::children($node, $path, $type, $depth + 1, $inCell || $type === 'tableCell' || $type === 'tableHeader');
         if ($children === []) {
             throw self::refuse($path, 'must not be empty');
         }
@@ -344,12 +351,13 @@ final class DocumentProfile
     }
 
     /**
-     * The children of a node, validated against what its parent type may hold.
+     * The children of a node, validated against what its parent type may hold. `$inCell` is whether the parent is, or sits below, a
+     * table cell or header.
      *
      * @param  array<mixed>  $node
      * @return list<array<string, mixed>>
      */
-    private static function children(array $node, string $path, string $parent, int $depth): array
+    private static function children(array $node, string $path, string $parent, int $depth, bool $inCell): array
     {
         $out = [];
         foreach (self::list($node, 'content', $path) as $i => $child) {
@@ -357,7 +365,7 @@ final class DocumentProfile
             if (! is_array($child)) {
                 throw self::refuse($at, 'must be an object');
             }
-            $out[] = self::node($child, $at, $parent, $depth);
+            $out[] = self::node($child, $at, $parent, $depth, $inCell);
         }
 
         return $out;

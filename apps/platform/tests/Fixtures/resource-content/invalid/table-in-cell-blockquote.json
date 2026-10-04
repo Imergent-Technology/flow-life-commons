@@ -1,0 +1,62 @@
+{
+  "description": "A table cannot sit in a blockquote inside a table cell: the rule is about every level below a cell, not only the direct parent.",
+  "path": "content.content[0].content[0].content[0].content[1].content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "table",
+        "content": [
+          {
+            "type": "tableRow",
+            "content": [
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "cell"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "blockquote",
+                    "content": [
+                      {
+                        "type": "table",
+                        "content": [
+                          {
+                            "type": "tableRow",
+                            "content": [
+                              {
+                                "type": "tableCell",
+                                "content": [
+                                  {
+                                    "type": "paragraph",
+                                    "content": [
+                                      {
+                                        "type": "text",
+                                        "text": "inner"
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

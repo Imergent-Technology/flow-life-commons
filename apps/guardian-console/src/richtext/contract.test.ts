@@ -147,3 +147,72 @@ describe('normaliseLinkHref', () => {
     expect(normaliseLinkHref(raw)).toBeNull()
   })
 })
+
+describe('a table is never anywhere below a table cell', () => {
+  const para = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', text }] })
+  const table = (blocks: unknown[], cell = 'tableCell') => ({
+    type: 'table',
+    content: [{ type: 'tableRow', content: [{ type: cell, content: blocks }] }],
+  })
+  const doc = (...content: unknown[]) => ({ type: 'doc', content })
+  const inner = table([para('inner')])
+  const list = (...items: unknown[]) => ({
+    type: 'bulletList',
+    content: items.map((content) => ({ type: 'listItem', content })),
+  })
+  const quote = (...content: unknown[]) => ({ type: 'blockquote', content })
+
+  it.each([
+    [
+      'directly in a cell',
+      table([para('x'), inner]),
+      'content.content[0].content[0].content[0].content[1]',
+    ],
+    [
+      'behind a blockquote',
+      table([para('x'), quote(inner)]),
+      'content.content[0].content[0].content[0].content[1].content[0]',
+    ],
+    [
+      'behind a list',
+      table([list([para('x'), inner])]),
+      'content.content[0].content[0].content[0].content[0].content[0].content[1]',
+    ],
+    [
+      'deep below a header',
+      table([quote(list([para('x'), quote(inner)]))], 'tableHeader'),
+      'content.content[0].content[0].content[0].content[0].content[0].content[0].content[1].content[0]',
+    ],
+  ])('refuses a table %s, at the path of the inner table', (_where, outer, path) => {
+    const refusal = (() => {
+      try {
+        canonicalDocument(doc(outer))
+      } catch (error) {
+        return error
+      }
+      return null
+    })()
+
+    expect(refusal).toBeInstanceOf(ContentRefusal)
+    expect((refusal as ContentRefusal).path).toBe(path)
+  })
+
+  it('keeps ordinary tables and everything a cell may hold but a table', () => {
+    const richCell = table([
+      para('x'),
+      quote(para('quoted')),
+      list([para('item'), list([para('nested')])]),
+      { type: 'codeBlock', content: [{ type: 'text', text: 'code' }] },
+    ])
+
+    for (const blocks of [
+      [inner],
+      [quote(inner)],
+      [list([para('x'), inner])],
+      [inner, inner],
+      [richCell],
+    ]) {
+      expect(() => canonicalDocument(doc(...blocks))).not.toThrow()
+    }
+  })
+})

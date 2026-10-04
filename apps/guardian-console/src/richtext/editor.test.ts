@@ -4,7 +4,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { pasteInto } from '../test/paste'
 import { validFixtures } from '../test/resourceFixtures'
 import { watchStyleWrites } from '../test/styleWatch'
-import { canonicalDocument, type ContentDocument } from './contract'
+import {
+  canonicalDocument,
+  type ContentDocument,
+  type ContentMark,
+  type ContentNode,
+} from './contract'
 import { documentFromEditor, editorContent, profileEditorProps } from './editorDocument'
 import { createEditorProfile, resourcesProfile, type EditorProfile } from './profile'
 
@@ -421,5 +426,229 @@ describe('under the production Content-Security-Policy', () => {
     } finally {
       watcher.stop()
     }
+  })
+})
+
+describe('a paste that would nest a table', () => {
+  const cellDocument = (...blocks: ContentDocument['content']): ContentDocument =>
+    doc(
+      paragraph('before'),
+      {
+        type: 'table',
+        content: [{ type: 'tableRow', content: [{ type: 'tableCell', content: blocks }] }],
+      },
+      paragraph('after'),
+    )
+  const TABLE_AND_TEXT =
+    '<p>pasted text</p><table><tbody><tr><td>P</td><td>Q</td></tr></tbody></table><p>more text</p>'
+
+  /** Puts the caret at the end of the first text node reading `text`. */
+  function caretIn(editor: Editor, text: string): void {
+    let at = -1
+    editor.state.doc.descendants((node, position) => {
+      if (node.isText && node.text === text && at === -1) at = position + text.length
+    })
+    expect(at).toBeGreaterThan(-1)
+    editor.commands.setTextSelection(at)
+  }
+
+  const nestedTables = (document: ContentDocument): number => {
+    let found = 0
+    const walk = (node: ContentDocument['content'][number], inCell: boolean) => {
+      if (node.type === 'table' && inCell) found++
+      const below = inCell || node.type === 'tableCell' || node.type === 'tableHeader'
+      node.content?.forEach((child) => {
+        walk(child, below)
+      })
+    }
+    document.content.forEach((node) => {
+      walk(node, false)
+    })
+    return found
+  }
+
+  it.each([
+    ['a cell directly', cellDocument(paragraph('cell')), 'cell'],
+    [
+      'a quote in a cell',
+      cellDocument({ type: 'blockquote', content: [paragraph('quoted')] }),
+      'quoted',
+    ],
+    [
+      'a list item in a cell',
+      cellDocument({
+        type: 'bulletList',
+        content: [{ type: 'listItem', content: [paragraph('item')] }],
+      }),
+      'item',
+    ],
+  ])(
+    'is refused whole with the caret in %s: nothing is inserted and the document stays valid',
+    (_where, start, text) => {
+      const editor = create(start)
+      editor.commands.focus()
+      caretIn(editor, text)
+      const before = JSON.stringify(documentFromEditor(editor))
+
+      pasteInto(editor, { html: TABLE_AND_TEXT })
+
+      expect(JSON.stringify(documentFromEditor(editor))).toBe(before)
+      expect(nestedTables(documentFromEditor(editor))).toBe(0)
+      expect(() => canonicalDocument(documentFromEditor(editor))).not.toThrow()
+    },
+  )
+
+  it('refuses it for any way of inserting a table inside a cell, not only paste', () => {
+    const editor = create(cellDocument({ type: 'blockquote', content: [paragraph('quoted')] }))
+    caretIn(editor, 'quoted')
+    const before = JSON.stringify(documentFromEditor(editor))
+
+    editor.commands.insertContent({
+      type: 'table',
+      content: [
+        {
+          type: 'tableRow',
+          content: [{ type: 'tableCell', content: [{ type: 'paragraph' }] }],
+        },
+      ],
+    })
+
+    expect(JSON.stringify(documentFromEditor(editor))).toBe(before)
+  })
+
+  it('still pastes a table at the top level, and pastes cell content over cells as before', () => {
+    const top = create(doc(paragraph('start')))
+    top.commands.focus('end')
+    pasteInto(top, { html: TABLE_AND_TEXT })
+    const types = documentFromEditor(top).content.map((n) => n.type)
+
+    expect(types).toContain('table')
+    expect(() => canonicalDocument(documentFromEditor(top))).not.toThrow()
+
+    // A table pasted over a table's cells is the table's own paste (cells over cells), never a nested table.
+    const inside = create(cellDocument(paragraph('cell')))
+    inside.commands.focus()
+    caretIn(inside, 'cell')
+    pasteInto(inside, { html: '<table><tbody><tr><td>P</td></tr></tbody></table>' })
+
+    expect(nestedTables(documentFromEditor(inside))).toBe(0)
+    expect(JSON.stringify(documentFromEditor(inside))).toContain('"P"')
+  })
+
+  it('keeps quotes, lists and plain pasted text working inside a cell', () => {
+    const editor = create(cellDocument(paragraph('cell')))
+    editor.commands.focus()
+    caretIn(editor, 'cell')
+
+    pasteInto(editor, {
+      html: '<blockquote><p>quoted</p></blockquote><ul><li>one</li></ul><p>plain</p>',
+    })
+    const result = documentFromEditor(editor)
+
+    expect(() => canonicalDocument(result)).not.toThrow()
+    const raw = JSON.stringify(result)
+    for (const word of ['quoted', 'one', 'plain']) expect(raw).toContain(word)
+    expect(nestedTables(result)).toBe(0)
+  })
+})
+
+describe('a hard break inside a mark', () => {
+  // Tiptap lets a mark sit on a hard break (`<strong>one<br>two</strong>` pastes as one). The profile has no marks on a
+  // hard break (the server refuses a `marks` key there), so what the editor emits never carries them, however they got in.
+  const bold: ContentMark[] = [{ type: 'bold' }]
+  const text = (value: string, marks?: ContentMark[]): ContentNode => ({
+    type: 'text',
+    text: value,
+    ...(marks === undefined ? {} : { marks }),
+  })
+
+  function pasted(html: string): { editor: Editor; output: ContentDocument } {
+    const editor = create(doc())
+    editor.commands.focus()
+    pasteInto(editor, { html })
+    return { editor, output: documentFromEditor(editor) }
+  }
+
+  it('pastes from bold text as a plain break between bold words, and the output is valid', () => {
+    const { output } = pasted('<p><strong>one<br>two</strong></p>')
+
+    expect(output).toEqual(
+      doc({
+        type: 'paragraph',
+        content: [text('one', bold), { type: 'hardBreak' }, text('two', bold)],
+      }),
+    )
+    expect(() => canonicalDocument(output)).not.toThrow()
+  })
+
+  it('pastes from a link as a plain break between linked words, and the output is valid', () => {
+    const link: ContentMark[] = [{ type: 'link', attrs: { href: 'https://example.com' } }]
+    const { output } = pasted('<p><a href="https://example.com">one<br>two</a></p>')
+
+    expect(output).toEqual(
+      doc({
+        type: 'paragraph',
+        content: [text('one', link), { type: 'hardBreak' }, text('two', link)],
+      }),
+    )
+    expect(() => canonicalDocument(output)).not.toThrow()
+  })
+
+  it('removes marks from a hard break however the editor came to hold them, and keeps every other mark', () => {
+    const editor = create(doc())
+    // Not through the profile's own paths: raw content, as a command, a drop or a future extension could put it.
+    editor.commands.setContent({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            text('a', [...bold, { type: 'italic' }]),
+            { type: 'hardBreak', marks: [...bold, { type: 'italic' }] },
+            text('b', bold),
+          ],
+        },
+        {
+          type: 'blockquote',
+          content: [
+            {
+              type: 'paragraph',
+              content: [text('c'), { type: 'hardBreak', marks: bold }, text('d')],
+            },
+          ],
+        },
+      ],
+    })
+
+    const output = documentFromEditor(editor)
+    expect(output).toEqual(
+      doc(
+        {
+          type: 'paragraph',
+          content: [
+            text('a', [...bold, { type: 'italic' }]),
+            { type: 'hardBreak' },
+            text('b', bold),
+          ],
+        },
+        {
+          type: 'blockquote',
+          content: [{ type: 'paragraph', content: [text('c'), { type: 'hardBreak' }, text('d')] }],
+        },
+      ),
+    )
+    expect(() => canonicalDocument(output)).not.toThrow()
+  })
+
+  it('leaves a hard break typed with Shift+Enter, and one in unmarked text, exactly as they were', () => {
+    const editor = create(doc(paragraph('one')))
+    editor.commands.focus('end')
+    editor.chain().setHardBreak().insertContent('two').run()
+
+    expect(documentFromEditor(editor).content[0]?.content?.map((n) => n.type)).toEqual([
+      'text',
+      'hardBreak',
+      'text',
+    ])
   })
 })

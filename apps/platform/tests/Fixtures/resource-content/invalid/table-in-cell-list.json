@@ -1,0 +1,67 @@
+{
+  "description": "A table cannot sit in a list item inside a table cell.",
+  "path": "content.content[0].content[0].content[0].content[0].content[0].content[1]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "table",
+        "content": [
+          {
+            "type": "tableRow",
+            "content": [
+              {
+                "type": "tableCell",
+                "content": [
+                  {
+                    "type": "bulletList",
+                    "content": [
+                      {
+                        "type": "listItem",
+                        "content": [
+                          {
+                            "type": "paragraph",
+                            "content": [
+                              {
+                                "type": "text",
+                                "text": "item"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "table",
+                            "content": [
+                              {
+                                "type": "tableRow",
+                                "content": [
+                                  {
+                                    "type": "tableCell",
+                                    "content": [
+                                      {
+                                        "type": "paragraph",
+                                        "content": [
+                                          {
+                                            "type": "text",
+                                            "text": "inner"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
