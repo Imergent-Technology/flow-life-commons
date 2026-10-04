@@ -86,9 +86,9 @@ Working titles to frame discussion. **They are not commitments and no folders ex
 | --- | --- |
 | ~~CRM~~ | **Now `Crm` (G1), above.** Profiles, contact methods, tags (WP2), and notes and interactions (WP3) are built; the Console's People, notes and tag screens (WP4, WP5) are built too |
 | ~~Discussions~~ | **Now `Discussions` (G2), above.** The backend, the Console screens and the demo data and end-to-end closeout are built |
-| Knowledge (Resources) | The next domain (G5). Its WP0 product-planning session happens before any boundary is fixed here |
+| `Resources` (was "Knowledge") | **Designed, not built** ([ADR 0037](../adr/0037-resources-are-audience-targeted-packs-of-cards.md); G5 WP1 creates it). Will own `resource_categories`, `resource_packs`, `resource_pack_audiences`, `resource_cards`, `resource_card_audiences` and (WP3) `resource_assets` with their files on a private `resources` disk, behind a `ResourceFileStore` port; nothing is added to `Shared`. Will depend only on `Access\Application` and `Identity\Application` (`FindPeople`), and on `Membership\Application` only once a surface delivers to Members. Owns which audiences content targets, never who belongs to them |
 | Events, Publishing | Deferred (G3, G4): ownership is under review, partly against the separate Quiverly event-production platform. No boundaries are fixed here, and it is not decided that Commons owns either in full. See the [roadmap](../roadmap.md#product-direction-realigned-2026-10-03) |
-| Volunteering | Volunteers are Members with elevated duties and privileges, not a second identity and not merely an Access role. The domain model (lifecycle, assignments, duties, history) is undecided |
+| Volunteering | Volunteering is a business relationship of its own, independent of Membership: a Person may be a Member, a Volunteer, both or neither ([ADR 0036](../adr/0036-business-relationships-are-independent-and-not-access-roles.md), which supersedes the earlier "Volunteers are Members with elevated duties"). It is not a second identity and not merely an Access role. The domain model (lifecycle, assignments, duties, history) is undecided; G10 needs only "who is a Volunteer now" |
 | Workflow | Approval/workflow, separate from authorization ([ADR 0009](../adr/0009-authorization-separate-from-approval.md)) |
 
 ## Adding a module

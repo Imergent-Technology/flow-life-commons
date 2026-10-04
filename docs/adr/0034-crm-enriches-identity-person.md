@@ -4,6 +4,7 @@
 - **Date:** 2026-09-29
 - **Supersedes:** none
 - **Superseded by:** none
+- **Amended by:** [ADR 0036](0036-business-relationships-are-independent-and-not-access-roles.md) (the "Note on Volunteers" only: Volunteering and Membership are separate relationships; every CRM decision is unchanged)
 - **Refines:** [ADR 0015](0015-identity-owns-person.md) (the decision that CRM will own rich contact data keyed by `person_id`, stated there as a consequence, is made concrete here; nothing in ADR 0015 changes)
 - **Related:** [ADR 0021](0021-cross-module-referential-integrity.md), [ADR 0024](0024-privileged-operator-administration.md), [ADR 0028](0028-membership-grants-derived-at-query-time.md), [ADR 0029](0029-commerce-providers-own-payment-facts.md)
 
@@ -133,6 +134,8 @@ Where closing the milestone settled what this ADR left to demonstration and proo
 - Erasure and anonymisation remain open ([data ownership](../architecture/data-ownership.md)); this ADR does not solve them and adds more personal data to the platform, which makes that question more pressing rather than less.
 
 ## Note on Volunteers
+
+> **Amended by [ADR 0036](0036-business-relationships-are-independent-and-not-access-roles.md) (2026-10-04):** Volunteering and Membership are separate business relationships; a Person may hold either, both or neither. The first sentence below is superseded; the rest of this note stands.
 
 Volunteers are Members with elevated duties and privileges. They are not a second identity type, and they are not merely an Access role. That relationship is settled. What is **not** decided is the Volunteering domain model: its lifecycle, assignments, duties, history, schedules and business data, and whether some Access role or capabilities mirror part of the relationship. Nothing in this ADR designs it. A "Volunteer Interest" tag is a label a Guardian can apply and carries no meaning to the platform.
 

@@ -11,6 +11,7 @@
 5. **Deny by default.** Endpoints are authenticated and authorized unless explicitly, and with reason, public.
 6. **Least privilege for Guardians.** Guardian operational capability is granted through the same model, not a bypass; the Console is a client.
 7. **Acting person vs calling client.** A request from WordPress carries both the client's identity and the person on whose behalf it acts; the platform authorizes the person.
+8. **Roles are not relationships.** A role or capability says what an Account may do in the software; it is never evidence that a Person is a Member, Volunteer, Partner or anything else, and granting one never creates a relationship. A relationship may result in Access grants; never the reverse. Audience eligibility for content is asked of the relationship's owning domain, not of Access ([ADR 0036](../adr/0036-business-relationships-are-independent-and-not-access-roles.md)).
 
 ## Auditing
 

@@ -48,7 +48,7 @@ Consequently:
 
 ## Volunteer extension seam
 
-**Decided:** Volunteers are Members with elevated duties or privileges. They are not a second identity type and not merely an Access role. Volunteer-specific capabilities, when they exist, can extend the same `/my/` surface a Member already reaches, gated by capability rather than by any special routing. Holding a volunteer capability never implies `console.access`; the Guardian Console remains Guardian/operator-only, unaffected by this design.
+**Decided, as corrected by [ADR 0036](../adr/0036-business-relationships-are-independent-and-not-access-roles.md):** Volunteering and Membership are separate business relationships; a Person may be a Volunteer, a Member, both or neither. (This page previously said Volunteers are Members with elevated duties or privileges; that is superseded.) A Volunteer is not a second identity type and Volunteering is not merely an Access role. A Volunteer with an Account reaches the same `/my/` surface any signed-in Account reaches, whether or not they are also a Member, and Volunteer-specific capabilities, when they exist, extend it, gated by capability (derived from the Volunteer relationship, never standing in for it) rather than by any special routing. Holding a volunteer capability never implies `console.access`; the Guardian Console remains Guardian/operator-only, unaffected by this design.
 
 **Deliberately undecided, and not designed here** — the relationship above is settled; the *Volunteering domain model* is not:
 
