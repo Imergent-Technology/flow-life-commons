@@ -1,0 +1,21 @@
+{
+  "description": "Level 1 is the page title.",
+  "path": "content.content[0].attrs.level",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 1
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

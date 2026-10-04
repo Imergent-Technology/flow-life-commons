@@ -1,0 +1,21 @@
+{
+  "description": "Inline styles are not in the profile.",
+  "path": "content.content[0].attrs",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "attrs": {
+          "style": "color:red"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

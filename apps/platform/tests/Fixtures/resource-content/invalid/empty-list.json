@@ -1,0 +1,13 @@
+{
+  "description": "A list holds at least one item.",
+  "path": "content.content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "bulletList",
+        "content": []
+      }
+    ]
+  }
+}

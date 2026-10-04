@@ -19,7 +19,7 @@ enum Role: string
     /** Resolves to EVERY capability, present and future, and is the only role that does. */
     case PlatformAdministrator = 'platform_administrator';
 
-    /** The Console's ordinary user: may use it, see and manage People (CRM) and take part in Guardian discussions. Nothing more yet. */
+    /** The Console's ordinary user: may use it, see and manage People (CRM), take part in Guardian discussions and manage Resources. Nothing more yet. */
     case Guardian = 'guardian';
 
     /**
@@ -36,6 +36,9 @@ enum Role: string
                 Capability::ConsoleAccess, Capability::ViewPeople, Capability::ManagePeople,
                 // Guardian Discussions access is an accepted owner decision (ADR 0035): both capabilities, listed, not derived.
                 Capability::ViewDiscussions, Capability::ParticipateInDiscussions,
+                // Resources access is an accepted owner decision (ADR 0037): Guardians are peers and organizational content has no
+                // owner, so every Guardian may manage it. Both capabilities, listed, not derived.
+                Capability::ViewResources, Capability::ManageResources,
             ],
         };
     }
@@ -53,7 +56,7 @@ enum Role: string
     {
         return match ($this) {
             self::PlatformAdministrator => 'Everything the platform can do, including administering other people\'s access.',
-            self::Guardian => 'May use the Guardian Console, see and manage People (contacts, tags) and take part in Guardian discussions. Nothing more yet.',
+            self::Guardian => 'May use the Guardian Console, see and manage People (contacts, tags), take part in Guardian discussions and manage Resources. Nothing more yet.',
         };
     }
 

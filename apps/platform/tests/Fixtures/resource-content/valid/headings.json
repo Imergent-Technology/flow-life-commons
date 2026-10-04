@@ -1,0 +1,45 @@
+{
+  "description": "Heading levels 2, 3 and 4. The Card title is the page heading, so level 1 is not allowed.",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 2
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Section"
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 3
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Subsection"
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 4
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Detail"
+          }
+        ]
+      }
+    ]
+  },
+  "text": "Section Subsection Detail"
+}

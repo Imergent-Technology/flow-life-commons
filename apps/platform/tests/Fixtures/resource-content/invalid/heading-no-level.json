@@ -1,0 +1,18 @@
+{
+  "description": "A heading states its level.",
+  "path": "content.content[0].attrs.level",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "heading",
+        "content": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

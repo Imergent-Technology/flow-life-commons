@@ -44,7 +44,7 @@ it('grants a role only the capabilities that role defines', function () {
     expect(authorizer()->allows($actor, Capability::ConsoleAccess))->toBeTrue()
         // An unrelated capability stays denied.
         ->and(authorizer()->allows($actor, Capability::AssignRoles))->toBeFalse()
-        ->and(held($actor))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view']);
+        ->and(held($actor))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view']);
 });
 
 it('gives the platform administrator every defined capability', function () {
@@ -133,7 +133,7 @@ it('narrows a person to what remains when one of two roles is revoked', function
 
     Access::revoke($account, Role::PlatformAdministrator);
 
-    expect(held($actor))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view']);
+    expect(held($actor))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view']);
 });
 
 it('carries no capability snapshot in the actor', function () {
@@ -208,7 +208,7 @@ it('ignores a bad key without disturbing the person\'s valid roles', function ()
     Access::plant($account->personId, 'retired_role');
     Access::grant($account, Role::Guardian);
 
-    expect(held(Access::actorFor($account)))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view']);
+    expect(held(Access::actorFor($account)))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view']);
 });
 
 it('never grants on an obsolete key, even one that once meant administrator', function () {

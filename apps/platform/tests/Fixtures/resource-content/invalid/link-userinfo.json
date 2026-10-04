@@ -1,0 +1,26 @@
+{
+  "description": "A user-information part is not allowed.",
+  "path": "content.content[0].content[0].marks[0].attrs.href",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "marks": [
+              {
+                "type": "link",
+                "attrs": {
+                  "href": "https://user:pass@example.org"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

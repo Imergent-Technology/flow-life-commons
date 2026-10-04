@@ -26,6 +26,13 @@
         </include>
     </source>
     <php>
+        <!--
+            The whole suite runs in ONE process and Pest loads every test file before the first test, and the architecture tests then
+            parse the whole code base into it. Measured on 2026-10-04 (2,572 tests, MariaDB): a peak of 577 MB, over the 512M the dev image
+            sets for the CLI (infrastructure/docker/php/php.ini), so the architecture tests died with "Allowed memory size exhausted" in a
+            full run while passing in any smaller one. 1G leaves headroom for growth and matches what Larastan is given (scripts/commands/check.sh).
+        -->
+        <ini name="memory_limit" value="1G"/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>

@@ -145,9 +145,18 @@ it('keeps every role key out of code outside Access, so nothing authorizes by ro
     $keys = array_map(fn (Role $r): string => $r->value, Role::cases());
     $offenders = [];
 
+    // An AUDIENCE is not a role (ADR 0036): Resources' audience catalog stores its `guardian` audience under that word (ADR 0037,
+    // decision 38). Exactly that file may hold exactly that literal, and nothing in it authorizes anything: Guardian eligibility
+    // is asked as a capability. Every other file in Resources, and every other literal in that file, is still scanned.
+    $audienceCatalog = ['app/Modules/Resources/Domain/Audience.php' => ['guardian']];
+
     foreach (appPhpFilesOutside('Access') as $path) {
         $source = (string) file_get_contents($path);
+        $relative = str_replace(dirname(__DIR__, 2).'/', '', $path);
         foreach ($keys as $key) {
+            if (in_array($key, $audienceCatalog[$relative] ?? [], true)) {
+                continue;
+            }
             if (preg_match('/[\'"]'.preg_quote($key, '/').'[\'"]/', $source) === 1) {
                 $offenders[] = str_replace(dirname(__DIR__, 2).'/', '', $path)." names role \"{$key}\"";
             }
@@ -161,6 +170,11 @@ it('keeps every role key out of code outside Access, so nothing authorizes by ro
     foreach ($keys as $key) {
         expect(preg_match('/[\'"]'.preg_quote($key, '/').'[\'"]/', $catalog))->toBe(1);
     }
+
+    // The exemption is real and exactly as narrow as stated: the audience file does hold the literal (so the exemption is needed,
+    // not decorative), and it is the only file exempted.
+    expect((string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Resources/Domain/Audience.php'))->toContain("'guardian'")
+        ->and(array_keys($audienceCatalog))->toBe(['app/Modules/Resources/Domain/Audience.php']);
 });
 
 it('keeps Access out of Identity\'s tables', function () {
@@ -239,6 +253,10 @@ it('has an acyclic module graph limited to the frozen edges', function () {
         'Crm' => ['Access', 'Identity'],
         // Discussions -> Access, Identity (ADR 0035): the same two edges, and no Audit, Crm or Membership edge.
         'Discussions' => ['Access', 'Identity'],
+        // Resources -> Access, Identity, Audit (ADR 0037): Access and Identity as the others, and ONE Audit edge, for the two
+        // permanent-deletion events (decision 55), through Audit\Application only. It is a deliberate, narrow edge: the use cases that
+        // may call the seam are pinned in MembershipTrustBoundariesTest and ResourcesBoundariesTest.
+        'Resources' => ['Access', 'Identity', 'Audit'],
     ];
     foreach ($graph as $module => $edges) {
         if (! array_key_exists($module, $allowed)) {

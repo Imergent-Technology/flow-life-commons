@@ -1,0 +1,21 @@
+{
+  "description": "Event-handler attributes never exist.",
+  "path": "content.content[0].attrs",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "attrs": {
+          "onclick": "alert(1)"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

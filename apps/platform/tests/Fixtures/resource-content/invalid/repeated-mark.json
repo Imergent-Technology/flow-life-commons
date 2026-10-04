@@ -1,0 +1,26 @@
+{
+  "description": "A mark appears once on a text node.",
+  "path": "content.content[0].content[0].marks[1]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "marks": [
+              {
+                "type": "bold"
+              },
+              {
+                "type": "bold"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

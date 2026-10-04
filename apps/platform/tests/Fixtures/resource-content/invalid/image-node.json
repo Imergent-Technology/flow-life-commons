@@ -1,0 +1,15 @@
+{
+  "description": "Images are not in profile v1.",
+  "path": "content.content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "image",
+        "attrs": {
+          "src": "https://example.org/a.png"
+        }
+      }
+    ]
+  }
+}

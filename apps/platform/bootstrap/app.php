@@ -56,6 +56,23 @@ use App\Modules\Membership\Application\UnknownPerson as UnknownMembershipPerson;
 use App\Modules\Membership\Domain\InvalidMembershipTerm as InvalidMembershipGrantTerm;
 use App\Modules\Membership\Http\MembershipProblems;
 use App\Modules\Membership\Http\MembershipRecordNotFound;
+use App\Modules\Resources\Application\CardAudienceConflict;
+use App\Modules\Resources\Application\CardLimitReached;
+use App\Modules\Resources\Application\CardNotFound;
+use App\Modules\Resources\Application\CardNotPublishable;
+use App\Modules\Resources\Application\CategoryNotEmpty;
+use App\Modules\Resources\Application\CategoryNotFound;
+use App\Modules\Resources\Application\DuplicateCategory;
+use App\Modules\Resources\Application\OrderMismatch;
+use App\Modules\Resources\Application\PackNotFound;
+use App\Modules\Resources\Application\PackNotPublishable;
+use App\Modules\Resources\Application\PublishedPackRequirement;
+use App\Modules\Resources\Application\ResourcePackNotFound;
+use App\Modules\Resources\Application\StaleRevision;
+use App\Modules\Resources\Application\UnknownCategory;
+use App\Modules\Resources\Domain\InvalidResourceInput;
+use App\Modules\Resources\Http\ResourcesPresenter;
+use App\Modules\Resources\Http\ResourcesProblems;
 use App\Modules\Security\Http\ApplyBrowserSecurityHeaders;
 use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -117,6 +134,15 @@ return Application::configure(basePath: dirname(__DIR__))
         // it outermost, so it also dresses a response produced by anything further in, including the
         // framework's own exception rendering.
         $middleware->prepend(ApplyBrowserSecurityHeaders::class);
+
+        // Whitespace inside a rich-content document is CONTENT: the space after "Hello" before a bold "world" is a text node's own
+        // character, and an empty string is not a missing value. Laravel's global TrimStrings and ConvertEmptyStringsToNull would
+        // silently rewrite both inside every string of the request, so they stand aside, for the Resources management routes only
+        // (ADR 0037). Nothing is lost by it: Resources' domain trims and judges every title, name and summary itself, and the
+        // document profile is the server's authoritative validation of the content. Every other route is untouched.
+        $resourcesManagement = static fn (Request $request): bool => $request->is('api/v1/admin/resources', 'api/v1/admin/resources/*');
+        $middleware->trimStrings(except: [$resourcesManagement]);
+        $middleware->convertEmptyStringsToNull(except: [$resourcesManagement]);
 
         // Cookie-authenticated Guardian Console flows are a deliberate opt-in (ADR 0016),
         // not something the whole API inherits. The API stays stateless, so public
@@ -246,6 +272,23 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (DiscussionResolved $e) => DiscussionsProblems::discussionResolved());
         $exceptions->render(fn (MessageRemoved $e) => DiscussionsProblems::messageRemoved());
         $exceptions->render(fn (InvalidDiscussionInput $e) => DiscussionsProblems::invalidInput($e));
+
+        // Resources (ADR 0037). One answer for every delivery refusal; every management refusal has a stable `code`.
+        $exceptions->render(fn (CategoryNotFound $e) => ResourcesProblems::notFound('category_not_found', $e->getMessage()));
+        $exceptions->render(fn (PackNotFound $e) => ResourcesProblems::notFound('pack_not_found', $e->getMessage()));
+        $exceptions->render(fn (CardNotFound $e) => ResourcesProblems::notFound('card_not_found', $e->getMessage()));
+        $exceptions->render(fn (ResourcePackNotFound $e) => ResourcesProblems::notFound('resource_pack_not_found', $e->getMessage()));
+        $exceptions->render(fn (StaleRevision $e) => ResourcesProblems::stale($e, new ResourcesPresenter));
+        $exceptions->render(fn (OrderMismatch $e) => ResourcesProblems::conflict('order_mismatch', $e->getMessage()));
+        $exceptions->render(fn (PackNotPublishable $e) => ResourcesProblems::packNotPublishable($e));
+        $exceptions->render(fn (CardNotPublishable $e) => ResourcesProblems::cardNotPublishable($e));
+        $exceptions->render(fn (PublishedPackRequirement $e) => ResourcesProblems::publishedPackRequirement($e));
+        $exceptions->render(fn (CardAudienceConflict $e) => ResourcesProblems::cardAudienceConflict($e));
+        $exceptions->render(fn (CategoryNotEmpty $e) => ResourcesProblems::conflict('category_not_empty', $e->getMessage()));
+        $exceptions->render(fn (CardLimitReached $e) => ResourcesProblems::conflict('card_limit_reached', $e->getMessage()));
+        $exceptions->render(fn (DuplicateCategory $e) => ResourcesProblems::conflict('duplicate_category', $e->getMessage()));
+        $exceptions->render(fn (UnknownCategory $e) => ResourcesProblems::unknownCategory());
+        $exceptions->render(fn (InvalidResourceInput $e) => ResourcesProblems::invalidInput($e));
 
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),

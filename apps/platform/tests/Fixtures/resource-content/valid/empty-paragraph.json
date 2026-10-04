@@ -1,0 +1,12 @@
+{
+  "description": "An empty paragraph, which is what an empty editor holds.",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph"
+      }
+    ]
+  },
+  "text": ""
+}

@@ -14,13 +14,15 @@ use Tests\Support\Api;
  * The capabilities whose mutations are exempt from recent verification, each pinned to the one module whose routes it may
  * cover. Routine maintenance and discussion (a note about how we know someone, a phone number, a tag, a typo in a name, a
  * reply in a thread) grants and removes no authority, so a fresh password and second factor for it would only make it
- * unusable: CRM's by ADR 0034, Discussions' by ADR 0035. Every other administration mutation still needs the proof. The
+ * unusable: CRM's by ADR 0034, Discussions' by ADR 0035, and Resources' (`resources.manage`, ADR 0037), whose two PERMANENT DELETE
+ * routes still carry `security.verified` anyway (pinned in ResourcesRoutesTest). Every other administration mutation still needs the proof. The
  * exemption is by capability AND by module, and a test below pins that each covers exactly its own module's routes and nothing
  * else. It is a short list on purpose: adding to it is a decision, not a convenience.
  */
 const STEP_UP_EXEMPT = [
     'can:crm.people.manage' => 'App\\Modules\\Crm\\Http\\',
     'can:discussions.participate' => 'App\\Modules\\Discussions\\Http\\',
+    'can:resources.manage' => 'App\\Modules\\Resources\\Http\\',
 ];
 
 /**
@@ -81,11 +83,13 @@ it('gives every administration route authentication, the Console boundary, exact
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:crm.people.manage'], ['PATCH']))->toBe([])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:discussions.participate'], ['POST']))->toBe([])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:discussions.view'], ['POST']))->toBe(['changes something without security.verified'])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:resources.manage'], ['PATCH']))->toBe([])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:resources.view'], ['POST']))->toBe(['changes something without security.verified'])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:crm.people.view'], ['PATCH']))->toBe(['changes something without security.verified'])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:membership.records.manage'], ['POST']))->toBe(['changes something without security.verified']);
 });
 
-it('exempts exactly the CRM and Discussions mutations from recent verification, each only on its own module\'s routes, and no other administration mutation', function () {
+it('exempts exactly the CRM, Discussions and Resources mutations from recent verification, each only on its own module\'s routes, and no other administration mutation', function () {
     $unverified = [];
     foreach (collect(app('router')->getRoutes()->getRoutes())->filter(fn ($route) => str_starts_with($route->uri(), 'api/v1/admin/')) as $route) {
         $middleware = Api::strings($route->gatherMiddleware());
@@ -103,8 +107,8 @@ it('exempts exactly the CRM and Discussions mutations from recent verification, 
     }
 
     // Positive control: both exempt surfaces really are here, and the list is exactly these two.
-    expect(array_keys($seen))->toEqualCanonicalizing(['can:crm.people.manage', 'can:discussions.participate'])
-        ->and(array_keys(STEP_UP_EXEMPT))->toBe(['can:crm.people.manage', 'can:discussions.participate']);
+    expect(array_keys($seen))->toEqualCanonicalizing(['can:crm.people.manage', 'can:discussions.participate', 'can:resources.manage'])
+        ->and(array_keys(STEP_UP_EXEMPT))->toBe(['can:crm.people.manage', 'can:discussions.participate', 'can:resources.manage']);
 });
 
 it('keeps every Discussions route under the Console boundary, one catalog capability, and no recent-verification middleware', function () {

@@ -1,0 +1,19 @@
+{
+  "description": "A node holds only its known keys, not a smuggled html field.",
+  "path": "content.content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "html": "<b>x</b>",
+        "content": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

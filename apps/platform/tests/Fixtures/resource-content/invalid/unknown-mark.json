@@ -1,0 +1,26 @@
+{
+  "description": "Only bold, italic, underline, code and link are marks.",
+  "path": "content.content[0].content[0].marks[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "marks": [
+              {
+                "type": "textStyle",
+                "attrs": {
+                  "color": "red"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

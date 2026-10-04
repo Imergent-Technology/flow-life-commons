@@ -1,0 +1,13 @@
+{
+  "description": "There is no raw HTML node.",
+  "path": "content.content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "html",
+        "content": "<b>x</b>"
+      }
+    ]
+  }
+}

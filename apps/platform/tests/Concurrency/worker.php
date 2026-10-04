@@ -29,6 +29,9 @@ declare(strict_types=1);
  *   php worker.php invite '{"email":"...","name":"..."}'
  *   php worker.php invite_existing_person '{"person":"...","email":"..."}'
  *   php worker.php discussion_reply|discussion_resolve|discussion_reopen '{"actor_account":"...","actor_person":"...","discussion":"..."[,"body":"..."]}'
+ *   php worker.php resources_<operation> '{"actor_account":"...","actor_person":"...",...}'   (see the branches below: publish_pack, unpublish_pack, delete_pack,
+ *       delete_card, publish_card, unpublish_card, set_pack_audiences, set_card_audiences, create_card, create_pack, create_category, reorder_cards,
+ *       reorder_categories, update_pack, update_card, delete_category, move_pack)
  *   php worker.php discussion_edit|discussion_remove '{"actor_account":"...","actor_person":"...","discussion":"...","message":"..."[,"body":"..."]}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
@@ -86,6 +89,28 @@ use App\Modules\Identity\Domain\InvitationToken;
 use App\Modules\Identity\Domain\RecoveryCodeRepository;
 use App\Modules\Membership\Application\RevokeMembershipGrant;
 use App\Modules\Membership\Domain\MembershipGrantId;
+use App\Modules\Resources\Application\CreateCard;
+use App\Modules\Resources\Application\CreateCategory;
+use App\Modules\Resources\Application\CreatePack;
+use App\Modules\Resources\Application\DeleteCard;
+use App\Modules\Resources\Application\DeleteCategory;
+use App\Modules\Resources\Application\DeletePack;
+use App\Modules\Resources\Application\PublishCard;
+use App\Modules\Resources\Application\PublishPack;
+use App\Modules\Resources\Application\ReorderCards;
+use App\Modules\Resources\Application\ReorderCategories;
+use App\Modules\Resources\Application\SetCardAudiences;
+use App\Modules\Resources\Application\SetPackAudiences;
+use App\Modules\Resources\Application\UnpublishCard;
+use App\Modules\Resources\Application\UnpublishPack;
+use App\Modules\Resources\Application\UpdateCard;
+use App\Modules\Resources\Application\UpdatePack;
+use App\Modules\Resources\Domain\Audience;
+use App\Modules\Resources\Domain\AudienceMode;
+use App\Modules\Resources\Domain\CardId;
+use App\Modules\Resources\Domain\CardType;
+use App\Modules\Resources\Domain\CategoryId;
+use App\Modules\Resources\Domain\PackId;
 use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
@@ -241,6 +266,30 @@ try {
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
             DiscussionId::fromString($arg('discussion')), DiscussionMessageId::fromString($arg('message')),
         );
+    } elseif (str_starts_with($operation, 'resources_')) {
+        $actor = Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person')));
+        $audiences = static fn (string $csv): array => array_values(array_map(Audience::from(...), array_filter(explode(',', $csv), static fn (string $a): bool => $a !== '')));
+        $doc = static fn (string $text): array => ['type' => 'doc', 'content' => [['type' => 'paragraph', 'content' => $text === '' ? [] : [['type' => 'text', 'text' => $text]]]]];
+        match ($operation) {
+            'resources_publish_pack' => $app->make(PublishPack::class)($actor, PackId::fromString($arg('pack'))),
+            'resources_unpublish_pack' => $app->make(UnpublishPack::class)($actor, PackId::fromString($arg('pack'))),
+            'resources_delete_pack' => $app->make(DeletePack::class)($actor, PackId::fromString($arg('pack'))),
+            'resources_delete_card' => $app->make(DeleteCard::class)($actor, PackId::fromString($arg('pack')), CardId::fromString($arg('card'))),
+            'resources_publish_card' => $app->make(PublishCard::class)($actor, PackId::fromString($arg('pack')), CardId::fromString($arg('card'))),
+            'resources_unpublish_card' => $app->make(UnpublishCard::class)($actor, PackId::fromString($arg('pack')), CardId::fromString($arg('card'))),
+            'resources_set_pack_audiences' => $app->make(SetPackAudiences::class)($actor, PackId::fromString($arg('pack')), $audiences($arg('audiences'))),
+            'resources_set_card_audiences' => $app->make(SetCardAudiences::class)($actor, PackId::fromString($arg('pack')), CardId::fromString($arg('card')), AudienceMode::from($arg('mode')), $audiences($arg('audiences'))),
+            'resources_create_card' => $app->make(CreateCard::class)($actor, PackId::fromString($arg('pack')), CardType::Basic, $arg('title'), $doc($arg('text')), null, null),
+            'resources_create_pack' => $app->make(CreatePack::class)($actor, $arg('title'), null, false, $arg('category') === '' ? null : CategoryId::fromString($arg('category'))),
+            'resources_create_category' => $app->make(CreateCategory::class)($actor, $arg('name')),
+            'resources_reorder_cards' => $app->make(ReorderCards::class)($actor, PackId::fromString($arg('pack')), array_map(CardId::fromString(...), array_values(array_filter(explode(',', $arg('ids')))))),
+            'resources_reorder_categories' => $app->make(ReorderCategories::class)($actor, array_map(CategoryId::fromString(...), array_values(array_filter(explode(',', $arg('ids')))))),
+            'resources_update_pack' => $app->make(UpdatePack::class)($actor, PackId::fromString($arg('pack')), (int) $arg('revision'), ['title' => $arg('title')]),
+            'resources_move_pack' => $app->make(UpdatePack::class)($actor, PackId::fromString($arg('pack')), (int) $arg('revision'), ['category_id' => $arg('category') === '' ? null : $arg('category')]),
+            'resources_update_card' => $app->make(UpdateCard::class)($actor, PackId::fromString($arg('pack')), CardId::fromString($arg('card')), (int) $arg('revision'), isset($decoded['text']) ? ['content' => $doc($arg('text'))] : ['title' => $arg('title')]),
+            'resources_delete_category' => $app->make(DeleteCategory::class)($actor, CategoryId::fromString($arg('category'))),
+            default => throw new InvalidArgumentException("unknown operation {$operation}"),
+        };
     } elseif ($operation === 'rename_person') {
         $app->make(RenamePerson::class)(PersonId::fromString($arg('person')), $arg('name'));
     } elseif ($operation === 'reissue') {

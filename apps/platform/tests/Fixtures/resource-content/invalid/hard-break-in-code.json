@@ -1,0 +1,17 @@
+{
+  "description": "A code block holds text only: a line break there is a line feed.",
+  "path": "content.content[0].content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "codeBlock",
+        "content": [
+          {
+            "type": "hardBreak"
+          }
+        ]
+      }
+    ]
+  }
+}

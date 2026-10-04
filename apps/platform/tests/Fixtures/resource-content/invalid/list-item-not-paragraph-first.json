@@ -1,0 +1,22 @@
+{
+  "description": "A list item starts with a paragraph.",
+  "path": "content.content[0].content[0].content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "bulletList",
+        "content": [
+          {
+            "type": "listItem",
+            "content": [
+              {
+                "type": "horizontalRule"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

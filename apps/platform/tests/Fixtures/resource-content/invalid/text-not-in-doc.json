@@ -1,0 +1,13 @@
+{
+  "description": "Text sits inside a block, never directly in the document.",
+  "path": "content.content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "text",
+        "text": "loose"
+      }
+    ]
+  }
+}

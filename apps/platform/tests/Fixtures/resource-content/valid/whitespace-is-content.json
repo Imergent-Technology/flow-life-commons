@@ -1,0 +1,31 @@
+{
+  "description": "A space at the edge of a text node is content, not noise: \"Hello \" then bold \"world\". Anything that trims strings in transit corrupts this.",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hello "
+          },
+          {
+            "type": "text",
+            "text": "world",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "text": " again"
+          }
+        ]
+      }
+    ]
+  },
+  "text": "Hello world again"
+}

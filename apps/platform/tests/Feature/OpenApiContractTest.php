@@ -172,8 +172,8 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, and Guardian Discussions (ADR 0035) ten.
-    expect($checked)->toBe(44);
+    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, and Resources (ADR 0037) twenty-five: 23 management, 2 delivery.
+    expect($checked)->toBe(69);
 });
 
 it('never lets an administration schema name a secret', function () {
@@ -185,6 +185,10 @@ it('never lets an administration schema name a secret', function () {
         'PersonRef', 'ContactProfile', 'ContactMethod', 'ContactTagRef', 'ContactTag', 'ContactTagList', 'PersonTagList', 'PersonRecord',
         'PersonUpdate', 'PersonListing', 'PersonListingPage', 'NewContactMethod', 'RegisterPersonRequest', 'UpdatePersonRequest', 'PossibleDuplicate',
         'DiscussionPerson', 'Discussion', 'DiscussionPage', 'NewDiscussion', 'RetitleRequest', 'NewMessage', 'DiscussionMessage', 'LiveMessage', 'RemovedMessage', 'MessagePage',
+        'ResourcePerson', 'ResourceCategoryRef', 'ResourceCategory', 'ResourceCategoryList', 'ResourceCategoryName', 'ResourceOrder', 'ManagedPack', 'ManagedPackPage', 'ManagedPackList',
+        'ManagedCardOutline', 'ManagedCard', 'ResourceContent', 'ResourceDocument', 'NewResourcePack', 'UpdateResourcePack', 'ResourcePackAudiences', 'NewResourceCard', 'UpdateResourceCard',
+        'ResourceCardAudiences', 'StaleRevisionError', 'PackNotPublishableError', 'CardNotPublishableError', 'PublishedPackRequirementError', 'CardAudienceConflictError',
+        'ResourcePack', 'ResourceDeliveredCard', 'ResourceLibrary', 'ResourcePackPreview',
     ];
     $text = strtolower(json_encode(array_intersect_key($components['schemas'], array_flip($names)), JSON_THROW_ON_ERROR));
     $text = str_replace('never a password', '', $text); // the description says what is NOT there

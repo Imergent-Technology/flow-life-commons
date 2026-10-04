@@ -24,6 +24,9 @@ it('has exactly the capability catalog, so adding one is a deliberate decision',
             'crm.people.view', 'crm.people.manage',
             // Guardian Discussions (ADR 0035): read, and take part. There is deliberately no discussions.manage.
             'discussions.view', 'discussions.participate',
+            // Resources (ADR 0037): read the Guardian library, and manage. There is deliberately no resources.delete or
+            // .publish: permanent deletion is the same capability behind recent verification, a route-level layer.
+            'resources.view', 'resources.manage',
         ]);
 });
 
@@ -56,12 +59,15 @@ it('gives the platform administrator every capability, by derivation rather than
     }
 });
 
-it('gives the guardian the Console, the People directory and Guardian Discussions, and nothing more', function () {
-    // CRM access (ADR 0034) and Discussions access (ADR 0035) are accepted owner decisions: each pair deliberately listed, not derived.
+it('gives the guardian the Console, the People directory, Guardian Discussions and Resources, and nothing more', function () {
+    // CRM access (ADR 0034), Discussions access (ADR 0035) and Resources access (ADR 0037) are accepted owner decisions: each pair deliberately listed, not derived.
     expect(Role::Guardian->capabilities())->toBe([
         Capability::ConsoleAccess, Capability::ViewPeople, Capability::ManagePeople,
         Capability::ViewDiscussions, Capability::ParticipateInDiscussions,
+        Capability::ViewResources, Capability::ManageResources,
     ])
+        ->and(Role::Guardian->grants(Capability::ViewResources))->toBeTrue()
+        ->and(Role::Guardian->grants(Capability::ManageResources))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ViewDiscussions))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ParticipateInDiscussions))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ConsoleAccess))->toBeTrue()
@@ -171,4 +177,36 @@ it('has no discussions.manage capability and no moderation capability: participa
     ));
 
     expect($discussionCapabilities)->toBe(['discussions.view', 'discussions.participate']);
+});
+
+it('gives every role that may manage Resources the right to view them: there is no manage-only role', function () {
+    // The capabilities stay independent checks (management and the Guardian library are separate routes with separate
+    // capabilities); this pins the ROLE POLICY, as for CRM and Discussions. A role that manages without viewing would see
+    // Resources in management but be refused the library a Guardian previews against, so a role with one and not the other needs
+    // a decision first, then this test changed deliberately.
+    $managers = [];
+    foreach (Role::cases() as $role) {
+        if ($role->grants(Capability::ManageResources)) {
+            $managers[] = $role->value;
+            expect($role->grants(Capability::ViewResources))->toBeTrue("{$role->value} grants resources.manage without resources.view (ADR 0037)");
+        }
+    }
+
+    expect($managers)->toBe(['platform_administrator', 'guardian']); // positive control: the loop really covered the managers
+});
+
+it('has exactly resources.view and resources.manage: no Resources-specific deletion, publishing or Member capability', function () {
+    $resourcesCapabilities = array_values(array_filter(
+        array_map(fn (Capability $c): string => $c->value, Capability::cases()),
+        fn (string $value): bool => str_starts_with($value, 'resources.'),
+    ));
+
+    expect($resourcesCapabilities)->toBe(['resources.view', 'resources.manage']);
+});
+
+it('does not give a Member, a Volunteer or any relationship a capability: no role is named after one (ADR 0036)', function () {
+    // A business relationship is not an Access role: Membership is derived at query time and Volunteering has no domain yet.
+    // The role catalog must therefore hold no `member` or `volunteer` role, and no Resources capability is reachable except by
+    // the two roles that exist.
+    expect(array_map(fn (Role $r): string => $r->value, Role::cases()))->not->toContain('member', 'volunteer', 'partner', 'vendor', 'artist');
 });

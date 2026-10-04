@@ -9,6 +9,7 @@ use App\Modules\Discussions\Infrastructure\DiscussionsServiceProvider;
 use App\Modules\Identity\Infrastructure\IdentityServiceProvider;
 use App\Modules\Membership\Infrastructure\MembershipServiceProvider;
 use App\Modules\Release\Infrastructure\ReleaseServiceProvider;
+use App\Modules\Resources\Infrastructure\ResourcesServiceProvider;
 use App\Modules\Security\Infrastructure\SecurityServiceProvider;
 use App\Providers\AppServiceProvider;
 
@@ -23,6 +24,8 @@ return [
     CrmServiceProvider::class,
     // Depends on Access\Application and Identity\Application (ADR 0035), so it registers after both.
     DiscussionsServiceProvider::class,
+    // Depends on Access\Application, Identity\Application and Audit\Application (ADR 0037), so it registers after all three.
+    ResourcesServiceProvider::class,
     SecurityServiceProvider::class,
     ReleaseServiceProvider::class,
 ];

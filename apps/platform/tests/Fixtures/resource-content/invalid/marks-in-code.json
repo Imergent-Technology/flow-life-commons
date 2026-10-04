@@ -1,0 +1,23 @@
+{
+  "description": "A code block holds plain text only.",
+  "path": "content.content[0].content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "codeBlock",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

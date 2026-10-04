@@ -1,0 +1,8 @@
+{
+  "description": "HTML is never accepted: content is a list of nodes, not a string.",
+  "path": "content.content",
+  "document": {
+    "type": "doc",
+    "content": "<p>hello</p><script>alert(1)</script>"
+  }
+}

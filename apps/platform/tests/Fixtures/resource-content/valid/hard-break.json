@@ -1,0 +1,25 @@
+{
+  "description": "A hard break inside a paragraph is the way to break a line outside code.",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "First"
+          },
+          {
+            "type": "hardBreak"
+          },
+          {
+            "type": "text",
+            "text": "Second"
+          }
+        ]
+      }
+    ]
+  },
+  "text": "First Second"
+}

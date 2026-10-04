@@ -1,0 +1,15 @@
+{
+  "description": "Frames are not in the profile (and the production CSP refuses them).",
+  "path": "content.content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "iframe",
+        "attrs": {
+          "src": "https://example.org"
+        }
+      }
+    ]
+  }
+}

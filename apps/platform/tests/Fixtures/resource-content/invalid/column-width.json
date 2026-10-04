@@ -1,0 +1,38 @@
+{
+  "description": "Column widths are written as inline styles, which the production CSP refuses, so they are not stored.",
+  "path": "content.content[0].content[0].content[0].attrs.colwidth",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "table",
+        "content": [
+          {
+            "type": "tableRow",
+            "content": [
+              {
+                "type": "tableCell",
+                "attrs": {
+                  "colwidth": [
+                    120
+                  ]
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "x"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

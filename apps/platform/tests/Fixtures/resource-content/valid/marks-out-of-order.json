@@ -1,0 +1,60 @@
+{
+  "description": "Marks sent in any order are stored in the fixed order: bold, italic, underline, code, link.",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "marks": [
+              {
+                "type": "link",
+                "attrs": {
+                  "href": "https://example.org"
+                }
+              },
+              {
+                "type": "underline"
+              },
+              {
+                "type": "bold"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "text": "x",
+  "canonical": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "x",
+            "marks": [
+              {
+                "type": "bold"
+              },
+              {
+                "type": "underline"
+              },
+              {
+                "type": "link",
+                "attrs": {
+                  "href": "https://example.org"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

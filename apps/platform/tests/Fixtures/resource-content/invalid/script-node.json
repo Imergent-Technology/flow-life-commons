@@ -1,0 +1,18 @@
+{
+  "description": "A script node does not exist, however it is spelled.",
+  "path": "content.content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "script",
+        "content": [
+          {
+            "type": "text",
+            "text": "alert(1)"
+          }
+        ]
+      }
+    ]
+  }
+}

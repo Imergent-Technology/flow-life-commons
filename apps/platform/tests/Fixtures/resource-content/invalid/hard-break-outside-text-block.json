@@ -1,0 +1,31 @@
+{
+  "description": "A hard break lives in a paragraph or heading.",
+  "path": "content.content[1]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "bulletList",
+        "content": [
+          {
+            "type": "listItem",
+            "content": [
+              {
+                "type": "paragraph",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "x"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "hardBreak"
+      }
+    ]
+  }
+}

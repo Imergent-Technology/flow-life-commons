@@ -3455,6 +3455,1381 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+  /admin/resources/categories:
+    get:
+      operationId: listResourceCategories
+      summary: List Resource Categories
+      description: >-
+        Needs `resources.manage`. Every Category in display order (manual position, then id) with how many Packs hold it, in
+        any state, and who created and last edited it. Not paged: a Category is a name and there are few. Read-only.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      responses:
+        '200':
+          description: 'The Categories.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceCategoryList'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+    post:
+      operationId: createResourceCategory
+      summary: Create a Resource Category
+      description: >-
+        Needs `resources.manage`, and nothing more: it asks for no recent verification (ADR 0037). Appends a Category at the
+        end of the order. The name is trimmed, one line, at most 80 characters; "Training guides" and "training Guides" are
+        one name, so a second is `duplicate_category`. Writes nothing to the security audit trail.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceCategoryName'
+      responses:
+        '201':
+          description: 'The Category as created.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceCategory'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '409':
+          description: 'A Category with that name already exists (`duplicate_category`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/categories/order:
+    put:
+      operationId: reorderResourceCategories
+      summary: Reorder all Resource Categories
+      description: >-
+        Needs `resources.manage`. Sends the COMPLETE ordered list of every Category id. The Categories are locked, the list
+        must be exactly the set that exists now (`order_mismatch` otherwise: someone added, deleted or reordered meanwhile),
+        and positions are rewritten 1..n in one transaction. Ordering is not editing: provenance is untouched.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceOrder'
+      responses:
+        '200':
+          description: 'The Categories in their new order.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceCategoryList'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '409':
+          description: 'The list is not exactly the current set (`order_mismatch`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/categories/{category}:
+    patch:
+      operationId: renameResourceCategory
+      summary: Rename a Resource Category
+      description: >-
+        Needs `resources.manage`. Renaming to the name it already has is allowed; to another Category's is
+        `duplicate_category`.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourceCategoryId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceCategoryName'
+      responses:
+        '200':
+          description: 'The Category as now named.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceCategory'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Category (`category_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'Another Category already has that name (`duplicate_category`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    delete:
+      operationId: deleteResourceCategory
+      summary: Delete an empty Resource Category
+      description: >-
+        Needs `resources.manage`. Routine: it loses a name, not content, so it asks for no recent verification. Refused
+        `category_not_empty` while any Pack holds the Category, in any state; Packs are never reassigned silently.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourceCategoryId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '204':
+          description: 'Deleted.'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Category (`category_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'A Pack still holds the Category (`category_not_empty`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/resources/categories/{category}/pack-order:
+    put:
+      operationId: reorderResourcePacks
+      summary: Reorder the Packs of one Category
+      description: >-
+        Needs `resources.manage`. Sends the COMPLETE ordered list of the ids of every Pack in the Category (all states). The
+        Category's row is the lock, and the list must be exactly the set that is there now (`order_mismatch` otherwise).
+        Positions are rewritten 1..n in one transaction. Ordering is not editing.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourceCategoryId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceOrder'
+      responses:
+        '200':
+          description: 'The Packs of the Category in their new order.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPackList'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Category (`category_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'The list is not exactly the current set (`order_mismatch`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/packs:
+    get:
+      operationId: listManagedResourcePacks
+      summary: List Resource Packs for management
+      description: >-
+        Needs `resources.manage`. Packs in Category order, then Pack order, then id, with Packs that have no Category last;
+        Drafts included. Optionally narrowed by `category`, `audience`, `state`, `card_type` and `q`, a case-insensitive match
+        on the title only. A modest bounded page (25 by default, at most 100). Each Pack carries its Card counts but not its
+        Cards.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - name: category
+          in: query
+          schema: {type: string}
+        - name: audience
+          in: query
+          schema: {type: string, enum: [guardian, member]}
+        - name: state
+          in: query
+          schema: {type: string, enum: [draft, published]}
+        - name: card_type
+          in: query
+          schema: {type: string, enum: [basic, external_link]}
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 200}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1}
+        - name: per_page
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+      responses:
+        '200':
+          description: 'A page of Packs.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPackPage'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    post:
+      operationId: createResourcePack
+      summary: Create a Draft Resource Pack
+      description: >-
+        Needs `resources.manage`, and nothing more. Creates an empty Draft: no audience, no Cards. Optionally already in a
+        Category (appended after its Packs). The title is required, at most 200 characters; the summary is optional
+        hand-written text, at most 300; `is_series` is presentation only (previous/next and *n of m*, never completion or
+        locking). Writes nothing to the security audit trail.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewResourcePack'
+      responses:
+        '201':
+          description: 'The Pack as created.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/packs/{pack}:
+    get:
+      operationId: getManagedResourcePack
+      summary: Show a Resource Pack for management
+      description: >-
+        Needs `resources.manage`. The Pack, its Category, audiences, state and revision, and every Card in it, Drafts
+        included, with each Card's state, audience and provenance but not its content (`GET` the Card for that). Read-only.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+      responses:
+        '200':
+          description: 'The Pack.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+    patch:
+      operationId: updateResourcePack
+      summary: Edit a Pack's authored fields
+      description: >-
+        Needs `resources.manage`; anyone who holds it may edit any Pack. Only the keys sent change. The edit MUST name the
+        `revision` it was based on: if someone else's edit won, `stale_revision` answers with the current Pack and nothing is
+        written. Clearing `category_id` on a PUBLISHED Pack is `published_pack_requirement`. Changing the Category appends the
+        Pack to the end of the new one.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateResourcePack'
+      responses:
+        '200':
+          description: 'The Pack as now edited (its revision advanced).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'Someone else edited it first (`stale_revision`, with `current`), or the edit would leave a Published Pack without its Category (`published_pack_requirement`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaleRevisionError'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    delete:
+      operationId: deleteResourcePack
+      summary: Permanently delete a Resource Pack
+      description: >-
+        Needs `resources.manage` AND recent verification (`security.verified`): a stolen session cannot destroy content, and a
+        caller without the capability is never asked to prove anything. PERMANENT: the Pack and every Card in it are deleted,
+        with no Trash, Restore or Archive; unpublishing is the reversible way to take a Pack out of use. In one transaction
+        the rows are deleted and ONE `resource.pack_deleted` security event is recorded (the acting Account, `pack_id`,
+        `cards_deleted` and `files_deleted`: never a title, summary, content or address), so the deletion commits if and only
+        if its event does. A refused or failed deletion records no event. The Console asks for explicit confirmation first.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '204':
+          description: 'Deleted.'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/resources/packs/{pack}/audiences:
+    put:
+      operationId: setResourcePackAudiences
+      summary: Set a Pack's audiences
+      description: >-
+        Needs `resources.manage`. Replaces the Pack's whole audience set (`guardian`, `member`; positive OR semantics, no deny
+        rules). An empty set is allowed for a Draft only: a PUBLISHED Pack keeps at least one (`published_pack_requirement`).
+        Refused `card_audience_conflict`, naming the Cards, if a narrowed Card would be left wider than its Pack; nothing is
+        adjusted automatically. Under the Pack's lock. Audiences are not an authored field, so no revision is needed.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourcePackAudiences'
+      responses:
+        '200':
+          description: 'The Pack as now targeted.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'Clearing the last audience of a Published Pack (`published_pack_requirement`), or narrowing past a narrowed Card (`card_audience_conflict`, with `cards`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardAudienceConflictError'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/packs/{pack}/publish:
+    post:
+      operationId: publishResourcePack
+      summary: Publish a Resource Pack
+      description: >-
+        Needs `resources.manage`. The Pack needs a Category, at least one audience and at least one Published Card
+        (`pack_not_publishable`, with `unmet` naming each missing one), and keeps all three for as long as it is Published.
+        Idempotent: publishing a Published Pack changes nothing.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: 'The Pack, Published.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'The Pack lacks something it needs (`pack_not_publishable`, with `unmet`: `category`, `audience`, `published_card`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackNotPublishableError'
+  /admin/resources/packs/{pack}/unpublish:
+    post:
+      operationId: unpublishResourcePack
+      summary: Return a Resource Pack to Draft
+      description: >-
+        Needs `resources.manage`. Reversible and idempotent: nothing is deleted or changed but the state. While a Draft, none
+        of its Cards is delivered to anyone, whatever their own state.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: 'The Pack, now a Draft.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+  /admin/resources/packs/{pack}/preview:
+    get:
+      operationId: previewResourcePack
+      summary: Preview a Pack as one audience
+      description: >-
+        Needs `resources.manage`: it may show Drafts. Returns what `audience` would receive if the Pack were Published as it
+        stands, through the SAME projection delivery uses (Card publication, audiences, narrowing and non-disclosure included;
+        only the Pack's own publication is set aside). It changes nothing and publishes nothing. `audience` must be a
+        supported audience. An audience that would see nothing gets `visible: false` and `pack: null`, not a 404, because the
+        caller may see everything.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - name: audience
+          in: query
+          required: true
+          schema: {type: string, enum: [guardian, member]}
+      responses:
+        '200':
+          description: 'The preview.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourcePackPreview'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/packs/{pack}/card-order:
+    put:
+      operationId: reorderResourceCards
+      summary: Reorder the Cards of a Pack
+      description: >-
+        Needs `resources.manage`. Sends the COMPLETE ordered list of every Card id in the Pack, Drafts included. The Pack's
+        row is the lock, and the list must be exactly the set that is there now (`order_mismatch` otherwise). The stored order
+        is never what a viewer sees: viewers number the Cards they can see among themselves.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceOrder'
+      responses:
+        '200':
+          description: 'The Pack with its Cards in their new order.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedPack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'The list is not exactly the current set (`order_mismatch`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/packs/{pack}/cards:
+    post:
+      operationId: createResourceCard
+      summary: Create a Draft Card
+      description: >-
+        Needs `resources.manage`, and nothing more. Appends a Draft Card to the Pack, inheriting the Pack's audiences. The
+        `type` is fixed here for good: `basic` (the content is the resource; a `uri` is optional) or `external_link` (a `uri`
+        is required). `content` is a document in the Resources profile (see ResourceDocument) or absent for an empty one; it
+        is validated by the server, which never strips: anything outside the profile is `invalid_content`. The summary is
+        derived from the content unless `summary` is given. The server never fetches the `uri`. At most 100 Cards per Pack
+        (`card_limit_reached`).
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewResourceCard'
+      responses:
+        '201':
+          description: 'The Card as created.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedCard'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'The Pack already holds 100 Cards (`card_limit_reached`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/packs/{pack}/cards/{card}:
+    get:
+      operationId: getManagedResourceCard
+      summary: Show a Card for management
+      description: >-
+        Needs `resources.manage`. The Card with its content, Drafts included. A Card that is not in that Pack is not found.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+      responses:
+        '200':
+          description: 'The Card.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedCard'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+    patch:
+      operationId: updateResourceCard
+      summary: Edit a Card's authored fields
+      description: >-
+        Needs `resources.manage`; anyone who holds it may edit any Card. Only the keys sent change; the Type never does. The
+        edit MUST name the `revision` it was based on: if someone else's edit won, `stale_revision` answers with the current
+        Card and nothing is written. `summary` writes a custom summary (later content changes never overwrite it);
+        `summary_mode: derived` returns to the automatic one and recomputes at once. An edit that would leave a PUBLISHED Card
+        without what its Type needs (text content, or an address) is `card_not_publishable`.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateResourceCard'
+      responses:
+        '200':
+          description: 'The Card as now edited (its revision advanced).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedCard'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'Someone else edited it first (`stale_revision`, with `current`), or the edit would leave a Published Card unpublishable (`card_not_publishable`, with `unmet`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaleRevisionError'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+    delete:
+      operationId: deleteResourceCard
+      summary: Permanently delete a Card
+      description: >-
+        Needs `resources.manage` AND recent verification (`security.verified`). PERMANENT, with no Trash, Restore or Archive.
+        Refused `published_pack_requirement` when it is the last Published Card of a Published Pack. In one transaction the
+        Card is deleted and ONE `resource.card_deleted` security event is recorded (the acting Account, `card_id`, `pack_id`,
+        `card_type`: never a title, summary, content or address). A refused or failed deletion records no event.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '204':
+          description: 'Deleted.'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Either the account lacks the capability (`message` only), or its last password-and-second-factor proof is older than 15 minutes (`verification_required: true`): re-prove with `POST /security/verify` and ask again. Nothing was changed.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'It is the last Published Card of a Published Pack (`published_pack_requirement`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedPackRequirementError'
+  /admin/resources/packs/{pack}/cards/{card}/audiences:
+    put:
+      operationId: setResourceCardAudiences
+      summary: Set a Card's audiences
+      description: >-
+        Needs `resources.manage`. `mode: inherit` follows the Pack's audiences, read at projection time. `mode: narrowed`
+        fixes a non-empty SUBSET of the Pack's audiences; it does not grow when the Pack's does. A Card is never broader than
+        its Pack: anything else is `card_audience_not_subset`. Under the Pack's lock.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResourceCardAudiences'
+      responses:
+        '200':
+          description: 'The Card as now targeted.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedCard'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resources/packs/{pack}/cards/{card}/publish:
+    post:
+      operationId: publishResourceCard
+      summary: Publish a Card
+      description: >-
+        Needs `resources.manage`. Independent of the Pack's own publication. Needs a title and, by Type, text content
+        (`basic`) or an address (`external_link`): `card_not_publishable`, with `unmet`. Idempotent.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: 'The Card, Published.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedCard'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'The Card lacks something its Type needs (`card_not_publishable`, with `unmet`: `content`, `uri`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardNotPublishableError'
+  /admin/resources/packs/{pack}/cards/{card}/unpublish:
+    post:
+      operationId: unpublishResourceCard
+      summary: Return a Card to Draft
+      description: >-
+        Needs `resources.manage`. The reversible "archive for later": the Card is absent from every viewer projection, and
+        kept, ordered and editable for managers. Idempotent. Refused `published_pack_requirement` when it is the last
+        Published Card of a Published Pack: the Pack is never silently unpublished.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - $ref: '#/components/parameters/XsrfToken'
+      responses:
+        '200':
+          description: 'The Card, now a Draft.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedCard'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: 'It is the last Published Card of a Published Pack (`published_pack_requirement`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublishedPackRequirementError'
+  /admin/resource-library:
+    get:
+      operationId: browseResourceLibrary
+      summary: Browse the Guardian resource library
+      description: >-
+        Needs `resources.view`. Categories in order, each with the Packs THIS viewer may see in it, through the one projection
+        rule: a Pack is shown only when it is Published and has a Published Card whose audience includes `guardian`. A
+        Category with no visible Pack is not listed; each Pack's `card_count` is the number of Cards this viewer can see.
+        Optionally one `category`, and `q`: a case-insensitive match on a Pack's title and summary and its VISIBLE Cards'
+        titles and summaries (never rich content, never a Draft or unauthorized Card). Audience is not a parameter: a viewer
+        receives their own projection. Not paged.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.view
+      x-requires-recent-verification: false
+      parameters:
+        - name: category
+          in: query
+          schema: {type: string}
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 200}
+      responses:
+        '200':
+          description: 'The library.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceLibrary'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+  /admin/resource-library/packs/{pack}:
+    get:
+      operationId: getResourcePack
+      summary: Show a Pack as a Guardian may have it
+      description: >-
+        Needs `resources.view`. The Pack with only the Cards this viewer may see, numbered 1..n among themselves (`index`),
+        with their content. A Pack that does not exist, is a Draft, is not Published to this audience or has no Card this
+        viewer may see is the SAME `resource_pack_not_found`, with nothing to say which. No management or provenance data, and
+        no hidden Card's id, title, summary, position or count.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.view
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+      responses:
+        '200':
+          description: 'The Pack.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourcePack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such resource (`resource_pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+
 components:
   securitySchemes:
     sessionCookie:
@@ -3538,6 +4913,30 @@ components:
         unless the browser marks the request `Sec-Fetch-Site: same-origin`.
       schema:
         type: string
+    ResourceCategoryId:
+      name: category
+      in: path
+      required: true
+      description: A Resource Category's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    ResourcePackId:
+      name: pack
+      in: path
+      required: true
+      description: A Resource Pack's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
+    ResourceCardId:
+      name: card
+      in: path
+      required: true
+      description: A Resource Card's identifier (a 26-character ULID).
+      schema:
+        type: string
+        pattern: '^[0-9a-z]{26}$'
   schemas:
     Health:
       type: object
@@ -4566,3 +5965,332 @@ components:
             per_page: {type: integer}
             total: {type: integer}
             last_page: {type: integer}
+
+    ResourcePerson:
+      type: object
+      description: 'A Person as management shows them: the id and the current display name, never an Account, login email, role or security state. `display_name` is null only when Identity no longer holds the Person.'
+      required: [id, display_name]
+      properties:
+        id: {type: string}
+        display_name: {type: [string, 'null']}
+    ResourceCategoryRef:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    ResourceCategory:
+      type: object
+      description: 'A Category for management. `pack_count` counts the Packs that hold it, in any state.'
+      required: [id, name, position, pack_count, created_by, updated_by, created_at, updated_at]
+      properties:
+        id: {type: string}
+        name: {type: string, minLength: 1, maxLength: 80}
+        position: {type: integer, minimum: 1}
+        pack_count: {type: integer, minimum: 0}
+        created_by: {$ref: '#/components/schemas/ResourcePerson'}
+        updated_by: {$ref: '#/components/schemas/ResourcePerson'}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ResourceCategoryList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/ResourceCategory'}
+    ResourceCategoryName:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, maxLength: 320}
+    ResourceOrder:
+      type: object
+      description: 'The COMPLETE ordered list of the ids of one sibling set (all Categories; the Packs of one Category; the Cards of one Pack). Anything other than exactly the current set is `order_mismatch`.'
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          maxItems: 1000
+          items: {type: string}
+    ResourceAudience:
+      type: string
+      description: 'A code-owned audience. Resources owns which audiences content targets, never who belongs to them.'
+      enum: [guardian, member]
+    ManagedPack:
+      type: object
+      description: >-
+        A Pack for management. `revision` is the optimistic-concurrency token of the AUTHORED fields (title, summary, Series, Category):
+        an edit must send the revision it was based on. Publication, audiences and order do not move it. `position` is the stored order
+        within the Category and is never shown to a viewer. `cards` (every Card, Drafts included, without content) is present when one
+        Pack is shown and absent from a list.
+      required: [id, title, summary, is_series, category, position, state, revision, audiences, card_count, published_card_count, created_by, updated_by, created_at, updated_at]
+      properties:
+        id: {type: string}
+        title: {type: string, minLength: 1, maxLength: 200}
+        summary: {type: [string, 'null'], maxLength: 300}
+        is_series: {type: boolean}
+        category:
+          oneOf:
+            - $ref: '#/components/schemas/ResourceCategoryRef'
+            - type: 'null'
+        position: {type: integer}
+        state: {type: string, enum: [draft, published]}
+        revision: {type: integer, minimum: 1}
+        audiences:
+          type: array
+          items: {$ref: '#/components/schemas/ResourceAudience'}
+        card_count: {type: integer, minimum: 0}
+        published_card_count: {type: integer, minimum: 0}
+        created_by: {$ref: '#/components/schemas/ResourcePerson'}
+        updated_by: {$ref: '#/components/schemas/ResourcePerson'}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        cards:
+          type: array
+          items: {$ref: '#/components/schemas/ManagedCardOutline'}
+    ManagedPackPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/ManagedPack'}
+        meta:
+          type: object
+          required: [page, per_page, total, last_page]
+          properties:
+            page: {type: integer}
+            per_page: {type: integer}
+            total: {type: integer}
+            last_page: {type: integer}
+    ManagedPackList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/ManagedPack'}
+    ManagedCardOutline:
+      type: object
+      description: >-
+        A Card for management without its content. `type` is fixed at creation. `audience_mode` is `inherit` (the Pack's audiences,
+        and `audiences` is empty) or `narrowed` (a fixed, non-empty subset of the Pack's). `summary_mode` is `derived` (follows the content) or
+        `custom` (never overwritten by content changes). `uri` is required for `external_link` and optional for `basic`.
+      required: [id, pack_id, position, type, title, summary_mode, summary, uri, audience_mode, audiences, state, revision, created_by, updated_by, created_at, updated_at]
+      properties:
+        id: {type: string}
+        pack_id: {type: string}
+        position: {type: integer}
+        type: {type: string, enum: [basic, external_link]}
+        title: {type: string, minLength: 1, maxLength: 200}
+        summary_mode: {type: string, enum: [derived, custom]}
+        summary: {type: string, maxLength: 300}
+        uri: {type: [string, 'null'], maxLength: 2048}
+        audience_mode: {type: string, enum: [inherit, narrowed]}
+        audiences:
+          type: array
+          items: {$ref: '#/components/schemas/ResourceAudience'}
+        state: {type: string, enum: [draft, published]}
+        revision: {type: integer, minimum: 1}
+        created_by: {$ref: '#/components/schemas/ResourcePerson'}
+        updated_by: {$ref: '#/components/schemas/ResourcePerson'}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    ManagedCard:
+      description: 'A Card with its content, for management.'
+      allOf:
+        - $ref: '#/components/schemas/ManagedCardOutline'
+        - type: object
+          required: [content]
+          properties:
+            content: {$ref: '#/components/schemas/ResourceContent'}
+    ResourceContent:
+      type: object
+      description: 'A Card''s rich content as the platform keeps it. HTML is never stored, accepted or returned.'
+      required: [format, version, document]
+      properties:
+        format: {type: string, enum: [prosemirror]}
+        version: {type: integer, enum: [1]}
+        document: {$ref: '#/components/schemas/ResourceDocument'}
+    ResourceDocument:
+      type: object
+      description: >-
+        A document in the Resources profile v1 (ADR 0037): the ONLY content the server accepts. The server validates it and refuses
+        (`invalid_content`, naming the path of the first offence) rather than strip anything. Blocks: `paragraph`, `heading` (`attrs.level`
+        2-4), `bulletList`, `orderedList` (`attrs.start`), `listItem` (starts with a paragraph), `blockquote`, `horizontalRule`, `codeBlock`
+        (plain text), `table`, `tableRow`, `tableHeader`, `tableCell` (`colspan`, `rowspan` 1-20; no nested table). Inline: `text`, `hardBreak`.
+        Marks: `bold`, `italic`, `underline`, `code`, `link` (`attrs.href`: https, http or mailto). Anything else, including images,
+        embeds, raw HTML, styles, classes and other attributes, is refused. At most 256 KiB, nesting depth 24. A line feed is allowed only
+        inside a `codeBlock`; use `hardBreak` elsewhere. The stored form is canonical: fixed key order, fixed mark order, editor-default
+        attributes dropped.
+      required: [type]
+      properties:
+        type: {type: string, enum: [doc]}
+        content:
+          type: array
+          items: {type: object}
+    NewResourcePack:
+      type: object
+      required: [title]
+      properties:
+        title: {type: string, maxLength: 800}
+        summary: {type: [string, 'null'], maxLength: 1200}
+        is_series: {type: boolean}
+        category_id: {type: [string, 'null']}
+    UpdateResourcePack:
+      type: object
+      required: [revision]
+      properties:
+        revision: {type: integer, minimum: 1}
+        title: {type: string, maxLength: 800}
+        summary: {type: [string, 'null'], maxLength: 1200}
+        is_series: {type: boolean}
+        category_id: {type: [string, 'null']}
+    ResourcePackAudiences:
+      type: object
+      required: [audiences]
+      properties:
+        audiences:
+          type: array
+          items: {$ref: '#/components/schemas/ResourceAudience'}
+    NewResourceCard:
+      type: object
+      required: [type, title]
+      properties:
+        type: {type: string, enum: [basic, external_link]}
+        title: {type: string, maxLength: 800}
+        content: {oneOf: [{$ref: '#/components/schemas/ResourceDocument'}, {type: 'null'}]}
+        uri: {type: [string, 'null'], maxLength: 4096}
+        summary: {type: [string, 'null'], maxLength: 1200}
+    UpdateResourceCard:
+      type: object
+      required: [revision]
+      properties:
+        revision: {type: integer, minimum: 1}
+        title: {type: string, maxLength: 800}
+        content: {$ref: '#/components/schemas/ResourceDocument'}
+        uri: {type: [string, 'null'], maxLength: 4096}
+        summary: {type: string, maxLength: 1200}
+        summary_mode: {type: string, enum: [derived, custom]}
+    ResourceCardAudiences:
+      type: object
+      required: [mode]
+      properties:
+        mode: {type: string, enum: [inherit, narrowed]}
+        audiences:
+          type: array
+          items: {$ref: '#/components/schemas/ResourceAudience'}
+    StaleRevisionError:
+      type: object
+      description: 'The refusal for an edit based on an out-of-date revision (`stale_revision`), carrying the current Pack or Card; or another 409 coded refusal of that operation.'
+      required: [message, code]
+      properties:
+        message: {type: string}
+        code: {type: string}
+        current:
+          oneOf:
+            - $ref: '#/components/schemas/ManagedPack'
+            - $ref: '#/components/schemas/ManagedCard'
+    PackNotPublishableError:
+      type: object
+      required: [message, code, unmet]
+      properties:
+        message: {type: string}
+        code: {type: string, enum: [pack_not_publishable]}
+        unmet:
+          type: array
+          items: {type: string, enum: [category, audience, published_card]}
+    CardNotPublishableError:
+      type: object
+      required: [message, code, unmet]
+      properties:
+        message: {type: string}
+        code: {type: string, enum: [card_not_publishable]}
+        unmet:
+          type: array
+          items: {type: string, enum: [content, uri]}
+    PublishedPackRequirementError:
+      type: object
+      required: [message, code]
+      properties:
+        message: {type: string}
+        code: {type: string, enum: [published_pack_requirement]}
+        requirement: {type: string, enum: [category, audience, published_card]}
+    CardAudienceConflictError:
+      type: object
+      required: [message, code]
+      properties:
+        message: {type: string}
+        code: {type: string}
+        requirement: {type: string}
+        cards:
+          type: array
+          items: {type: string}
+    ResourcePack:
+      type: object
+      description: >-
+        A Pack as a viewer receives it. Only the Cards this viewer may see are present, numbered `index` 1..`card_count` among
+        themselves: a stored position, a hidden Card's id, title, summary, count or navigation slot never appears. One visible Card or several is the viewer's,
+        not stored. No state, revision, audience or provenance.
+      required: [id, title, summary, is_series, category, card_count, cards]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        summary: {type: [string, 'null']}
+        is_series: {type: boolean}
+        category: {$ref: '#/components/schemas/ResourceCategoryRef'}
+        card_count: {type: integer, minimum: 1}
+        cards:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/ResourceDeliveredCard'}
+    ResourceDeliveredCard:
+      type: object
+      required: [id, index, type, title, summary, uri, content]
+      properties:
+        id: {type: string}
+        index: {type: integer, minimum: 1}
+        type: {type: string, enum: [basic, external_link]}
+        title: {type: string}
+        summary: {type: string}
+        uri: {type: [string, 'null']}
+        content: {$ref: '#/components/schemas/ResourceContent'}
+    ResourceLibrary:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required: [category, packs]
+            properties:
+              category: {$ref: '#/components/schemas/ResourceCategoryRef'}
+              packs:
+                type: array
+                minItems: 1
+                items:
+                  type: object
+                  required: [id, title, summary, is_series, card_count]
+                  properties:
+                    id: {type: string}
+                    title: {type: string}
+                    summary: {type: [string, 'null']}
+                    is_series: {type: boolean}
+                    card_count: {type: integer, minimum: 1}
+    ResourcePackPreview:
+      type: object
+      description: >-
+        What an audience would receive if the Pack were Published as it stands. `pack_state` is the Pack's real state; `audience_targeted`
+        says whether the audience is among the Pack's; `visible` is false (and `pack` null) when that audience would see nothing.
+      required: [audience, pack_state, audience_targeted, visible, pack]
+      properties:
+        audience: {$ref: '#/components/schemas/ResourceAudience'}
+        pack_state: {type: string, enum: [draft, published]}
+        audience_targeted: {type: boolean}
+        visible: {type: boolean}
+        pack:
+          oneOf:
+            - $ref: '#/components/schemas/ResourcePack'
+            - type: 'null'

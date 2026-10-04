@@ -1,0 +1,8 @@
+{
+  "description": "A Draft Card may hold an empty document; it just cannot be published as a basic Card.",
+  "document": {
+    "type": "doc",
+    "content": []
+  },
+  "text": ""
+}

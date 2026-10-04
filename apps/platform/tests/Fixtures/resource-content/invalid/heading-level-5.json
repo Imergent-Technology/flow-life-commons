@@ -1,0 +1,21 @@
+{
+  "description": "Level 5 is not in the profile.",
+  "path": "content.content[0].attrs.level",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "heading",
+        "attrs": {
+          "level": 5
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

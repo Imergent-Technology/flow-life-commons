@@ -1,0 +1,7 @@
+{
+  "description": "The root must be a document.",
+  "path": "content",
+  "document": {
+    "type": "paragraph"
+  }
+}

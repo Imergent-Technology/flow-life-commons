@@ -1,0 +1,58 @@
+{
+  "description": "An https link, an http link and a mailto link.",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "Site",
+            "marks": [
+              {
+                "type": "link",
+                "attrs": {
+                  "href": "https://example.org/a?b=c#d"
+                }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "text": " "
+          },
+          {
+            "type": "text",
+            "text": "Old",
+            "marks": [
+              {
+                "type": "link",
+                "attrs": {
+                  "href": "http://example.org"
+                }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "text": " "
+          },
+          {
+            "type": "text",
+            "text": "Mail",
+            "marks": [
+              {
+                "type": "link",
+                "attrs": {
+                  "href": "mailto:team@example.org"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "text": "Site Old Mail"
+}

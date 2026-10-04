@@ -1,0 +1,18 @@
+{
+  "description": "A line feed is a line break only inside code; elsewhere a hard break says it.",
+  "path": "content.content[0].content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "one\ntwo"
+          }
+        ]
+      }
+    ]
+  }
+}

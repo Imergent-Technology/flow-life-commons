@@ -1,0 +1,21 @@
+{
+  "description": "A code block has no language or highlighting.",
+  "path": "content.content[0].attrs.language",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "codeBlock",
+        "attrs": {
+          "language": "php"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

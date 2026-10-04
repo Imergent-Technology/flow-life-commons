@@ -1,0 +1,13 @@
+{
+  "description": "A blockquote holds at least one block.",
+  "path": "content.content[0]",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "blockquote",
+        "content": []
+      }
+    ]
+  }
+}

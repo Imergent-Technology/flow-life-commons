@@ -72,4 +72,20 @@ enum Capability: string
      * each only for its own module's routes.
      */
     case ParticipateInDiscussions = 'discussions.participate';
+
+    /**
+     * May read the Guardian Console's library of Published, Guardian-directed Resources, and download what is in it (ADR 0037).
+     * Changes nothing. A software permission, never the community audience system: no role or capability satisfies `member`.
+     */
+    case ViewResources = 'resources.view';
+
+    /**
+     * May manage Resources: Categories, Packs and Cards, their content, audiences, publication and order, preview Drafts, and
+     * replace files (ADR 0037). Organizational content has no owner, so this, and not authorship, is the authority to edit.
+     *
+     * Like `crm.people.manage` and `discussions.participate`, it is for ROUTINE work and its mutations ask for no recent
+     * verification, with ONE deliberate exception the route table pins: permanently deleting a Pack or a Card also needs
+     * `security.verified`. The exemption names this capability for `Resources\Http` routes and nothing else.
+     */
+    case ManageResources = 'resources.manage';
 }

@@ -1,0 +1,18 @@
+{
+  "description": "Non-ASCII text and an emoji sequence are ordinary text.",
+  "document": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "Café — 日本語 👩‍👩‍👧"
+          }
+        ]
+      }
+    ]
+  },
+  "text": "Café — 日本語 👩‍👩‍👧"
+}

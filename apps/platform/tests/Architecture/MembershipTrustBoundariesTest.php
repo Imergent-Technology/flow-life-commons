@@ -200,6 +200,8 @@ arch('Membership composes a display name only through Identity\'s Application re
         'App\\Modules\\Crm\\Application',
         // Discussions composes author names for its messages the same way (ADR 0035), through Application only.
         'App\\Modules\\Discussions\\Application',
+        // Resources composes the creator and last editor of what managers see the same way (ADR 0037), through Application only.
+        'App\\Modules\\Resources\\Application',
         'App\\Modules\\Identity',
     ]);
 });
@@ -222,11 +224,19 @@ it('keeps Membership out of Identity\'s, Access\'s and Audit\'s tables', functio
         ->toContain('membership_grants');
 });
 
-arch('Only Identity and Access record security events: Membership grants and revocations are not security events in Phase 1', function () {
+arch('Only Identity, Access and the two Resources deletion use cases record security events: Membership grants and revocations are not security events in Phase 1', function () {
     // ADR 0019's seam is for identity- and access-relevant occurrences. This pins the Phase-1 fact that no Membership
     // action writes there, directly or by a module it does not already depend on. A future general business audit or
     // history for Membership is a separate decision, not forbidden by this.
-    expect(RecordSecurityEvent::class)->toOnlyBeUsedIn(['App\\Modules\\Identity', 'App\\Modules\\Access', 'App\\Modules\\Audit']);
+    //
+    // The one deliberate addition is ADR 0037, decision 55: permanently deleting a Resources Pack or Card is a privileged,
+    // irreversible action that leaves nothing behind to describe it, so exactly those two use cases record `resource.pack_deleted`
+    // and `resource.card_deleted`. They are named as CLASSES, not as the module: routine Resources work (create, edit, publish,
+    // order, preview) records nothing, and a third use case calling the seam fails here until a decision says it may.
+    expect(RecordSecurityEvent::class)->toOnlyBeUsedIn([
+        'App\\Modules\\Identity', 'App\\Modules\\Access', 'App\\Modules\\Audit',
+        'App\\Modules\\Resources\\Application\\DeletePack', 'App\\Modules\\Resources\\Application\\DeleteCard',
+    ]);
 });
 
 arch('Membership reaches no external service: no provider (Luma, Zeffy) is called from anywhere in it', function () use ($membership) {
