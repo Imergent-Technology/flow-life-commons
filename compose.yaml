@@ -106,6 +106,10 @@ services:
       FLOW_VITE_POLLING: ${FLOW_VITE_POLLING:-false}
     volumes:
       - ./apps/guardian-console:/app
+      # The shared Resources content fixtures (ADR 0037, decision 28), read-only. The server's tests are their
+      # home and the Console's suite reads the same files at the same relative path (../platform/tests/...
+      # from /app), so there is one copy and nothing to drift. Tests only: nothing in the build reads them.
+      - ./apps/platform/tests/Fixtures/resource-content:/platform/tests/Fixtures/resource-content:ro
     healthcheck:
       # So `up --wait` returns only once Vite is actually serving (the gateway
       # would answer 502 before that). Node is the only tool in this image.

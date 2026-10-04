@@ -9,6 +9,10 @@ The server's validation is the security boundary for rich content, and the Conso
 
 The backend side is `tests/Unit/Modules/Resources/ContentFixturesTest.php`.
 
-## For WP2 (the Console's editor and renderer)
+## How the Console uses them (WP2)
 
-Today these were written by hand, in the shape Tiptap emits. WP2 must (1) make the Console's test suite consume this same directory, which the Console's dev container cannot see today (it mounts only `apps/guardian-console`), so WP2 decides the sharing mechanism (a read-only compose mount, or a sync step) deliberately; (2) add fixtures produced by the **real** configured editor, and run each through the server's validation, so a document the editor can produce that the server refuses is a defect found in tests rather than in production; and (3) keep both suites green against every file here.
+This directory is the **one** home of the corpus. The Console does not keep a copy: its Vitest suite reads these files by the relative path `../platform/tests/Fixtures/resource-content` from `apps/guardian-console` (`src/test/resourceFixtures.ts`), and the Console's dev container, which mounts only `apps/guardian-console`, gets this directory as a read-only compose mount at the same relative path. A directory that is not visible fails the suite loudly; it never passes by finding nothing. Nothing in a production build reads them.
+
+Against every file here the Console proves (`src/richtext/`): the TypeScript profile (`contract.ts`) produces exactly the stored form from each `valid/` document and refuses each `invalid/` one at `path`; the real configured editor round-trips each valid document; the renderer draws each valid one with all its text and withholds each invalid one; and the editor component opens each valid one without calling it a change. Add a file here and every one of those checks, in both stacks, picks it up.
+
+**`editor-*.json`** are not hand-written: the real editor produced them (`src/richtext/editorFixtures.test.ts` holds the recipes), and their `document` is the editor's raw output with its fixed defaults spelled out. That test fails if the editor ever stops producing exactly what is committed (a Tiptap upgrade, a changed extension), so a drift is a red test, not a surprise. After a deliberate change, regenerate from the repository with `UPDATE_RESOURCE_FIXTURES=1 npx vitest run src/richtext/editorFixtures.test.ts` (in `apps/guardian-console`; the container's mount is read-only), commit the files, and the server's `ContentFixturesTest` then checks the new output.

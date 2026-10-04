@@ -214,6 +214,23 @@ const rules: Rule[] = [
     fine: 'const text = codes.join(newline)',
   },
   {
+    name: 'editor internals outside the rich-text folder',
+    because:
+      'Tiptap and ProseMirror stay inside src/richtext, behind RichTextEditor and RichContentRenderer, so no screen can call an editor command, build its own schema or accept content the document profile has not checked (ADR 0037, decision 28)',
+    pattern: /@tiptap\/|prosemirror/,
+    allowedIn: /^\.\/richtext\//,
+    offends: "import { Editor } from '@tiptap/core'",
+    fine: "import { RichTextEditor } from '../richtext/RichTextEditor.tsx'",
+  },
+  {
+    name: 'an editor that writes styles',
+    because:
+      "the production policy is style-src 'self' with no 'unsafe-inline' (ADR 0026): an editor that injects a <style> element, or a table that is resizable, writes inline styles the browser refuses (ADR 0037, decision 28)",
+    pattern: /injectCSS\s*:\s*(?!false\b)\S|resizable\s*:\s*(?!false\b)\S|injectNonce/,
+    offends: 'new Editor({ injectCSS: true }); Table.configure({ resizable: true })',
+    fine: 'new Editor({ injectCSS: false }); Table.configure({ resizable: false })',
+  },
+  {
     name: 'raw HTML injection',
     because: 'the Console is the most privileged surface; markup from data would be XSS',
     pattern: /dangerouslySetInnerHTML|\.innerHTML\s*=/,
