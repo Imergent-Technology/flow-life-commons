@@ -2,7 +2,7 @@
 
 **Two ecosystems, one command:**
 
-```
+```text
 ./flow audit              # both
 ./flow audit backend      # composer audit --locked
 ./flow audit frontend     # npm audit
@@ -39,7 +39,7 @@ In this order, and record the answer:
 
 ## Current findings
 
-Audited 2026-09-23, against the committed lockfiles:
+Audited 2026-10-04, against the committed lockfiles after remediation:
 
 | Ecosystem | Result |
 | --- | --- |
@@ -47,13 +47,29 @@ Audited 2026-09-23, against the committed lockfiles:
 | npm, runtime only | **No advisories.** |
 | npm, including development tooling | **No advisories.** |
 
-The dependencies most worth watching, because they are recent additions on security-relevant paths:
+### Recent remediation
+
+On 2026-10-04 the security audit reported two advisories affecting the locked `league/commonmark` 2.10.1 dependency:
+
+| Advisory | Severity | Issue |
+| --- | --- | --- |
+| `PKSA-m2dq-1fhr-29b1` / `GHSA-97jj-33gv-5xf9` | Medium | `DisallowedRawHtml` could be bypassed when a disallowed tag name ended the raw-HTML literal. |
+| `PKSA-m4t9-vsgq-8khn` / `GHSA-3q6v-r5mr-hxv8` | High | Quadratic-time denial of service in the GitHub Flavored Markdown table-extension block-start scan. |
+
+`league/commonmark` is an indirect runtime dependency required by `laravel/framework` (`^2.8.1`). A compatible patch upgrade was available, so the lockfile was updated from `league/commonmark` 2.10.1 to 2.10.3.
+
+Composer also resolved `symfony/polyfill-php80` from 1.37.0 to 1.43.0 as part of that update. No application dependency constraint changed.
+
+The post-upgrade Composer and npm audits report no known advisories. No exception or accepted-risk entry was required.
+
+The dependencies most worth watching, because they are recent additions or sit on security-relevant/runtime paths:
 
 | Package | Version | Why it is on this list |
 | --- | --- | --- |
 | `spomky-labs/otphp` | 11.5.0 | Generates and verifies every TOTP code. Behind an Identity port, and checked against an independent RFC 4226/6238 implementation in the test suite, so a behavioural regression would be caught here rather than in production. |
 | `paragonie/constant_time_encoding` | 3.1.3 | otphp's base32. Constant-time by design; a flaw here would be a timing question. |
 | `laravel/framework` | 13.32.0 | Session handling, encryption, CSRF, routing. The largest single dependency and the one whose advisories matter most. |
+| `league/commonmark` | 2.10.3 | Runtime Markdown parser required by Laravel. It produced two actionable advisories in the 2026-10-04 audit and was patched from 2.10.1 to 2.10.3. Parser, raw-HTML and complexity advisories here deserve prompt review. |
 | `qr` (npm) | 0.7.0 | Draws the enrolment QR code **in the browser**, from a value that contains a secret. Runtime, and on a secret's path — which is exactly why the QR code is not fetched from a service. It is used to produce a module matrix, never markup, so it has no HTML injection surface. |
 | `react-router` | 8.4.0 | Reads and scrubs the secret-bearing fragments of the reset and invitation links. Runtime. |
 | `react` / `react-dom` | 19.3.0 | Runtime. |
