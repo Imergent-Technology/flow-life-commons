@@ -138,7 +138,7 @@ Volunteers are Members with elevated duties and privileges. They are not a secon
 
 ## Roadmap direction
 
-Recorded for sequencing and domain ownership only; each later domain has its own design gate and, where warranted, its own ADR.
+Recorded for sequencing and domain ownership only; each later domain has its own design gate and, where warranted, its own ADR. *The order below is the original (2026-09-29). The [roadmap](../roadmap.md#product-direction-realigned-2026-10-03) now holds the current order: Resources (G5) is next, and G3 and G4 are deferred while ownership is reviewed.*
 
 | Milestone | Domain |
 | --- | --- |

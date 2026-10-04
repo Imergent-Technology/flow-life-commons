@@ -86,7 +86,8 @@ Working titles to frame discussion. **They are not commitments and no folders ex
 | --- | --- |
 | ~~CRM~~ | **Now `Crm` (G1), above.** Profiles, contact methods, tags (WP2), and notes and interactions (WP3) are built; the Console's People, notes and tag screens (WP4, WP5) are built too |
 | ~~Discussions~~ | **Now `Discussions` (G2), above.** The backend, the Console screens and the demo data and end-to-end closeout are built |
-| Events, Publishing, Knowledge | Planned Guardian domains (G3–G5, in that order). Each gets its own design gate; no boundaries are fixed here |
+| Knowledge (Resources) | The next domain (G5). Its WP0 product-planning session happens before any boundary is fixed here |
+| Events, Publishing | Deferred (G3, G4): ownership is under review, partly against the separate Quiverly event-production platform. No boundaries are fixed here, and it is not decided that Commons owns either in full. See the [roadmap](../roadmap.md#product-direction-realigned-2026-10-03) |
 | Volunteering | Volunteers are Members with elevated duties and privileges, not a second identity and not merely an Access role. The domain model (lifecycle, assignments, duties, history) is undecided |
 | Workflow | Approval/workflow, separate from authorization ([ADR 0009](../adr/0009-authorization-separate-from-approval.md)) |
 
