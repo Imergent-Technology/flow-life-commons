@@ -3895,7 +3895,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '422':
-          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`, or, when `category_id` names no Category, `unknown_category`.'
           content:
             application/json:
               schema:
@@ -4001,7 +4001,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/StaleRevisionError'
         '422':
-          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`, or, when `category_id` names no Category, `unknown_category`.'
           content:
             application/json:
               schema:
@@ -4445,7 +4445,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
-          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          description: 'No such Pack (`pack_not_found`), or no such Card in it (`card_not_found`).'
           content:
             application/json:
               schema:
@@ -4500,7 +4500,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
-          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          description: 'No such Pack (`pack_not_found`), or no such Card in it (`card_not_found`).'
           content:
             application/json:
               schema:
@@ -4558,7 +4558,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
-          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          description: 'No such Pack (`pack_not_found`), or no such Card in it (`card_not_found`).'
           content:
             application/json:
               schema:
@@ -4618,7 +4618,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
-          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          description: 'No such Pack (`pack_not_found`), or no such Card in it (`card_not_found`).'
           content:
             application/json:
               schema:
@@ -4673,7 +4673,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
-          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          description: 'No such Pack (`pack_not_found`), or no such Card in it (`card_not_found`).'
           content:
             application/json:
               schema:
@@ -4727,7 +4727,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
-          description: 'No such Pack, or no such Card in it (`pack_not_found`).'
+          description: 'No such Pack (`pack_not_found`), or no such Card in it (`card_not_found`).'
           content:
             application/json:
               schema:

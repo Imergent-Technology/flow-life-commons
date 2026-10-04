@@ -177,7 +177,11 @@ final readonly class DatabaseCardRepository implements CardRepository
 
     public function deleteAllOf(PackId $pack): int
     {
-        $ids = $this->database->table(self::TABLE)->where('pack_id', $pack->value)->pluck('id')->all();
+        // A locking, CURRENT read, on purpose. The caller has the Pack's lock, so no Card can be added or removed from here on, but
+        // one may have committed while it waited for that lock. A plain read would use the transaction's snapshot, which on MariaDB
+        // (REPEATABLE READ) was fixed by an earlier plain read (finding the Pack), and would miss that Card, while the DELETE below
+        // (always a current read) removes it: the count would be short and its audience rows would be left to trip the foreign key.
+        $ids = $this->database->table(self::TABLE)->where('pack_id', $pack->value)->lockForUpdate()->pluck('id')->all();
         if ($ids === []) {
             return 0;
         }

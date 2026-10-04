@@ -684,3 +684,63 @@ it('holds the Pack\'s lock while its Cards are being deleted: a Card created in 
         ->and(DB::table('resource_cards')->count())->toBe(0)
         ->and(DB::table('security_events')->where('type', 'resource.pack_deleted')->count())->toBe(1);
 });
+
+/**
+ * The reverse of the race above: a Card is CREATED while the Pack is being DELETED. The creation holds the Pack's lock and commits
+ * a new Card while the deletion waits for that lock. The deletion's first read (finding the Pack, to know its Category) is a plain
+ * read, which on MariaDB (InnoDB REPEATABLE READ) fixes the transaction's snapshot BEFORE it waits; a plain read of the Card ids
+ * after the lock would use that old snapshot and miss the late Card, while the DELETE that follows (a current read) removes it
+ * anyway. The deletion must therefore read the Card ids with a locking, current read.
+ *
+ * @return array{race: array{blocked: bool, exit: int|null, class: string|null}, packId: string, cardsDeleted: mixed}
+ */
+function racePackDeletionAgainstCardCreation(bool $narrowed): array
+{
+    $by = Resources::editor();
+    [$pack] = readyDraftPack($by); // one Published Card already there; audiences guardian and member
+
+    $race = Race::against(
+        function (Closure $pause) use ($by, $pack, $narrowed) {
+            DB::transaction(function () use ($by, $pack, $narrowed, $pause) {
+                $late = Resources::card($by, $pack, 'Latecomer', 'Late words');
+                if ($narrowed) {
+                    app(SetCardAudiences::class)($by, $pack->pack->id, $late->card->id, AudienceMode::Narrowed, [Audience::Guardian]);
+                }
+                $pause(); // the Pack's lock is held, the late Card is written and not committed: the deletion starts now and waits
+            });
+        },
+        null, 'resources_delete_pack', [...resourcesActor($by), 'pack' => $pack->pack->id->value],
+    );
+
+    $events = Resources::events();
+    $context = $events === [] ? [] : json_decode(Resources::str($events[0]->context), true, 512, JSON_THROW_ON_ERROR);
+    assert(is_array($context));
+
+    return ['race' => $race, 'packId' => $pack->pack->id->value, 'cardsDeleted' => $context['cards_deleted'] ?? null];
+}
+
+it('deletes a Card created while the Pack deletion waited for its lock, and counts it: cards_deleted is exactly the Cards deleted', function () {
+    ['race' => $race, 'packId' => $packId, 'cardsDeleted' => $cardsDeleted] = racePackDeletionAgainstCardCreation(narrowed: false);
+
+    expect($race['blocked'])->toBeTrue('the deletion did not wait for the creation to commit')
+        ->and($race['exit'])->toBe(0, 'the deletion failed: '.($race['class'] ?? '?'))
+        ->and(DB::table('resource_packs')->where('id', $packId)->count())->toBe(0)
+        ->and(DB::table('resource_cards')->count())->toBe(0)
+        ->and(Resources::events())->toHaveCount(1)
+        ->and($cardsDeleted)->toBe(2, 'the event under-counted the Cards the deletion removed');
+});
+
+it('removes the audience rows of a narrowed Card created while the Pack deletion waited: the deletion succeeds and nothing is left behind', function () {
+    ['race' => $race, 'packId' => $packId, 'cardsDeleted' => $cardsDeleted] = racePackDeletionAgainstCardCreation(narrowed: true);
+
+    expect($race['blocked'])->toBeTrue('the deletion did not wait for the creation to commit')
+        // Without the current read the late Card's id is missing from the cleanup list, its audience row survives, and deleting the
+        // Card hits the RESTRICT foreign key: the deletion fails instead of succeeding.
+        ->and($race['exit'])->toBe(0, 'the deletion failed: '.($race['class'] ?? '?'))
+        ->and(DB::table('resource_packs')->where('id', $packId)->count())->toBe(0)
+        ->and(DB::table('resource_cards')->count())->toBe(0)
+        ->and(DB::table('resource_card_audiences')->count())->toBe(0)
+        ->and(DB::table('resource_pack_audiences')->count())->toBe(0)
+        ->and(Resources::events())->toHaveCount(1)
+        ->and($cardsDeleted)->toBe(2, 'the event under-counted the Cards the deletion removed');
+});

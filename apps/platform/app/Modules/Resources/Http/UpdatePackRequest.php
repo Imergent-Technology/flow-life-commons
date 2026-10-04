@@ -33,6 +33,11 @@ final class UpdatePackRequest extends FormRequest
     /** @return array<string, mixed> */
     public function changes(): array
     {
-        return array_intersect_key($this->validated(), array_flip(['title', 'summary', 'is_series', 'category_id']));
+        $changes = array_intersect_key($this->validated(), array_flip(['title', 'summary', 'is_series', 'category_id']));
+        if (array_key_exists('category_id', $changes)) {
+            $changes['category_id'] = BlankInput::optional($changes['category_id']); // "" clears the Category, exactly as null does
+        }
+
+        return $changes;
     }
 }

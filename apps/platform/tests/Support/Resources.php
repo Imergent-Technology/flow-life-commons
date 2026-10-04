@@ -221,7 +221,9 @@ final class Resources
             $names[] = self::str($table['name'] ?? null);
         }
 
-        return $names;
+        // On MariaDB `Schema::getTables()` lists every database the connection can see, and the development database holds these tables
+        // too once the browser suite has migrated it, so each name can appear once per database: the NAMES are what is asked about.
+        return array_values(array_unique($names));
     }
 
     public static function eventCount(): int

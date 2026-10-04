@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Tests\Support\Api;
@@ -11,6 +13,8 @@ use Tests\Support\Console;
 use Tests\Support\Identity;
 use Tests\Support\Resources;
 use Tests\Support\Totp;
+
+use function Pest\Laravel\postJson;
 
 /*
  * The Resources API as a browser sees it (ADR 0037): the whole Phase 1 workflow over HTTP, the exact response shapes, the coded
@@ -229,6 +233,104 @@ it('does not hand Resources\' whitespace exemption to any other route', function
     $created = body($console->post('/api/v1/admin/discussions', ['title' => '  Padded title  ', 'body' => 'Opening words'])->assertCreated());
 
     expect($created['title'])->toBe('Padded title');
+});
+
+// --- Blank scalars: the whitespace exemption lets "" reach the request, so the request decides what it means --------------------
+
+it('treats a blank Category id as "no Category" when creating or editing a Pack, and never fails', function () {
+    [$console] = Resources::signedInGuardian();
+    $category = apiCategory($console);
+
+    // Creating: "" and whitespace-only both mean none, as an absent field does.
+    foreach (['', '   '] as $blank) {
+        expect(body($console->post(MANAGE.'/packs', ['title' => 'No category', 'category_id' => $blank])->assertCreated())['category'])->toBeNull();
+    }
+
+    // Editing: "" clears the Category of a Draft, exactly as null does.
+    $draft = Api::string(apiPack($console, 'In a category', $category)['id']);
+    $cleared = body($console->patch(MANAGE."/packs/{$draft}", ['revision' => 1, 'category_id' => ''])->assertOk());
+    expect($cleared['category'])->toBeNull()->and($cleared['revision'])->toBe(2);
+
+    // ...and is refused for a Published Pack exactly as null is, because clearing is what it means.
+    $live = apiPublished($console, 'Live');
+    $console->patch(MANAGE."/packs/{$live}", ['revision' => 1, 'category_id' => '  '])
+        ->assertStatus(409)->assertJson(['code' => 'published_pack_requirement', 'requirement' => 'category']);
+});
+
+it('treats blank management filters and paging as absent: the list answers normally', function () {
+    [$console] = Resources::signedInGuardian();
+    apiPack($console, 'One', apiCategory($console));
+    apiPack($console, 'Two');
+
+    foreach (['?category=&audience=&state=&card_type=&q=', '?category=%20&audience=%20&state=%20&card_type=%20&q=%20', '?page=&per_page='] as $query) {
+        $page = body($console->get(MANAGE.'/packs'.$query)->assertOk());
+        expect($page['meta'])->toBe(['page' => 1, 'per_page' => 25, 'total' => 2, 'last_page' => 1], $query)->and($page['data'])->toHaveCount(2);
+    }
+});
+
+it('answers 422, never 500, for a blank value where one is required', function () {
+    [$console] = Resources::signedInGuardian();
+    $category = apiCategory($console);
+    $pack = Api::string(apiPack($console, 'Pack', $category)['id']);
+    $card = Api::string(body($console->post(MANAGE."/packs/{$pack}/cards", ['type' => 'basic', 'title' => 'Card', 'content' => Resources::doc('x')])->assertCreated())['id']);
+
+    foreach (['', '   '] as $blank) {
+        $console->post(MANAGE.'/packs', ['title' => $blank])->assertStatus(422);
+        $console->post(MANAGE.'/categories', ['name' => $blank])->assertStatus(422);
+        $console->patch(MANAGE."/categories/{$category}", ['name' => $blank])->assertStatus(422);
+        $console->post(MANAGE."/packs/{$pack}/cards", ['type' => $blank, 'title' => 'x'])->assertStatus(422);
+        $console->post(MANAGE."/packs/{$pack}/cards", ['type' => 'basic', 'title' => $blank])->assertStatus(422);
+        $console->patch(MANAGE."/packs/{$pack}", ['revision' => $blank, 'title' => 'x'])->assertStatus(422);
+        $console->patch(MANAGE."/packs/{$pack}", ['revision' => 1, 'title' => $blank])->assertStatus(422)->assertJson(['code' => 'invalid_resource_input']);
+        $console->patch(MANAGE."/packs/{$pack}/cards/{$card}", ['revision' => 1, 'title' => $blank])->assertStatus(422)->assertJson(['code' => 'invalid_resource_input']);
+        $console->get(MANAGE."/packs/{$pack}/preview?audience=".rawurlencode($blank))->assertStatus(422);
+        // Whole-list bodies: a blank is not a list.
+        $console->put(MANAGE."/packs/{$pack}/audiences", ['audiences' => $blank])->assertStatus(422);
+        $console->put(MANAGE."/packs/{$pack}/cards/{$card}/audiences", ['mode' => $blank])->assertStatus(422);
+        $console->put(MANAGE."/packs/{$pack}/cards/{$card}/audiences", ['mode' => 'narrowed', 'audiences' => $blank])->assertStatus(422);
+        $console->put(MANAGE.'/categories/order', ['ids' => $blank])->assertStatus(422);
+        $console->put(MANAGE."/categories/{$category}/pack-order", ['ids' => $blank])->assertStatus(422);
+        $console->put(MANAGE."/packs/{$pack}/card-order", ['ids' => $blank])->assertStatus(422);
+    }
+
+    // Nothing was changed by any of them.
+    expect(DB::table('resource_packs')->where('id', $pack)->value('title'))->toBe('Pack')
+        ->and(DB::table('resource_categories')->where('id', $category)->value('name'))->toBe('Guides');
+});
+
+it('clears an address with a blank string and still keeps the whitespace of the document sent beside it', function () {
+    [$console] = Resources::signedInGuardian();
+    $pack = Api::string(apiPack($console)['id']);
+    $card = body($console->post(MANAGE."/packs/{$pack}/cards", ['type' => 'basic', 'title' => 'Card', 'uri' => 'https://example.org/related', 'content' => Resources::doc('x')])->assertCreated());
+    $cardId = Api::string($card['id']);
+    $document = ['type' => 'doc', 'content' => [['type' => 'paragraph', 'content' => [
+        ['type' => 'text', 'text' => 'Hello '], ['type' => 'text', 'text' => 'world', 'marks' => [['type' => 'bold']]], ['type' => 'text', 'text' => '  padded  '],
+    ]]]];
+
+    $edited = body($console->patch(MANAGE."/packs/{$pack}/cards/{$cardId}", ['revision' => 1, 'uri' => '', 'content' => $document])->assertOk());
+
+    expect($edited['uri'])->toBeNull()
+        ->and(Api::rows(Api::map(Api::map($edited['content'])['document'])['content'])[0]['content'])->toBe([
+            ['type' => 'text', 'text' => 'Hello '],
+            ['type' => 'text', 'text' => 'world', 'marks' => [['type' => 'bold']]],
+            ['type' => 'text', 'text' => '  padded  '],
+        ]);
+});
+
+it('exempts exactly /api/v1/admin/resources and below from trimming and empty-to-null, and nothing that merely looks like it', function () {
+    $probe = static fn (Request $request) => response()->json(['v' => $request->input('v'), 't' => $request->input('t')]);
+    Route::post('api/v1/admin/resources/probe', $probe);
+    Route::post('api/v1/admin/resources-probe', $probe);
+    Route::post('api/v1/admin/resource-library/probe', $probe);
+    Route::post('api/v1/admin/people-probe', $probe);
+    $sent = ['v' => '', 't' => '  padded  '];
+
+    // The exemption applies where it is meant to (a positive control, so the others prove something)...
+    expect(postJson('api/v1/admin/resources/probe', $sent)->json())->toBe(['v' => '', 't' => '  padded  ']);
+    // ...and nowhere else: a lookalike prefix, the delivery routes and any other route still trim and null.
+    foreach (['api/v1/admin/resources-probe', 'api/v1/admin/resource-library/probe', 'api/v1/admin/people-probe'] as $uri) {
+        expect(postJson($uri, $sent)->json())->toBe(['v' => null, 't' => 'padded'], $uri);
+    }
 });
 
 it('answers a stale edit 409 stale_revision with the current Pack or Card, and writes nothing', function () {

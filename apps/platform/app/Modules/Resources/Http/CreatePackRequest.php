@@ -40,8 +40,6 @@ final class CreatePackRequest extends FormRequest
 
     public function category(): ?string
     {
-        $category = $this->input('category_id');
-
-        return is_string($category) ? $category : null;
+        return BlankInput::optional($this->input('category_id'));
     }
 }

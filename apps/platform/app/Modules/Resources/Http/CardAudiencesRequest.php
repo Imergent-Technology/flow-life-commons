@@ -12,6 +12,14 @@ use Illuminate\Validation\Rule;
 /** `mode` is `inherit` (the Pack's audiences) or `narrowed` with the subset to narrow to. The use case enforces that it is a subset. */
 final class CardAudiencesRequest extends FormRequest
 {
+    /** A blank is not a list: it becomes null, so the `array` rule refuses it with a 422 instead of it reaching `Audience::from` (see BlankInput). */
+    protected function prepareForValidation(): void
+    {
+        if (BlankInput::isBlank($this->input('audiences'))) {
+            $this->merge(['audiences' => null]);
+        }
+    }
+
     /** @return array<string, list<mixed>> */
     public function rules(): array
     {

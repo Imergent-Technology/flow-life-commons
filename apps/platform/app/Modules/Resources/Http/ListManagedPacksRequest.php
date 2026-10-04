@@ -32,28 +32,29 @@ final class ListManagedPacksRequest extends FormRequest
 
     public function filter(): ManagedPackFilter
     {
-        $category = $this->input('category');
-        $audience = $this->input('audience');
-        $state = $this->input('state');
-        $type = $this->input('card_type');
-        $text = $this->input('q');
+        // A blank filter is no filter (see BlankInput).
+        $category = BlankInput::optional($this->input('category'));
+        $audience = BlankInput::optional($this->input('audience'));
+        $state = BlankInput::optional($this->input('state'));
+        $type = BlankInput::optional($this->input('card_type'));
+        $text = BlankInput::optional($this->input('q'));
 
         return new ManagedPackFilter(
-            is_string($category) ? CategoryId::fromString($category) : null,
-            is_string($audience) ? Audience::from($audience) : null,
-            is_string($state) ? PublicationState::from($state) : null,
-            is_string($type) ? CardType::from($type) : null,
-            is_string($text) && trim($text) !== '' ? $text : null,
+            $category === null ? null : CategoryId::fromString($category),
+            $audience === null ? null : Audience::from($audience),
+            $state === null ? null : PublicationState::from($state),
+            $type === null ? null : CardType::from($type),
+            $text,
         );
     }
 
     public function page(): int
     {
-        return $this->integer('page', 1);
+        return BlankInput::isBlank($this->input('page')) ? 1 : $this->integer('page', 1);
     }
 
     public function perPage(): int
     {
-        return $this->integer('per_page', 25);
+        return BlankInput::isBlank($this->input('per_page')) ? 25 : $this->integer('per_page', 25);
     }
 }
