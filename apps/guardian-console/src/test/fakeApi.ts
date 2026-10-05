@@ -6,6 +6,8 @@ export interface RecordedCall {
   method: string
   path: string
   body: unknown
+  /** The multipart form, when the request was one (a file upload); null otherwise. */
+  form: FormData | null
   headers: Record<string, string>
   init: RequestInit
 }
@@ -112,6 +114,7 @@ export class FakeApi {
           method,
           path,
           body: typeof rawBody === 'string' ? (JSON.parse(rawBody) as unknown) : null,
+          form: rawBody instanceof FormData ? rawBody : null,
           headers: Object.fromEntries(
             Object.entries((init.headers ?? {}) as Record<string, string>),
           ),

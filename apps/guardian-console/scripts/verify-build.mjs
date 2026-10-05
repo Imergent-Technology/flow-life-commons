@@ -3,7 +3,9 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-const assets = join(import.meta.dirname, '..', 'dist', 'assets')
+// `VERIFY_BUILD_DIST` points the check at another build (a mutation test builds one on purpose); the default is the real one.
+const dist = process.env.VERIFY_BUILD_DIST ?? join(import.meta.dirname, '..', 'dist')
+const assets = join(dist, 'assets')
 const cssFiles = readdirSync(assets).filter((f) => f.endsWith('.css'))
 if (cssFiles.length === 0) {
   throw new Error('verify:build: no CSS emitted in dist/assets')
@@ -131,6 +133,44 @@ if (!images.some((file) => scripts.includes(file))) {
   throw new Error('verify:build: the brand image is emitted but nothing in the build refers to it')
 }
 
+// The rich-text editor is not in the Console's initial load (ADR 0037, decision 28; WP2's carry-forward, WP4). Tiptap and ProseMirror
+// are about 225 kB gzipped, and almost no page edits rich text, so Vite must put the editor in a chunk of its own that the entry
+// reaches only through `import()`. "The initial load" is what index.html itself loads: its module scripts and any modulepreload it
+// lists. None of those may carry editor code; at least one OTHER chunk must (or the check would pass on a build that dropped the
+// editor, or on markers that no longer exist); and index.html must not name that chunk at all.
+const html = readFileSync(join(dist, 'index.html'), 'utf8')
+const initial = new Set(
+  [...html.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)="\/assets\/([^"]+\.js)"/g)].map(
+    (match) => match[1],
+  ),
+)
+if (initial.size === 0) {
+  throw new Error(
+    'verify:build: index.html names no entry script, so the initial load cannot be checked',
+  )
+}
+const editorMarkers = /ProseMirror|prosemirror|tiptap/
+const jsFiles = readdirSync(assets).filter((f) => f.endsWith('.js'))
+const carriers = jsFiles.filter((f) => editorMarkers.test(readFileSync(join(assets, f), 'utf8')))
+if (carriers.length === 0) {
+  throw new Error(
+    'verify:build: no chunk carries the rich-text editor; the lazy-load check would prove nothing',
+  )
+}
+const eager = carriers.filter((f) => initial.has(f))
+if (eager.length > 0) {
+  throw new Error(
+    `verify:build: the rich-text editor is in the initial load (${eager.join(', ')}). It must be reached only through import() (see richtext/LazyRichTextEditor.tsx)`,
+  )
+}
+const named = carriers.filter((f) => html.includes(f))
+if (named.length > 0) {
+  throw new Error(`verify:build: index.html itself loads the editor chunk (${named.join(', ')})`)
+}
+
 console.log(
   `verify:build: OK (${String(cssFiles.length)} CSS file, ${String(woffFiles.length)} font files, ${String(images.length)} image, Tailwind utilities and design tokens present)`,
+)
+console.log(
+  `verify:build: OK (the rich-text editor is split into ${carriers.join(', ')} and kept out of the initial load: ${[...initial].join(', ')})`,
 )

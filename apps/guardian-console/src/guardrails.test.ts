@@ -125,6 +125,10 @@ const rules: Rule[] = [
     // dotted name that contains `.roles` and is allowed; `account.roles` and `.role` stay flagged.
     pattern:
       /platform_administrator|['"`]guardian['"`]|\bis(?:Guardian|Admin|Administrator)\b|(?<!access)\.roles?\b|\broles\s*:/,
+    // The Resources API's audience catalog: `guardian` there is an AUDIENCE KEY stored with a Pack (ADR 0037, decision 38; an audience
+    // is not a role, ADR 0036), not a question about who the signed-in person is. The same word is exempted on the platform's side
+    // (`Resources\Domain\Audience`). It lives in this one file, and no screen compares with it.
+    allowedIn: /(^|\/)api\/resources\.ts$/,
     offends: "if (account.roles.includes('platform_administrator')) show()",
     fine: "<div role=\"alert\">Flow Life Commons</div> hasCapability(current, 'console.access') const ROLES_ASSIGN = 'access.roles.assign'",
   },
@@ -221,6 +225,15 @@ const rules: Rule[] = [
     allowedIn: /^\.\/richtext\//,
     offends: "import { Editor } from '@tiptap/core'",
     fine: "import { RichTextEditor } from '../richtext/RichTextEditor.tsx'",
+  },
+  {
+    name: 'the rich-text editor imported eagerly',
+    because:
+      "Tiptap and ProseMirror are about 225 kB gzipped, and almost no page edits rich text, so the editor must load on demand through LazyRichTextEditor and its import(); a static import of RichTextEditor puts it back in the Console's entry bundle (ADR 0037, decision 28; scripts/verify-build.mjs proves the build)",
+    // A real import of the module. `import type` is erased by the compiler and loads nothing.
+    pattern: /^\s*import\s+(?!type\b)[^'"]*?\bfrom\s+['"][^'"]*\/RichTextEditor(?:\.tsx)?['"]/m,
+    offends: "import { RichTextEditor } from '../richtext/RichTextEditor.tsx'",
+    fine: "import type { RichTextEditor } from './RichTextEditor.tsx'; const load = () => import('./RichTextEditor.tsx')",
   },
   {
     name: 'an editor that writes styles',

@@ -247,6 +247,8 @@ export type FixtureSession =
   | 'admin-recover'
   | 'plain-guardian'
   | 'discussions-stale'
+  | 'resources-stale-card'
+  | 'resources-stale-pack'
 
 interface MintedSession {
   session: string

@@ -7,6 +7,8 @@ import {
   MEMBERSHIP_VIEW,
   PEOPLE_MANAGE,
   PEOPLE_VIEW,
+  RESOURCES_MANAGE,
+  RESOURCES_VIEW,
 } from '../auth/capabilities.ts'
 import {
   breadcrumbs,
@@ -208,5 +210,46 @@ describe('currentMarker', () => {
     expect(invite && currentMarker(at('/admin/accounts'), invite)).toBeUndefined()
     expect(accounts && currentMarker(at('/account/security'), accounts)).toBeUndefined()
     expect(accounts && currentMarker(null, accounts)).toBeUndefined()
+  })
+})
+
+describe('Resources management', () => {
+  it('is a section of its own, for someone who may manage Resources', () => {
+    expect(labels(having(RESOURCES_MANAGE))).toEqual([
+      'Overview',
+      'Resources',
+      'All Resource Packs',
+      'Add a Resource Pack',
+      'Categories',
+    ])
+  })
+
+  it('is not offered to someone who may only view Resources: view does not imply manage', () => {
+    expect(labels(having(RESOURCES_VIEW))).toEqual(['Overview'])
+    expect(labels(having())).toEqual(['Overview'])
+  })
+
+  it('keeps "All Resource Packs" current on a Pack and on the Cards beneath it, with a breadcrumb', () => {
+    const sections = having(RESOURCES_MANAGE)
+    for (const path of [
+      '/resources/packs/01J00000000000000000PACK001',
+      '/resources/packs/01J00000000000000000PACK001/cards/new',
+      '/resources/packs/01J00000000000000000PACK001/cards/01J00000000000000000CARD001',
+    ]) {
+      const where = locate(sections, path)
+      expect(where?.item?.label, path).toBe('All Resource Packs')
+      expect(where?.detail, path).toBe(true)
+      expect(breadcrumbs(where, 'Welcome pack')).toEqual([
+        { label: 'Resources', to: '/resources' },
+        { label: 'Welcome pack' },
+      ])
+    }
+  })
+
+  it('does not take the other Resources pages for a Pack', () => {
+    const sections = having(RESOURCES_MANAGE)
+    expect(locate(sections, '/resources/new')?.item?.label).toBe('Add a Resource Pack')
+    expect(locate(sections, '/resources/categories')?.item?.label).toBe('Categories')
+    expect(locate(sections, '/resources')?.detail).toBe(false)
   })
 })

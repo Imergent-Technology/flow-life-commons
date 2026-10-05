@@ -15,6 +15,13 @@ export type ApiPath = `/api/v1/${string}`
 
 export type FieldErrors = Record<string, string[]>
 
+/** The explanatory fields of a Resources 409 (ADR 0037): see `Failure`'s `conflict`. */
+export interface ConflictDetail {
+  requirement?: string
+  unmet?: string[]
+  cards?: string[]
+}
+
 export type Failure =
   /** 401: no session, or the one held has ended. */
   | { kind: 'unauthenticated' }
@@ -28,16 +35,26 @@ export type Failure =
    * proof is too old. Prove again (`POST /security/verify`), then ask again; nothing is retried automatically.
    */
   | { kind: 'verification-required' }
-  /** 404: what was asked about no longer exists. */
-  | { kind: 'not-found' }
+  /**
+   * 404: what was asked about no longer exists. `code` is present when the server named which thing it could not find
+   * (Resources: `pack_not_found`, `card_not_found`, `category_not_found`, `asset_unavailable`).
+   */
+  | { kind: 'not-found'; code?: string }
   /**
    * 409: the request was understood and refused because of the state of things; `code` is the stable reason. `candidates`
    * is present only when the refusal carries a list the person must see (the People registration's possible duplicates);
-   * it is untrusted and the caller must check its shape.
+   * it is untrusted and the caller must check its shape. `detail` carries the few explanatory fields a Resources refusal
+   * names (which requirement a Published Pack would lose, what a Pack or Card still lacks, which Cards a narrowing
+   * conflicts with), each kept only when it has the shape documented.
    */
-  | { kind: 'conflict'; code: string; candidates?: unknown[] }
+  | { kind: 'conflict'; code: string; candidates?: unknown[]; detail?: ConflictDetail }
   /** 419: the request-forgery check refused even after a fresh token was fetched. */
   | { kind: 'csrf' }
+  /**
+   * 413: the request was larger than the server (or something in front of it) accepts. Said by status alone, because an
+   * oversized body can be refused before the application sees it, with no body the Console could read.
+   */
+  | { kind: 'too-large' }
   /** 422: the request was refused and nothing changed; `errors` is keyed by request field. */
   | { kind: 'invalid'; message: string; errors: FieldErrors; code?: string }
   /** 429 */
@@ -56,6 +73,11 @@ export interface RequestOptions {
   path: ApiPath
   /** JSON body. Never logged, and never placed in a URL. */
   body?: object
+  /**
+   * A multipart form (a file upload), instead of a JSON body. The browser sets the `Content-Type` and its boundary itself,
+   * so none is set here. Never both `body` and `form`.
+   */
+  form?: FormData
   signal?: AbortSignal
   /**
    * True for a request made as a signed-in user. A 401 to one of those means the session the Console
@@ -98,7 +120,9 @@ async function attempt(options: RequestOptions): Promise<Reply | null> {
   assertSameOriginPath(options.path)
 
   const headers: Record<string, string> = { Accept: 'application/json' }
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json'
+  if (options.body !== undefined && options.form === undefined) {
+    headers['Content-Type'] = 'application/json'
+  }
   if (options.method !== 'GET') {
     const token = readXsrfToken()
     if (token !== null) headers['X-XSRF-TOKEN'] = token
@@ -110,7 +134,8 @@ async function attempt(options: RequestOptions): Promise<Reply | null> {
     credentials: 'same-origin',
     cache: 'no-store',
   }
-  if (options.body !== undefined) init.body = JSON.stringify(options.body)
+  if (options.form !== undefined) init.body = options.form
+  else if (options.body !== undefined) init.body = JSON.stringify(options.body)
   if (options.signal) init.signal = options.signal
 
   let response: Response
@@ -166,6 +191,18 @@ function isFieldErrors(value: unknown): value is FieldErrors {
   )
 }
 
+const isStringList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item: unknown) => typeof item === 'string')
+
+/** The documented explanatory fields of a 409 body, each only when it has the documented shape. */
+function conflictDetail(body: Record<string, unknown>): ConflictDetail | undefined {
+  const detail: ConflictDetail = {}
+  if (typeof body.requirement === 'string') detail.requirement = body.requirement
+  if (isStringList(body.unmet)) detail.unmet = body.unmet
+  if (isStringList(body.cards)) detail.cards = body.cards
+  return Object.keys(detail).length === 0 ? undefined : detail
+}
+
 function failureFor(reply: Reply | null): Failure {
   if (reply === null) return { kind: 'network' }
 
@@ -181,8 +218,13 @@ function failureFor(reply: Reply | null): Failure {
               typeof reply.body.code === 'string' && { code: reply.body.code }),
           }
     case 404:
-      return { kind: 'not-found' }
-    case 409:
+      return {
+        kind: 'not-found',
+        ...(isRecord(reply.body) &&
+          typeof reply.body.code === 'string' && { code: reply.body.code }),
+      }
+    case 409: {
+      const detail = isRecord(reply.body) ? conflictDetail(reply.body) : undefined
       return {
         kind: 'conflict',
         code: isRecord(reply.body) && typeof reply.body.code === 'string' ? reply.body.code : '',
@@ -190,7 +232,11 @@ function failureFor(reply: Reply | null): Failure {
           Array.isArray(reply.body.candidates) && {
             candidates: reply.body.candidates as unknown[],
           }),
+        ...(detail !== undefined && { detail }),
       }
+    }
+    case 413:
+      return { kind: 'too-large' }
     case 419:
       return { kind: 'csrf' }
     case 422: {

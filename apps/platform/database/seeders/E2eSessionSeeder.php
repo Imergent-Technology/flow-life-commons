@@ -62,6 +62,12 @@ final class E2eSessionSeeder extends Seeder
         // A stale session of its own for the Discussions closeout: the administration journey uses (and rotates) 'admin-stale'.
         'discussions-stale' => [E2eAccountSeeder::ADMIN_STORY_EMAIL, E2eAccountSeeder::ADMIN_STORY_PASSWORD, 'N', 16, 8],
         'plain-guardian' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 0, self::RECOVERY_INDEX],
+        // Stale sessions of their own for Resources management (WP4): permanent deletion needs a recent proof, and proving it
+        // freshens the session, so each destructive journey (a Card, a Pack) has one that nothing else is using. Each signs in with
+        // an unused recovery code of the plain Guardian and, when the prompt asks, proves with another
+        // (e2e/resources-stepup.spec.ts).
+        'resources-stale-card' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 16, 7],
+        'resources-stale-pack' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 16, 6],
     ];
 
     /** @var array<string, string> the cookie jar of the sign-in in progress: name => value as the server sent it */

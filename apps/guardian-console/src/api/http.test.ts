@@ -283,3 +283,148 @@ describe('an ended session', () => {
     stop()
   })
 })
+
+describe('multipart uploads and the refusals Resources adds', () => {
+  const isAny = (body: unknown): body is Record<string, unknown> =>
+    typeof body === 'object' && body !== null
+
+  it('sends a form as the body, adds no Content-Type of its own (the browser adds the boundary), and still sends the CSRF token', async () => {
+    setXsrfCookie('token-123')
+    api.on('POST /api/v1/upload', empty(204)).install()
+    const form = new FormData()
+    form.set('file', new File(['x'], 'a.pdf', { type: 'application/pdf' }))
+
+    await requestVoid({ method: 'POST', path: '/api/v1/upload', form, authenticated: true })
+
+    const [call] = api.calls
+    expect(call?.init.body).toBe(form)
+    expect(call?.form?.get('file')).toBeInstanceOf(File)
+    expect(call?.body).toBeNull()
+    expect(Object.keys(call?.headers ?? {}).map((h) => h.toLowerCase())).not.toContain(
+      'content-type',
+    )
+    expect(call?.headers['X-XSRF-TOKEN']).toBe('token-123')
+    expect(call?.init.credentials).toBe('same-origin')
+  })
+
+  it('sends a JSON body as JSON, as before', async () => {
+    api.on('POST /api/v1/thing', empty(204)).install()
+    await requestVoid({
+      method: 'POST',
+      path: '/api/v1/thing',
+      body: { a: 1 },
+      authenticated: true,
+    })
+
+    const [call] = api.calls
+    expect(call?.headers['Content-Type']).toBe('application/json')
+    expect(call?.body).toEqual({ a: 1 })
+    expect(call?.form).toBeNull()
+  })
+
+  it('sends the same form again after a stale CSRF token is refreshed', async () => {
+    let attempts = 0
+    api
+      .on('GET /api/v1/me', json({ message: 'ok' }))
+      .on('POST /api/v1/upload', () =>
+        attempts++ === 0 ? json({ message: 'CSRF token mismatch.' }, 419) : empty(204),
+      )
+      .install()
+    const form = new FormData()
+    form.set('file', new File(['x'], 'a.pdf'))
+
+    const result = await requestVoid({
+      method: 'POST',
+      path: '/api/v1/upload',
+      form,
+      authenticated: true,
+    })
+
+    expect(result.ok).toBe(true)
+    const uploads = api.callsTo('POST /api/v1/upload')
+    expect(uploads).toHaveLength(2)
+    expect(uploads[1]?.form).toBe(form)
+  })
+
+  it('reads any 413 as too-large, with or without a body the Console can read', async () => {
+    api
+      .on('POST /api/v1/json', json({ message: 'x', code: 'file_too_large', max_bytes: 1 }, 413))
+      .on(
+        'POST /api/v1/html',
+        () => new Response('<html>Request Entity Too Large</html>', { status: 413 }),
+      )
+      .on('POST /api/v1/empty', () => new Response(null, { status: 413 }))
+      .install()
+
+    for (const path of ['/api/v1/json', '/api/v1/html', '/api/v1/empty'] as const) {
+      const result = await requestJson({ method: 'POST', path, authenticated: true }, isAny)
+      expect(result, path).toEqual({ ok: false, failure: { kind: 'too-large' } })
+    }
+  })
+
+  it('carries the code of a 404, only when the server gave one', async () => {
+    api
+      .on('GET /api/v1/coded', json({ message: 'x', code: 'card_not_found' }, 404))
+      .on('GET /api/v1/bare', json({ message: 'Not found.' }, 404))
+      .on('GET /api/v1/odd', json({ message: 'x', code: 7 }, 404))
+      .install()
+
+    expect(await requestJson({ method: 'GET', path: '/api/v1/coded' }, isAny)).toEqual({
+      ok: false,
+      failure: { kind: 'not-found', code: 'card_not_found' },
+    })
+    expect(await requestJson({ method: 'GET', path: '/api/v1/bare' }, isAny)).toEqual({
+      ok: false,
+      failure: { kind: 'not-found' },
+    })
+    expect(await requestJson({ method: 'GET', path: '/api/v1/odd' }, isAny)).toEqual({
+      ok: false,
+      failure: { kind: 'not-found' },
+    })
+  })
+
+  it('carries a 409’s explanatory fields, each only in its documented shape', async () => {
+    api
+      .on(
+        'POST /api/v1/a',
+        json({ message: 'x', code: 'pack_not_publishable', unmet: ['category', 'audience'] }, 409),
+      )
+      .on(
+        'POST /api/v1/b',
+        json({ message: 'x', code: 'published_pack_requirement', requirement: 'category' }, 409),
+      )
+      .on(
+        'POST /api/v1/c',
+        json({ message: 'x', code: 'card_audience_conflict', cards: ['c1'] }, 409),
+      )
+      .on(
+        'POST /api/v1/d',
+        json({ message: 'x', code: 'weird', unmet: 'nope', cards: [1], requirement: 9 }, 409),
+      )
+      .on('POST /api/v1/e', json({ message: 'x', code: 'duplicate_category' }, 409))
+      .install()
+
+    const failureOf = async (path: `/api/v1/${string}`) => {
+      const result = await requestJson({ method: 'POST', path }, isAny)
+      return result.ok ? null : result.failure
+    }
+    expect(await failureOf('/api/v1/a')).toEqual({
+      kind: 'conflict',
+      code: 'pack_not_publishable',
+      detail: { unmet: ['category', 'audience'] },
+    })
+    expect(await failureOf('/api/v1/b')).toEqual({
+      kind: 'conflict',
+      code: 'published_pack_requirement',
+      detail: { requirement: 'category' },
+    })
+    expect(await failureOf('/api/v1/c')).toEqual({
+      kind: 'conflict',
+      code: 'card_audience_conflict',
+      detail: { cards: ['c1'] },
+    })
+    // Wrong shapes are dropped, not trusted; and a refusal with none carries no `detail` key at all.
+    expect(await failureOf('/api/v1/d')).toEqual({ kind: 'conflict', code: 'weird' })
+    expect(await failureOf('/api/v1/e')).toEqual({ kind: 'conflict', code: 'duplicate_category' })
+  })
+})

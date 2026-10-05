@@ -26,6 +26,12 @@ export const PEOPLE_MANAGE = 'crm.people.manage'
 export const DISCUSSIONS_VIEW = 'discussions.view'
 export const DISCUSSIONS_PARTICIPATE = 'discussions.participate'
 
+// Resources (ADR 0037). Independent: manage does not imply view, and the Console never treats one as the other (the role catalog
+// grants both together; that is the server's arrangement, not something the Console infers). Management is the
+// authoring surface; view is the library a Guardian reads (a later package).
+export const RESOURCES_VIEW = 'resources.view'
+export const RESOURCES_MANAGE = 'resources.manage'
+
 export function hasCapability(current: CurrentAccount, capability: string): boolean {
   return current.capabilities.includes(capability)
 }

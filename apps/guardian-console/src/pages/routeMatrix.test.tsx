@@ -22,6 +22,16 @@ import {
   wireMessage,
 } from '../test/discussions.ts'
 import { renderApp } from '../test/renderApp.tsx'
+import {
+  CARD_ID,
+  categoryList,
+  PACK_ID,
+  packsPage,
+  wireCard,
+  wireCategory,
+  wireListedPack,
+  wirePack,
+} from '../test/resources.ts'
 
 // Every Console route and full-page screen, rendered for real: one h1, the document named for it, the width
 // the task calls for, and no structural accessibility violation. The colours themselves are proved in a
@@ -43,6 +53,7 @@ const EVERYTHING = [
   'crm.people.manage',
   'discussions.view',
   'discussions.participate',
+  'resources.manage',
 ]
 
 function serveAll() {
@@ -62,6 +73,10 @@ function serveAll() {
     `GET /api/v1/admin/discussions/${DISCUSSION_ID}/messages`,
     json(messagesPage([wireMessage()])),
   )
+  api.on('GET /api/v1/admin/resources/categories', json(categoryList([wireCategory()])))
+  api.on('GET /api/v1/admin/resources/packs', json(packsPage([wireListedPack()])))
+  api.on(`GET /api/v1/admin/resources/packs/${PACK_ID}`, json(wirePack()))
+  api.on(`GET /api/v1/admin/resources/packs/${PACK_ID}/cards/${CARD_ID}`, json(wireCard()))
   return api
 }
 
@@ -81,6 +96,12 @@ const consoleRoutes: { path: string; h1: string; width: PageWidth }[] = [
   { path: '/discussions', h1: 'Discussions', width: 'wide' },
   { path: '/discussions/new', h1: 'Start a discussion', width: 'form' },
   { path: `/discussions/${DISCUSSION_ID}`, h1: 'Where do we meet?', width: 'detail' },
+  { path: '/resources', h1: 'Resources', width: 'wide' },
+  { path: '/resources/new', h1: 'Add a Resource Pack', width: 'form' },
+  { path: '/resources/categories', h1: 'Categories', width: 'detail' },
+  { path: `/resources/packs/${PACK_ID}`, h1: 'Welcome pack', width: 'detail' },
+  { path: `/resources/packs/${PACK_ID}/cards/new`, h1: 'Add a Card', width: 'form' },
+  { path: `/resources/packs/${PACK_ID}/cards/${CARD_ID}`, h1: 'Opening hours', width: 'detail' },
   { path: '/no/such/page', h1: 'Page not found', width: 'prose' },
 ]
 

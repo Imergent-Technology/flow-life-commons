@@ -9,6 +9,7 @@ import {
   MEMBERSHIP_VIEW,
   PEOPLE_MANAGE,
   PEOPLE_VIEW,
+  RESOURCES_MANAGE,
 } from '../auth/capabilities.ts'
 
 /**
@@ -17,7 +18,7 @@ import {
  * capabilities (a presentation courtesy: the server decides every request, and RequireCapability still guards
  * each route). Account security is not here on purpose: it belongs to the person, and lives in the account menu.
  */
-export type IconName = 'home' | 'people' | 'contacts' | 'discussions'
+export type IconName = 'home' | 'people' | 'contacts' | 'discussions' | 'resources'
 
 export interface NavItem {
   label: string
@@ -86,6 +87,27 @@ export const navigation: readonly NavSection[] = [
             to: '/discussions/new',
             capability: DISCUSSIONS_PARTICIPATE,
           },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'resources',
+    label: 'Resources',
+    icon: 'resources',
+    groups: [
+      {
+        label: 'Resources',
+        items: [
+          {
+            label: 'All Resource Packs',
+            to: '/resources',
+            capability: RESOURCES_MANAGE,
+            // A Pack, and the Cards beneath it (`/resources/packs/:packId/cards/new`, `.../cards/:cardId`).
+            detail: { pattern: '/resources/packs/:packId/*', label: 'Resource Pack' },
+          },
+          { label: 'Add a Resource Pack', to: '/resources/new', capability: RESOURCES_MANAGE },
+          { label: 'Categories', to: '/resources/categories', capability: RESOURCES_MANAGE },
         ],
       },
     ],

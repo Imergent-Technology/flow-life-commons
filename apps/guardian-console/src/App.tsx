@@ -10,6 +10,7 @@ import {
   MEMBERSHIP_VIEW,
   PEOPLE_MANAGE,
   PEOPLE_VIEW,
+  RESOURCES_MANAGE,
 } from './auth/capabilities.ts'
 import { RequireAuthentication } from './auth/RequireAuthentication.tsx'
 import { RequireCapability } from './auth/RequireCapability.tsx'
@@ -29,6 +30,12 @@ import { DiscussionPage } from './pages/discussions/DiscussionPage.tsx'
 import { DiscussionsPage } from './pages/discussions/DiscussionsPage.tsx'
 import { StartDiscussionPage } from './pages/discussions/StartDiscussionPage.tsx'
 import { PeoplePage } from './pages/people/PeoplePage.tsx'
+import { CardPage } from './pages/resources/CardPage.tsx'
+import { CategoriesPage } from './pages/resources/CategoriesPage.tsx'
+import { NewCardPage } from './pages/resources/NewCardPage.tsx'
+import { NewPackPage } from './pages/resources/NewPackPage.tsx'
+import { PackPage } from './pages/resources/PackPage.tsx'
+import { ResourcesPage } from './pages/resources/ResourcesPage.tsx'
 import { PersonDetailPage } from './pages/people/PersonDetailPage.tsx'
 import { TagsPage } from './pages/people/TagsPage.tsx'
 import { RegisterPersonPage } from './pages/people/RegisterPersonPage.tsx'
@@ -131,6 +138,54 @@ function App() {
                   element={
                     <RequireCapability capability={DISCUSSIONS_VIEW}>
                       <DiscussionPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="resources"
+                  element={
+                    <RequireCapability capability={RESOURCES_MANAGE}>
+                      <ResourcesPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="resources/new"
+                  element={
+                    <RequireCapability capability={RESOURCES_MANAGE}>
+                      <NewPackPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="resources/categories"
+                  element={
+                    <RequireCapability capability={RESOURCES_MANAGE}>
+                      <CategoriesPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="resources/packs/:packId"
+                  element={
+                    <RequireCapability capability={RESOURCES_MANAGE}>
+                      <PackPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="resources/packs/:packId/cards/new"
+                  element={
+                    <RequireCapability capability={RESOURCES_MANAGE}>
+                      <NewCardPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="resources/packs/:packId/cards/:cardId"
+                  element={
+                    <RequireCapability capability={RESOURCES_MANAGE}>
+                      <CardPage />
                     </RequireCapability>
                   }
                 />

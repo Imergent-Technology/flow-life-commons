@@ -32,6 +32,8 @@ export function describeFailure(failure: Failure): Problem {
         message: 'The service is temporarily unavailable. Try again in a moment.',
         fields: {},
       }
+    case 'too-large':
+      return { message: 'That request was too large to send.', fields: {} }
     case 'csrf':
       return {
         message: 'Your browser session could not be verified. Reload the page and try again.',

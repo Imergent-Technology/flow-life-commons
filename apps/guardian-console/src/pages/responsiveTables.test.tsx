@@ -5,6 +5,7 @@ import { ADMIN_CAPABILITIES, page, serveOperator, wire } from '../test/admin.ts'
 import { accountFor, json } from '../test/fakeApi.ts'
 import { membersPage, wireMember } from '../test/membership.ts'
 import { renderApp } from '../test/renderApp.tsx'
+import { categoryList, packsPage, wireCategory, wireListedPack } from '../test/resources.ts'
 
 // Below 768px a table becomes stacked records, and CSS reads each value's name from its `data-label`. jsdom
 // cannot lay anything out, so what is provable here is the contract that makes the stacked layout honest:
@@ -16,10 +17,17 @@ afterEach(() => {
 
 function serve() {
   const api = serveOperator(
-    accountFor({ capabilities: [...ADMIN_CAPABILITIES, 'membership.records.view'] }),
+    accountFor({
+      capabilities: [...ADMIN_CAPABILITIES, 'membership.records.view', 'resources.manage'],
+    }),
   )
   api.on('GET /api/v1/admin/accounts', json(page([wire(), wire({ id: 'B', display_name: 'Bo' })])))
   api.on('GET /api/v1/admin/members', json(membersPage([wireMember()])))
+  api.on('GET /api/v1/admin/resources/categories', json(categoryList([wireCategory()])))
+  api.on(
+    'GET /api/v1/admin/resources/packs',
+    json(packsPage([wireListedPack(), wireListedPack({ id: 'B', title: 'Second pack' })])),
+  )
 }
 
 async function labelsAgainstHeaders(name: string) {
@@ -37,6 +45,7 @@ async function labelsAgainstHeaders(name: string) {
 describe.each([
   { path: '/admin/accounts', caption: 'Accounts', columns: 5 },
   { path: '/admin/members', caption: 'Members', columns: 3 },
+  { path: '/resources', caption: 'Resource Packs', columns: 6 },
 ])('the $caption table on a narrow screen', ({ path, caption, columns }) => {
   it('gives every value the name of its column, so a stacked record never shows a bare value', async () => {
     serve()

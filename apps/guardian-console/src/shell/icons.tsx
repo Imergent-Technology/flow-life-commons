@@ -32,6 +32,15 @@ export function SectionIcon({ name }: { name: IconName }) {
       </Svg>
     )
   }
+  if (name === 'resources') {
+    return (
+      <Svg>
+        <path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H19v13H6.5A1.5 1.5 0 0 0 5 18.5z" />
+        <path d="M5 18.5A1.5 1.5 0 0 0 6.5 20H19v-3" />
+        <path d="M9 8h6M9 11.5h4" />
+      </Svg>
+    )
+  }
   if (name === 'discussions') {
     return (
       <Svg>
