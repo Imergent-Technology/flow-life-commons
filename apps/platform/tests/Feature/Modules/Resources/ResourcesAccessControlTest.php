@@ -10,6 +10,8 @@ use App\Modules\Resources\Application\CreatePack;
 use App\Modules\Resources\Application\DeleteCard;
 use App\Modules\Resources\Application\DeleteCategory;
 use App\Modules\Resources\Application\DeletePack;
+use App\Modules\Resources\Application\DownloadManagedFile;
+use App\Modules\Resources\Application\DownloadResourceFile;
 use App\Modules\Resources\Application\GetManagedCard;
 use App\Modules\Resources\Application\GetManagedPack;
 use App\Modules\Resources\Application\GetResourcePack;
@@ -22,6 +24,7 @@ use App\Modules\Resources\Application\RenameCategory;
 use App\Modules\Resources\Application\ReorderCards;
 use App\Modules\Resources\Application\ReorderCategories;
 use App\Modules\Resources\Application\ReorderPacks;
+use App\Modules\Resources\Application\ReplaceCardFile;
 use App\Modules\Resources\Application\SetCardAudiences;
 use App\Modules\Resources\Application\SetPackAudiences;
 use App\Modules\Resources\Application\UnpublishCard;
@@ -33,6 +36,7 @@ use App\Modules\Resources\Domain\AudienceMode;
 use App\Modules\Resources\Domain\CardType;
 use App\Modules\Resources\Domain\ManagedPackFilter;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Testing\TestResponse;
@@ -41,6 +45,7 @@ use Tests\Support\Api;
 use Tests\Support\Console;
 use Tests\Support\Identity;
 use Tests\Support\Membership;
+use Tests\Support\ResourceFiles;
 use Tests\Support\Resources;
 use Tests\Support\SourceScan;
 
@@ -50,6 +55,10 @@ use Tests\Support\SourceScan;
  * layer is moved at a time through the platform's own seam, the Laravel Gate the route `can:` middleware asks, keeping every
  * other layer real. Runs on MariaDB and PostgreSQL.
  */
+
+beforeEach(function () {
+    ResourceFiles::fake();
+});
 
 /** Makes the Gate answer `$answer` for these abilities only; every other ability still asks the real Authorizer. */
 function resourcesGate(bool $answer, string ...$abilities): void
@@ -69,7 +78,7 @@ function idOf(TestResponse $response): string
 }
 
 /**
- * @return array{pack: string, card: string, category: string, spare: string, spareCard: string}
+ * @return array{pack: string, card: string, fileCard: string, category: string, spare: string, spareCard: string}
  */
 function resourcesFixture(Console $console): array
 {
@@ -77,18 +86,20 @@ function resourcesFixture(Console $console): array
     $pack = idOf($console->post('/api/v1/admin/resources/packs', ['title' => 'Pack', 'category_id' => $category])->assertCreated());
     $card = idOf($console->post("/api/v1/admin/resources/packs/{$pack}/cards", ['type' => 'basic', 'title' => 'Card', 'content' => Resources::doc('Words')])->assertCreated());
     $console->post("/api/v1/admin/resources/packs/{$pack}/cards/{$card}/publish")->assertOk();
+    $fileCard = idOf($console->multipart("/api/v1/admin/resources/packs/{$pack}/cards", ['type' => 'file', 'title' => 'File', 'file' => ResourceFiles::upload('guide.pdf', ResourceFiles::pdf())])->assertCreated());
+    $console->post("/api/v1/admin/resources/packs/{$pack}/cards/{$fileCard}/publish")->assertOk();
     $console->put("/api/v1/admin/resources/packs/{$pack}/audiences", ['audiences' => ['guardian']])->assertOk();
     $console->post("/api/v1/admin/resources/packs/{$pack}/publish")->assertOk();
     $spare = idOf($console->post('/api/v1/admin/resources/packs', ['title' => 'Spare'])->assertCreated());
     $spareCard = idOf($console->post("/api/v1/admin/resources/packs/{$spare}/cards", ['type' => 'basic', 'title' => 'Spare card', 'content' => Resources::doc('Spare')])->assertCreated());
 
-    return ['pack' => $pack, 'card' => $card, 'category' => $category, 'spare' => $spare, 'spareCard' => $spareCard];
+    return ['pack' => $pack, 'card' => $card, 'fileCard' => $fileCard, 'category' => $category, 'spare' => $spare, 'spareCard' => $spareCard];
 }
 
 /**
  * Every operation: method, path, a body that would be valid, and which capability it asks for.
  *
- * @param  array{pack: string, card: string, category: string, spare: string, spareCard: string}  $f
+ * @param  array{pack: string, card: string, fileCard: string, category: string, spare: string, spareCard: string}  $f
  * @return list<array{string, string, array<string, mixed>, string}>
  */
 function resourcesOperations(array $f): array
@@ -118,10 +129,13 @@ function resourcesOperations(array $f): array
         ['POST', "{$m}/packs/{$f['spare']}/cards/{$f['spareCard']}/publish", [], 'manage'],
         ['POST', "{$m}/packs/{$f['spare']}/cards/{$f['spareCard']}/unpublish", [], 'manage'],
         ['DELETE', "{$m}/packs/{$f['spare']}/cards/{$f['spareCard']}", [], 'manage'],
+        ['POST', "{$m}/packs/{$f['pack']}/cards/{$f['fileCard']}/file", ['file' => ResourceFiles::upload('new.pdf', ResourceFiles::pdf('new'))], 'manage'],
+        ['GET', "{$m}/packs/{$f['pack']}/cards/{$f['fileCard']}/file", [], 'manage'],
         ['DELETE', "{$m}/packs/{$f['spare']}", [], 'manage'],
         ['DELETE', "{$m}/categories/{$f['category']}", [], 'manage'],
         ['GET', $l, [], 'view'],
         ['GET', "{$l}/packs/{$f['pack']}", [], 'view'],
+        ['GET', "{$l}/packs/{$f['pack']}/cards/{$f['fileCard']}/file", [], 'view'],
     ];
 }
 
@@ -131,9 +145,11 @@ function resourcesOperations(array $f): array
  */
 function resourcesCall(Console $console, string $method, string $path, array $body): TestResponse
 {
+    $multipart = array_filter($body, fn (mixed $v): bool => $v instanceof UploadedFile) !== [];
+
     return match ($method) {
         'GET' => $console->get($path),
-        'POST' => $console->post($path, $body),
+        'POST' => $multipart ? $console->multipart($path, $body) : $console->post($path, $body),
         'PUT' => $console->put($path, $body),
         'PATCH' => $console->patch($path, $body),
         'DELETE' => $console->delete($path),
@@ -155,7 +171,7 @@ it('covers every Resources route with the table below, so a route added later ca
     sort($table);
     sort($routes);
 
-    expect(count($routes))->toBe(25)->and($table)->toBe($routes);
+    expect(count($routes))->toBe(28)->and($table)->toBe($routes);
 });
 
 it('refuses EVERY operation to a signed-in Guardian who holds neither capability, and changes nothing', function () {
@@ -165,7 +181,7 @@ it('refuses EVERY operation to a signed-in Guardian who holds neither capability
     resourcesGate(false, 'resources.view', 'resources.manage');
 
     foreach (resourcesOperations($f) as [$method, $path, $body]) {
-        expect(resourcesCall($console, $method, $path, $body)->status())->toBe(403, "{$method} {$path}");
+        expect(resourcesCall($console, $method, $path, $body)->getStatusCode())->toBe(403, "{$method} {$path}");
     }
     expect(array_map(fn (string $t): int => DB::table($t)->count(), Resources::tables()))->toBe($before)
         ->and(DB::table('security_events')->where('type', 'like', 'resource.%')->count())->toBe(0);
@@ -177,7 +193,7 @@ it('lets resources.manage do every management operation and refuses it the libra
     resourcesGate(false, 'resources.view');
 
     foreach (resourcesOperations($f) as [$method, $path, $body, $needs]) {
-        $status = resourcesCall($console, $method, $path, $body)->status();
+        $status = resourcesCall($console, $method, $path, $body)->getStatusCode();
         if ($needs === 'view') {
             expect($status)->toBe(403, "{$method} {$path}");
         } else {
@@ -196,7 +212,7 @@ it('lets resources.view read the library and refuses it every management operati
         if ($needs === 'view') {
             $response->assertOk();
         } else {
-            expect($response->status())->toBe(403, "{$method} {$path}");
+            expect($response->getStatusCode())->toBe(403, "{$method} {$path}");
         }
     }
 });
@@ -210,7 +226,7 @@ it('refuses every operation to an account that can sign in but cannot use the Co
     $browser->login('mia.member@example.org', Identity::PASSWORD)->assertOk();
 
     foreach (resourcesOperations($f) as [$method, $path, $body]) {
-        expect(resourcesCall($browser, $method, $path, $body)->status())->toBe(403, "{$method} {$path}");
+        expect(resourcesCall($browser, $method, $path, $body)->getStatusCode())->toBe(403, "{$method} {$path}");
     }
 });
 
@@ -221,6 +237,8 @@ it('checks the capability again inside every use case, so no other caller can sk
     $live = Resources::published($by, [Audience::Guardian], 1, 'Live');
     $spare = Resources::pack($by, 'Spare');
     $card = Resources::card($by, $spare);
+    $file = ResourceFiles::card($by, $spare);
+    $liveFile = ResourceFiles::publishedCard($by, $live);
 
     $calls = [
         fn () => app(ListCategories::class)($outsider),
@@ -248,9 +266,12 @@ it('checks the capability again inside every use case, so no other caller can sk
         fn () => app(DeleteCard::class)($outsider, $spare->pack->id, $card->card->id),
         fn () => app(BrowseResourceLibrary::class)($outsider, null, null),
         fn () => app(GetResourcePack::class)($outsider, $live->pack->id),
+        fn () => app(ReplaceCardFile::class)($outsider, $spare->pack->id, $file->card->id, ResourceFiles::incoming('b.pdf', ResourceFiles::pdf())),
+        fn () => app(DownloadManagedFile::class)($outsider, $spare->pack->id, $file->card->id),
+        fn () => app(DownloadResourceFile::class)($outsider, $live->pack->id, $liveFile->card->id),
     ];
 
-    expect(count($calls))->toBe(25);
+    expect(count($calls))->toBe(28);
     foreach ($calls as $i => $call) {
         try {
             $call();
@@ -265,11 +286,12 @@ it('checks the capability again inside every use case, so no other caller can sk
 it('asks each use case for exactly the one capability its route asks for', function () {
     $dir = dirname(__DIR__, 4).'/app/Modules/Resources/Application';
     $expected = [];
-    foreach (['ListCategories', 'CreateCategory', 'RenameCategory', 'DeleteCategory', 'ReorderCategories', 'PageManagedPacks', 'GetManagedPack', 'CreatePack', 'UpdatePack', 'SetPackAudiences', 'PublishPack', 'UnpublishPack', 'ReorderPacks', 'DeletePack', 'PreviewPack', 'CreateCard', 'GetManagedCard', 'UpdateCard', 'SetCardAudiences', 'PublishCard', 'UnpublishCard', 'ReorderCards', 'DeleteCard'] as $useCase) {
+    foreach (['ListCategories', 'CreateCategory', 'RenameCategory', 'DeleteCategory', 'ReorderCategories', 'PageManagedPacks', 'GetManagedPack', 'CreatePack', 'UpdatePack', 'SetPackAudiences', 'PublishPack', 'UnpublishPack', 'ReorderPacks', 'DeletePack', 'PreviewPack', 'CreateCard', 'GetManagedCard', 'UpdateCard', 'SetCardAudiences', 'PublishCard', 'UnpublishCard', 'ReorderCards', 'DeleteCard', 'ReplaceCardFile', 'DownloadManagedFile'] as $useCase) {
         $expected[$useCase] = 'ManageResources';
     }
     $expected['BrowseResourceLibrary'] = 'ViewResources';
     $expected['GetResourcePack'] = 'ViewResources';
+    $expected['DownloadResourceFile'] = 'ViewResources';
 
     foreach ($expected as $useCase => $capability) {
         preg_match_all('/Capability::(\w+)/', SourceScan::code((string) file_get_contents("{$dir}/{$useCase}.php")), $matches);

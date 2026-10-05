@@ -28,3 +28,14 @@ Schedule::command('identity:prune-expired')
     ->hourly()
     ->withoutOverlapping()
     ->description('Remove expired transient Identity state (ADR 0016, ADR 0023).');
+
+/*
+ * Resources' orphaned files (ADR 0037, decision 61): files no asset row refers to, left by a removal that failed after its deletion
+ * committed or by an upload whose change failed. Deleted content must not linger in the store, so this is scheduled rather than left
+ * to an operator. It removes only unreferenced files older than a day, never one a row refers to, and the scheduler does not run it
+ * while the application is in maintenance mode, which is when a restore happens (docs/runbooks/backup-and-restore.md).
+ */
+Schedule::command('resources:assets:prune')
+    ->dailyAt('03:30')
+    ->withoutOverlapping()
+    ->description('Remove Resources files no asset refers to (ADR 0037).');

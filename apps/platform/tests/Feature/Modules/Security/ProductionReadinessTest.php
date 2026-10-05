@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use App\Modules\Resources\Application\AssetLimits;
+use App\Modules\Security\Application\PhpIni;
 use App\Modules\Security\Application\ProductionReadiness;
 use Illuminate\Testing\PendingCommand;
 
@@ -72,7 +74,10 @@ function asProduction(): void
         'cache.default' => 'database',
         'queue.default' => 'database',
         'mail.default' => 'log',
+        'resources.assets.max_bytes' => 20 * 1024 * 1024,
     ]);
+    // PHP as a correctly configured host would report it, not as this test container's PHP does (ADR 0037, decision 64).
+    app()->instance(PhpIni::class, new PhpIni(['file_uploads' => '1', 'max_file_uploads' => '20', 'upload_max_filesize' => '20M', 'post_max_size' => '24M']));
 }
 
 /**
@@ -290,6 +295,88 @@ describe('each dangerous value is refused', function () {
             expect(array_filter(readiness(), static fn (bool $passed): bool => ! $passed))
                 ->not->toBe([], "changing {$key} was not noticed");
         }
+    });
+});
+
+describe('Resources files (ADR 0037, decision 64)', function () {
+    $withPhp = function (array $ini): void {
+        /** @var array<string, string> $ini */
+        app()->instance(PhpIni::class, new PhpIni(array_merge(['file_uploads' => '1', 'max_file_uploads' => '20', 'upload_max_filesize' => '20M', 'post_max_size' => '24M'], $ini)));
+    };
+    $failing = fn (): array => array_keys(array_filter(readiness(), static fn (bool $passed): bool => ! $passed));
+
+    it('refuses PHP limits below the largest Resources file, as the development defaults are', function () use ($withPhp, $failing) {
+        asProduction();
+        $withPhp(['upload_max_filesize' => '2M', 'post_max_size' => '8M']);
+
+        expect($failing())->toBe([
+            'PHP\'s upload_max_filesize admits the largest Resources file',
+            'PHP\'s post_max_size admits the largest Resources upload, with room for the rest of the form',
+        ]);
+    });
+
+    it('asks post_max_size for room beyond the file itself, and accepts PHP\'s "unlimited"', function () use ($withPhp, $failing) {
+        asProduction();
+        $withPhp(['post_max_size' => '20M']);
+        expect($failing())->toBe(['PHP\'s post_max_size admits the largest Resources upload, with room for the rest of the form']);
+
+        $withPhp(['post_max_size' => '21M']);
+        expect($failing())->toBe([]);
+
+        $withPhp(['upload_max_filesize' => '0', 'post_max_size' => '0']);
+        expect($failing())->toBe([]);
+    });
+
+    it('judges the limit the application will enforce: a lowered setting passes on a smaller host, and an absurd one is bounded', function () use ($withPhp, $failing) {
+        asProduction();
+        $withPhp(['upload_max_filesize' => '8M', 'post_max_size' => '9M']);
+        config(['resources.assets.max_bytes' => 8 * 1024 * 1024]);
+        expect($failing())->toBe([]);
+
+        config(['resources.assets.max_bytes' => PHP_INT_MAX]); // enforced as the 100 MiB ceiling
+        $withPhp(['upload_max_filesize' => '100M', 'post_max_size' => '101M']);
+        expect($failing())->toBe([])
+            ->and(ProductionReadiness::RESOURCES_ASSET_FLOOR)->toBe(AssetLimits::FLOOR)
+            ->and(ProductionReadiness::RESOURCES_ASSET_CEILING)->toBe(AssetLimits::CEILING);
+    });
+
+    it('refuses a host with uploads switched off, or a limit it cannot read', function () use ($withPhp, $failing) {
+        asProduction();
+        $withPhp(['file_uploads' => '0']);
+        expect($failing())->toBe(['PHP accepts file uploads']);
+
+        $withPhp(['upload_max_filesize' => 'lots']);
+        expect($failing())->toBe(['PHP\'s upload_max_filesize admits the largest Resources file']);
+    });
+
+    it('refuses a Resources store that is public, served, has a URL, or lives under public/', function (string $case) use ($failing) {
+        asProduction();
+        $disk = match ($case) {
+            'under public/' => ['root' => public_path('resources')],
+            'the public directory itself' => ['root' => public_path()],
+            'with a URL' => ['url' => 'https://commons.flowlifeglobal.org/files'],
+            'served' => ['serve' => true],
+            default => ['visibility' => 'public'],
+        };
+        config(['filesystems.disks.resources' => [...config()->array('filesystems.disks.resources'), ...$disk]]);
+
+        expect($failing())->toBe(['the Resources file store is private and outside the public directory']);
+    })->with(['under public/', 'the public directory itself', 'with a URL', 'served', 'public visibility']);
+
+    it('accepts the store exactly as config/filesystems.php ships it', function () use ($failing) {
+        asProduction();
+
+        expect($failing())->toBe([])
+            ->and(config('filesystems.disks.resources.root'))->toBe(storage_path('app/private/resources'));
+    });
+
+    it('lists the web server\'s PHP limits and the Resource files\' backup as owner verifications', function () {
+        asProduction();
+
+        commandProductionReadiness('security:production-check')
+            ->expectsOutputToContain('upload_max_filesize and post_max_size admit RESOURCES_ASSET_MAX_BYTES')
+            ->expectsOutputToContain('Resource files (shared/storage/app/private/resources) are backed up together with the database dump')
+            ->assertSuccessful();
     });
 });
 

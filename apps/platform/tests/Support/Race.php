@@ -8,6 +8,7 @@ use App\Modules\Audit\Domain\SecurityEvent;
 use App\Modules\Audit\Domain\SecurityEventWriter;
 use Closure;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 
@@ -29,7 +30,7 @@ final class Race
 {
     /** Tables these tests commit into, children first. */
     private const array TABLES = [
-        'resource_card_audiences', 'resource_cards', 'resource_pack_audiences', 'resource_packs', 'resource_categories',
+        'resource_card_audiences', 'resource_cards', 'resource_assets', 'resource_pack_audiences', 'resource_packs', 'resource_categories',
         'discussion_messages', 'discussions',
         'contact_interactions', 'contact_tag_assignments', 'contact_methods', 'contact_tags', 'contact_profiles',
         'security_events', 'sessions', 'password_reset_tokens', 'role_assignments',
@@ -70,6 +71,8 @@ final class Race
             'BCRYPT_ROUNDS' => '4',
             'IDENTITY_COMPROMISED_PASSWORD_CHECK' => 'none',
             'IDENTITY_PASSWORD_RESET_RESPONSE_FLOOR_MS' => '0',
+            // Whatever Resources file store this process is using (the faked one, in the Resources races), the worker uses too.
+            'RESOURCES_TEST_DISK_ROOT' => rtrim(Storage::disk('resources')->path(''), '/'),
         ];
 
         $process = new Process([PHP_BINARY, base_path('tests/Concurrency/worker.php'), $operation, json_encode($arguments, JSON_THROW_ON_ERROR)], base_path(), $environment, null, 180);

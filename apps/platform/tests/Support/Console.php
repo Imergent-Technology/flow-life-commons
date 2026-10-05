@@ -102,6 +102,43 @@ final class Console
     }
 
     /**
+     * A multipart form POST, as a browser sends a form with a file in it: every field is text and each `UploadedFile` is a file part.
+     * Same cookie jar and CSRF header as every other request from this browser.
+     *
+     * @param  array<string, mixed>  $fields  strings, and UploadedFile values for file parts
+     * @param  array<string, string>  $headers
+     * @return TestResponse<Response>
+     */
+    public function multipart(string $path, array $fields, array $headers = []): TestResponse
+    {
+        app('session')->forgetDrivers();
+        app()->forgetInstance('session.store');
+        app()->forgetInstance('auth.driver');
+        app('auth')->forgetGuards();
+
+        if (isset($this->jar[self::XSRF_COOKIE]) && ! isset($headers['X-XSRF-TOKEN'])) {
+            $headers['X-XSRF-TOKEN'] = (string) $this->jar[self::XSRF_COOKIE]->getValue();
+        }
+        $headers += ['Accept' => 'application/json', 'Content-Type' => 'multipart/form-data; boundary=----flc'];
+        $server = $this->ip === null ? [] : ['REMOTE_ADDR' => $this->ip];
+        // A declared length is a server variable, as PHP gives it; Laravel would send it as HTTP_CONTENT_LENGTH otherwise.
+        if (isset($headers['Content-Length'])) {
+            $server['CONTENT_LENGTH'] = $headers['Content-Length'];
+            unset($headers['Content-Length']);
+        }
+        self::forgetTestCaseCookies();
+
+        $response = withUnencryptedCookies($this->cookieValues())
+            ->withServerVariables($server)
+            ->withHeaders($headers)
+            ->post($path, $fields);
+
+        $this->absorb($response);
+
+        return $response;
+    }
+
+    /**
      * Gets a session and CSRF cookie the way the Console does before signing in.
      *
      * @return TestResponse<Response>

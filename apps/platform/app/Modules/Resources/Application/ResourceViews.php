@@ -13,6 +13,7 @@ use App\Modules\Resources\Domain\CategoryRepository;
 use App\Modules\Resources\Domain\Pack;
 use App\Modules\Resources\Domain\PackRepository;
 use App\Modules\Resources\Domain\Provenance;
+use App\Modules\Resources\Domain\ResourceFileStore;
 use App\Shared\Domain\PersonId;
 
 /**
@@ -27,6 +28,7 @@ final readonly class ResourceViews
         private CategoryRepository $categories,
         private PackRepository $packs,
         private CardRepository $cards,
+        private ResourceFileStore $files,
     ) {}
 
     /**
@@ -91,21 +93,32 @@ final readonly class ResourceViews
 
     public function card(Card $card): ManagedCardView
     {
-        $names = $this->names([$card->provenance]);
+        $asset = $card->asset;
+        $names = $this->names([$card->provenance], $asset === null ? [] : [$asset->uploadedBy]);
 
-        return new ManagedCardView($card, self::person($card->provenance->createdBy, $names), self::person($card->provenance->updatedBy, $names));
+        return new ManagedCardView(
+            $card,
+            self::person($card->provenance->createdBy, $names),
+            self::person($card->provenance->updatedBy, $names),
+            $asset === null ? null : self::person($asset->uploadedBy, $names),
+            $asset === null ? null : $this->files->exists($asset->storageKey),
+        );
     }
 
     /**
      * @param  list<Provenance>  $provenance
+     * @param  list<PersonId>  $others  further people to name (an uploader)
      * @return array<string, string> display names keyed by PersonId value
      */
-    private function names(array $provenance): array
+    private function names(array $provenance, array $others = []): array
     {
         $ids = [];
         foreach ($provenance as $p) {
             $ids[$p->createdBy->value] = $p->createdBy;
             $ids[$p->updatedBy->value] = $p->updatedBy;
+        }
+        foreach ($others as $other) {
+            $ids[$other->value] = $other;
         }
         $names = [];
         foreach ($ids === [] ? [] : ($this->findPeople)(array_values($ids)) as $key => $summary) {

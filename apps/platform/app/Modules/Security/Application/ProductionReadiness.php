@@ -53,7 +53,18 @@ final readonly class ProductionReadiness
      */
     private const float MAX_SMTP_TIMEOUT_SECONDS = 30.0;
 
-    public function __construct(private Config $config, private Application $app) {}
+    /**
+     * The bounds Resources applies to `resources.assets.max_bytes` (Resources\Application\AssetLimits), restated because this module
+     * depends on none: the check must judge the limit the application will actually enforce. A test pins that the two agree.
+     */
+    public const int RESOURCES_ASSET_FLOOR = 1024 * 1024;
+
+    public const int RESOURCES_ASSET_CEILING = 100 * 1024 * 1024;
+
+    /** Room a multipart request needs beyond the file itself: the other fields (a File Card's document may be 256 KiB) and framing. */
+    public const int RESOURCES_FORM_ALLOWANCE = 1024 * 1024;
+
+    public function __construct(private Config $config, private Application $app, private PhpIni $ini = new PhpIni) {}
 
     /** @return list<ReadinessCheck> */
     public function checks(): array
@@ -64,6 +75,7 @@ final readonly class ProductionReadiness
             ...$this->session(),
             ...$this->limits(),
             ...$this->runtime(),
+            ...$this->uploads(),
             ...$this->maintenance(),
             ...$this->database(),
             ...$this->mail(),
@@ -446,6 +458,67 @@ final readonly class ProductionReadiness
             ReadinessCheck::assert('the runtime directories are writable', $writable === [], 'Not writable: '.implode(', ', $writable).'.'),
             // `expose_php` is deliberately NOT a check here: see exposePhp() below for why.
         ];
+    }
+
+    /**
+     * Resources' managed files (ADR 0037, decisions 63-64). The application refuses a file over `resources.assets.max_bytes` itself;
+     * these make sure PHP lets such a file reach it, so that "too large" is the application's coded answer rather than PHP silently
+     * discarding the body, and that the store the files go to is private.
+     *
+     * The PHP limits read here are THIS process's (the CLI's on the production host). The web server's PHP can differ, which is why
+     * the command also lists them as an owner verification.
+     *
+     * @return list<ReadinessCheck>
+     */
+    private function uploads(): array
+    {
+        $max = max(self::RESOURCES_ASSET_FLOOR, min(self::RESOURCES_ASSET_CEILING, $this->config->integer('resources.assets.max_bytes', 20 * 1024 * 1024)));
+        $upload = $this->ini->bytes('upload_max_filesize');
+        $post = $this->ini->bytes('post_max_size');
+        $fileUploads = $this->ini->get('file_uploads');
+        $maxFiles = $this->ini->get('max_file_uploads');
+
+        $disk = $this->config->array('filesystems.disks.resources', []);
+        $root = is_string($disk['root'] ?? null) ? rtrim(str_replace('\\', '/', $disk['root']), '/') : '';
+        $public = rtrim(str_replace('\\', '/', $this->app->publicPath()), '/');
+        $private = $root !== '' && $root !== $public && ! str_starts_with($root.'/', $public.'/')
+            && ! array_key_exists('url', $disk) && ! (bool) ($disk['serve'] ?? false) && ($disk['visibility'] ?? null) === 'private';
+
+        return [
+            ReadinessCheck::assert(
+                'PHP accepts file uploads',
+                in_array(strtolower(is_string($fileUploads) ? $fileUploads : ''), ['1', 'on', 'true', 'yes'], true) && is_numeric($maxFiles) && (int) $maxFiles >= 1,
+                'file_uploads is off or max_file_uploads is 0, so no File Card can be created and no file replaced (ADR 0037).',
+            ),
+            ReadinessCheck::assert(
+                'PHP\'s upload_max_filesize admits the largest Resources file',
+                $upload !== null && ($upload === 0 || $upload >= $max),
+                'upload_max_filesize is '.self::size($upload).' and RESOURCES_ASSET_MAX_BYTES is '.self::size($max).'. PHP would discard a '
+                .'file between the two before the application could refuse it properly. Raise upload_max_filesize, or lower '
+                .'RESOURCES_ASSET_MAX_BYTES to what the host allows.',
+            ),
+            ReadinessCheck::assert(
+                'PHP\'s post_max_size admits the largest Resources upload, with room for the rest of the form',
+                $post !== null && ($post === 0 || $post >= $max + self::RESOURCES_FORM_ALLOWANCE),
+                'post_max_size is '.self::size($post).'; it must be at least RESOURCES_ASSET_MAX_BYTES ('.self::size($max).') plus '
+                .self::size(self::RESOURCES_FORM_ALLOWANCE).' for the other fields of the form. Over it, PHP drops the whole request body.',
+            ),
+            ReadinessCheck::assert(
+                'the Resources file store is private and outside the public directory',
+                $private,
+                'The `resources` disk in config/filesystems.php must be a private disk with no url, not served, rooted outside public/. '
+                .'Resource files are authorization-controlled: they are served only by Resources\' authorized routes (ADR 0037, decision 66).',
+            ),
+        ];
+    }
+
+    private static function size(?int $bytes): string
+    {
+        return match (true) {
+            $bytes === null => 'unreadable',
+            $bytes === 0 => 'unlimited',
+            default => number_format($bytes / 1048576, 1).' MiB ('.$bytes.' bytes)',
+        };
     }
 
     /**

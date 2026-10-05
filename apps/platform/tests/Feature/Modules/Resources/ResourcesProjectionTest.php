@@ -333,7 +333,7 @@ it('delivers the Series flag as presentation only, with no completion, progress 
 
     expect($delivered['is_series'])->toBeTrue()
         ->and(array_keys($delivered))->toBe(['id', 'title', 'summary', 'is_series', 'category', 'card_count', 'cards'])
-        ->and(array_keys($cards[0]))->toBe(['id', 'index', 'type', 'title', 'summary', 'uri', 'content'])
+        ->and(array_keys($cards[0]))->toBe(['id', 'index', 'type', 'title', 'summary', 'uri', 'file', 'content'])
         // Every visible Card is reachable directly: nothing is locked behind another.
         ->and(array_column($cards, 'index'))->toBe([1, 2]);
 });

@@ -3811,7 +3811,7 @@ paths:
           schema: {type: string, enum: [draft, published]}
         - name: card_type
           in: query
-          schema: {type: string, enum: [basic, external_link]}
+          schema: {type: string, enum: [basic, external_link, file]}
         - name: q
           in: query
           schema: {type: string, maxLength: 200}
@@ -4016,8 +4016,10 @@ paths:
         caller without the capability is never asked to prove anything. PERMANENT: the Pack and every Card in it are deleted,
         with no Trash, Restore or Archive; unpublishing is the reversible way to take a Pack out of use. In one transaction
         the rows are deleted and ONE `resource.pack_deleted` security event is recorded (the acting Account, `pack_id`,
-        `cards_deleted` and `files_deleted`: never a title, summary, content or address), so the deletion commits if and only
-        if its event does. A refused or failed deletion records no event. The Console asks for explicit confirmation first.
+        `cards_deleted` and `files_deleted`, the number of files removed with them: never a title, summary, content, address or
+        filename), so the deletion commits if and only if its event does. A refused or failed deletion records no event. The files
+        are removed from the store only after the deletion commits. The Console asks for explicit confirmation first, saying that
+        every Card in the Pack and every file they own will be permanently deleted.
       tags: [Resources]
       security:
         - sessionCookie: []
@@ -4347,11 +4349,20 @@ paths:
       summary: Create a Draft Card
       description: >-
         Needs `resources.manage`, and nothing more. Appends a Draft Card to the Pack, inheriting the Pack's audiences. The
-        `type` is fixed here for good: `basic` (the content is the resource; a `uri` is optional) or `external_link` (a `uri`
-        is required). `content` is a document in the Resources profile (see ResourceDocument) or absent for an empty one; it
-        is validated by the server, which never strips: anything outside the profile is `invalid_content`. The summary is
-        derived from the content unless `summary` is given. The server never fetches the `uri`. At most 100 Cards per Pack
-        (`card_limit_reached`).
+        `type` is fixed here for good: `basic` (the content is the resource; a `uri` is optional), `external_link` (a `uri`
+        is required) or `file` (one managed file, required, and no `uri`). `basic` and `external_link` are created with a JSON
+        body; a `file` Card is created with a MULTIPART form whose `file` part is the file (a JSON body for `file`, or a `file`
+        part for any other Type, is a 422). In the form, `content` is the document's JSON text. `content` is a document in the
+        Resources profile (see ResourceDocument) or absent for an empty one; it is validated by the server, which never strips:
+        anything outside the profile is `invalid_content`. The summary is derived from the content unless `summary` is given.
+        The server never fetches the `uri`. At most 100 Cards per Pack (`card_limit_reached`).
+
+        A file is accepted only when its media type, DETECTED from its content by the server, and its filename's extension agree
+        on one allowed kind: PDF, PNG, JPEG (`.jpg`, `.jpeg`), WebP, GIF, plain text (`.txt`), CSV, DOCX, XLSX, PPTX. The type the
+        browser claims for the part is ignored. Never SVG, HTML, XML, scripts, executables or archives (`file_type_not_allowed`).
+        At most the configured size (default 20 MiB; `file_too_large`, 413, also for a request PHP refused for its size). The
+        filename is kept, sanitised, as display metadata only: it is never a path, and the file is stored privately under a key
+        derived from a new id. Nothing is stored for a refused file.
       tags: [Resources]
       security:
         - sessionCookie: []
@@ -4366,6 +4377,9 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/NewResourceCard'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/NewResourceFileCard'
       responses:
         '201':
           description: 'The Card as created.'
@@ -4403,14 +4417,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+        '413':
+          description: 'The file (or the whole request) is over the size limit (`file_too_large`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTooLargeError'
         '422':
-          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          description: 'A malformed request (per-field messages under `errors`; a `file` Card without its `file` part, or a `file` part on another Type), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`, or, for a file, `file_type_not_allowed`.'
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/ValidationError'
                   - $ref: '#/components/schemas/CodedValidationError'
+        '503':
+          description: 'The file could not be stored just now; nothing was changed (`file_storage_unavailable`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
   /admin/resources/packs/{pack}/cards/{card}:
     get:
       operationId: getManagedResourceCard
@@ -4525,8 +4551,10 @@ paths:
       description: >-
         Needs `resources.manage` AND recent verification (`security.verified`). PERMANENT, with no Trash, Restore or Archive.
         Refused `published_pack_requirement` when it is the last Published Card of a Published Pack. In one transaction the
-        Card is deleted and ONE `resource.card_deleted` security event is recorded (the acting Account, `card_id`, `pack_id`,
-        `card_type`: never a title, summary, content or address). A refused or failed deletion records no event.
+        Card (and, for a `file` Card, its file's record) is deleted and ONE `resource.card_deleted` security event is recorded (the
+        acting Account, `card_id`, `pack_id`, `card_type`: never a title, summary, content, address, filename, media type, digest or
+        storage key). A refused or failed deletion records no event. A `file` Card's file is removed from the store only after the
+        deletion commits.
       tags: [Resources]
       security:
         - sessionCookie: []
@@ -4738,6 +4766,151 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PublishedPackRequirementError'
+  /admin/resources/packs/{pack}/cards/{card}/file:
+    post:
+      operationId: replaceResourceCardFile
+      summary: Replace a File Card's file
+      description: >-
+        Needs `resources.manage`, and nothing more: replacing a file is routine and records no security event. A MULTIPART form with
+        one `file` part, judged exactly as at creation. No `revision`: replacement is not an authored edit (ADR 0037, decision 56),
+        and two replacements of one Card serialise on the Pack's lock, the later winning. The Card keeps its id, state, audiences,
+        position and revision; only its file changes. The new file is stored first; the Card is pointed at it in one transaction;
+        the old file is removed only after that commits, so a reader is never left without one. Only a `file` Card has a file to
+        replace (`invalid_resource_input`).
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - $ref: '#/components/parameters/XsrfToken'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResourceFileUpload'
+      responses:
+        '200':
+          description: 'The Card with its new file.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManagedCard'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '419':
+          description: 'Missing or invalid CSRF token.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`), or no such Card in it (`card_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '413':
+          description: 'The file (or the whole request) is over the size limit (`file_too_large`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileTooLargeError'
+        '422':
+          description: 'A malformed request (no `file` part, or one that is not one successfully uploaded file), or a Resources rule: `file_type_not_allowed`, or `invalid_resource_input` for a Card that is not a `file` Card.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ValidationError'
+                  - $ref: '#/components/schemas/CodedValidationError'
+        '503':
+          description: 'The file could not be stored just now; nothing was changed (`file_storage_unavailable`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+    get:
+      operationId: downloadManagedResourceFile
+      summary: Download a File Card's file for management
+      description: >-
+        Needs `resources.manage`. The file of any File Card, Drafts included (the management preview of a file). Streamed; never a
+        redirect or a public URL. A Card with no file, or whose file is on record but missing from the store, is `asset_unavailable`.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - name: disposition
+          in: query
+          required: false
+          description: '`attachment` (the default) or `inline`. Inline is honoured only for a PDF or a raster image; any other file is still an attachment.'
+          schema: {type: string, enum: [attachment, inline]}
+      responses:
+        '200':
+          description: >-
+            The file's bytes, streamed. `Content-Type` is the stored, allowlisted type; `Content-Disposition` is `attachment` (or
+            `inline`, only when asked for and the file is a PDF or a raster image) with the sanitised original name, encoded per
+            RFC 6266 (`filename`, and `filename*` when the name is not plain ASCII); `Cache-Control: private, no-store`;
+            `X-Content-Type-Options: nosniff`; and the platform's security headers, including the production CSP.
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+            Content-Length:
+              schema: {type: integer}
+            Cache-Control:
+              schema: {type: string, enum: ['no-store, private']}
+          content:
+            application/pdf: {schema: {type: string, format: binary}}
+            image/png: {schema: {type: string, format: binary}}
+            image/jpeg: {schema: {type: string, format: binary}}
+            image/webp: {schema: {type: string, format: binary}}
+            image/gif: {schema: {type: string, format: binary}}
+            text/plain: {schema: {type: string, format: binary}}
+            text/csv: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.presentationml.presentation: {schema: {type: string, format: binary}}
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such Pack (`pack_not_found`), no such Card in it (`card_not_found`), or no file to give (`asset_unavailable`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'An unknown `disposition`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
   /admin/resource-library:
     get:
       operationId: browseResourceLibrary
@@ -4829,6 +5002,79 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
+
+  /admin/resource-library/packs/{pack}/cards/{card}/file:
+    get:
+      operationId: downloadResourceFile
+      summary: Download a File Card's file from the library
+      description: >-
+        Needs `resources.view`, and the Card must be VISIBLE to this viewer in the Guardian projection: the same rule a delivered
+        Pack follows, so a file can be had exactly when its Card can be seen. Nothing else authorizes it, and no request names an asset
+        or a storage key. Every reason the file is not the viewer's (a missing, Draft or unpublished Pack; a Draft, hidden, narrowed-away
+        or missing Card; a Card in another Pack; a Card with no file) is the SAME `resource_pack_not_found`. Only for a Card the viewer
+        can see may the answer be `asset_unavailable` (its file is on record but missing from the store).
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: resources.view
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - name: disposition
+          in: query
+          required: false
+          description: '`attachment` (the default) or `inline`. Inline is honoured only for a PDF or a raster image; any other file is still an attachment.'
+          schema: {type: string, enum: [attachment, inline]}
+      responses:
+        '200':
+          description: >-
+            The file's bytes, streamed. `Content-Type` is the stored, allowlisted type; `Content-Disposition` is `attachment` (or
+            `inline`, only when asked for and the file is a PDF or a raster image) with the sanitised original name, encoded per
+            RFC 6266 (`filename`, and `filename*` when the name is not plain ASCII); `Cache-Control: private, no-store`;
+            `X-Content-Type-Options: nosniff`; and the platform's security headers, including the production CSP.
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+            Content-Length:
+              schema: {type: integer}
+            Cache-Control:
+              schema: {type: string, enum: ['no-store, private']}
+          content:
+            application/pdf: {schema: {type: string, format: binary}}
+            image/png: {schema: {type: string, format: binary}}
+            image/jpeg: {schema: {type: string, format: binary}}
+            image/webp: {schema: {type: string, format: binary}}
+            image/gif: {schema: {type: string, format: binary}}
+            text/plain: {schema: {type: string, format: binary}}
+            text/csv: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.presentationml.presentation: {schema: {type: string, format: binary}}
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such resource (`resource_pack_not_found`), or, for a Card the viewer can see, its file is missing from the store (`asset_unavailable`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'An unknown `disposition`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
 
 components:
   securitySchemes:
@@ -6076,17 +6322,22 @@ components:
       description: >-
         A Card for management without its content. `type` is fixed at creation. `audience_mode` is `inherit` (the Pack's audiences,
         and `audiences` is empty) or `narrowed` (a fixed, non-empty subset of the Pack's). `summary_mode` is `derived` (follows the content) or
-        `custom` (never overwritten by content changes). `uri` is required for `external_link` and optional for `basic`.
-      required: [id, pack_id, position, type, title, summary_mode, summary, uri, audience_mode, audiences, state, revision, created_by, updated_by, created_at, updated_at]
+        `custom` (never overwritten by content changes). `uri` is required for `external_link`, optional for `basic` and absent for
+        `file`. `file` describes a `file` Card's file (null for any other Type): never where it is stored.
+      required: [id, pack_id, position, type, title, summary_mode, summary, uri, file, audience_mode, audiences, state, revision, created_by, updated_by, created_at, updated_at]
       properties:
         id: {type: string}
         pack_id: {type: string}
         position: {type: integer}
-        type: {type: string, enum: [basic, external_link]}
+        type: {type: string, enum: [basic, external_link, file]}
         title: {type: string, minLength: 1, maxLength: 200}
         summary_mode: {type: string, enum: [derived, custom]}
         summary: {type: string, maxLength: 300}
         uri: {type: [string, 'null'], maxLength: 2048}
+        file:
+          oneOf:
+            - $ref: '#/components/schemas/ResourceFileSummary'
+            - {type: 'null'}
         audience_mode: {type: string, enum: [inherit, narrowed]}
         audiences:
           type: array
@@ -6098,13 +6349,73 @@ components:
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}
     ManagedCard:
-      description: 'A Card with its content, for management.'
+      description: 'A Card with its content, for management. For a `file` Card, `file` is the fuller ManagedResourceFile.'
       allOf:
         - $ref: '#/components/schemas/ManagedCardOutline'
         - type: object
           required: [content]
           properties:
             content: {$ref: '#/components/schemas/ResourceContent'}
+            file:
+              oneOf:
+                - $ref: '#/components/schemas/ManagedResourceFile'
+                - {type: 'null'}
+    ResourceFileSummary:
+      type: object
+      description: 'A File Card''s file as a list shows it: its sanitised original name, its detected and allowlisted media type, and its size.'
+      required: [name, media_type, byte_size]
+      properties:
+        name: {type: string, maxLength: 255}
+        media_type:
+          type: string
+          enum: [application/pdf, image/png, image/jpeg, image/webp, image/gif, text/plain, text/csv, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.openxmlformats-officedocument.presentationml.presentation]
+        byte_size: {type: integer, minimum: 1}
+    ManagedResourceFile:
+      description: >-
+        A File Card's file for management: also its SHA-256 digest, who uploaded it and when, whether the store holds it now
+        (`available` false means a download answers `asset_unavailable`, after a partial restore, say), and the management path that
+        serves it. Never a storage key, disk or directory.
+      allOf:
+        - $ref: '#/components/schemas/ResourceFileSummary'
+        - type: object
+          required: [sha256, uploaded_by, uploaded_at, available, download_path]
+          properties:
+            sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+            uploaded_by: {$ref: '#/components/schemas/ResourcePerson'}
+            uploaded_at: {type: string, format: date-time}
+            available: {type: boolean}
+            download_path: {type: string, description: 'The API path (no host) of downloadManagedResourceFile for this Card.'}
+    DeliveredResourceFile:
+      description: 'A visible File Card''s file as a viewer receives it, with the library path that serves it to them. Nothing management sees.'
+      allOf:
+        - $ref: '#/components/schemas/ResourceFileSummary'
+        - type: object
+          required: [download_path]
+          properties:
+            download_path: {type: string, description: 'The API path (no host) of downloadResourceFile for this Card.'}
+    ResourceFileUpload:
+      type: object
+      description: 'One file, as a multipart part named `file`. The part''s claimed Content-Type is ignored.'
+      required: [file]
+      properties:
+        file: {type: string, format: binary}
+    NewResourceFileCard:
+      type: object
+      description: 'A `file` Card, as a multipart form. `content`, when sent, is the JSON text of a ResourceDocument; blank is none.'
+      required: [type, title, file]
+      properties:
+        type: {type: string, enum: [file]}
+        title: {type: string, maxLength: 800}
+        content: {type: string, maxLength: 1048576}
+        summary: {type: string, maxLength: 1200}
+        file: {type: string, format: binary}
+    FileTooLargeError:
+      type: object
+      required: [message, code, max_bytes]
+      properties:
+        message: {type: string}
+        code: {type: string, enum: [file_too_large]}
+        max_bytes: {type: integer, description: 'The configured limit, in bytes.'}
     ResourceContent:
       type: object
       description: 'A Card''s rich content as the platform keeps it. HTML is never stored, accepted or returned.'
@@ -6156,6 +6467,7 @@ components:
           items: {$ref: '#/components/schemas/ResourceAudience'}
     NewResourceCard:
       type: object
+      description: 'A `basic` or `external_link` Card, as JSON. A `file` Card is a multipart form (NewResourceFileCard).'
       required: [type, title]
       properties:
         type: {type: string, enum: [basic, external_link]}
@@ -6209,7 +6521,7 @@ components:
         code: {type: string, enum: [card_not_publishable]}
         unmet:
           type: array
-          items: {type: string, enum: [content, uri]}
+          items: {type: string, enum: [content, uri, file]}
     PublishedPackRequirementError:
       type: object
       required: [message, code]
@@ -6247,14 +6559,19 @@ components:
           items: {$ref: '#/components/schemas/ResourceDeliveredCard'}
     ResourceDeliveredCard:
       type: object
-      required: [id, index, type, title, summary, uri, content]
+      description: 'A visible Card: its link (`uri`) or its file (`file`), whatever the Type, so a consumer can always offer its safe action.'
+      required: [id, index, type, title, summary, uri, file, content]
       properties:
         id: {type: string}
         index: {type: integer, minimum: 1}
-        type: {type: string, enum: [basic, external_link]}
+        type: {type: string, enum: [basic, external_link, file]}
         title: {type: string}
         summary: {type: string}
         uri: {type: [string, 'null']}
+        file:
+          oneOf:
+            - $ref: '#/components/schemas/DeliveredResourceFile'
+            - {type: 'null'}
         content: {$ref: '#/components/schemas/ResourceContent'}
     ResourceLibrary:
       type: object

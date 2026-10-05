@@ -4,17 +4,20 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
+use App\Modules\Resources\Domain\AssetId;
 use App\Modules\Resources\Domain\Card;
 use App\Modules\Resources\Domain\CardId;
 use App\Modules\Resources\Domain\CardRepository;
 use App\Modules\Resources\Domain\Category;
 use App\Modules\Resources\Domain\CategoryId;
 use App\Modules\Resources\Domain\CategoryRepository;
+use App\Modules\Resources\Domain\DeletedCards;
 use App\Modules\Resources\Domain\ManagedPackFilter;
 use App\Modules\Resources\Domain\Pack;
 use App\Modules\Resources\Domain\PackId;
 use App\Modules\Resources\Domain\PackRepository;
 use App\Modules\Resources\Domain\PublicationState;
+use App\Modules\Resources\Domain\StorageKey;
 use Closure;
 
 /**
@@ -107,6 +110,13 @@ final class PausingCardRepository implements CardRepository
     public function add(Card $card): void
     {
         $this->inner->add($card);
+        $this->fire(__FUNCTION__);
+    }
+
+    public function replaceAsset(Card $card, ?AssetId $previous): void
+    {
+        $this->inner->replaceAsset($card, $previous);
+        $this->fire(__FUNCTION__);
     }
 
     public function saveAuthored(Card $card, int $expectedRevision, PublicationState $observedState): bool
@@ -129,12 +139,20 @@ final class PausingCardRepository implements CardRepository
         $this->inner->savePosition($id, $position);
     }
 
-    public function delete(CardId $id): void
+    public function delete(CardId $id): ?StorageKey
     {
-        $this->inner->delete($id);
+        $r = $this->inner->delete($id);
+        $this->fire(__FUNCTION__);
+
+        return $r;
     }
 
-    public function deleteAllOf(PackId $pack): int
+    public function assetStorageKeys(): array
+    {
+        return $this->inner->assetStorageKeys();
+    }
+
+    public function deleteAllOf(PackId $pack): DeletedCards
     {
         $r = $this->inner->deleteAllOf($pack);
         $this->fire(__FUNCTION__);

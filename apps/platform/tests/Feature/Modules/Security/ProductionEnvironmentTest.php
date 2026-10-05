@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Security\Application\PhpIni;
 use App\Modules\Security\Application\ProductionEnvironment;
 use App\Modules\Security\Application\ProductionReadiness;
 use Dotenv\Dotenv;
@@ -36,7 +37,7 @@ function productionTemplateAssignments(): string
 }
 
 /** Config files underEnvironment() rebuilds from disk, and must therefore also restore. */
-const UNDER_ENVIRONMENT_CONFIG_FILES = ['app', 'cache', 'cors', 'database', 'hashing', 'identity', 'mail', 'queue', 'session'];
+const UNDER_ENVIRONMENT_CONFIG_FILES = ['app', 'cache', 'cors', 'database', 'filesystems', 'hashing', 'identity', 'mail', 'queue', 'resources', 'session'];
 
 /**
  * Run $callback with the process environment replaced by $values ALONE, then put everything back —
@@ -146,8 +147,10 @@ function filledIn(string $file): array
 /** @return list<string> the name and detail of every required check that fails */
 function failingChecks(): array
 {
+    // The PHP limits are the host's, not the template's: a host set up as the runbook says, not this test container's PHP.
+    $hostPhp = new PhpIni(['file_uploads' => '1', 'max_file_uploads' => '20', 'upload_max_filesize' => '20M', 'post_max_size' => '24M']);
     $failures = [];
-    foreach (app(ProductionReadiness::class)->checks() as $check) {
+    foreach (app()->make(ProductionReadiness::class, ['ini' => $hostPhp])->checks() as $check) {
         if (! $check->passed) {
             $failures[] = $check->name;
         }

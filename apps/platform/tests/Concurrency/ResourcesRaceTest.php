@@ -23,6 +23,7 @@ use App\Modules\Resources\Application\PublishedPackRequirement;
 use App\Modules\Resources\Application\PublishPack;
 use App\Modules\Resources\Application\ReorderCards;
 use App\Modules\Resources\Application\ReorderCategories;
+use App\Modules\Resources\Application\ReplaceCardFile;
 use App\Modules\Resources\Application\SetCardAudiences;
 use App\Modules\Resources\Application\SetPackAudiences;
 use App\Modules\Resources\Application\StaleRevision;
@@ -39,6 +40,7 @@ use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Tests\Support\Race;
+use Tests\Support\ResourceFiles;
 use Tests\Support\Resources;
 use Tests\Support\ResourcesPauses;
 
@@ -58,6 +60,7 @@ use Tests\Support\ResourcesPauses;
 beforeEach(function () {
     Artisan::call('migrate', ['--force' => true]);
     Race::clean();
+    ResourceFiles::fake(); // one store for both processes (Race::start hands the worker its root)
 });
 
 afterEach(function () {
@@ -743,4 +746,127 @@ it('removes the audience rows of a narrowed Card created while the Pack deletion
         ->and(DB::table('resource_pack_audiences')->count())->toBe(0)
         ->and(Resources::events())->toHaveCount(1)
         ->and($cardsDeleted)->toBe(2, 'the event under-counted the Cards the deletion removed');
+});
+
+// --- Managed files (WP3) ---------------------------------------------------------------------------------------------------------
+//
+// A file is written before its transaction and removed only after one commits, and the asset a Card points at is read under the
+// Pack's lock (and the Card's row) by a current read. Whatever order these commit in, the end state has exactly one asset row per File
+// Card, every stored file is referenced (nothing leaks), and nothing referenced was removed. Replacement does not use the revision
+// (ADR 0037, decision 56): two replacements serialise and the later one wins.
+
+/** @return array{ManagedPackView, ManagedCardView} a Draft Pack holding one Draft File Card */
+function filePackForRace(Actor $by): array
+{
+    $pack = Resources::pack($by, 'Files');
+
+    return [$pack, ResourceFiles::card($by, $pack, 'The file', 'first.pdf', ResourceFiles::pdf('first'))];
+}
+
+/** @return array<string, string> the worker's arguments to replace a Card's file with `$bytes` named `$name` */
+function replaceArguments(Actor $by, ManagedPackView $pack, ManagedCardView $card, string $name, string $bytes): array
+{
+    return [...resourcesActor($by), 'pack' => $pack->pack->id->value, 'card' => $card->card->id->value, 'name' => $name, 'bytes' => base64_encode($bytes)];
+}
+
+it('serialises two replacements of one file: the later wins, and neither the first file nor the middle one is left behind', function () {
+    $by = Resources::editor();
+    [$pack, $card] = filePackForRace($by);
+
+    $race = Race::against(
+        function (Closure $pause) use ($by, $pack, $card) {
+            ResourcesPauses::afterCard('replaceAsset', $pause); // the swap is written, not committed
+            app(ReplaceCardFile::class)($by, $pack->pack->id, $card->card->id, ResourceFiles::incoming('second.pdf', ResourceFiles::pdf('second')));
+        },
+        null, 'resources_replace_file', replaceArguments($by, $pack, $card, 'third.pdf', ResourceFiles::pdf('third')),
+    );
+
+    $asset = DB::table('resource_assets')->first();
+    expect($race['blocked'])->toBeTrue('the second replacement did not wait for the first to commit')
+        ->and($race['exit'])->toBe(0)
+        ->and(DB::table('resource_assets')->count())->toBe(1)
+        ->and(Resources::str($asset?->original_filename))->toBe('third.pdf')
+        ->and(Resources::str(DB::table('resource_cards')->value('asset_id')))->toBe(Resources::str($asset?->id))
+        ->and(ResourceFiles::stored())->toBe([Resources::str($asset?->storage_key)])
+        ->and(ResourceFiles::storedBytes(Resources::str($asset?->storage_key)))->toBe(ResourceFiles::pdf('third'))
+        ->and(DB::table('security_events')->count())->toBe(0);
+});
+
+it('serialises deleting a File Card against replacing its file: the replacement finds it gone and removes the file it wrote', function () {
+    $by = Resources::editor();
+    [$pack, $card] = filePackForRace($by);
+
+    $race = Race::against(
+        fn () => app(DeleteCard::class)($by, $pack->pack->id, $card->card->id),
+        'resource.card_deleted', 'resources_replace_file', replaceArguments($by, $pack, $card, 'late.pdf', ResourceFiles::pdf('late')),
+    );
+
+    expect($race['blocked'])->toBeTrue('the replacement did not wait for the deletion to commit')
+        ->and($race['exit'])->toBe(2)
+        ->and($race['class'])->toBe(CardNotFound::class)
+        ->and(DB::table('resource_cards')->count())->toBe(0)
+        ->and(DB::table('resource_assets')->count())->toBe(0)
+        ->and(ResourceFiles::stored())->toBe([])
+        ->and(DB::table('security_events')->where('type', 'resource.card_deleted')->count())->toBe(1);
+});
+
+it('serialises replacing a file against deleting its Card: the deletion removes the NEW asset and its file, leaving nothing', function () {
+    $by = Resources::editor();
+    [$pack, $card] = filePackForRace($by);
+
+    $race = Race::against(
+        function (Closure $pause) use ($by, $pack, $card) {
+            ResourcesPauses::afterCard('replaceAsset', $pause);
+            app(ReplaceCardFile::class)($by, $pack->pack->id, $card->card->id, ResourceFiles::incoming('second.pdf', ResourceFiles::pdf('second')));
+        },
+        null, 'resources_delete_card', [...resourcesActor($by), 'pack' => $pack->pack->id->value, 'card' => $card->card->id->value],
+    );
+
+    $events = DB::table('security_events')->where('type', 'resource.card_deleted')->get()->all();
+    expect($race['blocked'])->toBeTrue('the deletion did not wait for the replacement to commit')
+        ->and($race['exit'])->toBe(0)
+        ->and(DB::table('resource_cards')->count())->toBe(0)
+        ->and(DB::table('resource_assets')->count())->toBe(0)
+        ->and(ResourceFiles::stored())->toBe([])
+        ->and($events)->toHaveCount(1)
+        ->and(json_decode(Resources::str($events[0]->context), true))->toBe(['card_id' => $card->card->id->value, 'pack_id' => $pack->pack->id->value, 'card_type' => 'file']);
+});
+
+it('serialises replacing a file against deleting its Pack: the deletion counts and removes the NEW asset, even on MariaDB\'s snapshot', function () {
+    $by = Resources::editor();
+    [$pack, $card] = filePackForRace($by);
+
+    $race = Race::against(
+        function (Closure $pause) use ($by, $pack, $card) {
+            ResourcesPauses::afterCard('replaceAsset', $pause);
+            app(ReplaceCardFile::class)($by, $pack->pack->id, $card->card->id, ResourceFiles::incoming('second.pdf', ResourceFiles::pdf('second')));
+        },
+        null, 'resources_delete_pack', [...resourcesActor($by), 'pack' => $pack->pack->id->value],
+    );
+
+    $event = DB::table('security_events')->where('type', 'resource.pack_deleted')->first();
+    expect($race['blocked'])->toBeTrue('the Pack deletion did not wait for the replacement to commit')
+        ->and($race['exit'])->toBe(0)
+        ->and(DB::table('resource_packs')->count())->toBe(0)
+        ->and(DB::table('resource_assets')->count())->toBe(0)
+        ->and(ResourceFiles::stored())->toBe([])
+        ->and(json_decode(Resources::str($event?->context), true))->toBe(['pack_id' => $pack->pack->id->value, 'cards_deleted' => 1, 'files_deleted' => 1]);
+});
+
+it('serialises deleting a Pack against replacing a file in it: the replacement finds the Pack gone and removes the file it wrote', function () {
+    $by = Resources::editor();
+    [$pack, $card] = filePackForRace($by);
+
+    $race = Race::against(
+        fn () => app(DeletePack::class)($by, $pack->pack->id),
+        'resource.pack_deleted', 'resources_replace_file', replaceArguments($by, $pack, $card, 'late.pdf', ResourceFiles::pdf('late')),
+    );
+
+    expect($race['blocked'])->toBeTrue('the replacement did not wait for the Pack deletion to commit')
+        ->and($race['exit'])->toBe(2)
+        ->and($race['class'])->toBe(PackNotFound::class)
+        ->and(DB::table('resource_assets')->count())->toBe(0)
+        ->and(ResourceFiles::stored())->toBe([])
+        ->and(json_decode(Resources::str(DB::table('security_events')->where('type', 'resource.pack_deleted')->value('context')), true))
+        ->toBe(['pack_id' => $pack->pack->id->value, 'cards_deleted' => 1, 'files_deleted' => 1]);
 });

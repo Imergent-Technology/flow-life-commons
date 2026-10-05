@@ -9,6 +9,8 @@ use App\Modules\Resources\Http\CreatePackController;
 use App\Modules\Resources\Http\DeleteCardController;
 use App\Modules\Resources\Http\DeleteCategoryController;
 use App\Modules\Resources\Http\DeletePackController;
+use App\Modules\Resources\Http\DownloadLibraryFileController;
+use App\Modules\Resources\Http\DownloadManagedFileController;
 use App\Modules\Resources\Http\ListCategoriesController;
 use App\Modules\Resources\Http\ListManagedPacksController;
 use App\Modules\Resources\Http\PreviewPackController;
@@ -18,6 +20,7 @@ use App\Modules\Resources\Http\RenameCategoryController;
 use App\Modules\Resources\Http\ReorderCardsController;
 use App\Modules\Resources\Http\ReorderCategoriesController;
 use App\Modules\Resources\Http\ReorderPacksController;
+use App\Modules\Resources\Http\ReplaceCardFileController;
 use App\Modules\Resources\Http\SetCardAudiencesController;
 use App\Modules\Resources\Http\SetPackAudiencesController;
 use App\Modules\Resources\Http\ShowLibraryPackController;
@@ -48,6 +51,10 @@ use Illuminate\Support\Facades\Route;
  *   name, not content) is routine.
  *
  * The actor is always the signed-in caller: no request field names a creator, an editor or an uploader.
+ *
+ * Files (WP3) follow the same split. A File Card's file is replaced and downloaded (Drafts included) under management, and downloaded
+ * by a viewer under delivery only for a Card the projection shows them. Both are routes on a Card: no route takes an asset id or a
+ * storage key, and nothing of the store is reachable any other way. Replacing a file is routine (no recent verification).
  */
 Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin')->group(function (): void {
     // Exactly what `Str::isUlid` accepts, in the lowercase form ids are held in (see Membership's routes).
@@ -80,10 +87,13 @@ Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin
         Route::post('packs/{pack}/cards/{card}/publish', PublishCardController::class)->where('pack', $id)->where('card', $id)->name('api.v1.admin.resources.cards.publish');
         Route::post('packs/{pack}/cards/{card}/unpublish', UnpublishCardController::class)->where('pack', $id)->where('card', $id)->name('api.v1.admin.resources.cards.unpublish');
         Route::delete('packs/{pack}/cards/{card}', DeleteCardController::class)->where('pack', $id)->where('card', $id)->middleware('security.verified')->name('api.v1.admin.resources.cards.destroy');
+        Route::post('packs/{pack}/cards/{card}/file', ReplaceCardFileController::class)->where('pack', $id)->where('card', $id)->name('api.v1.admin.resources.cards.file.replace');
+        Route::get('packs/{pack}/cards/{card}/file', DownloadManagedFileController::class)->where('pack', $id)->where('card', $id)->name('api.v1.admin.resources.cards.file');
     });
 
     Route::middleware('can:resources.view')->prefix('resource-library')->group(function () use ($id): void {
         Route::get('/', BrowseLibraryController::class)->name('api.v1.admin.resource-library.index');
         Route::get('packs/{pack}', ShowLibraryPackController::class)->where('pack', $id)->name('api.v1.admin.resource-library.show');
+        Route::get('packs/{pack}/cards/{card}/file', DownloadLibraryFileController::class)->where('pack', $id)->where('card', $id)->name('api.v1.admin.resource-library.cards.file');
     });
 });

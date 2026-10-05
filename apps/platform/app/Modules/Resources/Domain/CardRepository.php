@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\Modules\Resources\Domain;
 
 /**
- * Persistence for Cards and their narrowing rows. Each write names the columns it changes and no others.
+ * Persistence for Cards, their narrowing rows and a File Card's asset row. Each write names the columns it changes and no others.
+ * Asset rows are written and removed only with their Card: there is no way to reach one except through the Card that owns it.
  */
 interface CardRepository
 {
@@ -41,8 +42,15 @@ interface CardRepository
      */
     public function outlinesOfPacks(array $packs): array;
 
-    /** Inserts the Card and its audience rows. */
+    /** Inserts a File Card's asset row, then the Card, then its audience rows. */
     public function add(Card $card): void;
+
+    /**
+     * The File Card's file was replaced (decision 65): inserts the Card's new asset row, points the Card at it with the editing
+     * provenance, and deletes the asset row it pointed at before (`$previous`; null only for a File Card whose row lost its asset,
+     * which replacement repairs). The caller holds the Pack's lock and the Card's row.
+     */
+    public function replaceAsset(Card $card, ?AssetId $previous): void;
 
     /**
      * Writes the authored fields, the address and the new revision and editing provenance, ONLY if the row still holds
@@ -59,13 +67,24 @@ interface CardRepository
 
     public function savePosition(CardId $id, int $position): void;
 
-    /** Deletes the narrowing rows and the Card. */
-    public function delete(CardId $id): void;
+    /**
+     * Deletes the narrowing rows, the Card and, for a File Card, its asset row. Returns the storage key of the asset removed, so the
+     * caller can remove the file once the deletion has committed, or null when there was none.
+     */
+    public function delete(CardId $id): ?StorageKey;
 
     /**
-     * Deletes every Card of a Pack with their narrowing rows, and returns how many there were.
+     * Deletes every Card of a Pack with their narrowing rows and asset rows, and says how many Cards and asset rows there were and
+     * which storage keys the removed assets used.
      */
-    public function deleteAllOf(PackId $pack): int;
+    public function deleteAllOf(PackId $pack): DeletedCards;
+
+    /**
+     * Every storage key a committed asset row refers to: what the prune must never remove.
+     *
+     * @return list<StorageKey>
+     */
+    public function assetStorageKeys(): array;
 
     public function countIn(PackId $pack): int;
 

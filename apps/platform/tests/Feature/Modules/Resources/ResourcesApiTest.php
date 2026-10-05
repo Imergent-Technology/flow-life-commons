@@ -136,8 +136,9 @@ it('gives each response exactly its documented keys, management and delivery dif
     expect(array_keys(ofKey($category)))->toBe(['id', 'name', 'position', 'pack_count', 'created_by', 'updated_by', 'created_at', 'updated_at'])
         ->and(array_keys($managed))->toBe(['id', 'title', 'summary', 'is_series', 'category', 'position', 'state', 'revision', 'audiences', 'card_count', 'published_card_count', 'created_by', 'updated_by', 'created_at', 'updated_at', 'cards'])
         ->and(array_keys(ofKey($list)))->not->toContain('cards') // a list carries counts, not the Cards
-        ->and(array_keys(Api::rows($managed['cards'])[0]))->toBe(['id', 'pack_id', 'position', 'type', 'title', 'summary_mode', 'summary', 'uri', 'audience_mode', 'audiences', 'state', 'revision', 'created_by', 'updated_by', 'created_at', 'updated_at'])
-        ->and(array_keys($card))->toBe(['id', 'pack_id', 'position', 'type', 'title', 'summary_mode', 'summary', 'uri', 'audience_mode', 'audiences', 'state', 'revision', 'created_by', 'updated_by', 'created_at', 'updated_at', 'content'])
+        ->and(array_keys(Api::rows($managed['cards'])[0]))->toBe(['id', 'pack_id', 'position', 'type', 'title', 'summary_mode', 'summary', 'uri', 'file', 'audience_mode', 'audiences', 'state', 'revision', 'created_by', 'updated_by', 'created_at', 'updated_at'])
+        ->and(array_keys($card))->toBe(['id', 'pack_id', 'position', 'type', 'title', 'summary_mode', 'summary', 'uri', 'file', 'audience_mode', 'audiences', 'state', 'revision', 'created_by', 'updated_by', 'created_at', 'updated_at', 'content'])
+        ->and($card['file'])->toBeNull() // a basic Card has no file; a File Card's is pinned in ResourcesFilesApiTest
         ->and(array_keys(ofKey($card['content'])))->toBe(['format', 'version', 'document'])
         ->and(array_keys(ofKey($managed['created_by'])))->toBe(['id', 'display_name'])
         ->and(array_keys(body($console->get(LIBRARY."/packs/{$pack}")->assertOk())))->toBe(['id', 'title', 'summary', 'is_series', 'category', 'card_count', 'cards'])
@@ -426,11 +427,12 @@ it('refuses invalid content with invalid_content naming where, and an unsafe add
     expect(DB::table('resource_cards')->count())->toBe(0);
 });
 
-it('refuses what the closed vocabularies do not contain: no file Type, no volunteer audience, no free-form preview audience', function () {
+it('refuses what the closed vocabularies do not contain: no other Type, no volunteer audience, no free-form preview audience', function () {
     [$console] = Resources::signedInGuardian();
     $pack = Api::string(apiPack($console)['id']);
 
-    $console->post(MANAGE."/packs/{$pack}/cards", ['type' => 'file', 'title' => 'A file'])->assertStatus(422)->assertJsonValidationErrors('type');
+    // `file` is a Type now (WP3), and one that cannot be created without its file.
+    $console->post(MANAGE."/packs/{$pack}/cards", ['type' => 'file', 'title' => 'A file'])->assertStatus(422)->assertJsonValidationErrors('file');
     $console->post(MANAGE."/packs/{$pack}/cards", ['type' => 'youtube', 'title' => 'Video', 'uri' => 'https://youtu.be/x'])->assertStatus(422)->assertJsonValidationErrors('type');
     $console->put(MANAGE."/packs/{$pack}/audiences", ['audiences' => ['volunteer']])->assertStatus(422)->assertJsonValidationErrors('audiences.0');
     $console->put(MANAGE."/packs/{$pack}/audiences", ['audiences' => ['guardian', 'partner']])->assertStatus(422);
@@ -438,7 +440,8 @@ it('refuses what the closed vocabularies do not contain: no file Type, no volunt
     $console->get(MANAGE."/packs/{$pack}/preview")->assertStatus(422)->assertJsonValidationErrors('audience');
     $console->get(MANAGE."/packs/{$pack}/preview?audience=Guardian")->assertStatus(422);
     $console->get(MANAGE.'/packs?audience=everyone')->assertStatus(422);
-    $console->get(MANAGE.'/packs?card_type=file')->assertStatus(422);
+    $console->get(MANAGE.'/packs?card_type=video')->assertStatus(422);
+    $console->get(MANAGE.'/packs?card_type=file')->assertOk();
 });
 
 it('gives every delivery refusal the SAME body: missing, Draft, unpublished, not for you and empty are indistinguishable', function () {

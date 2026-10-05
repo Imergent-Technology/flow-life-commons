@@ -56,6 +56,8 @@ use App\Modules\Membership\Application\UnknownPerson as UnknownMembershipPerson;
 use App\Modules\Membership\Domain\InvalidMembershipTerm as InvalidMembershipGrantTerm;
 use App\Modules\Membership\Http\MembershipProblems;
 use App\Modules\Membership\Http\MembershipRecordNotFound;
+use App\Modules\Resources\Application\AssetLimits;
+use App\Modules\Resources\Application\AssetUnavailable;
 use App\Modules\Resources\Application\CardAudienceConflict;
 use App\Modules\Resources\Application\CardLimitReached;
 use App\Modules\Resources\Application\CardNotFound;
@@ -63,6 +65,8 @@ use App\Modules\Resources\Application\CardNotPublishable;
 use App\Modules\Resources\Application\CategoryNotEmpty;
 use App\Modules\Resources\Application\CategoryNotFound;
 use App\Modules\Resources\Application\DuplicateCategory;
+use App\Modules\Resources\Application\FileTooLarge;
+use App\Modules\Resources\Application\FileTypeNotAllowed;
 use App\Modules\Resources\Application\OrderMismatch;
 use App\Modules\Resources\Application\PackNotFound;
 use App\Modules\Resources\Application\PackNotPublishable;
@@ -70,6 +74,7 @@ use App\Modules\Resources\Application\PublishedPackRequirement;
 use App\Modules\Resources\Application\ResourcePackNotFound;
 use App\Modules\Resources\Application\StaleRevision;
 use App\Modules\Resources\Application\UnknownCategory;
+use App\Modules\Resources\Domain\FileStoreFailure;
 use App\Modules\Resources\Domain\InvalidResourceInput;
 use App\Modules\Resources\Http\ResourcesPresenter;
 use App\Modules\Resources\Http\ResourcesProblems;
@@ -82,6 +87,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Foundation\Events\DiagnosingHealth;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
+use Illuminate\Http\Exceptions\PostTooLargeException;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Session\Middleware\StartSession;
@@ -289,6 +295,15 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (DuplicateCategory $e) => ResourcesProblems::conflict('duplicate_category', $e->getMessage()));
         $exceptions->render(fn (UnknownCategory $e) => ResourcesProblems::unknownCategory());
         $exceptions->render(fn (InvalidResourceInput $e) => ResourcesProblems::invalidInput($e));
+        // Resources' managed files (WP3). A body over PHP's post_max_size is refused by the framework before routing; on the Resources
+        // management routes it is the same coded 413 as a file over the application's own limit.
+        $exceptions->render(fn (FileTooLarge $e) => ResourcesProblems::fileTooLarge($e->maxBytes, $e->getMessage()));
+        $exceptions->render(fn (PostTooLargeException $e, Request $request) => $request->is('api/v1/admin/resources/*')
+            ? ResourcesProblems::fileTooLarge(AssetLimits::maxBytes(), (new FileTooLarge(AssetLimits::maxBytes()))->getMessage())
+            : null);
+        $exceptions->render(fn (FileTypeNotAllowed $e) => ResourcesProblems::fileTypeNotAllowed($e->getMessage()));
+        $exceptions->render(fn (AssetUnavailable $e) => ResourcesProblems::notFound('asset_unavailable', $e->getMessage()));
+        $exceptions->render(fn (FileStoreFailure $e) => ResourcesProblems::fileStorageUnavailable());
 
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),

@@ -8,6 +8,7 @@ use App\Modules\Resources\Domain\Audience;
 use App\Modules\Resources\Domain\Card;
 use App\Modules\Resources\Domain\Category;
 use App\Modules\Resources\Domain\Pack;
+use App\Modules\Resources\Domain\ResourceAsset;
 use Tests\Support\SourceScan;
 
 /*
@@ -16,9 +17,9 @@ use Tests\Support\SourceScan;
  * tests/Concurrency/ResourcesRaceTest.php.
  *
  * Resources owns Resource business state. It may use Identity's and Access's Application layers, ONE Audit Application type for the two
- * permanent-deletion events, Shared primitives and its own persistence. It may not reach Identity's tables or Domain, Membership,
- * CRM, Discussions or WordPress; it invents no relationship (ADR 0036); it handles no HTML, files, network or Node; and nothing else may
- * depend on it. The generic rules in ModuleBoundariesTest and the module graph in AccessBoundariesTest already cover the module because
+ * permanent-deletion events, Shared primitives and its own persistence, including its own managed files (WP3), which only its
+ * Infrastructure touches. It may not reach Identity's tables or Domain, Membership, CRM, Discussions or WordPress; it invents no
+ * relationship (ADR 0036); it handles no HTML, network or Node; and nothing else may depend on it or on its assets. The generic rules in ModuleBoundariesTest and the module graph in AccessBoundariesTest already cover the module because
  * modules are discovered from disk; these are the Resources-specific, positive statements.
  *
  * One subject per arch expectation (README.md). Every source scan has a positive control.
@@ -69,11 +70,45 @@ arch('Resources reaches no network: no HTTP client, so a stored address is never
     expect($resources)->not->toUse(['Illuminate\\Support\\Facades\\Http', 'Illuminate\\Http\\Client', 'GuzzleHttp', 'Psr\\Http\\Client', 'Symfony\\Contracts\\HttpClient']);
 });
 
-arch('Resources has no file, upload or storage dependency in this package: managed files are a later one', function () use ($resources) {
-    expect($resources)->not->toUse([
-        'Illuminate\\Support\\Facades\\Storage', 'Illuminate\\Contracts\\Filesystem', 'Illuminate\\Filesystem', 'Illuminate\\Http\\UploadedFile',
-        'Symfony\\Component\\HttpFoundation\\File', 'League\\Flysystem',
-    ]);
+foreach (['Domain', 'Application', 'Http'] as $layer) {
+    arch("Resources {$layer} reaches no filesystem: only Infrastructure's file store does, behind the ResourceFileStore port (ADR 0037, decision 4)", function () use ($resources, $layer) {
+        expect("{$resources}\\{$layer}")->not->toUse([
+            'Illuminate\\Support\\Facades\\Storage', 'Illuminate\\Contracts\\Filesystem', 'Illuminate\\Filesystem', 'League\\Flysystem',
+            'Illuminate\\Support\\Facades\\File', 'Symfony\\Component\\Filesystem',
+        ]);
+    });
+
+    arch("Resources {$layer} does not inspect file content itself: detection is Infrastructure's, behind the MediaTypeDetector port", function () use ($resources, $layer) {
+        expect("{$resources}\\{$layer}")->not->toUse(['finfo', 'ZipArchive']);
+    });
+}
+
+foreach (['Domain', 'Application'] as $layer) {
+    arch("Resources {$layer} never sees an HTTP upload: it receives an IncomingFile, without the client's claimed type", function () use ($resources, $layer) {
+        expect("{$resources}\\{$layer}")->not->toUse(['Illuminate\\Http\\UploadedFile', 'Symfony\\Component\\HttpFoundation\\File']);
+    });
+}
+
+it('lets exactly one class open the resources disk, and nothing outside Resources reaches the store or its table', function () {
+    $diskUsers = [];
+    $assetTableUsers = [];
+    foreach (SourceScan::phpFiles(['app', 'database', 'routes', 'bootstrap/app.php', 'bootstrap/providers.php']) as $path) {
+        $code = SourceScan::code(SourceScan::read($path));
+        if (preg_match('/Storage::|->disk\(|Filesystem\b/', $code) === 1) {
+            $diskUsers[] = SourceScan::relative($path);
+        }
+        $inResources = str_contains($path, '/app/Modules/Resources/') || str_contains($path, 'create_resource_assets_table');
+        if (! $inResources && in_array('resource_assets', SourceScan::stringLiterals(SourceScan::read($path)), true)) {
+            $assetTableUsers[] = SourceScan::relative($path);
+        }
+    }
+
+    expect($diskUsers)->toBe(['app/Modules/Resources/Infrastructure/DiskResourceFileStore.php'])
+        ->and($assetTableUsers)->toBe([])
+        // Positive controls: the scans see a use in code, and not one in a comment.
+        ->and(preg_match('/Storage::|->disk\(|Filesystem\b/', SourceScan::code("<?php Storage::disk('resources')->get('x');")))->toBe(1)
+        ->and(preg_match('/Storage::|->disk\(|Filesystem\b/', SourceScan::code("<?php // Storage::disk('resources')")))->toBe(0)
+        ->and(SourceScan::stringLiterals("<?php \$db->table('resource_assets')->get();"))->toContain('resource_assets');
 });
 
 arch('Resources runs no process and needs no Node: rich content is validated in plain PHP', function () use ($resources) {
@@ -282,10 +317,11 @@ it('names no table that is not Resources\' own: it never queries or writes peopl
         ->and(resourcesForeignTableLiterals("<?php \$db->table('resource_cards')->get(); echo 'no such people'; // table('people')", $tables))->toBe([]);
 });
 
-it('names only the five tables Resources owns, wherever it reaches the database', function () {
-    $tablesIn = function (string $source): array {
+it('names only the six tables Resources owns, wherever it reaches the database', function () {
+    // String constants are table names in the repositories (TABLE, AUDIENCES, ASSETS); elsewhere they are not (the store's DISK name).
+    $tablesIn = function (string $source, bool $repository = true): array {
         $code = SourceScan::code($source);
-        preg_match_all('/const\s+string\s+\w+\s*=\s*[\'"]([a-z_]+)[\'"]/', $code, $constants);
+        preg_match_all('/const\s+string\s+\w+\s*=\s*[\'"]([a-z_]+)[\'"]/', $repository ? $code : '', $constants);
         preg_match_all('/(?:->|::)table\(\s*[\'"]([a-z_]+)(?:\s+as\s+\w+)?[\'"]/', $code, $calls);
         preg_match_all('/(?:->join|->leftJoin)\(\s*[\'"]([a-z_]+)(?:\s+as\s+\w+)?[\'"]/', $code, $joins);
         preg_match_all('/->from\(\s*[\'"]([a-z_]+)(?:\s+as\s+\w+)?[\'"]/', $code, $from);
@@ -295,24 +331,25 @@ it('names only the five tables Resources owns, wherever it reaches the database'
 
     $tables = [];
     foreach (SourceScan::phpFiles(['app/Modules/Resources/Infrastructure']) as $path) {
-        array_push($tables, ...$tablesIn(SourceScan::read($path)));
+        array_push($tables, ...$tablesIn(SourceScan::read($path), str_starts_with(basename($path), 'Database')));
     }
 
-    expect(array_values(array_unique($tables)))->toEqualCanonicalizing(['resource_categories', 'resource_packs', 'resource_pack_audiences', 'resource_cards', 'resource_card_audiences'])
+    expect(array_values(array_unique($tables)))->toEqualCanonicalizing(['resource_categories', 'resource_packs', 'resource_pack_audiences', 'resource_cards', 'resource_card_audiences', 'resource_assets'])
         ->and($tablesIn("<?php private const string TABLE = 'widgets';"))->toBe(['widgets'])
         ->and($tablesIn("<?php \$db->table('gadgets as g')->join('gizmos as z', 'a', 'b')->get();"))->toBe(['gadgets', 'gizmos'])
         ->and($tablesIn("<?php \$db->table(self::TABLE)->where('pack_id', 1)->get(); // table('ghost')"))->toBe([]);
 });
 
-it('creates exactly the five Resources tables and no generic content, page, media, file, asset, trash, history or version table', function () {
+it('creates exactly the six Resources tables and no generic content, page, media, folder, trash, history or version table', function () {
     $owned = [];
     foreach (glob(SourceScan::root().'/database/migrations/*.php') ?: [] as $migration) {
         preg_match_all('/Schema::create\(\s*[\'"](resource[a-z_]*)[\'"]/', SourceScan::read($migration), $matches);
         array_push($owned, ...$matches[1]);
     }
 
-    expect($owned)->toEqualCanonicalizing(['resource_categories', 'resource_packs', 'resource_pack_audiences', 'resource_cards', 'resource_card_audiences'])
-        ->and(array_values(array_filter($owned, fn (string $t): bool => preg_match('/content|page|media|asset|file|trash|archive|history|version|revision|attachment/', $t) === 1)))->toBe([]);
+    // `resource_assets` is the one asset table ADR 0037 approved: the metadata of the file each File Card owns. Nothing else of the kind.
+    expect($owned)->toEqualCanonicalizing(['resource_categories', 'resource_packs', 'resource_pack_audiences', 'resource_cards', 'resource_card_audiences', 'resource_assets'])
+        ->and(array_values(array_filter(array_diff($owned, ['resource_assets']), fn (string $t): bool => preg_match('/content|page|media|asset|file|folder|trash|archive|history|version|revision|attachment|library/', $t) === 1)))->toBe([]);
 });
 
 it('puts no Resources, Card, Pack or content type in Shared', function () {
@@ -347,7 +384,7 @@ function resourcesInventedRelationships(string $source): array
 
 it('invents no Volunteer, Partner, Vendor or Artist relationship, audience, flag or eligibility: those wait for their owning domains', function () {
     $offenders = [];
-    foreach (SourceScan::phpFiles(['app/Modules/Resources', 'database/migrations/2026_10_04_000001_create_resource_categories_table.php', 'database/migrations/2026_10_04_000002_create_resource_packs_tables.php', 'database/migrations/2026_10_04_000003_create_resource_cards_tables.php']) as $path) {
+    foreach (SourceScan::phpFiles(['app/Modules/Resources', 'database/migrations/2026_10_04_000001_create_resource_categories_table.php', 'database/migrations/2026_10_04_000002_create_resource_packs_tables.php', 'database/migrations/2026_10_04_000003_create_resource_cards_tables.php', 'database/migrations/2026_10_04_000004_create_resource_assets_table.php']) as $path) {
         foreach (resourcesInventedRelationships(SourceScan::read($path)) as $word) {
             $offenders[] = SourceScan::relative($path).": {$word}";
         }
@@ -374,7 +411,8 @@ it('stores a relationship fact nowhere: a Pack and a Card hold audience KEYS, ne
     $properties = resourcesPropertiesOf(...);
 
     expect($properties(Pack::class))->toBe(['id', 'categoryId', 'position', 'title', 'summary', 'isSeries', 'audiences', 'state', 'revision', 'provenance'])
-        ->and($properties(Card::class))->toBe(['id', 'packId', 'position', 'type', 'title', 'summary', 'content', 'externalUri', 'audience', 'state', 'revision', 'provenance'])
+        ->and($properties(Card::class))->toBe(['id', 'packId', 'position', 'type', 'title', 'summary', 'content', 'externalUri', 'asset', 'audience', 'state', 'revision', 'provenance'])
+        ->and($properties(ResourceAsset::class))->toBe(['id', 'storageKey', 'originalFilename', 'mediaType', 'byteSize', 'sha256', 'uploadedBy', 'uploadedAt'])
         ->and($properties(Category::class))->toBe(['id', 'name', 'nameCanonical', 'position', 'provenance']);
 });
 

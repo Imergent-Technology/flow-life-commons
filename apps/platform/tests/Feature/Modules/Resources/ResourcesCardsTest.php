@@ -409,9 +409,9 @@ it('does not find a Card through another Pack, or in a Pack that does not exist'
     }
 });
 
-it('has no file Type yet: the Type is a closed set of two, held as a string', function () {
-    expect(array_map(fn (CardType $t): string => $t->value, CardType::cases()))->toBe(['basic', 'external_link'])
-        ->and(CardType::tryFrom('file'))->toBeNull()
-        ->and(Schema::hasTable('resource_assets'))->toBeFalse()
-        ->and(Schema::hasColumn('resource_cards', 'asset_id'))->toBeFalse();
+it('has exactly the three approved Types, a closed set held as a string; File Cards and their assets are WP3\'s (ResourcesFilesTest)', function () {
+    expect(array_map(fn (CardType $t): string => $t->value, CardType::cases()))->toBe(['basic', 'external_link', 'file'])
+        ->and(CardType::tryFrom('youtube'))->toBeNull()
+        ->and(Schema::hasTable('resource_assets'))->toBeTrue()
+        ->and(Schema::hasColumn('resource_cards', 'asset_id'))->toBeTrue();
 });

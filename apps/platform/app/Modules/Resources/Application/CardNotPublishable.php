@@ -7,8 +7,8 @@ namespace App\Modules\Resources\Application;
 use RuntimeException;
 
 /**
- * The Card lacks something its Type needs to be Published (`content` for a basic Card, `uri` for an external link), or an edit to a
- * Published Card would leave it lacking one.
+ * The Card lacks something its Type needs to be Published (`content` for a basic Card, `uri` for an external link, `file` for a file
+ * Card whose file is not in the store), or an edit to a Published Card would leave it lacking one.
  */
 final class CardNotPublishable extends RuntimeException
 {

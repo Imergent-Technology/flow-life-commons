@@ -85,11 +85,52 @@ function schemaCard(string $id, string $pack, int $position = 1): array
     ];
 }
 
-it('creates exactly the five Resources tables of this package, and none for files, assets, history, trash or audiences-as-entities', function () {
+/** @return array<string, mixed> an asset row, as the store would have written its file */
+function schemaAsset(string $id): array
+{
+    return [
+        'id' => $id, 'storage_key' => $id, 'original_filename' => 'a.pdf', 'media_type' => 'application/pdf', 'byte_size' => 10,
+        'sha256' => str_repeat('a', 64), 'uploaded_by_person_id' => ulid(), 'created_at' => '2026-10-04 12:00:00',
+    ];
+}
+
+it('creates exactly the six Resources tables, the sixth being WP3\'s assets, and none for history, trash, folders or audiences-as-entities', function () {
     $tables = array_values(array_filter(Resources::allTables(), fn (string $name): bool => str_starts_with($name, 'resource')));
     sort($tables);
 
-    expect($tables)->toBe(['resource_card_audiences', 'resource_cards', 'resource_categories', 'resource_pack_audiences', 'resource_packs']);
+    expect($tables)->toBe(['resource_assets', 'resource_card_audiences', 'resource_cards', 'resource_categories', 'resource_pack_audiences', 'resource_packs']);
+});
+
+it('gives each asset to at most one Card: a second Card naming the same asset is refused, while any number of Cards have none', function () {
+    DB::table('resource_packs')->insert(schemaPack($pack = ulid()));
+    DB::table('resource_assets')->insert(schemaAsset($asset = ulid()));
+    DB::table('resource_cards')->insert([...schemaCard(ulid(), $pack, 1), 'type' => 'file', 'asset_id' => $asset]);
+
+    resourcesSchemaRefuses(fn () => DB::table('resource_cards')->insert([...schemaCard(ulid(), $pack, 2), 'type' => 'file', 'asset_id' => $asset]), UniqueConstraintViolationException::class);
+    DB::table('resource_cards')->insert([schemaCard(ulid(), $pack, 3), schemaCard(ulid(), $pack, 4)]); // NULL twice is not a duplicate, on either engine
+
+    expect(DB::table('resource_cards')->whereNull('asset_id')->count())->toBe(2);
+});
+
+it('refuses a Card naming an asset that does not exist, and refuses to delete an asset a Card still names (RESTRICT, never cascade)', function () {
+    DB::table('resource_packs')->insert(schemaPack($pack = ulid()));
+    resourcesSchemaRefuses(fn () => DB::table('resource_cards')->insert([...schemaCard(ulid(), $pack), 'type' => 'file', 'asset_id' => ulid()]), QueryException::class);
+
+    DB::table('resource_assets')->insert(schemaAsset($asset = ulid()));
+    DB::table('resource_cards')->insert([...schemaCard($card = ulid(), $pack), 'type' => 'file', 'asset_id' => $asset]);
+    resourcesSchemaRefuses(fn () => DB::table('resource_assets')->where('id', $asset)->delete(), QueryException::class);
+    DB::table('resource_cards')->where('id', $card)->delete();
+    DB::table('resource_assets')->where('id', $asset)->delete();
+
+    expect(DB::table('resource_assets')->count())->toBe(0);
+});
+
+it('keeps storage keys unique and holds a file size past 2 GiB', function () {
+    DB::table('resource_assets')->insert(schemaAsset($asset = ulid()));
+    resourcesSchemaRefuses(fn () => DB::table('resource_assets')->insert([...schemaAsset(ulid()), 'storage_key' => $asset]), UniqueConstraintViolationException::class);
+
+    DB::table('resource_assets')->insert([...schemaAsset($big = ulid()), 'byte_size' => 5_000_000_000]);
+    expect(Resources::int(DB::table('resource_assets')->where('id', $big)->value('byte_size')))->toBe(5_000_000_000);
 });
 
 it('refuses a Pack in a Category that does not exist, and refuses to delete a Category a Pack still holds (RESTRICT, never cascade)', function () {
@@ -152,7 +193,7 @@ it('holds provenance as plain Person ids with no foreign key: a creator need not
     DB::table('resource_categories')->insert(schemaCategory(ulid()));
     DB::table('resource_packs')->insert(schemaPack(ulid()));
 
-    foreach (['resource_categories', 'resource_packs', 'resource_cards'] as $table) {
+    foreach (['resource_categories', 'resource_packs', 'resource_cards', 'resource_assets'] as $table) {
         foreach (schemaForeignKeys($table) as $foreignKey) {
             $columns = implode(',', $foreignKey['columns']);
             expect($columns)->not->toContain('person');
@@ -162,12 +203,24 @@ it('holds provenance as plain Person ids with no foreign key: a creator need not
 });
 
 it('has no cross-module foreign key and no cascade anywhere: every Resources foreign key points inside Resources and is RESTRICT', function () {
-    foreach (['resource_packs', 'resource_pack_audiences', 'resource_cards', 'resource_card_audiences', 'resource_categories'] as $table) {
+    $all = [];
+    foreach (['resource_packs', 'resource_pack_audiences', 'resource_cards', 'resource_card_audiences', 'resource_categories', 'resource_assets'] as $table) {
         foreach (schemaForeignKeys($table) as $fk) {
             expect(str_starts_with($fk['foreign_table'], 'resource'))->toBeTrue("{$table} -> {$fk['foreign_table']}")
                 ->and($fk['on_delete'])->toBeIn(['restrict', 'no action'], "{$table} delete rule");
+            $all[] = "{$table}.".implode(',', $fk['columns'])." -> {$fk['foreign_table']}";
         }
     }
+    sort($all);
+
+    // The asset is owned FROM the Card; an asset row points at nothing, so it can never block anything but its own deletion.
+    expect($all)->toBe([
+        'resource_card_audiences.card_id -> resource_cards',
+        'resource_cards.asset_id -> resource_assets',
+        'resource_cards.pack_id -> resource_packs',
+        'resource_pack_audiences.pack_id -> resource_packs',
+        'resource_packs.category_id -> resource_categories',
+    ]);
 });
 
 it('stores the document as text, never as a database json type, and holds a document of the full 256 KiB', function () {
@@ -194,18 +247,38 @@ it('uses validated strings, not database enums, for state, type, modes and audie
     expect(DB::table('resource_packs')->where('state', 'archived')->count())->toBe(1);
 });
 
-it('has the columns of this package and none a later one would add: no asset, file, tag, history or presentation column', function () {
-    expect(Schema::getColumnListing('resource_cards'))->toBe([
+it('has exactly the columns of the contract and none a later package would add: no path, URL, folder, tag, history or presentation column', function () {
+    // Column ORDER is not compared: `asset_id` was added by WP3's migration, which (portably) does not position it.
+    expect(Schema::getColumnListing('resource_cards'))->toEqualCanonicalizing([
         'id', 'pack_id', 'position', 'type', 'title', 'summary_mode', 'summary_text', 'content_format', 'content_version', 'content_document',
-        'external_uri', 'audience_mode', 'state', 'revision', 'created_by_person_id', 'updated_by_person_id', 'created_at', 'updated_at',
+        'external_uri', 'asset_id', 'audience_mode', 'state', 'revision', 'created_by_person_id', 'updated_by_person_id', 'created_at', 'updated_at',
+    ])->and(Schema::getColumnListing('resource_assets'))->toBe([
+        'id', 'storage_key', 'original_filename', 'media_type', 'byte_size', 'sha256', 'uploaded_by_person_id', 'created_at',
     ])->and(Schema::getColumnListing('resource_pack_audiences'))->toBe(['pack_id', 'audience'])
         ->and(Schema::getColumnListing('resource_card_audiences'))->toBe(['card_id', 'audience']);
 });
 
+it('indexes what the asset contract names: the storage key and a Card\'s asset, each unique', function () {
+    $unique = function (string $table): array {
+        $columns = [];
+        foreach (Schema::getIndexes($table) as $index) {
+            assert(is_array($index) && is_array($index['columns'] ?? null));
+            if (($index['unique'] ?? false) === true && ($index['primary'] ?? false) !== true) {
+                $columns[] = implode(',', array_map(fn (mixed $c): string => Resources::str($c), $index['columns']));
+            }
+        }
+
+        return $columns;
+    };
+
+    expect($unique('resource_assets'))->toBe(['storage_key'])
+        ->and($unique('resource_cards'))->toContain('asset_id');
+});
+
 it('stores instants in UTC datetime columns written by the domain, with no database default or on-update trigger', function () {
-    foreach (['resource_categories', 'resource_packs', 'resource_cards'] as $table) {
+    foreach (['resource_categories', 'resource_packs', 'resource_cards', 'resource_assets'] as $table) {
         $columns = schemaColumns($table);
-        foreach (['created_at', 'updated_at'] as $name) {
+        foreach ($table === 'resource_assets' ? ['created_at'] : ['created_at', 'updated_at'] as $name) {
             expect($columns[$name]['type_name'])->toBeIn(['datetime', 'timestamp'])
                 ->and($columns[$name]['default'])->toBeNull();
         }

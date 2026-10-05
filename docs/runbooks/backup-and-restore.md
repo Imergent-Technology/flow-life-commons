@@ -35,8 +35,40 @@ These are not independent tables. A restore that takes some at one point in time
 | `account_invitations` | An invitation restored after it was accepted becomes usable again, which is a way to set someone's password. Accepted invitations are deleted, so a stale restore resurrects them — which is why reconciliation below is a required step, not a suggestion. |
 | `membership_grants` | Durable business data, restored with data ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md)). `person_id` is a `RESTRICT` foreign key to `people`, so grants and people must come from the same point in time. Revocation is a later update to the same row (`revoked_at`): restored *older* than the rest, a grant revoked in between is live again. |
 | `security_events` | Append-only history ([ADR 0019](../adr/0019-security-event-auditing-seam.md)). Restoring it *older* than the rest silently erases the record of whatever happened in between — including whatever caused the restore. |
+| `resource_*` tables **and the Resource files** | Durable business data ([ADR 0037](../adr/0037-resources-are-audience-targeted-packs-of-cards.md)), and the one case where the database alone is not the record: `resource_assets` names files that live **outside the database**. Restored without the files, every File Card answers `asset_unavailable`; restored with files from a *different* point in time, some Cards lose their file and some files belong to nothing. See [Resource files](#resource-files). |
 
-**Outside the database:** `APP_KEY` and `APP_PREVIOUS_KEYS`, which live in the environment file and are not in any dump. Back them up deliberately and separately from the database, because a single compromised store holding both the ciphertext and the key protects nothing.
+**Outside the database:** `APP_KEY` and `APP_PREVIOUS_KEYS`, which live in the environment file and are not in any dump. Back them up deliberately and separately from the database, because a single compromised store holding both the ciphertext and the key protects nothing. **And the Resource files** (below), which are part of the same backup as the dump, not a separate concern.
+
+## Resource files
+
+**What they are.** Each File Card owns one file ([ADR 0037](../adr/0037-resources-are-audience-targeted-packs-of-cards.md), decisions 62-68). The file's metadata is a row in `resource_assets` (in the dump, with data, like every durable table); its **bytes** are a file in the private `resources` disk:
+
+```
+/home/<user>/commons/shared/storage/app/private/resources/<storage key>
+```
+
+One file per asset, named by the asset's id (26 lowercase characters, no extension), mode `0600`, nothing else in the directory. It is under `shared/storage`, so it survives releases ([ADR 0027](../adr/0027-release-and-deployment-model.md)); it is outside the document root and never served except by an authorized Resources route. A stored file is **never changed**: replacing a Card's file writes a new one and removes the old, so a copy of the directory is consistent file by file.
+
+**Taking it, with the dump.** Inside the same maintenance window, immediately after the two-pass dump ([deployment runbook §5](deployment.md#5-taking-a-backup)), so the files and the rows describe one moment (nothing writes while maintenance is up):
+
+```bash
+tar -C /home/<user>/commons/shared/storage/app/private -czf "$B/resource-files.tar.gz" resources
+sha256sum "$B/resource-files.tar.gz"
+```
+
+and record `resource_files_sha256` and the file count in the manifest. A dump without its Resource files is not a full backup of Resources.
+
+**Restoring it.** With maintenance mode up throughout (the scheduler does not run `resources:assets:prune` in maintenance mode, which is what makes this order safe):
+
+1. Restore the database exactly as [the restore contract](#the-restore-contract) says.
+2. Move the live directory aside, never delete it: `mv .../app/private/resources .../app/private/resources.before-restore-$(date -u +%Y%m%dT%H%M%SZ)`.
+3. Verify `resource-files.tar.gz` against `resource_files_sha256`, then extract it into `.../shared/storage/app/private/`, giving `resources/` back.
+4. **Check before anything removes a file:** `php artisan resources:assets:prune --dry-run`. Expect *Asset rows whose file is missing* to be **0** (every Card has its file) and *orphaned, would be removed* to be **0** (no file without a row). Anything else means the files and the dump are not from the same backup: stop and find the right pair.
+5. Only then bring the application up. Remove the moved-aside directory once the restore is accepted, not before.
+
+**The prune after a restore.** `resources:assets:prune` removes files no row refers to, older than a day. After restoring an *older* database over *newer* files, every file uploaded since that backup is exactly such a file, and the prune removes it, **irreversibly**. That is correct for the restored database and wrong if you might yet go back to the newer one. That is why step 2 moves the directory aside, why step 4 is a dry run, and why the daily schedule cannot fire during the maintenance window.
+
+**The host's own backups.** Whether the hosting account's backups (cPanel or the provider's) include `/home/<user>/commons/shared/storage` has **not been confirmed** from this repository: it is an owner check ([production readiness §4c](production-readiness.md#4c-resources-managed-files-wp3)). The procedure above does not depend on it: the backup directory holds the dump, the manifest and the file archive together.
 
 ## Transient state does not come back
 

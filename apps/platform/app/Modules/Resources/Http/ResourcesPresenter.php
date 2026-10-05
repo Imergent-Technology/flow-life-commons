@@ -15,7 +15,10 @@ use App\Modules\Resources\Application\ManagedPackView;
 use App\Modules\Resources\Application\PackPreview;
 use App\Modules\Resources\Application\ResourcePerson;
 use App\Modules\Resources\Domain\CardAudience;
+use App\Modules\Resources\Domain\CardId;
 use App\Modules\Resources\Domain\Category;
+use App\Modules\Resources\Domain\PackId;
+use App\Modules\Resources\Domain\ResourceAsset;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 
@@ -24,6 +27,10 @@ use DateTimeInterface;
  * revision, audiences, stored position and provenance (a Person's id and display name, never an Account, a login email, a role,
  * a capability, MFA or Membership state); delivery shows only what a viewer may have, with a Card's place being its index among the
  * Cards that viewer can see. A document is emitted as the object it is, never as HTML.
+ *
+ * A File Card's file is described, never located: its name, media type and size, and the API path that serves it to THIS caller
+ * (the management route for management, the library route for delivery). No storage key, disk, directory or asset id is ever in a
+ * response; management alone also sees the digest, the uploader and whether the store holds the file now.
  */
 final readonly class ResourcesPresenter
 {
@@ -104,10 +111,22 @@ final readonly class ResourcesPresenter
     {
         $card = $view->card;
 
-        return [
+        $out = [
             ...$this->outline(new ManagedCardOutlineView($card->outline(), $view->createdBy, $view->updatedBy)),
             'content' => ['format' => $card->content->format, 'version' => $card->content->version, 'document' => $card->content->decoded()],
         ];
+        if ($card->asset !== null) {
+            $out['file'] = [
+                ...$this->fileSummary($card->asset),
+                'sha256' => $card->asset->sha256,
+                'uploaded_by' => $view->uploadedBy === null ? null : $this->person($view->uploadedBy),
+                'uploaded_at' => $this->instant($card->asset->uploadedAt),
+                'available' => $view->fileAvailable === true,
+                'download_path' => self::path('api.v1.admin.resources.cards.file', $card->packId, $card->id),
+            ];
+        }
+
+        return $out;
     }
 
     /** @return array<string, mixed> */
@@ -124,6 +143,7 @@ final readonly class ResourcesPresenter
             'summary_mode' => $card->summary->mode->value,
             'summary' => $card->summary->text,
             'uri' => $card->externalUri,
+            'file' => $card->asset === null ? null : $this->fileSummary($card->asset),
             ...$this->audience($card->audience),
             'state' => $card->state->value,
             'revision' => $card->revision,
@@ -171,6 +191,10 @@ final readonly class ResourcesPresenter
                 'title' => $entry->card->title,
                 'summary' => $entry->card->summary->text,
                 'uri' => $entry->card->externalUri,
+                'file' => $entry->card->asset === null ? null : [
+                    ...$this->fileSummary($entry->card->asset),
+                    'download_path' => self::path('api.v1.admin.resource-library.cards.file', $entry->card->packId, $entry->card->id),
+                ],
                 'content' => ['format' => $entry->card->content->format, 'version' => $entry->card->content->version, 'document' => $entry->card->content->decoded()],
             ], $delivered->cards),
         ];
@@ -186,6 +210,18 @@ final readonly class ResourcesPresenter
             'visible' => $preview->visible(),
             'pack' => $preview->pack === null ? null : $this->delivered($preview->pack),
         ];
+    }
+
+    /** @return array{name: string, media_type: string, byte_size: int} */
+    private function fileSummary(ResourceAsset $asset): array
+    {
+        return ['name' => $asset->originalFilename, 'media_type' => $asset->mediaType, 'byte_size' => $asset->byteSize];
+    }
+
+    /** The API path (no host) of a Card's file on one of the two file routes. */
+    private static function path(string $route, PackId $pack, CardId $card): string
+    {
+        return route($route, ['pack' => $pack->value, 'card' => $card->value], false);
     }
 
     /** @return array{audience_mode: string, audiences: list<string>} */

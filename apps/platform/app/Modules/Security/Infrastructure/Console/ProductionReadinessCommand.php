@@ -42,10 +42,13 @@ final class ProductionReadinessCommand extends Command
         '.htaccess overrides are honoured (AllowOverride) and mod_rewrite is on.',
         'mod_headers is enabled. Without it the Console\'s static files ship with NO security headers while the API keeps them.',
         'The WEB SERVER\'s PHP (not the CLI this command ran under) is 8.3 with the same extensions.',
+        'The WEB SERVER\'s PHP upload_max_filesize and post_max_size admit RESOURCES_ASSET_MAX_BYTES (the check above read the CLI\'s), and a file of that size uploads through the web server: nothing in front of PHP refuses a smaller request body.',
+        'The WEB SERVER\'s PHP has display_errors off: otherwise PHP prints its own warning ahead of the application\'s answer to an oversized or malformed upload, and the response goes out as a 200.',
         'A cron entry runs `php artisan schedule:run` every minute. Nothing else drives scheduled maintenance.',
         'Outbound HTTPS to api.pwnedpasswords.com works, or no password can be accepted.',
         'Outbound mail works: an invitation or reset that cannot be sent leaves the person unable to proceed.',
         'The database is reachable with production credentials, and backed up together with APP_KEY.',
+        'Resource files (shared/storage/app/private/resources) are backed up together with the database dump: the dump alone cannot restore a File Card.',
         'Repository and application-private files (.env, storage/, vendor/) are not reachable over the web.',
     ];
 

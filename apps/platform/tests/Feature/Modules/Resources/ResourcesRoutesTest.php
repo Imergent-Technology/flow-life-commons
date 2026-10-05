@@ -25,12 +25,13 @@ function resourcesMiddleware(Route $route): array
     return Api::strings($route->gatherMiddleware());
 }
 
-it('has exactly 23 management routes under /admin/resources and 2 delivery routes under /admin/resource-library, and no other Resources route', function () {
+it('has exactly 25 management routes under /admin/resources and 3 delivery routes under /admin/resource-library, and no other Resources route', function () {
     $management = resourcesRoutes('resources');
     $delivery = resourcesRoutes('resource-library');
     $all = array_filter(app('router')->getRoutes()->getRoutes(), fn ($r): bool => str_contains($r->getActionName(), 'Modules\\Resources\\'));
 
-    expect($management)->toHaveCount(23)->and($delivery)->toHaveCount(2)->and(count($all))->toBe(25);
+    // WP3 added three: replace a File Card's file and download it under management, and download it from the library.
+    expect($management)->toHaveCount(25)->and($delivery)->toHaveCount(3)->and(count($all))->toBe(28);
 });
 
 it('gives every Resources route authentication, the Console boundary and exactly one capability: manage for management, view for delivery', function () {
@@ -77,22 +78,35 @@ it('exempts every OTHER Resources mutation from recent verification: routine man
         }
     }
 
-    // 16 routine mutations: 5 on Categories (create, reorder, rename, delete an EMPTY one, reorder its Packs), 6 on Packs (create, edit,
-    // audiences, publish, unpublish, reorder Cards) and 5 on Cards (create, edit, audiences, publish, unpublish). The 5 reads are not mutations
-    // and the 2 permanent deletions are verified.
-    expect(count($routine))->toBe(16)
+    // 17 routine mutations: 5 on Categories (create, reorder, rename, delete an EMPTY one, reorder its Packs), 6 on Packs (create, edit,
+    // audiences, publish, unpublish, reorder Cards) and 6 on Cards (create, edit, audiences, publish, unpublish, replace the file). The 6
+    // reads are not mutations and the 2 permanent deletions are verified.
+    expect(count($routine))->toBe(17)
         ->and($routine)->toContain('DELETE api/v1/admin/resources/categories/{category}')   // an empty Category loses a name, not content
+        ->and($routine)->toContain('POST api/v1/admin/resources/packs/{pack}/cards/{card}/file') // replacing a file is routine (decision 52)
         ->and($routine)->not->toContain('DELETE api/v1/admin/resources/packs/{pack}');
 });
 
-it('has no route that deletes or restores anything but the three DELETEs, and none for Trash, Archive, Restore or files', function () {
+it('has no route that deletes or restores anything but the three DELETEs, none for Trash, Archive or Restore, and files only on a Card', function () {
     $deletes = [];
-    foreach (resourcesRoutes('resources') as $route) {
+    $files = [];
+    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library')] as $route) {
         if (in_array('DELETE', Api::strings($route->methods()), true)) {
             $deletes[] = $route->uri();
         }
-        expect($route->uri())->not->toMatch('/trash|archive|restore|recycle|file|asset|upload|download|embed|import|export/i');
+        expect($route->uri())->not->toMatch('/trash|archive|restore|recycle|asset|upload|download|media|attachment|embed|import|export/i');
+        if (str_contains($route->uri(), 'file')) {
+            $files[] = implode('|', Api::strings($route->methods())).' '.$route->uri();
+        }
     }
+    sort($files);
+
+    // A file is reached only as the file OF a Card, never by its own id or key, and is never deleted on its own: it goes with its Card.
+    expect($files)->toBe([
+        'GET|HEAD api/v1/admin/resource-library/packs/{pack}/cards/{card}/file',
+        'GET|HEAD api/v1/admin/resources/packs/{pack}/cards/{card}/file',
+        'POST api/v1/admin/resources/packs/{pack}/cards/{card}/file',
+    ]);
     sort($deletes);
 
     expect($deletes)->toBe([

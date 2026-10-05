@@ -494,7 +494,13 @@ mysqldump --no-create-info --single-transaction --quick --no-tablespaces <db> \
 
 gzip "$B/dump.sql"
 sha256sum "$B/dump.sql.gz"
+
+# Resource files (ADR 0037): the bytes File Cards own live outside the database, so they are part of the same backup.
+tar -C /home/<user>/commons/shared/storage/app/private -czf "$B/resource-files.tar.gz" resources
+sha256sum "$B/resource-files.tar.gz"
 ```
+
+The archive is taken in the same window, right after the dump, so the files and the `resource_assets` rows describe one moment. Restoring it, and why the prune must not run in between, is in [backup and restore](backup-and-restore.md#resource-files).
 
 | Restored with data | Structure only |
 | --- | --- |
@@ -503,6 +509,7 @@ sha256sum "$B/dump.sql.gz"
 | `account_invitations` | `jobs`, `job_batches`, `failed_jobs` |
 | `membership_grants` | `password_reset_tokens` |
 | `security_events`, `migrations` | |
+| `resource_categories`, `resource_packs`, `resource_pack_audiences`, `resource_cards`, `resource_card_audiences`, `resource_assets` (and the Resource files, archived beside the dump) | |
 
 `migrations` keeps its rows, or the application believes nothing has ever migrated. `password_reset_tokens` is excluded because a restored token is a live credential; the cost is that anyone mid-reset requests a new link.
 
@@ -519,6 +526,8 @@ sha256sum "$B/dump.sql.gz"
   "reason": "pre-release",
   "dump_sha256": "…",
   "dump_bytes": 148213,
+  "resource_files_sha256": "…",
+  "resource_files_count": 12,
   "release": { "version": "v0.1.0", "commit": "96c9eb1" },
   "database": { "connection": "mariadb", "name": "…" },
   "keyring": {

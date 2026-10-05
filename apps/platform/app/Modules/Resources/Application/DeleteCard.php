@@ -23,10 +23,14 @@ use Illuminate\Database\ConnectionInterface;
  * verification. There is no Trash, Restore or Archive: unpublishing is the reversible way to take a Card out of use.
  *
  * Under the Pack's lock, in one transaction: refused `published_pack_requirement` if it is the last Published Card of a
- * Published Pack; otherwise the Card and its narrowing rows are deleted and ONE `resource.card_deleted` security event is
- * recorded inside the same transaction through the audit seam, so the deletion commits if and only if its event does. The event
- * holds the acting Account and ids only (`card_id`, `pack_id`, `card_type`): never a title, summary, content, address or
- * anything that could rebuild the Card. A refused or failed deletion records no event.
+ * Published Pack; otherwise the Card, its narrowing rows and, for a File Card, its asset row are deleted and ONE
+ * `resource.card_deleted` security event is recorded inside the same transaction through the audit seam, so the deletion commits if
+ * and only if its event does. The event holds the acting Account and ids only (`card_id`, `pack_id`, `card_type`): never a title,
+ * summary, content, address, filename, media type, digest, storage key or anything that could rebuild the Card. A refused or failed
+ * deletion records no event.
+ *
+ * A File Card's file is removed from the store only AFTER the deletion commits (decision 61). If the transaction rolls back, the file
+ * stays with its row; if the removal fails after the commit, the Card stays deleted and the file is an orphan for the prune.
  */
 final readonly class DeleteCard
 {
@@ -36,6 +40,7 @@ final readonly class DeleteCard
         private CardRepository $cards,
         private RecordSecurityEvent $record,
         private ConnectionInterface $database,
+        private AssetCleanup $cleanup,
     ) {}
 
     /**
@@ -59,13 +64,16 @@ final readonly class DeleteCard
                 throw new PublishedPackRequirement(Pack::NEEDS_PUBLISHED_CARD);
             }
 
-            $this->cards->delete($id);
+            $storageKey = $this->cards->delete($id);
 
             // Inside the transaction: the deletion and its record commit together or not at all.
             ($this->record)(
                 ResourceEvent::CardDeleted->value, SecurityEventOutcome::Success, $actor, null, null, null, null,
                 ['card_id' => $card->id->value, 'pack_id' => $card->packId->value, 'card_type' => $card->type->value],
             );
+
+            // Only once all of the above has committed; forgotten if it rolls back.
+            $this->cleanup->afterCommit($storageKey === null ? [] : [$storageKey]);
         }, 3);
     }
 }

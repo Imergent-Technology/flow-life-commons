@@ -75,6 +75,22 @@ final class ResourcesProblems
         ], 422);
     }
 
+    public static function fileTooLarge(int $maxBytes, string $message): JsonResponse
+    {
+        return response()->json(['message' => $message, 'code' => 'file_too_large', 'max_bytes' => $maxBytes], 413);
+    }
+
+    public static function fileTypeNotAllowed(string $message): JsonResponse
+    {
+        return response()->json(['message' => $message, 'code' => 'file_type_not_allowed', 'errors' => ['file' => [$message]]], 422);
+    }
+
+    /** The store could not keep or read a file. Nothing about the store (a path, a disk, a key) is said. */
+    public static function fileStorageUnavailable(): JsonResponse
+    {
+        return response()->json(['message' => 'The file could not be stored just now. Nothing was changed; try again.', 'code' => 'file_storage_unavailable'], 503);
+    }
+
     public static function unknownCategory(): JsonResponse
     {
         return response()->json([

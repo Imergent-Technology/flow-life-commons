@@ -32,10 +32,16 @@ return [
 
     'disks' => [
 
+        /*
+         * NOT served. Laravel's default (`serve: true`) registers `GET` and `PUT /storage/{path}`, which answer any signed URL for a
+         * file under this root, and this root contains the Resources store (`app/private/resources`). Nothing here mints such URLs
+         * and the web server denies `/storage` before Laravel sees it, but a route that could serve a Resource file without asking
+         * Resources has no place in the route table at all (ADR 0037, decision 66; a test pins its absence).
+         */
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],
@@ -46,6 +52,24 @@ return [
             'url' => rtrim((string) env('APP_URL', 'http://localhost'), '/').'/storage',
             'visibility' => 'public',
             'throw' => false,
+            'report' => false,
+        ],
+
+        /*
+         * Resources' managed files (ADR 0037, decision 63): the bytes of File Cards, named by storage key. PRIVATE and nothing
+         * else: no `url`, no `serve`, so no route, link or signed URL can reach it; every download goes through an authorized
+         * Resources route that resolves a Card first. Under `storage/`, which on the production host is the release-shared
+         * `shared/storage`, outside the document root (ADR 0027) and in the backups (docs/runbooks/backup-and-restore.md).
+         * `throw` so a failed write is never mistaken for a written file; links are skipped, never followed. Not read from the
+         * environment: moving it is a reviewed change, and `security:production-check` fails if it is ever under public/.
+         */
+        'resources' => [
+            'driver' => 'local',
+            'root' => storage_path('app/private/resources'),
+            'visibility' => 'private',
+            'directory_visibility' => 'private',
+            'links' => 'skip',
+            'throw' => true,
             'report' => false,
         ],
 

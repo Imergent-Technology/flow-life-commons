@@ -22,7 +22,7 @@ const RESOURCES_ERROR_CODES = [
     'category_not_found', 'pack_not_found', 'card_not_found', 'resource_pack_not_found', 'duplicate_category', 'category_not_empty',
     'order_mismatch', 'stale_revision', 'pack_not_publishable', 'card_not_publishable', 'published_pack_requirement',
     'card_audience_conflict', 'card_limit_reached', 'card_audience_not_subset', 'invalid_resource_input', 'invalid_content',
-    'invalid_uri', 'unknown_category',
+    'invalid_uri', 'unknown_category', 'file_type_not_allowed', 'file_too_large', 'asset_unavailable', 'file_storage_unavailable',
 ];
 
 /**
@@ -51,15 +51,18 @@ function resourcesErrorContract(): array
         "POST {$pack}/unpublish" => [404 => ['pack_not_found']],
         "GET {$pack}/preview" => [404 => ['pack_not_found']],
         "PUT {$pack}/card-order" => [404 => ['pack_not_found'], 409 => ['order_mismatch']],
-        "POST {$pack}/cards" => [404 => ['pack_not_found'], 409 => ['card_limit_reached'], 422 => ['invalid_content', 'invalid_uri']],
+        "POST {$pack}/cards" => [404 => ['pack_not_found'], 409 => ['card_limit_reached'], 413 => ['file_too_large'], 422 => ['invalid_content', 'invalid_uri', 'file_type_not_allowed'], 503 => ['file_storage_unavailable']],
         "GET {$card}" => [404 => $bothMissing],
         "PATCH {$card}" => [404 => $bothMissing, 409 => ['stale_revision', 'card_not_publishable'], 422 => ['invalid_content', 'invalid_uri']],
         "DELETE {$card}" => [404 => $bothMissing, 409 => ['published_pack_requirement']],
         "PUT {$card}/audiences" => [404 => $bothMissing, 422 => ['card_audience_not_subset']],
         "POST {$card}/publish" => [404 => $bothMissing, 409 => ['card_not_publishable']],
         "POST {$card}/unpublish" => [404 => $bothMissing, 409 => ['published_pack_requirement']],
+        "POST {$card}/file" => [404 => $bothMissing, 413 => ['file_too_large'], 422 => ['file_type_not_allowed', 'invalid_resource_input'], 503 => ['file_storage_unavailable']],
+        "GET {$card}/file" => [404 => [...$bothMissing, 'asset_unavailable']],
         'GET /admin/resource-library' => [],
         'GET /admin/resource-library/packs/{pack}' => [404 => ['resource_pack_not_found']],
+        'GET /admin/resource-library/packs/{pack}/cards/{card}/file' => [404 => ['resource_pack_not_found', 'asset_unavailable']],
     ];
 }
 
@@ -98,14 +101,14 @@ function resourcesDocumentedErrors(): array
 
 it('documents exactly the Resources operations the contract table lists', function () {
     expect(array_keys(resourcesDocumentedErrors()))->toEqualCanonicalizing(array_keys(resourcesErrorContract()))
-        ->and(count(resourcesErrorContract()))->toBe(25);
+        ->and(count(resourcesErrorContract()))->toBe(28);
 });
 
 it('names exactly the contract\'s codes on every 404 and 409, and has those statuses only where the contract does', function () {
     $documented = resourcesDocumentedErrors();
 
     foreach (resourcesErrorContract() as $operation => $statuses) {
-        foreach ([404, 409] as $status) {
+        foreach ([404, 409, 413, 503] as $status) {
             $expected = $statuses[$status] ?? null;
             $actual = $documented[$operation][$status] ?? null;
             if ($expected === null) {
@@ -145,8 +148,12 @@ it('pins the two drifts this table was added for: a Card 404 names card_not_foun
 
 it('never lets the delivery 404 name a management code: a viewer cannot tell why a Pack is not theirs', function () {
     $delivery = resourcesDocumentedErrors()['GET /admin/resource-library/packs/{pack}'][404] ?? [];
+    $file = resourcesDocumentedErrors()['GET /admin/resource-library/packs/{pack}/cards/{card}/file'][404] ?? [];
+    sort($file);
 
-    expect($delivery)->toBe(['resource_pack_not_found']);
+    // The file route adds only `asset_unavailable`, which it answers solely for a Card the viewer can already see.
+    expect($delivery)->toBe(['resource_pack_not_found'])
+        ->and($file)->toBe(['asset_unavailable', 'resource_pack_not_found']);
 });
 
 it('lists only codes the application really produces, so the table cannot drift from the code either', function () {

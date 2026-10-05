@@ -172,8 +172,8 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, and Resources (ADR 0037) twenty-five: 23 management, 2 delivery.
-    expect($checked)->toBe(69);
+    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, and Resources (ADR 0037) twenty-eight: 25 management, 3 delivery (WP3 added the three file routes).
+    expect($checked)->toBe(72);
 });
 
 it('never lets an administration schema name a secret', function () {
@@ -189,6 +189,7 @@ it('never lets an administration schema name a secret', function () {
         'ManagedCardOutline', 'ManagedCard', 'ResourceContent', 'ResourceDocument', 'NewResourcePack', 'UpdateResourcePack', 'ResourcePackAudiences', 'NewResourceCard', 'UpdateResourceCard',
         'ResourceCardAudiences', 'StaleRevisionError', 'PackNotPublishableError', 'CardNotPublishableError', 'PublishedPackRequirementError', 'CardAudienceConflictError',
         'ResourcePack', 'ResourceDeliveredCard', 'ResourceLibrary', 'ResourcePackPreview',
+        'ResourceFileSummary', 'ManagedResourceFile', 'DeliveredResourceFile', 'ResourceFileUpload', 'NewResourceFileCard', 'FileTooLargeError',
     ];
     $text = strtolower(json_encode(array_intersect_key($components['schemas'], array_flip($names)), JSON_THROW_ON_ERROR));
     $text = str_replace('never a password', '', $text); // the description says what is NOT there

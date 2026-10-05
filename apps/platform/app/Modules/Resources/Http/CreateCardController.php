@@ -12,6 +12,8 @@ final readonly class CreateCardController
 {
     public function __invoke(CreateCardRequest $request, string $pack, CreateCard $use, RequestActor $actors, ResourcesPresenter $presenter): JsonResponse
     {
-        return response()->json($presenter->card($use($actors->for($request), PackId::fromString($pack), $request->type(), $request->title(), $request->content(), $request->address(), $request->summary())), 201);
+        return response()->json($presenter->card($use(
+            $actors->for($request), PackId::fromString($pack), $request->type(), $request->title(), $request->content(), $request->address(), $request->summary(), $request->upload(),
+        )), 201);
     }
 }

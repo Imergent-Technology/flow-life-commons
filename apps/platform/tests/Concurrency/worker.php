@@ -31,7 +31,7 @@ declare(strict_types=1);
  *   php worker.php discussion_reply|discussion_resolve|discussion_reopen '{"actor_account":"...","actor_person":"...","discussion":"..."[,"body":"..."]}'
  *   php worker.php resources_<operation> '{"actor_account":"...","actor_person":"...",...}'   (see the branches below: publish_pack, unpublish_pack, delete_pack,
  *       delete_card, publish_card, unpublish_card, set_pack_audiences, set_card_audiences, create_card, create_pack, create_category, reorder_cards,
- *       reorder_categories, update_pack, update_card, delete_category, move_pack)
+ *       reorder_categories, update_pack, update_card, delete_category, move_pack, replace_file with "name" and base64 "bytes")
  *   php worker.php discussion_edit|discussion_remove '{"actor_account":"...","actor_person":"...","discussion":"...","message":"..."[,"body":"..."]}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
@@ -95,10 +95,12 @@ use App\Modules\Resources\Application\CreatePack;
 use App\Modules\Resources\Application\DeleteCard;
 use App\Modules\Resources\Application\DeleteCategory;
 use App\Modules\Resources\Application\DeletePack;
+use App\Modules\Resources\Application\IncomingFile;
 use App\Modules\Resources\Application\PublishCard;
 use App\Modules\Resources\Application\PublishPack;
 use App\Modules\Resources\Application\ReorderCards;
 use App\Modules\Resources\Application\ReorderCategories;
+use App\Modules\Resources\Application\ReplaceCardFile;
 use App\Modules\Resources\Application\SetCardAudiences;
 use App\Modules\Resources\Application\SetPackAudiences;
 use App\Modules\Resources\Application\UnpublishCard;
@@ -117,6 +119,7 @@ use App\Shared\Domain\PersonId;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 require __DIR__.'/../../vendor/autoload.php';
 
@@ -128,6 +131,13 @@ $database = config('database.connections.'.config()->string('database.default').
 if (! is_string($database) || ! str_ends_with($database, '_test')) {
     fwrite(STDERR, "worker refuses to run against a database that is not a _test database\n");
     exit(64);
+}
+
+// The test process's Resources file store, so both processes of a race write and remove files in one place (tests/Support/ResourceFiles).
+$diskRoot = getenv('RESOURCES_TEST_DISK_ROOT');
+if (is_string($diskRoot) && $diskRoot !== '') {
+    config(['filesystems.disks.resources.root' => $diskRoot]);
+    Storage::forgetDisk('resources');
 }
 
 $operation = $argv[1] ?? '';
@@ -288,6 +298,12 @@ try {
             'resources_move_pack' => $app->make(UpdatePack::class)($actor, PackId::fromString($arg('pack')), (int) $arg('revision'), ['category_id' => $arg('category') === '' ? null : $arg('category')]),
             'resources_update_card' => $app->make(UpdateCard::class)($actor, PackId::fromString($arg('pack')), CardId::fromString($arg('card')), (int) $arg('revision'), isset($decoded['text']) ? ['content' => $doc($arg('text'))] : ['title' => $arg('title')]),
             'resources_delete_category' => $app->make(DeleteCategory::class)($actor, CategoryId::fromString($arg('category'))),
+            'resources_replace_file' => $app->make(ReplaceCardFile::class)($actor, PackId::fromString($arg('pack')), CardId::fromString($arg('card')), (static function () use ($arg): IncomingFile {
+                $path = (string) tempnam(sys_get_temp_dir(), 'flc-worker-');
+                file_put_contents($path, (string) base64_decode($arg('bytes'), true));
+
+                return new IncomingFile($path, $arg('name'));
+            })()),
             default => throw new InvalidArgumentException("unknown operation {$operation}"),
         };
     } elseif ($operation === 'rename_person') {
