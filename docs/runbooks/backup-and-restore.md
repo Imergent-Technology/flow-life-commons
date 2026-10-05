@@ -68,7 +68,7 @@ and record `resource_files_sha256` and the file count in the manifest. A dump wi
 
 **The prune after a restore.** `resources:assets:prune` removes files no row refers to, older than a day. After restoring an *older* database over *newer* files, every file uploaded since that backup is exactly such a file, and the prune removes it, **irreversibly**. That is correct for the restored database and wrong if you might yet go back to the newer one. That is why step 2 moves the directory aside, why step 4 is a dry run, and why the daily schedule cannot fire during the maintenance window.
 
-**The host's own backups.** Whether the hosting account's backups (cPanel or the provider's) include `/home/<user>/commons/shared/storage` has **not been confirmed** from this repository: it is an owner check ([production readiness §4c](production-readiness.md#4c-resources-managed-files-wp3)). The procedure above does not depend on it: the backup directory holds the dump, the manifest and the file archive together.
+**The host's own backups are supplementary.** The authoritative restore pair for Resources is the Commons backup above: the dump, the Resource files archive and the manifest, taken together in one maintenance window. Provider or cPanel home-directory backups, if they exist, are not relied on for Resources, because nothing makes them consistent with a dump. Whether they cover `/home/<user>/commons/shared` is **not confirmed**. When checked on 2026-10-05, the account had no user-level backup exclusion, but listed no retained backups to inspect ([production readiness §4c, F4](production-readiness.md#4c-resources-managed-files-wp3)). Do not plan a Resources restore around them.
 
 ## Transient state does not come back
 
