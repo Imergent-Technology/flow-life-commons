@@ -52,12 +52,57 @@ function contentDiffers(edited: ContentDocument, saved: unknown): boolean {
   return !parsed.ok || JSON.stringify(parsed.document) !== JSON.stringify(edited)
 }
 
+/** What the person changed: the form (and their edit of the content, if any) against the Card their edits are based on. */
+function changesFrom(
+  values: Values,
+  edited: ContentDocument | null,
+  card: ManagedCard,
+): CardChanges {
+  const out: CardChanges = {}
+  if (values.title !== card.title) out.title = values.title
+  if (edited !== null && contentDiffers(edited, card.content.document)) out.content = edited
+  if (card.type !== 'file' && values.uri.trim() !== (card.uri ?? '')) {
+    out.uri = values.uri.trim() === '' ? null : values.uri
+  }
+  if (values.summaryMode === 'derived') {
+    if (card.summaryMode === 'custom') out.summaryMode = 'derived'
+  } else if (card.summaryMode === 'derived' || values.summaryText.trim() !== card.summary) {
+    out.summary = values.summaryText
+  }
+  return out
+}
+
+/**
+ * The form moved onto `fresh` after a stale save: a field the person changed from `base` keeps their value, and every other field
+ * takes the saved one (the summary's mode and text count as one field), so a later Save sends only their edits.
+ */
+function rebased(
+  values: Values,
+  edited: ContentDocument | null,
+  base: ManagedCard,
+  fresh: ManagedCard,
+): Values {
+  const changed = changesFrom(values, edited, base)
+  const saved = valuesOf(fresh)
+  const summaryChanged = changed.summary !== undefined || changed.summaryMode !== undefined
+  return {
+    title: changed.title !== undefined ? values.title : saved.title,
+    uri: changed.uri !== undefined ? values.uri : saved.uri,
+    summaryMode: summaryChanged ? values.summaryMode : saved.summaryMode,
+    summaryText: summaryChanged ? values.summaryText : saved.summaryText,
+  }
+}
+
 /**
  * A Card's authored fields: title, content, web address and summary (ADR 0037, decisions 17-23, 34-37, 56). They are guarded by the
- * Card's `revision`, exactly as a Pack's are: a stale edit is refused, nothing is merged, the Card is read again, the person's
- * edits stay in the form, and they are shown what was saved meanwhile before they choose to save over it or take it. The Type is
- * fixed and shown elsewhere; it is never a field here. Only what changed is sent, and the content is sent as the editor's canonical
- * document.
+ * Card's `revision`, exactly as a Pack's are: a stale edit is refused, the Card is read again, the person's edits stay in the form,
+ * every field they did not touch (the content too) takes the saved value, and they are shown what was saved meanwhile before they
+ * choose to save their changes over it or take it. The Type is fixed and shown elsewhere; it is never a field here. Only what the
+ * person changed is sent, and the content is sent as the editor's canonical document.
+ *
+ * As for a Pack, the edits are based on `base` and a save sends `base`'s revision; `card` (the page's latest copy, which the
+ * publication, audience and file sections replace) is not the base. `base` moves only on a successful save, a stale save's re-read,
+ * or taking the saved version.
  */
 export function CardDetailsSection({
   card,
@@ -66,6 +111,7 @@ export function CardDetailsSection({
   card: ManagedCard
   onSaved: (next: ManagedCard) => void
 }) {
+  const [base, setBase] = useState<ManagedCard>(card)
   const [values, setValues] = useState<Values>(() => valuesOf(card))
   // The person's edit of the content, if they have made one: the document goes back to the editor so a re-read Card does not reset it.
   const [edited, setEdited] = useState<ContentDocument | null>(null)
@@ -77,21 +123,6 @@ export function CardDetailsSection({
   const form = useFocusFirstInvalid(problem?.attempt)
   const hasAddress = card.type !== 'file'
 
-  function changes(): CardChanges {
-    const out: CardChanges = {}
-    if (values.title !== card.title) out.title = values.title
-    if (edited !== null && contentDiffers(edited, card.content.document)) out.content = edited
-    if (hasAddress && values.uri.trim() !== (card.uri ?? '')) {
-      out.uri = values.uri.trim() === '' ? null : values.uri
-    }
-    if (values.summaryMode === 'derived') {
-      if (card.summaryMode === 'custom') out.summaryMode = 'derived'
-    } else if (card.summaryMode === 'derived' || values.summaryText.trim() !== card.summary) {
-      out.summary = values.summaryText
-    }
-    return out
-  }
-
   async function submit() {
     if (refusal !== null) {
       setProblem((previous) => ({
@@ -102,7 +133,7 @@ export function CardDetailsSection({
       }))
       return
     }
-    const sending = changes()
+    const sending = changesFrom(values, edited, base)
     if (Object.keys(sending).length === 0) {
       say('info', 'There is nothing to save: no field has changed.')
       return
@@ -110,10 +141,11 @@ export function CardDetailsSection({
     setPending(true)
     clear()
     setProblem(null)
-    const result = await updateCard(card.packId, card.id, card.revision, sending)
+    const result = await updateCard(base.packId, base.id, base.revision, sending)
     if (result.ok) {
       setPending(false)
       setConflict(null)
+      setBase(result.value)
       setEdited(null)
       onSaved(result.value)
       setValues(valuesOf(result.value))
@@ -125,9 +157,17 @@ export function CardDetailsSection({
       return
     }
     if (isStaleRevision(result.failure)) {
-      const fresh = await getCard(card.packId, card.id)
+      const fresh = await getCard(base.packId, base.id)
       setPending(false)
       if (fresh.ok) {
+        const contentEdited = edited !== null && contentDiffers(edited, base.content.document)
+        setValues((current) => rebased(current, edited, base, fresh.value))
+        // Content the person did not change shows the saved content; their edit of it stays theirs.
+        if (!contentEdited) {
+          setEdited(null)
+          setRefusal(null)
+        }
+        setBase(fresh.value)
         onSaved(fresh.value)
         setConflict((previous) => ({ saved: fresh.value, attempt: (previous?.attempt ?? 0) + 1 }))
         return
@@ -180,13 +220,15 @@ export function CardDetailsSection({
               </Property>
             </PropertyList>
             <p>
-              Its content may differ too. Save again to replace the saved fields with yours, or take
-              the saved version and discard your edits.
+              Its content may differ too. Fields you did not change now show the saved version. Save
+              again to replace the fields you changed with yours, or take the saved version and
+              discard your edits.
             </p>
             <div className="mt-2">
               <Button
                 size="sm"
                 onClick={() => {
+                  setBase(conflict.saved)
                   setValues(valuesOf(conflict.saved))
                   setEdited(null)
                   setRefusal(null)
@@ -251,7 +293,7 @@ export function CardDetailsSection({
               ? 'The Card’s text. It needs some before it can be published.'
               : 'Say what this Card is for.'
           }
-          value={edited ?? card.content.document}
+          value={edited ?? base.content.document}
           onChange={setEdited}
           onRefusal={setRefusal}
           error={fields.content?.join(' ')}
@@ -266,7 +308,7 @@ export function CardDetailsSection({
           onTextChange={(summaryText) => {
             setValues({ ...values, summaryText })
           }}
-          saved={card.summary}
+          saved={base.summary}
           error={fields.summary?.join(' ')}
         />
 

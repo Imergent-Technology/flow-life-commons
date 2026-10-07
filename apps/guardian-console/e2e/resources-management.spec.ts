@@ -255,30 +255,51 @@ test.describe.serial('authoring a Resource Pack, start to finish', () => {
     await expect(result).toContainText(names.first)
   })
 
-  test('saving over someone else’s change is a deliberate act, not a silent one', async () => {
+  test('saving over someone else’s change is a deliberate act, and keeps their change to a field this person left alone', async ({
+    browser,
+    baseURL,
+  }) => {
     await page.goto(`/resources/packs/${packId}`)
     const details = page.getByRole('form', { name: 'Pack details' })
     await expect(details.getByLabel('Title')).toHaveValue(names.renamed)
+    const series = details.getByRole('checkbox', { name: 'This Pack is a Series' })
+    await expect(series).not.toBeChecked()
 
-    // Someone else saves a change to the same Pack while this one is open.
-    const base = (await packOf(page, packId)).revision
-    const theirs = await apiFrom(page, 'PATCH', `${ROOT}/packs/${packId}`, {
-      revision: base,
-      summary: 'Their summary',
-    })
-    expect(theirs.status).toBe(200)
+    // Someone else, signed in separately, makes the Pack a Series while this one is open.
+    const other = await signedInAs(browser, baseURL ?? '', 'admin-read')
+    try {
+      await other.goto('/')
+      const base = (await packOf(other, packId)).revision
+      const theirs = await apiFrom(other, 'PATCH', `${ROOT}/packs/${packId}`, {
+        revision: base,
+        is_series: true,
+      })
+      expect(theirs.status).toBe(200)
+    } finally {
+      await other.context().close()
+    }
 
+    // This person changes only the summary. The server refuses the stale save and changes nothing.
     await details.getByLabel('Summary').fill('My summary')
     await details.getByRole('button', { name: 'Save details' }).click()
     const conflict = page.getByText('Someone else saved changes to this Pack first.')
     await expect(conflict).toBeVisible()
-    await expect(page.getByText('Their summary').first()).toBeVisible()
+    expect((await packOf(page, packId)).summary).not.toBe('My summary')
+
+    // Their change shows in the field this person left alone; this person's edit is still in the form.
+    await expect(series).toBeChecked()
     await expect(details.getByLabel('Summary')).toHaveValue('My summary')
-    expect((await packOf(page, packId)).title).toBe(names.renamed)
+    await expect(details.getByLabel('Title')).toHaveValue(names.renamed)
 
     await details.getByRole('button', { name: 'Save details' }).click()
     await expect(page.getByText('The Pack’s details were saved.')).toBeVisible()
     await expect(conflict).toHaveCount(0)
+
+    // Both changes are on the server: theirs was not reverted by this save.
+    const saved = await packOf(page, packId)
+    expect(saved.summary).toBe('My summary')
+    expect(saved.is_series).toBe(true)
+    expect(saved.title).toBe(names.renamed)
   })
 
   test('Packs are listed, filtered and found by the server', async () => {

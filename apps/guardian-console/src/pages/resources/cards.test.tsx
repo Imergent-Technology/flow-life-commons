@@ -1,11 +1,11 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { expectNoAxeViolations } from '../../test/a11y.ts'
 import { pageBody } from '../../test/deferred.ts'
 import { operator, serveOperator, verificationRequired } from '../../test/admin.ts'
-import { writeContent, paragraphs } from '../../test/editor.ts'
+import { editorOf, writeContent, paragraphs } from '../../test/editor.ts'
 import { empty, json } from '../../test/fakeApi.ts'
 import { renderApp } from '../../test/renderApp.tsx'
 import {
@@ -407,10 +407,119 @@ describe('editing a Card', () => {
     api.on(`PATCH ${CARD_PATH}`, () => json(wireCard({ revision: 3, title: 'My title' })))
     await user.click(screen.getByRole('button', { name: 'Save Card' }))
     await screen.findByText('The Card was saved.')
-    expect(api.callsTo(`PATCH ${CARD_PATH}`)[1]?.body).toMatchObject({
+    expect(api.callsTo(`PATCH ${CARD_PATH}`)[1]?.body).toEqual({
       revision: 2,
       title: 'My title',
+      content: doc('We are open every day. Mine.'),
     })
+  })
+
+  it('bases a save on the version the form was filled from, not on a newer one another section brought in', async () => {
+    const { user, api } = await openCard(wireLinkCard({ revision: 1 }))
+    // Someone else retitled the Card and wrote its summary (revision 2). This person publishes it; the answer is the Card as it is now.
+    const theirs = wireLinkCard({
+      revision: 2,
+      title: 'Their title',
+      summary_mode: 'custom',
+      summary: 'Their summary',
+      state: 'published',
+    })
+    api.on(`POST ${CARD_PATH}/publish`, () => json(theirs))
+    await user.click(screen.getByRole('button', { name: 'Publish Card' }))
+    await screen.findByText('The Card is now Published.')
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Their title')
+
+    // They change only the web address. The save is based on revision 1 and carries nothing else, so the server can refuse it.
+    api.on(`PATCH ${CARD_PATH}`, () => staleRevision(theirs))
+    api.on(`GET ${CARD_PATH}`, () => json(theirs))
+    await user.clear(screen.getByLabelText('Web address'))
+    await user.type(screen.getByLabelText('Web address'), 'https://example.org/mine')
+    await user.click(screen.getByRole('button', { name: 'Save Card' }))
+    await screen.findByText('Someone else saved changes to this Card first.')
+    expect(api.callsTo(`PATCH ${CARD_PATH}`)[0]?.body).toEqual({
+      revision: 1,
+      uri: 'https://example.org/mine',
+    })
+
+    // The untouched title and summary take theirs; the address stays this person's.
+    expect(screen.getByLabelText('Title')).toHaveValue('Their title')
+    expect(screen.getByLabelText('Web address')).toHaveValue('https://example.org/mine')
+    expect(screen.getByRole('radio', { name: 'Write my own summary' })).toBeChecked()
+    expect(screen.getByLabelText('Your summary')).toHaveValue('Their summary')
+
+    api.on(`PATCH ${CARD_PATH}`, () =>
+      json({ ...theirs, revision: 3, uri: 'https://example.org/mine' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save Card' }))
+    await screen.findByText('The Card was saved.')
+    expect(api.callsTo(`PATCH ${CARD_PATH}`)[1]?.body).toEqual({
+      revision: 2,
+      uri: 'https://example.org/mine',
+    })
+  })
+
+  it('after a conflict over different fields, untouched content and fields take the saved version', async () => {
+    const { user, api } = await openCard(wireLinkCard({ revision: 7 }))
+    const theirs = wireLinkCard({
+      revision: 8,
+      uri: 'https://example.org/theirs',
+      content: { format: 'prosemirror', version: 1, document: doc('Their words.') },
+    })
+    api.on(`PATCH ${CARD_PATH}`, () => staleRevision(theirs))
+    api.on(`GET ${CARD_PATH}`, () => json(theirs))
+
+    await user.clear(screen.getByLabelText('Title'))
+    await user.type(screen.getByLabelText('Title'), 'My title')
+    await user.click(screen.getByRole('button', { name: 'Save Card' }))
+    await screen.findByText('Someone else saved changes to this Card first.')
+
+    expect(screen.getByLabelText('Title')).toHaveValue('My title')
+    expect(screen.getByLabelText('Web address')).toHaveValue('https://example.org/theirs')
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Description (optional)' })).toHaveTextContent(
+        'Their words.',
+      )
+    })
+
+    api.on(`PATCH ${CARD_PATH}`, () => json({ ...theirs, revision: 9, title: 'My title' }))
+    await user.click(screen.getByRole('button', { name: 'Save Card' }))
+    await screen.findByText('The Card was saved.')
+    expect(api.callsTo(`PATCH ${CARD_PATH}`)[1]?.body).toEqual({ revision: 8, title: 'My title' })
+  })
+
+  it('content typed and then taken back counts as untouched: after a conflict it takes the saved content and is not sent', async () => {
+    const { user, api } = await openCard(wireCard({ revision: 1 }))
+    const theirs = wireCard({
+      revision: 2,
+      content: { format: 'prosemirror', version: 1, document: doc('Their words.') },
+    })
+    api.on(`PATCH ${CARD_PATH}`, () => staleRevision(theirs))
+    api.on(`GET ${CARD_PATH}`, () => json(theirs))
+
+    // An edit of the content that ends where it began: the editor has reported a document, equal to the saved one.
+    const surface = await writeContent('Content', ' Mine.')
+    act(() => {
+      const editor = editorOf(surface)
+      const to = editor.state.selection.from
+      editor
+        .chain()
+        .deleteRange({ from: to - ' Mine.'.length, to })
+        .run()
+    })
+    expect(surface).toHaveTextContent(/^We are open every day\.$/)
+    await user.clear(screen.getByLabelText('Title'))
+    await user.type(screen.getByLabelText('Title'), 'My title')
+    await user.click(screen.getByRole('button', { name: 'Save Card' }))
+    await screen.findByText('Someone else saved changes to this Card first.')
+    expect(api.callsTo(`PATCH ${CARD_PATH}`)[0]?.body).toEqual({ revision: 1, title: 'My title' })
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Content' })).toHaveTextContent('Their words.')
+    })
+    api.on(`PATCH ${CARD_PATH}`, () => json({ ...theirs, revision: 3, title: 'My title' }))
+    await user.click(screen.getByRole('button', { name: 'Save Card' }))
+    await screen.findByText('The Card was saved.')
+    expect(api.callsTo(`PATCH ${CARD_PATH}`)[1]?.body).toEqual({ revision: 2, title: 'My title' })
   })
 
   it('shows the server’s refusal of content where the editor is', async () => {

@@ -31,7 +31,7 @@ const valuesOf = (pack: ManagedPack): PackFieldValues => ({
   categoryId: pack.category?.id ?? '',
 })
 
-/** What differs between the form and a Pack: only that is sent. */
+/** What the person changed: the form against the Pack their edits are based on. Only that is sent. */
 function changesFrom(values: PackFieldValues, pack: ManagedPack): PackChanges {
   const changes: PackChanges = {}
   if (values.title !== pack.title) changes.title = values.title
@@ -46,11 +46,31 @@ function changesFrom(values: PackFieldValues, pack: ManagedPack): PackChanges {
 }
 
 /**
+ * The form moved onto `fresh` after a stale save: a field the person changed from `base` keeps their value, and every other field
+ * takes the saved one, so a later Save sends only their edits (never a field someone else changed meanwhile).
+ */
+function rebased(values: PackFieldValues, base: ManagedPack, fresh: ManagedPack): PackFieldValues {
+  const edited = changesFrom(values, base)
+  const saved = valuesOf(fresh)
+  return {
+    title: edited.title !== undefined ? values.title : saved.title,
+    summary: edited.summary !== undefined ? values.summary : saved.summary,
+    isSeries: edited.isSeries !== undefined ? values.isSeries : saved.isSeries,
+    categoryId: edited.categoryId !== undefined ? values.categoryId : saved.categoryId,
+  }
+}
+
+/**
  * A Pack's authored fields: title, summary, Category and Series (ADR 0037, decisions 11 and 56). They are guarded by the Pack's
  * `revision`: an edit says which revision it was based on, and if someone saved first the server refuses it (`stale_revision`)
- * rather than let one editor overwrite the other. When that happens nothing is saved and nothing is merged: the Pack is read
- * again, the person's edits stay in the form, and they are shown what was saved meanwhile. Saving again then replaces those
- * fields with theirs, on purpose, or they can take the saved version instead.
+ * rather than let one editor overwrite the other. When that happens nothing is saved: the Pack is read again, the person's edits
+ * stay in the form, every field they did not touch takes the saved value, and they are shown what was saved meanwhile. Saving
+ * again then replaces only the fields they changed, on purpose, or they can take the saved version instead.
+ *
+ * The form's edits are based on `base`, the version it was filled from, and a save sends `base`'s revision with only the fields
+ * that differ from it. `pack` (the page's latest copy, which other sections replace) is deliberately NOT the base: pairing the
+ * form's old values with a newer revision would send back, unchanged-looking, a field someone else has since changed. `base`
+ * moves only on a successful save, a stale save's re-read, or taking the saved version.
  */
 export function PackDetailsSection({
   pack,
@@ -61,6 +81,7 @@ export function PackDetailsSection({
   categories: Load<ResourceCategory[]>
   onSaved: (next: ManagedPack) => void
 }) {
+  const [base, setBase] = useState<ManagedPack>(pack)
   const [values, setValues] = useState<PackFieldValues>(() => valuesOf(pack))
   const [pending, setPending] = useState(false)
   const [problem, setProblem] = useState<(ResourceProblem & { attempt: number }) | null>(null)
@@ -69,7 +90,7 @@ export function PackDetailsSection({
   const form = useFocusFirstInvalid(problem?.attempt)
 
   async function submit() {
-    const changes = changesFrom(values, pack)
+    const changes = changesFrom(values, base)
     if (Object.keys(changes).length === 0) {
       say('info', 'There is nothing to save: no field has changed.')
       return
@@ -77,10 +98,11 @@ export function PackDetailsSection({
     setPending(true)
     clear()
     setProblem(null)
-    const result = await updatePack(pack.id, pack.revision, changes)
+    const result = await updatePack(base.id, base.revision, changes)
     if (result.ok) {
       setPending(false)
       setConflict(null)
+      setBase(result.value)
       onSaved(result.value)
       setValues(valuesOf(result.value))
       say('success', 'The Pack’s details were saved.')
@@ -92,9 +114,11 @@ export function PackDetailsSection({
     }
     if (isStaleRevision(result.failure)) {
       // Read it again, so the revision is the current one and the person can see what was saved meanwhile.
-      const fresh = await getPack(pack.id)
+      const fresh = await getPack(base.id)
       setPending(false)
       if (fresh.ok) {
+        setValues((current) => rebased(current, base, fresh.value))
+        setBase(fresh.value)
         onSaved(fresh.value)
         setConflict((previous) => ({ saved: fresh.value, attempt: (previous?.attempt ?? 0) + 1 }))
         return
@@ -142,13 +166,14 @@ export function PackDetailsSection({
               <Property term="Series">{conflict.saved.isSeries ? 'Yes' : 'No'}</Property>
             </PropertyList>
             <p>
-              Save again to replace those fields with yours, or take the saved version and discard
-              your edits.
+              Fields you did not change now show the saved version. Save again to replace the fields
+              you changed with yours, or take the saved version and discard your edits.
             </p>
             <div className="mt-2">
               <Button
                 size="sm"
                 onClick={() => {
+                  setBase(conflict.saved)
                   setValues(valuesOf(conflict.saved))
                   setConflict(null)
                   say('info', 'The form now shows the saved version.')

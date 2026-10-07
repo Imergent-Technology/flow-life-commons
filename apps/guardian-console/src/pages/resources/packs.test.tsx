@@ -404,13 +404,15 @@ describe('editing a Pack’s details', () => {
     expect(alert).toHaveTextContent('Their summary')
     // Their words are shown beside mine; mine are still in the form, unsaved.
     expect(screen.getByLabelText('Title')).toHaveValue('My title')
+    // The summary was not touched here, so it now shows theirs.
+    expect(screen.getByLabelText('Summary')).toHaveValue('Their summary')
     expect(api.callsTo(`PATCH ${PACK_PATH}`)).toHaveLength(1)
 
-    // Saving again is a deliberate act, based on the CURRENT revision.
+    // Saving again is a deliberate act, based on the CURRENT revision, and sends only what this person changed.
     api.on(`PATCH ${PACK_PATH}`, () => json(wirePack({ revision: 3, title: 'My title' })))
     await user.click(screen.getByRole('button', { name: 'Save details' }))
     expect(await screen.findByText('The Pack’s details were saved.')).toBeInTheDocument()
-    expect(api.callsTo(`PATCH ${PACK_PATH}`)[1]?.body).toMatchObject({
+    expect(api.callsTo(`PATCH ${PACK_PATH}`)[1]?.body).toEqual({
       revision: 2,
       title: 'My title',
     })
@@ -436,6 +438,93 @@ describe('editing a Pack’s details', () => {
       screen.queryByText('Someone else saved changes to this Pack first.'),
     ).not.toBeInTheDocument()
     expect(document.activeElement).toHaveTextContent('The form now shows the saved version.')
+
+    // The saved version is now what edits are based on: its revision, and nothing of the discarded edit.
+    api.on(`PATCH ${PACK_PATH}`, () => json(wirePack({ revision: 3, summary: 'Shorter.' })))
+    await user.clear(screen.getByLabelText('Summary'))
+    await user.type(screen.getByLabelText('Summary'), 'Shorter.')
+    await user.click(screen.getByRole('button', { name: 'Save details' }))
+    await screen.findByText('The Pack’s details were saved.')
+    expect(api.callsTo(`PATCH ${PACK_PATH}`)[1]?.body).toEqual({ revision: 2, summary: 'Shorter.' })
+  })
+
+  it('bases a save on the version the form was filled from, not on a newer one another section brought in', async () => {
+    const { user, api } = await openPack(
+      wirePack({ revision: 1, title: 'Original title', summary: 'Original summary' }),
+    )
+    // Someone else renamed the Pack (revision 2). This person saves the audiences, and the answer is the Pack as it is now.
+    const theirs = wirePack({
+      revision: 2,
+      title: 'Their title',
+      summary: 'Original summary',
+      audiences: ['guardian', 'member'],
+    })
+    api.on(`PUT ${PACK_PATH}/audiences`, () => json(theirs))
+    await user.click(screen.getByRole('checkbox', { name: 'Members' }))
+    await user.click(screen.getByRole('button', { name: 'Save audiences' }))
+    await screen.findByText('The Pack’s audiences were saved.')
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Their title')
+
+    // They change only the summary. The save is based on revision 1 and carries no title, so the server can refuse it.
+    api.on(`PATCH ${PACK_PATH}`, () => staleRevision(theirs))
+    api.on(`GET ${PACK_PATH}`, () => json(theirs))
+    await user.clear(screen.getByLabelText('Summary'))
+    await user.type(screen.getByLabelText('Summary'), 'My summary')
+    await user.click(screen.getByRole('button', { name: 'Save details' }))
+    await screen.findByText('Someone else saved changes to this Pack first.')
+    expect(api.callsTo(`PATCH ${PACK_PATH}`)[0]?.body).toEqual({
+      revision: 1,
+      summary: 'My summary',
+    })
+
+    // The untouched title takes theirs; the summary stays this person's.
+    expect(screen.getByLabelText('Title')).toHaveValue('Their title')
+    expect(screen.getByLabelText('Summary')).toHaveValue('My summary')
+
+    api.on(`PATCH ${PACK_PATH}`, () =>
+      json(wirePack({ revision: 3, title: 'Their title', summary: 'My summary' })),
+    )
+    await user.click(screen.getByRole('button', { name: 'Save details' }))
+    await screen.findByText('The Pack’s details were saved.')
+    expect(api.callsTo(`PATCH ${PACK_PATH}`)[1]?.body).toEqual({
+      revision: 2,
+      summary: 'My summary',
+    })
+  })
+
+  it('after a conflict over different fields, keeps the person’s field and takes the other person’s', async () => {
+    const { user, api } = await openPack(
+      wirePack({
+        revision: 4,
+        title: 'Original title',
+        summary: 'Original summary',
+        is_series: false,
+      }),
+    )
+    const theirs = wirePack({
+      revision: 5,
+      title: 'Original title',
+      summary: 'Their summary',
+      is_series: true,
+      category: null,
+    })
+    api.on(`PATCH ${PACK_PATH}`, () => staleRevision(theirs))
+    api.on(`GET ${PACK_PATH}`, () => json(theirs))
+
+    await user.clear(screen.getByLabelText('Title'))
+    await user.type(screen.getByLabelText('Title'), 'My title')
+    await user.click(screen.getByRole('button', { name: 'Save details' }))
+    await screen.findByText('Someone else saved changes to this Pack first.')
+
+    expect(screen.getByLabelText('Title')).toHaveValue('My title')
+    expect(screen.getByLabelText('Summary')).toHaveValue('Their summary')
+    expect(screen.getByLabelText('Category')).toHaveValue('')
+    expect(screen.getByRole('checkbox', { name: /Series/ })).toBeChecked()
+
+    api.on(`PATCH ${PACK_PATH}`, () => json(wirePack({ revision: 6, title: 'My title' })))
+    await user.click(screen.getByRole('button', { name: 'Save details' }))
+    await screen.findByText('The Pack’s details were saved.')
+    expect(api.callsTo(`PATCH ${PACK_PATH}`)[1]?.body).toEqual({ revision: 5, title: 'My title' })
   })
 
   it('says a Category that has gone is gone, beside the Category field', async () => {

@@ -200,6 +200,8 @@ export async function publishPack(page: Page, packId: string): Promise<void> {
 
 interface PackBody {
   title: string
+  summary: string | null
+  is_series: boolean
   state: string
   revision: number
   audiences: string[]
