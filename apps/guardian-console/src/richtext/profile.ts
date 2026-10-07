@@ -19,7 +19,7 @@ import { MAX_SPAN, normaliseLinkHref } from './contract.ts'
 //
 // Two constraints from the production Content-Security-Policy (`style-src 'self'`, no inline styles)
 // shape every extension below: nothing injects CSS (the editor's own styles are the Console's
-// stylesheet, richtext.css, and `RichTextEditor` creates the editor with `injectCSS: false`), and
+// stylesheets, richtext.css and editor.css, and `RichTextEditor` creates the editor with `injectCSS: false`), and
 // tables are not resizable, because column resizing writes inline `style` attributes.
 
 export type EditorFeature =

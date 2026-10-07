@@ -56,8 +56,11 @@ test.describe.serial('authoring a Resource Pack, start to finish', () => {
     await page.context().close()
   })
 
-  test('the Resources entry is in the navigation and leads to the management list', async () => {
+  test('the Resources entry is in the navigation, opens on the library, and leads on to the management list', async () => {
+    // The section opens on the Guardian's library (first in the section); management is its other group.
     await page.getByRole('link', { name: 'Resources', exact: true }).first().click()
+    await expect(page).toHaveURL(/\/resource-library$/)
+    await page.getByRole('link', { name: 'All Resource Packs' }).first().click()
     await expect(page).toHaveURL(/\/resources$/)
     await expect(page.getByRole('heading', { level: 1, name: 'Resources' })).toBeVisible()
     await expect(page.getByRole('link', { name: 'Add a Resource Pack' }).first()).toBeVisible()
@@ -592,7 +595,9 @@ test.describe('who may manage Resources', () => {
 
     await page.goto('/')
     await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Resources', exact: true })).toHaveCount(0)
+    // They have the library, and none of the pages that manage.
+    await expect(page.getByRole('link', { name: 'All Resource Packs' })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'Add a Resource Pack' })).toHaveCount(0)
     await expect(page.getByRole('link', { name: 'Categories', exact: true })).toHaveCount(0)
 
     for (const path of [

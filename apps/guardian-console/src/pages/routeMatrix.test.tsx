@@ -21,6 +21,7 @@ import {
   wireDiscussion,
   wireMessage,
 } from '../test/discussions.ts'
+import { libraryOf, TWO_GROUPS, wireLibraryPack } from '../test/library.ts'
 import { renderApp } from '../test/renderApp.tsx'
 import {
   CARD_ID,
@@ -54,6 +55,7 @@ const EVERYTHING = [
   'discussions.view',
   'discussions.participate',
   'resources.manage',
+  'resources.view',
 ]
 
 function serveAll() {
@@ -77,6 +79,8 @@ function serveAll() {
   api.on('GET /api/v1/admin/resources/packs', json(packsPage([wireListedPack()])))
   api.on(`GET /api/v1/admin/resources/packs/${PACK_ID}`, json(wirePack()))
   api.on(`GET /api/v1/admin/resources/packs/${PACK_ID}/cards/${CARD_ID}`, json(wireCard()))
+  api.on('GET /api/v1/admin/resource-library', libraryOf(...TWO_GROUPS))
+  api.on(`GET /api/v1/admin/resource-library/packs/${PACK_ID}`, json(wireLibraryPack()))
   return api
 }
 
@@ -102,6 +106,8 @@ const consoleRoutes: { path: string; h1: string; width: PageWidth }[] = [
   { path: `/resources/packs/${PACK_ID}`, h1: 'Welcome pack', width: 'detail' },
   { path: `/resources/packs/${PACK_ID}/cards/new`, h1: 'Add a Card', width: 'form' },
   { path: `/resources/packs/${PACK_ID}/cards/${CARD_ID}`, h1: 'Opening hours', width: 'detail' },
+  { path: '/resource-library', h1: 'Resource Library', width: 'wide' },
+  { path: `/resource-library/${PACK_ID}`, h1: 'Welcome pack', width: 'detail' },
   { path: '/no/such/page', h1: 'Page not found', width: 'prose' },
 ]
 

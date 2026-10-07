@@ -12,6 +12,7 @@ import {
 import { documentFromEditor, editorContent, profileEditorProps } from './editorDocument.ts'
 import { EditorToolbar } from './EditorToolbar.tsx'
 import { resourcesProfile, type EditorProfile } from './profile.ts'
+import './editor.css'
 import './richtext.css'
 
 /**
@@ -33,7 +34,7 @@ import './richtext.css'
  *   removes the control from interaction and from the tab order, and says so to assistive technology.
  *
  * Nothing is injected into the page by it: no stylesheet (`injectCSS: false`; its rules are
- * richtext.css, so the production policy's `style-src 'self'` holds), no inline style, no HTML.
+ * editor.css and richtext.css, so the production policy's `style-src 'self'` holds), no inline style, no HTML.
  */
 export function RichTextEditor({
   value,

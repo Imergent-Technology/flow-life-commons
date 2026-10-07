@@ -84,12 +84,14 @@ describe('who may manage Resources', () => {
     },
   )
 
-  it('does not offer the section to someone who may only view Resources', async () => {
+  it('does not offer the management pages to someone who may only view Resources', async () => {
     serve(VIEW_ONLY)
     renderApp('/')
 
     await screen.findByRole('heading', { level: 1 })
-    expect(screen.queryByRole('link', { name: 'Resources' })).not.toBeInTheDocument()
+    // They have the library (its own tests say so); none of the pages that manage.
+    expect(screen.queryByRole('link', { name: 'All Resource Packs' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Add a Resource Pack' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Categories' })).not.toBeInTheDocument()
   })
 })

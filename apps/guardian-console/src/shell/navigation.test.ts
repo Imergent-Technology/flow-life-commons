@@ -224,9 +224,24 @@ describe('Resources management', () => {
     ])
   })
 
-  it('is not offered to someone who may only view Resources: view does not imply manage', () => {
-    expect(labels(having(RESOURCES_VIEW))).toEqual(['Overview'])
+  it('does not offer the management pages to someone who may only view Resources: view does not imply manage', () => {
+    expect(labels(having(RESOURCES_VIEW))).toEqual(['Overview', 'Resources', 'Resource Library'])
     expect(labels(having())).toEqual(['Overview'])
+  })
+
+  it('does not offer the library to someone who may only manage Resources: manage does not imply view', () => {
+    expect(labels(having(RESOURCES_MANAGE))).not.toContain('Resource Library')
+  })
+
+  it('offers both, the library first, to someone who holds both capabilities', () => {
+    expect(labels(having(RESOURCES_VIEW, RESOURCES_MANAGE))).toEqual([
+      'Overview',
+      'Resources',
+      'Resource Library',
+      'All Resource Packs',
+      'Add a Resource Pack',
+      'Categories',
+    ])
   })
 
   it('keeps "All Resource Packs" current on a Pack and on the Cards beneath it, with a breadcrumb', () => {
@@ -251,5 +266,34 @@ describe('Resources management', () => {
     expect(locate(sections, '/resources/new')?.item?.label).toBe('Add a Resource Pack')
     expect(locate(sections, '/resources/categories')?.item?.label).toBe('Categories')
     expect(locate(sections, '/resources')?.detail).toBe(false)
+  })
+})
+
+describe('the Resource Library', () => {
+  const at = (path: string) => locate(having(RESOURCES_VIEW), path)
+
+  it('is current on its own page', () => {
+    const where = at('/resource-library')
+    expect(where?.item?.label).toBe('Resource Library')
+    expect(where?.detail).toBe(false)
+  })
+
+  it('stays current on a Resource, with a breadcrumb named for it', () => {
+    const where = at('/resource-library/01J00000000000000000PACK001')
+    expect(where?.item?.label).toBe('Resource Library')
+    expect(where?.detail).toBe(true)
+    expect(breadcrumbs(where, 'Welcome pack')).toEqual([
+      { label: 'Library', to: '/resource-library' },
+      { label: 'Welcome pack' },
+    ])
+  })
+
+  it('is not taken for management, nor management for it', () => {
+    const both = having(RESOURCES_VIEW, RESOURCES_MANAGE)
+    expect(locate(both, '/resources')?.item?.label).toBe('All Resource Packs')
+    expect(locate(both, '/resource-library')?.item?.label).toBe('Resource Library')
+    expect(locate(both, '/resources/packs/01J00000000000000000PACK001')?.item?.label).toBe(
+      'All Resource Packs',
+    )
   })
 })

@@ -83,7 +83,7 @@ export const documentOf = (text: string) => ({
   content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
 })
 
-async function publishCard(page: Page, packId: string, cardId: string): Promise<void> {
+export async function publishCard(page: Page, packId: string, cardId: string): Promise<void> {
   expectStatus(
     await apiFrom(page, 'POST', `${ROOT}/packs/${packId}/cards/${cardId}/publish`),
     200,
@@ -94,16 +94,24 @@ async function publishCard(page: Page, packId: string, cardId: string): Promise<
 export async function makeBasicCard(
   page: Page,
   packId: string,
-  options: { title?: string; text?: string; publish?: boolean } = {},
+  options: {
+    title?: string
+    text?: string
+    /** A whole document, instead of one paragraph of `text`. */
+    document?: unknown
+    summary?: string | null
+    uri?: string | null
+    publish?: boolean
+  } = {},
 ): Promise<Id & { title: string }> {
   const title = options.title ?? unique('E2E Card')
   const id = createdId(
     await apiFrom(page, 'POST', `${ROOT}/packs/${packId}/cards`, {
       type: 'basic',
       title,
-      content: documentOf(options.text ?? 'Some words worth keeping.'),
-      uri: null,
-      summary: null,
+      content: options.document ?? documentOf(options.text ?? 'Some words worth keeping.'),
+      uri: options.uri ?? null,
+      summary: options.summary ?? null,
     }),
     'create a Card',
   )
@@ -114,7 +122,7 @@ export async function makeBasicCard(
 export async function makeLinkCard(
   page: Page,
   packId: string,
-  options: { title?: string; uri?: string } = {},
+  options: { title?: string; uri?: string; summary?: string | null; publish?: boolean } = {},
 ): Promise<Id & { title: string }> {
   const title = options.title ?? unique('E2E Link')
   const id = createdId(
@@ -123,16 +131,19 @@ export async function makeLinkCard(
       title,
       content: null,
       uri: options.uri ?? 'https://example.org/a-page',
-      summary: null,
+      summary: options.summary ?? null,
     }),
     'create a link Card',
   )
+  if (options.publish === true) await publishCard(page, packId, id)
   return { id, title }
 }
 
 interface Dom {
   FormData: new () => { append: (name: string, value: unknown, filename?: string) => void }
-  File: new (parts: string[], name: string, options: { type: string }) => unknown
+  File: new (parts: unknown[], name: string, options: { type: string }) => unknown
+  atob: (encoded: string) => string
+  Uint8Array: { from: (source: string, map: (char: string) => number) => unknown }
   fetch: (
     path: string,
     init: { method: string; headers: Record<string, string>; body: unknown },
@@ -147,7 +158,7 @@ export async function uploadFrom(
   page: Page,
   path: string,
   fields: Record<string, string>,
-  file: { name: string; type: string; text: string },
+  file: { name: string; type: string; text?: string; base64?: string },
 ): Promise<{ status: number; body: unknown }> {
   const xsrf = (await page.context().cookies()).find((c) => c.name === 'XSRF-TOKEN')
   const token = xsrf === undefined ? undefined : decodeURIComponent(xsrf.value)
@@ -156,7 +167,12 @@ export async function uploadFrom(
       const dom = globalThis as unknown as Dom
       const form = new dom.FormData()
       for (const [name, value] of Object.entries(fields)) form.append(name, value)
-      form.append('file', new dom.File([file.text], file.name, { type: file.type }), file.name)
+      // A binary file travels as base64 (a string cannot hold arbitrary bytes), and is turned back into bytes here.
+      const part =
+        file.base64 === undefined
+          ? file.text
+          : dom.Uint8Array.from(dom.atob(file.base64), (char) => char.charCodeAt(0))
+      form.append('file', new dom.File([part], file.name, { type: file.type }), file.name)
       const headers: Record<string, string> = { Accept: 'application/json' }
       if (token !== undefined) headers['X-XSRF-TOKEN'] = token
       const response = await dom.fetch(path, { method: 'POST', headers, body: form })
@@ -243,4 +259,53 @@ export class RemoveAfter {
     for (const id of this.categories)
       await apiFrom(page, 'DELETE', `${ROOT}/categories/${id}`).catch(() => undefined)
   }
+}
+
+/** A 1x1 PNG: the smallest file the platform's own detection calls an image. */
+export const PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+/** A File Card of any allowed kind; the platform judges the content, whatever the name or the claimed type say. */
+export async function makeUploadCard(
+  page: Page,
+  packId: string,
+  options: {
+    title?: string
+    name: string
+    type: string
+    text?: string
+    base64?: string
+    publish?: boolean
+  },
+): Promise<Id & { title: string }> {
+  const title = options.title ?? unique('E2E File')
+  const file = {
+    name: options.name,
+    type: options.type,
+    ...(options.text !== undefined && { text: options.text }),
+    ...(options.base64 !== undefined && { base64: options.base64 }),
+  }
+  const id = createdId(
+    await uploadFrom(page, `${ROOT}/packs/${packId}/cards`, { type: 'file', title }, file),
+    'create a File Card',
+  )
+  if (options.publish === true) await publishCard(page, packId, id)
+  return { id, title }
+}
+
+/** Narrows a Card to part of its Pack's audience. */
+export async function narrowCard(
+  page: Page,
+  packId: string,
+  cardId: string,
+  audiences: string[],
+): Promise<void> {
+  expectStatus(
+    await apiFrom(page, 'PUT', `${ROOT}/packs/${packId}/cards/${cardId}/audiences`, {
+      mode: 'narrowed',
+      audiences,
+    }),
+    200,
+    'narrow a Card',
+  )
 }

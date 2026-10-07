@@ -332,7 +332,10 @@ describe('replacing a File Card’s file', () => {
     expect([...(call?.form?.keys() ?? [])]).toEqual(['file'])
     expect(call?.form?.get('file')).toHaveProperty('name', 'Handbook v2.pdf')
     expect(api.callsTo('POST /api/v1/security/verify')).toHaveLength(0)
-    expect(document.activeElement).toHaveTextContent('The file was replaced.')
+    // The alert takes focus in an effect after it appears, so on a busy machine it can be a moment behind its text.
+    await waitFor(() => {
+      expect(document.activeElement).toHaveTextContent('The file was replaced.')
+    })
   })
 
   it('clears the chosen file after a replacement, so it is not sent twice', async () => {

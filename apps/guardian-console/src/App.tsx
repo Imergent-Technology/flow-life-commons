@@ -11,6 +11,7 @@ import {
   PEOPLE_MANAGE,
   PEOPLE_VIEW,
   RESOURCES_MANAGE,
+  RESOURCES_VIEW,
 } from './auth/capabilities.ts'
 import { RequireAuthentication } from './auth/RequireAuthentication.tsx'
 import { RequireCapability } from './auth/RequireCapability.tsx'
@@ -29,6 +30,8 @@ import { RegisterMemberPage } from './pages/admin/RegisterMemberPage.tsx'
 import { DiscussionPage } from './pages/discussions/DiscussionPage.tsx'
 import { DiscussionsPage } from './pages/discussions/DiscussionsPage.tsx'
 import { StartDiscussionPage } from './pages/discussions/StartDiscussionPage.tsx'
+import { LibraryPackPage } from './pages/library/LibraryPackPage.tsx'
+import { LibraryPage } from './pages/library/LibraryPage.tsx'
 import { PeoplePage } from './pages/people/PeoplePage.tsx'
 import { CardPage } from './pages/resources/CardPage.tsx'
 import { CategoriesPage } from './pages/resources/CategoriesPage.tsx'
@@ -138,6 +141,22 @@ function App() {
                   element={
                     <RequireCapability capability={DISCUSSIONS_VIEW}>
                       <DiscussionPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="resource-library"
+                  element={
+                    <RequireCapability capability={RESOURCES_VIEW}>
+                      <LibraryPage />
+                    </RequireCapability>
+                  }
+                />
+                <Route
+                  path="resource-library/:packId"
+                  element={
+                    <RequireCapability capability={RESOURCES_VIEW}>
+                      <LibraryPackPage />
                     </RequireCapability>
                   }
                 />

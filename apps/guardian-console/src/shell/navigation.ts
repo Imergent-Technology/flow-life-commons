@@ -10,6 +10,7 @@ import {
   PEOPLE_MANAGE,
   PEOPLE_VIEW,
   RESOURCES_MANAGE,
+  RESOURCES_VIEW,
 } from '../auth/capabilities.ts'
 
 /**
@@ -96,6 +97,18 @@ export const navigation: readonly NavSection[] = [
     label: 'Resources',
     icon: 'resources',
     groups: [
+      {
+        label: 'Library',
+        items: [
+          {
+            label: 'Resource Library',
+            to: '/resource-library',
+            capability: RESOURCES_VIEW,
+            // A Resource (a Pack), read with the Cards the person may see (`?card=` chooses one).
+            detail: { pattern: '/resource-library/:packId', label: 'Resource' },
+          },
+        ],
+      },
       {
         label: 'Resources',
         items: [
