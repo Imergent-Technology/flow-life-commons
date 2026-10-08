@@ -4,6 +4,7 @@
 - **Date:** 2026-10-04
 - **Supersedes:** none. **Amends** the Volunteer relationship stated in [ADR 0034](0034-crm-enriches-identity-person.md) ("Note on Volunteers") and in [member access](../architecture/member-access.md) ("Volunteer extension seam")
 - **Superseded by:** none
+- **Amended by:** [ADR 0038](0038-organizational-relationships-and-resource-viewing-authority.md) (**proposed**, taking effect when accepted): decision 7 (Guardian becomes a business relationship, owned by a `Relationships` module, and is no longer represented only in Access), decision 3 (Volunteer is owned by that module rather than a separate Volunteering module), and the rejected alternative of a generic relationships table, whose trigger (a second real consumer) has arrived. Every principle of this ADR stands
 - **Related:** [ADR 0015](0015-identity-owns-person.md), [ADR 0017](0017-capabilities-and-roles-in-code.md), [ADR 0028](0028-membership-grants-derived-at-query-time.md), [ADR 0032](0032-members-use-a-commons-hosted-surface.md), [ADR 0037](0037-resources-are-audience-targeted-packs-of-cards.md)
 
 ## Context
