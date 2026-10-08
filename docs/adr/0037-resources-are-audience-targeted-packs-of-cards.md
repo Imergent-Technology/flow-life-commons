@@ -5,6 +5,7 @@
 - **Amended:** 2026-10-04, before implementation: permanent deletion of a Pack or Card now records a security event (decision 55). Nothing else changed
 - **Supersedes:** none
 - **Superseded by:** none
+- **Amended by:** [ADR 0038](0038-volunteer-relationships-and-resource-viewing-authority.md) (**proposed**, taking effect when accepted): decisions 42–46, 49–51, 66 and 69. `resources.view` reads every Resource in the Console, Drafts included; the `volunteer` audience is added; audience delivery is driven by relationship eligibility; Membership becomes a dependency of Resources in G10
 - **Related:** [ADR 0005](0005-mariadb-with-postgresql-portability.md), [ADR 0017](0017-capabilities-and-roles-in-code.md), [ADR 0019](0019-security-event-auditing-seam.md), [ADR 0021](0021-cross-module-referential-integrity.md), [ADR 0023](0023-multi-factor-authentication.md), [ADR 0026](0026-production-browser-security-policy.md), [ADR 0027](0027-release-and-deployment-model.md), [ADR 0028](0028-membership-grants-derived-at-query-time.md), [ADR 0035](0035-guardian-discussions-are-durable-asynchronous-threads.md), [ADR 0036](0036-business-relationships-are-independent-and-not-access-roles.md)
 
 ## Context
