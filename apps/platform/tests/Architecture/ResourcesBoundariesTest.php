@@ -166,10 +166,12 @@ arch('Shared does not depend on Resources: it stays the tiny kernel, never a med
     expect('App\\Shared')->not->toUse('App\\Modules\\Resources');
 });
 
-arch('nothing outside Resources uses Resources', function () use ($resources) {
-    // Not even a seeder yet: the demo dataset is a later package. The module's own exception renderers live in bootstrap/app.php, which is
-    // not a class and so not an arch subject; the route loader finds Http/routes.php from disk.
-    expect($resources)->toOnlyBeUsedIn([$resources]);
+arch('nothing outside Resources uses Resources, but the development-only demo seeder, which uses its public use cases as an operator would', function () use ($resources) {
+    // The one exception is `Database\Seeders\ResourcesDemoSeeder`: opt-in, refused outside local and testing, and referenced by nothing
+    // in the application (ResourcesDemoSeederTest pins each). It writes through Resources' own use cases, and its only direct writes are
+    // provenance updates to three of Resources' own tables (also pinned there). The module's own exception renderers live in
+    // bootstrap/app.php, which is not a class and so not an arch subject; the route loader finds Http/routes.php from disk.
+    expect($resources)->toOnlyBeUsedIn([$resources, 'Database\\Seeders\\ResourcesDemoSeeder']);
 });
 
 // --- Layers ------------------------------------------------------------------------------------------------------------

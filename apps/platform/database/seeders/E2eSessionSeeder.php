@@ -68,6 +68,9 @@ final class E2eSessionSeeder extends Seeder
         // (e2e/resources-stepup.spec.ts).
         'resources-stale-card' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 16, 7],
         'resources-stale-pack' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 16, 6],
+        // And one for the library closeout (WP6): a File Card is deleted from management and the library stops serving it. It signs in with
+        // recovery code 4 and proves with 8 (e2e/resources-closeout.spec.ts); 0 is the only plain-Guardian code left over.
+        'resources-stale-library' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 16, 4],
     ];
 
     /** @var array<string, string> the cookie jar of the sign-in in progress: name => value as the server sent it */

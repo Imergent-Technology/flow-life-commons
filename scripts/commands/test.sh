@@ -113,6 +113,8 @@ test_e2e() {
     php_run php artisan db:seed --class=CrmDemoSeeder --force --no-interaction
     step "Seeding the Discussions demo data (development only, repeatable, and repaired after the fixture Accounts are recreated)"
     php_run php artisan db:seed --class=DiscussionsDemoSeeder --force --no-interaction
+    step "Seeding the Resources demo data (development only, repeatable: Packs that exist are left alone, and provenance is repaired)"
+    php_run php artisan db:seed --class=ResourcesDemoSeeder --force --no-interaction
     mkdir -p apps/guardian-console/e2e/.fixtures
     cp apps/platform/storage/app/private/e2e-sessions.json apps/guardian-console/e2e/.fixtures/sessions.json
     php_run php artisan cache:clear --no-interaction

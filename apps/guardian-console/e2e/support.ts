@@ -249,6 +249,7 @@ export type FixtureSession =
   | 'discussions-stale'
   | 'resources-stale-card'
   | 'resources-stale-pack'
+  | 'resources-stale-library'
 
 interface MintedSession {
   session: string
