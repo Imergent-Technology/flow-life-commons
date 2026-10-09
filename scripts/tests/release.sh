@@ -102,7 +102,7 @@ case "$image" in
         echo "docker stub: unexpected php command: ${cmd[*]}" >&2
         exit 99
         ;;
-    node:*)
+    node:* | */node:*)
         app="$(mount_for /app)"
         case "${cmd[0]:-} ${cmd[1]:-} ${cmd[2]:-}" in
             "npm ci "*) mkdir -p "$app/node_modules"; exit 0 ;;

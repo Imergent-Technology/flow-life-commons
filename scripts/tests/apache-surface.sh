@@ -30,7 +30,7 @@
 # are what has to strip it back off.
 #
 # WHAT IS REAL: apps/platform/public/.htaccess and apps/platform/public/maintenance.php, unmodified,
-# under php:8.3-apache (the production PHP version, verified 2026-09-21). WHAT IS STUBBED: the Laravel
+# under php:8.3-apache via Google's public cache (the production PHP version, verified 2026-09-21). WHAT IS STUBBED: the Laravel
 # front controller, replaced by a small PHP script that answers with a marker distinguishing "the
 # front controller was reached" from "the maintenance responder was reached" and sets the seven policy
 # headers with a dummy value, so header replacement (not merely presence) can be proved. This script
@@ -42,7 +42,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 HTACCESS="$ROOT/apps/platform/public/.htaccess"
 RESPONDER="$ROOT/apps/platform/public/maintenance.php"
-APACHE_IMAGE="php:8.3-apache" # matches the verified production PHP version, 8.3.33 (production readiness)
+APACHE_IMAGE="mirror.gcr.io/library/php:8.3-apache" # official php:8.3-apache; Hub 429 avoidance (see compose.yaml)
 
 command -v docker >/dev/null 2>&1 || {
     echo "apache-surface: docker not found. This check needs a disposable Apache container." >&2

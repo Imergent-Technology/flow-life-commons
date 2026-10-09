@@ -644,7 +644,7 @@ Implemented, developer-side only: pure functions of a commit, run on a developer
 
 Output goes to `dist/releases/` (gitignored) unless `--out` says otherwise. An existing artifact is never overwritten. `./flow release --help` lists every option.
 
-**This build runs on the developer's own machine, and needs GNU userland there — not merely inside a container.** `scripts/lib/release.sh` calls `date -d` and `tar --sort=name --mtime=…` directly from the outer shell, on the host, before anything reaches a container; the container images (`flowlife-dev/php:8.3`, `node:24-bookworm-slim`) only run the Composer/npm/cache steps inside. BSD `date`/`tar` (macOS, the default on a Mac without `coreutils`/`gnu-tar` installed) do not accept the same flags. The development target is Linux or WSL2 ([getting started](../development/getting-started.md)); this is a property of that same requirement, not a new one, and is not a promise of macOS support.
+**This build runs on the developer's own machine, and needs GNU userland there — not merely inside a container.** `scripts/lib/release.sh` calls `date -d` and `tar --sort=name --mtime=…` directly from the outer shell, on the host, before anything reaches a container; the container images (`flowlife-dev/php:8.3`, `mirror.gcr.io/library/node:24-bookworm-slim`) only run the Composer/npm/cache steps inside. BSD `date`/`tar` (macOS, the default on a Mac without `coreutils`/`gnu-tar` installed) do not accept the same flags. The development target is Linux or WSL2 ([getting started](../development/getting-started.md)); this is a property of that same requirement, not a new one, and is not a promise of macOS support.
 
 **What a person supplies, and the build refuses to guess:**
 

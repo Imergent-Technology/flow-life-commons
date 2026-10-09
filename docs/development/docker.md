@@ -6,13 +6,13 @@ Development runs in Docker Compose ([ADR 0011](../adr/0011-docker-compose-develo
 
 | Service | Image | Purpose | Published on host |
 | --- | --- | --- | --- |
-| `gateway` | `caddy:2-alpine` | Reverse proxy; host-based routing | `127.0.0.1:18080` |
+| `gateway` | `caddy:2-alpine` (via `mirror.gcr.io`) | Reverse proxy; host-based routing | `127.0.0.1:18080` |
 | `platform` | built from `infrastructure/docker/php` (PHP 8.3 php-fpm) | Laravel app; also the Composer/Artisan tool container | none |
 | `queue` | same PHP image | `queue:listen` (development worker) | none |
 | `scheduler` | same PHP image | `schedule:work` (development scheduler) | none |
-| `mariadb` | `mariadb:10.11` | Database (UTC, utf8mb4) | `127.0.0.1:13306` |
-| `guardian` | `node:24-bookworm-slim` | Vite dev server (also the npm tool container) | none (via gateway) |
-| `mailpit` | `axllent/mailpit` (pinned) | Catches dev mail; SMTP `mailpit:1025` internally | none (via gateway) |
+| `mariadb` | `mariadb:10.11` (via `mirror.gcr.io`) | Database (UTC, utf8mb4) | `127.0.0.1:13306` |
+| `guardian` | `node:24-bookworm-slim` (via `mirror.gcr.io`) | Vite dev server (also the npm tool container) | none (via gateway) |
+| `mailpit` | `axllent/mailpit` (pinned, via `mirror.gcr.io`) | Catches dev mail; SMTP `mailpit:1025` internally | none (via gateway) |
 
 The PHP image includes `bcmath intl pcntl pdo_mysql pdo_pgsql zip`, the extensions the platform needs on cPanel PHP 8.3, plus `pdo_pgsql` for the portability run.
 
@@ -20,8 +20,8 @@ The PHP image includes `bcmath intl pcntl pdo_mysql pdo_pgsql zip`, the extensio
 
 | Profile | Service | Notes |
 | --- | --- | --- |
-| `postgres` | `postgres:16-alpine` on `127.0.0.1:15432` | Used by `./flow test backend --pgsql` and `./flow db shell --pgsql`; started automatically when needed |
-| `redis` | `redis:7-alpine` on `127.0.0.1:16379` | Optional and **not consumed by the application**; `./flow up --profile redis` |
+| `postgres` | `postgres:16-alpine` (via `mirror.gcr.io`) on `127.0.0.1:15432` | Used by `./flow test backend --pgsql` and `./flow db shell --pgsql`; started automatically when needed |
+| `redis` | `redis:7-alpine` (via `mirror.gcr.io`) on `127.0.0.1:16379` | Optional and **not consumed by the application**; `./flow up --profile redis` |
 | `e2e` | Playwright image (`v1.63.0-noble`) | Used by `./flow test e2e`; keep the tag in step with `@playwright/test` |
 
 **WordPress** is intentionally not in the stack yet. It will arrive as a `wordpress` profile when the first real feature needs it ([WordPress integration](../integrations/wordpress.md)).
@@ -101,6 +101,10 @@ The dev `queue` container reloads code per job (`queue:listen`); the `scheduler`
 ## CI parity
 
 CI uses the same `compose.yaml` and `./flow` commands. The only CI-specific step is pre-building the PHP image with layer caching (`docker/bake-action`), then `./flow setup --skip-build`.
+
+Image *names* are not docker.io short names: `docker pull` and Bake HEAD the named registry even when a layer cache or local copy exists, and GitHub-hosted runners share egress IPs that exhaust Hub's anonymous quota (HTTP 429 before `./flow check` starts). Official images and pinned third-party tags resolve through Google's public cache (`mirror.gcr.io`); the PHP extension installer is the project's own GHCR publish of the same pin (that tag is not in the Google cache). Buildx pulls BuildKit from the same cache. Do not restart dockerd on the runner to install a daemon mirror: that times out `setup-buildx` on `auth.docker.io`.
+
+Local `./flow setup` still builds `flowlife-dev/php:8.3` (PHP 8.3 bookworm, same extensions). Compose service names, ports and commands are unchanged.
 
 ## Not covered yet
 

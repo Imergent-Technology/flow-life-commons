@@ -3,11 +3,18 @@
 # Runs as the developer's UID/GID (set by compose `user:`), so no user is
 # baked into the image and no per-developer rebuild is needed.
 # Production does not use this image: production is cPanel shared hosting.
-FROM composer:2 AS composer
+#
+# FROM images are not docker.io short names. Bake resolves each FROM even when
+# the GHA layer cache hits, and GitHub-hosted runners share egress IPs, so an
+# anonymous Docker Hub HEAD returns 429 before ./flow check starts. The PHP and
+# Composer tags are the official Docker Library images via Google's public cache;
+# the extension installer is the project's own GHCR publish of the same pin
+# (that tag is not in the Google cache, so a docker.io fallback would 429 too).
+FROM mirror.gcr.io/library/composer:2 AS composer
 
-FROM php:8.3-fpm-bookworm
+FROM mirror.gcr.io/library/php:8.3-fpm-bookworm
 
-COPY --from=mlocati/php-extension-installer:2.11.27 /usr/bin/install-php-extensions /usr/local/bin/
+COPY --from=ghcr.io/mlocati/php-extension-installer:2.11.27 /usr/bin/install-php-extensions /usr/local/bin/
 
 # Extensions match what the platform needs on cPanel PHP 8.3.
 # Both pdo_mysql (MariaDB) and pdo_pgsql (PostgreSQL portability) are installed.
