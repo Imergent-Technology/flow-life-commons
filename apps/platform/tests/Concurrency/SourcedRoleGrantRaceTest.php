@@ -7,6 +7,7 @@ use App\Modules\Access\Application\ProvisionableRole;
 use App\Modules\Access\Application\Role;
 use App\Modules\Access\Application\RoleGrantSource;
 use App\Modules\Access\Application\SourcedGrantBoundToAnotherPerson;
+use App\Modules\Access\Application\WithdrawSourcedRoles;
 use App\Shared\Domain\Actor;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -14,6 +15,7 @@ use Illuminate\Support\Str;
 use Tests\Support\Access;
 use Tests\Support\Identity;
 use Tests\Support\Race;
+use Tests\Support\SourcedRoleGrantPauses;
 
 /*
  * Sourced grants under two processes. The pause is the audit write, inside the open
@@ -121,4 +123,32 @@ it('lets two sources of the same role commit without waiting on each other', fun
     expect($race['blocked'])->toBeFalse()
         ->and($race['exit'])->toBe(0)
         ->and(DB::table('sourced_role_grants')->count())->toBe(2);
+});
+
+it('does not let a grant of an empty source commit while withdrawal still holds it', function () {
+    // Source-level exclusion only. WP2B must still lock the relationship instance around status
+    // change and withdrawal; a grant that starts after this withdrawal commits is a new grant.
+    $actor = sourcedActor();
+    $person = Identity::savedPerson('Absent Then Granted');
+    $source = strtolower((string) Str::ulid());
+
+    expect(DB::table('sourced_role_grants')->where('source_id', $source)->count())->toBe(0);
+
+    $race = Race::against(function (Closure $pause) use ($actor, $source): void {
+        SourcedRoleGrantPauses::after('lockForSource', $pause);
+        app(WithdrawSourcedRoles::class)($actor, RoleGrantSource::relationship($source));
+    }, null, 'grant_sourced_role', [
+        'actor_account' => $actor->accountId->value,
+        'actor_person' => $actor->personId->value,
+        'person' => $person->id->value,
+        'role' => 'guardian-initiate',
+        'source' => $source,
+    ]);
+
+    expect($race['blocked'])->toBeTrue()
+        ->and($race['exit'])->toBe(0)
+        ->and(DB::table('sourced_role_grants')->where('source_id', $source)->count())->toBe(1)
+        ->and(DB::table('sourced_role_grants')->where('person_id', $person->id->value)->value('role_key'))->toBe('guardian-initiate')
+        ->and(DB::table('security_events')->where('type', 'role.granted')->count())->toBe(1)
+        ->and(DB::table('security_events')->where('type', 'role.revoked')->count())->toBe(0);
 });

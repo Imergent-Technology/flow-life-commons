@@ -43,6 +43,23 @@ it('renames guardian to guardian-full and leaves every other assignment and the 
         ->and(array_map(fn (Capability $capability): string => $capability->value, app(Authorizer::class)->capabilitiesOf(Access::actorFor($admin))))->toBe($every);
 });
 
+it('renames only an exact guardian key and leaves a wrongly cased row granting nothing', function () {
+    $exact = Identity::savedActiveAccount('exact-guardian@example.org');
+    $cased = Identity::savedActiveAccount('cased-guardian@example.org');
+    Access::plant($exact->personId, 'guardian');
+    Access::plant($cased->personId, 'Guardian');
+
+    (new RenameGuardianRoleAssignments)->up(DB::connection());
+
+    $full = array_map(fn (Capability $capability): string => $capability->value, Role::GuardianFull->capabilities());
+    sort($full, SORT_STRING);
+
+    expect(DB::table('role_assignments')->where('person_id', $exact->personId->value)->value('role_key'))->toBe('guardian-full')
+        ->and(DB::table('role_assignments')->where('person_id', $cased->personId->value)->value('role_key'))->toBe('Guardian')
+        ->and(array_map(fn (Capability $capability): string => $capability->value, app(Authorizer::class)->capabilitiesOf(Access::actorFor($exact))))->toBe($full)
+        ->and(app(Authorizer::class)->capabilitiesOf(Access::actorFor($cased)))->toBe([]);
+});
+
 it('refuses to rename when a guardian-full assignment already exists, and changes nothing', function () {
     $person = Identity::savedActiveAccount('both@example.org');
     Access::grant($person, Role::GuardianFull);
