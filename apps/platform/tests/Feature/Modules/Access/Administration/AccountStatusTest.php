@@ -32,7 +32,7 @@ it('disables through the existing safe path: sessions end, and the Person, roles
     $events = Identity::events('account.disabled');
     expect($response->json('status'))->toBe('disabled')
         ->and($response->json('disabled_at'))->not->toBeNull()
-        ->and($response->json('assignments.0.key'))->toBe(Role::Guardian->value) // roles preserved
+        ->and($response->json('assignments.0.key'))->toBe(Role::GuardianFull->value) // roles preserved
         ->and($events)->toHaveCount(1)
         ->and($events[0]->actor_account_id)->toBe($admin->id->value)
         ->and(Identity::context($events[0]))->toBe(['previous_status' => 'active', 'signed_out' => 1])
@@ -80,7 +80,7 @@ it('re-enables a disabled Account, audited, with NO session, and no change to it
     $events = Identity::events('account.reenabled');
     expect($response->json('status'))->toBe('active')
         ->and($response->json('disabled_at'))->toBeNull()
-        ->and($response->json('assignments.0.key'))->toBe(Role::Guardian->value)
+        ->and($response->json('assignments.0.key'))->toBe(Role::GuardianFull->value)
         ->and($events)->toHaveCount(1)
         ->and($events[0]->actor_account_id)->toBe($admin->id->value)
         ->and(DB::table('accounts')->where('id', $target->id->value)->value('password_hash'))->toBe($hash)

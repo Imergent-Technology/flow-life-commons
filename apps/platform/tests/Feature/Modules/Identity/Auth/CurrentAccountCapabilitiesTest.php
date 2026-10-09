@@ -43,7 +43,7 @@ it('reports no capabilities to an account that holds none', function () {
 
 it('reports capability identifiers, never role names, in a stable order', function () {
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     Access::grant($account, Role::PlatformAdministrator);
     Mfa::enroll($account);
     $console = new Console;
@@ -55,7 +55,7 @@ it('reports capability identifiers, never role names, in a stable order', functi
         expect($response->json('capabilities'))->toBe(Access::everyCapabilityId());
         // The client learns what it may do, not which label produced it. The check is the JSON string, because
         // capability ids such as guardians.view contain the letters of the role key.
-        foreach (['platform_administrator', 'guardian'] as $roleName) {
+        foreach (['platform_administrator', 'guardian', 'guardian-full', 'guardian-senior', 'guardian-initiate', 'console-participant'] as $roleName) {
             expect((string) $response->getContent())->not->toContain('"'.$roleName.'"');
         }
         expect($response->json())->not->toHaveKeys(['roles', 'permissions', 'role']);
@@ -64,7 +64,7 @@ it('reports capability identifiers, never role names, in a stable order', functi
 
 it('reports a guardian\'s Console access and nothing else', function () {
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     Mfa::enroll($account);
     $console = new Console;
     $console->loginWithMfa('ada@example.org', Identity::PASSWORD)->assertOk();
@@ -83,17 +83,17 @@ it('derives capabilities fresh on every request, so a revoked role disappears wi
     Access::revoke($account, Role::PlatformAdministrator);
     expect(capabilitiesOfMe($console))->toBe([]);
 
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view']);
 });
 
 it('reports the same list whatever order the roles were assigned in', function () {
     $first = Identity::savedActiveAccount('first@example.org');
-    Access::grant($first, Role::Guardian);
+    Access::grant($first, Role::GuardianFull);
     Access::grant($first, Role::PlatformAdministrator);
     $second = Identity::savedActiveAccount('second@example.org', name: 'Second');
     Access::grant($second, Role::PlatformAdministrator);
-    Access::grant($second, Role::Guardian);
+    Access::grant($second, Role::GuardianFull);
 
     Mfa::enroll($first);
     Mfa::enroll($second);

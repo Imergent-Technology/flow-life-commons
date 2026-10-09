@@ -76,7 +76,7 @@ it('answers 403 to a signed-in person who lacks the capability', function () {
 });
 
 it('lets a guardian through the Console gate but not the role-assignment gate', function () {
-    [$console] = signedInAs(Role::Guardian);
+    [$console] = signedInAs(Role::GuardianFull);
 
     $console->get('/api/v1/zz/console')->assertOk();
     $console->get('/api/v1/zz/assign')->assertForbidden();
@@ -105,7 +105,7 @@ it('gives a newly granted role on the next request, without signing in again', f
     [$console, $account] = signedInAs(enrolled: true);
     $console->get('/api/v1/zz/console')->assertForbidden();
 
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
 
     $console->get('/api/v1/zz/console')->assertOk();
 });
@@ -159,7 +159,7 @@ it('keeps no capability or role data in the stored session', function () {
 });
 
 it('turns AccessDenied from business code into a 403', function () {
-    [$console] = signedInAs(Role::Guardian);
+    [$console] = signedInAs(Role::GuardianFull);
 
     $console->get('/api/v1/zz/action')->assertForbidden()->assertExactJson(['message' => 'This action is unauthorized.']);
 });
@@ -195,7 +195,7 @@ it('denies a Gate check for an ability that is not a capability, whoever asks', 
 });
 
 it('delegates every decision to the Authorizer: the Gate and the Authorizer never disagree', function () {
-    foreach (['none' => null, 'guardian' => Role::Guardian, 'admin' => Role::PlatformAdministrator] as $label => $role) {
+    foreach (['none' => null, 'guardian' => Role::GuardianFull, 'admin' => Role::PlatformAdministrator] as $label => $role) {
         $account = Identity::savedActiveAccount("{$label}@example.org", name: $label);
         if ($role !== null) {
             Access::grant($account, $role);

@@ -38,7 +38,7 @@ it('denies everything to an actor with no assignments', function () {
 
 it('grants a role only the capabilities that role defines', function () {
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     $actor = Access::actorFor($account);
 
     expect(authorizer()->allows($actor, Capability::ConsoleAccess))->toBeTrue()
@@ -60,7 +60,7 @@ it('gives the platform administrator every defined capability', function () {
 
 it('unions the capabilities of several roles, in a stable order', function () {
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     Access::grant($account, Role::PlatformAdministrator);
 
     expect(held(Access::actorFor($account)))->toBe(Access::everyCapabilityId());
@@ -68,11 +68,11 @@ it('unions the capabilities of several roles, in a stable order', function () {
 
 it('reports the same capabilities however the assignments were made', function () {
     $ascending = Identity::savedActiveAccount('a@example.org');
-    Access::grant($ascending, Role::Guardian);
+    Access::grant($ascending, Role::GuardianFull);
     Access::grant($ascending, Role::PlatformAdministrator);
     $descending = Identity::savedActiveAccount('b@example.org', name: 'B');
     Access::grant($descending, Role::PlatformAdministrator);
-    Access::grant($descending, Role::Guardian);
+    Access::grant($descending, Role::GuardianFull);
 
     expect(held(Access::actorFor($ascending)))->toBe(held(Access::actorFor($descending)));
 });
@@ -86,7 +86,7 @@ it('never lets one person\'s roles reach another', function () {
 });
 
 it('answers allows and capabilitiesOf consistently for every role and capability', function () {
-    foreach (['none' => null, 'guardian' => Role::Guardian, 'admin' => Role::PlatformAdministrator] as $label => $role) {
+    foreach (['none' => null, 'guardian' => Role::GuardianFull, 'admin' => Role::PlatformAdministrator] as $label => $role) {
         $account = Identity::savedActiveAccount("{$label}@example.org", name: $label);
         if ($role !== null) {
             Access::grant($account, $role);
@@ -120,14 +120,14 @@ it('reflects a role added after the actor was resolved, without recreating it', 
     $actor = Access::actorFor($account);
     expect(authorizer()->allows($actor, Capability::ConsoleAccess))->toBeFalse();
 
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
 
     expect(authorizer()->allows($actor, Capability::ConsoleAccess))->toBeTrue();
 });
 
 it('narrows a person to what remains when one of two roles is revoked', function () {
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     Access::grant($account, Role::PlatformAdministrator);
     $actor = Access::actorFor($account);
 
@@ -201,12 +201,12 @@ it('grants nothing for an unknown, obsolete or wrongly-cased role key', function
     Access::plant($account->personId, $key);
 
     expect(authorizer()->capabilitiesOf(Access::actorFor($account)))->toBe([]);
-})->with(['retired_role', 'PLATFORM_ADMINISTRATOR', 'Platform_Administrator', 'platform_administrator ', ' guardian', '', 'is_admin', 'admin']);
+})->with(['retired_role', 'guardian', 'PLATFORM_ADMINISTRATOR', 'Platform_Administrator', 'platform_administrator ', ' guardian', '', 'is_admin', 'admin']);
 
 it('ignores a bad key without disturbing the person\'s valid roles', function () {
     $account = Identity::savedActiveAccount();
     Access::plant($account->personId, 'retired_role');
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
 
     expect(held(Access::actorFor($account)))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view']);
 });
@@ -222,7 +222,7 @@ it('never grants on an obsolete key, even one that once meant administrator', fu
 
 it('lets business code require a capability, returning quietly when held', function () {
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
 
     app(AuthorizeAction::class)(Access::actorFor($account), Capability::ConsoleAccess);
 

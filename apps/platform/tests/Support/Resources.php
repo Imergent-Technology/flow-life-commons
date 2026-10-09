@@ -41,7 +41,7 @@ final class Resources
         $account = app(AccountRepository::class)->findByEmail(EmailAddress::fromString($email));
         if ($account === null) {
             $account = Identity::savedActiveAccount($email, name: $name);
-            Access::grant($account, Role::Guardian);
+            Access::grant($account, Role::GuardianFull);
         }
 
         return Access::actorFor($account);
@@ -66,7 +66,7 @@ final class Resources
     public static function signedInGuardian(string $email = 'gina.guardian@example.org', string $name = 'Gina Guardian'): array
     {
         $account = Identity::savedActiveAccount($email, name: $name);
-        Access::grant($account, Role::Guardian);
+        Access::grant($account, Role::GuardianFull);
         $factor = Mfa::enroll($account);
         $console = new Console;
         $console->loginWithMfa($email, Identity::PASSWORD)->assertOk();

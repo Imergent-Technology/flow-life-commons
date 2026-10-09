@@ -335,7 +335,7 @@ it('gives a password-only session no way to replace or regenerate anything', fun
  * Pinned for the Member self-service surface (ADR 0032, Work Package 4, `/my/security`): these two routes
  * are authenticated self-service (`auth:web` alone), never Guardian-only, whether or not the Account holds
  * `console.access`. Nothing above this point exercises an enrolled Account that holds NO role at all —
- * `Mfa::signedIn()` always grants `Role::Guardian` first — so this is the one case that actually pins it.
+ * `Mfa::signedIn()` always grants `Role::GuardianFull` first — so this is the one case that actually pins it.
  */
 it('is intentionally authenticated self-service, not accidentally Guardian-only: an enrolled, role-less Account manages its own MFA', function () {
     [$console, $account, $factor] = Mfa::signedInMember();

@@ -20,6 +20,8 @@ use Illuminate\Database\ConnectionInterface;
  *   authority for the last-administrator invariant, which locks before it decides. Nothing here
  *   counts administrators itself.
  * - Idempotent: revoking a role not held succeeds, changes nothing and records nothing.
+ * - It removes an independent assignment only. A relationship-sourced grant of the same role
+ *   stays (ADR 0038, K4). Withdrawing that grant is WithdrawSourcedRoles, which this does not call.
  * - The revocation and its audit event commit together or not at all. Authorization history
  *   lives in the audit trail; the deleted row leaves no trace of its own.
  */

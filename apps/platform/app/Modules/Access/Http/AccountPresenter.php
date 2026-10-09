@@ -11,6 +11,7 @@ use App\Modules\Access\Application\ManagedPasswordReset;
 use App\Modules\Access\Application\OperatorInvitation;
 use App\Modules\Access\Application\RoleAssignmentView;
 use App\Modules\Access\Application\RoleDescriptor;
+use App\Modules\Access\Application\SourcedRoleGrantView;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 
@@ -48,6 +49,16 @@ final readonly class AccountPresenter
                 'key' => $a->role->key, 'name' => $a->role->name, 'description' => $a->role->description,
                 'granted_at' => $this->instant($a->grantedAt),
             ], $view->assignments),
+            'sourced_grants' => array_map(fn (SourcedRoleGrantView $grant): array => [
+                'key' => $grant->role->key,
+                'name' => $grant->role->name,
+                'description' => $grant->role->description,
+                'source_type' => $grant->sourceType,
+                'source_label' => $grant->sourceLabel,
+                'source_id' => $grant->sourceId,
+                'granted_at' => $this->instant($grant->grantedAt),
+                'granted_by_account_id' => $grant->grantedByAccountId,
+            ], $view->sourcedGrants),
         ];
     }
 

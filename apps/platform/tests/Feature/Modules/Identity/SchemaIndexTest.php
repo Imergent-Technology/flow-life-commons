@@ -68,6 +68,14 @@ it('indexes role assignments for both directions they are read in', function () 
         ->and($indexes)->toContain('role_assignments_role_key_index');
 });
 
+it('indexes sourced role grants by person, by role and by source', function () {
+    $indexes = indexesOn('sourced_role_grants');
+
+    expect($indexes)->toContain('sourced_role_grants_source_role_unique')
+        ->and($indexes)->toContain('sourced_role_grants_person_id_index')
+        ->and($indexes)->toContain('sourced_role_grants_role_key_index');
+});
+
 it('resolves every hot lookup through an index once the tables are not trivially small', function () {
     // Measured on a populated schema, deliberately. Both engines scan a one-row table and are RIGHT to:
     // asserting a plan on an empty one proves only that the planner can count, and it passes or fails

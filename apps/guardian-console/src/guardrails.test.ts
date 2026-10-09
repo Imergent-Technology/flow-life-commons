@@ -119,12 +119,13 @@ const rules: Rule[] = [
   {
     name: 'system role names',
     because:
-      'the Console asks about capabilities, never roles (ADR 0017); a role check here is the rot the design forbids',
+      'the Console asks about capabilities, never roles (ADR 0017); a role check here is the rot the design forbids. guardian is an audience and a relationship type, not a role',
     // Not `role="alert"`: that is an ARIA role, which the Console uses legitimately.
     // `access.roles.assign` is a CAPABILITY identifier (what an operator may do), not a role property, so it is the one
     // dotted name that contains `.roles` and is allowed; `account.roles` and `.role` stay flagged.
+    // Hyphenated role keys are named in full. A quote directly after `guardian` would miss `guardian-full`.
     pattern:
-      /platform_administrator|['"`]guardian['"`]|\bis(?:Guardian|Admin|Administrator)\b|(?<!access)\.roles?\b|\broles\s*:/,
+      /platform_administrator|['"`]guardian-initiate['"`]|['"`]guardian-full['"`]|['"`]guardian-senior['"`]|['"`]console-participant['"`]|['"`]guardian['"`]|\bis(?:Guardian|Admin|Administrator)\b|(?<!access)\.roles?\b|\broles\s*:/,
     // The Resources API's audience catalog: `guardian` there is an AUDIENCE KEY stored with a Pack (ADR 0037, decision 38; an audience
     // is not a role, ADR 0036), not a question about who the signed-in person is. The same word is exempted on the platform's side
     // (`Resources\Domain\Audience`). It lives in this one file, and no screen compares with it.
@@ -296,6 +297,28 @@ describe('Console source rules', () => {
 
   it('finds no violation in the Console', () => {
     expect(scan(production)).toEqual([])
+  })
+
+  it('flags every role key, and allows the audience word only in the resources client', () => {
+    const rule = 'system role names'
+    for (const line of [
+      "const key = 'platform_administrator'",
+      "const key = 'guardian-initiate'",
+      "const key = 'guardian-full'",
+      "const key = 'guardian-senior'",
+      "const key = 'console-participant'",
+      "const key = 'guardian'",
+    ]) {
+      expect(scan({ './pages/Offender.tsx': line }).map((v) => v.rule)).toContain(rule)
+    }
+    expect(
+      scan({ './api/resources.ts': "export type Audience = 'guardian' | 'member'" }).map(
+        (v) => v.rule,
+      ),
+    ).not.toContain(rule)
+    expect(
+      scan({ './pages/Relationship.tsx': "const type = 'guardian'" }).map((v) => v.rule),
+    ).toContain(rule)
   })
 
   describe.each(rules)('$name', (rule) => {

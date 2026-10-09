@@ -183,7 +183,7 @@ it('leaves the Account linked and untouched', function () {
 
 it('leaves role assignments and membership grants attached to the same person_id', function () {
     $account = Identity::savedActiveAccount('ada@example.org', name: 'Ada Lovelase');
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     $grant = Membership::savedGrant($account->personId);
 
     renamePerson($account->personId, 'Ada Lovelace');

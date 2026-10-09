@@ -159,7 +159,7 @@ it('names the field that broke the rule', function () {
 it('corrects a note in place, recording who changed it and when, and keeping the original author', function () {
     $author = Crm::manager();
     $editorAccount = Identity::savedActiveAccount('editor@example.org', name: 'Edith Editor');
-    Access::grant($editorAccount, Role::Guardian);
+    Access::grant($editorAccount, Role::GuardianFull);
     $editor = Access::actorFor($editorAccount);
     $ada = Identity::savedPerson('Ada');
     $note = Crm::interaction($author, $ada->id, 'Spoke on the phone', '2026-09-30 09:00:00');

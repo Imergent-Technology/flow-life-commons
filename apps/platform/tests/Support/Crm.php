@@ -36,7 +36,7 @@ final class Crm
         $account = app(AccountRepository::class)->findByEmail(EmailAddress::fromString($email));
         if ($account === null) {
             $account = Identity::savedActiveAccount($email, name: self::MANAGER_NAME);
-            Access::grant($account, Role::Guardian);
+            Access::grant($account, Role::GuardianFull);
         }
 
         return Access::actorFor($account);
@@ -50,7 +50,7 @@ final class Crm
     public static function signedInGuardian(string $email = 'gina.guardian@example.org', string $name = 'Gina Guardian'): array
     {
         $account = Identity::savedActiveAccount($email, name: $name);
-        Access::grant($account, Role::Guardian);
+        Access::grant($account, Role::GuardianFull);
         Mfa::enroll($account);
         $console = new Console;
         $console->loginWithMfa($email, Identity::PASSWORD)->assertOk();

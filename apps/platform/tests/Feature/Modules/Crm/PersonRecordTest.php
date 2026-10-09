@@ -50,7 +50,7 @@ it('reads the profile, methods and tags together', function () {
 it('composes nothing from Membership, Accounts or access into the record', function () {
     $by = Crm::manager();
     $account = Identity::savedActiveAccount('operator@example.org', name: 'Operator');
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     Membership::savedGrant($account->personId);
 
     $record = app(GetPersonRecord::class)($by, $account->personId);

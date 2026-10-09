@@ -46,7 +46,7 @@ afterEach(function () {
 function committedFactor(): array
 {
     $account = Identity::savedActiveAccount('target@example.org');
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     $factor = Mfa::enroll($account);
     $current = app(AccountRepository::class)->find($account->id);
     assert($current !== null);

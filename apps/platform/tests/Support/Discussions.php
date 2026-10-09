@@ -27,7 +27,7 @@ final class Discussions
         $account = app(AccountRepository::class)->findByEmail(EmailAddress::fromString($email));
         if ($account === null) {
             $account = Identity::savedActiveAccount($email, name: $name);
-            Access::grant($account, Role::Guardian);
+            Access::grant($account, Role::GuardianFull);
         }
 
         return Access::actorFor($account);

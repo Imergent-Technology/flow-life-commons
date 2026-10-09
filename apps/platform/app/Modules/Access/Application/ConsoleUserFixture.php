@@ -30,13 +30,25 @@ final readonly class ConsoleUserFixture
 
     public function __invoke(PersonId $person): void
     {
-        $this->give($person, Role::Guardian);
+        $this->give($person, Role::GuardianFull);
     }
 
     /** A Console user who may also administer operators: what the administration journeys sign in as. */
     public function administrator(PersonId $person): void
     {
         $this->give($person, Role::PlatformAdministrator);
+    }
+
+    /** The restricted Guardian Initiate persona (ADR 0038, A3): Console admission and nothing else. */
+    public function initiate(PersonId $person): void
+    {
+        $this->give($person, Role::GuardianInitiate);
+    }
+
+    /** The restricted Console Participant persona (ADR 0038, A3): Console admission and nothing else. */
+    public function participant(PersonId $person): void
+    {
+        $this->give($person, Role::ConsoleParticipant);
     }
 
     private function give(PersonId $person, Role $role): void

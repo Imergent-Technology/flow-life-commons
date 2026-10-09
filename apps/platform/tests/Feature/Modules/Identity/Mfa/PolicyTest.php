@@ -34,7 +34,7 @@ it('requires a second factor of every Account whose access reaches the Console, 
     Access::grant($account, $role);
 
     (new Console)->login('ada@example.org', Identity::PASSWORD)->assertStatus(202)->assertJson(['next' => 'enrollment']);
-})->with([Role::Guardian, Role::PlatformAdministrator]);
+})->with([Role::GuardianFull, Role::PlatformAdministrator]);
 
 it('requires nothing of an Account whose access does not reach the Console', function () {
     Identity::savedActiveAccount();
@@ -48,10 +48,10 @@ it('is decided by what the Account may do NOW, not by what role it happens to ho
     $policy = app(MultiFactorPolicy::class);
     expect($policy->requiredFor($actor))->toBeFalse();
 
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     expect($policy->requiredFor($actor))->toBeTrue();
 
-    Access::revoke($account, Role::Guardian);
+    Access::revoke($account, Role::GuardianFull);
     expect($policy->requiredFor($actor))->toBeFalse();
     // A stored role key that no longer means anything grants nothing, so it requires nothing.
     Access::plant($account->personId, 'retired_role');
@@ -70,7 +70,7 @@ it('ends a password-only session that is given Console access, so it never becom
     $console->login('ada@example.org', Identity::PASSWORD)->assertOk();
     $console->me()->assertOk();
 
-    Access::grant($account, Role::Guardian);   // access that needs a second factor, which this session never proved
+    Access::grant($account, Role::GuardianFull);   // access that needs a second factor, which this session never proved
 
     $console->get('/api/v1/zz/console')->assertUnauthorized();
     $console->me()->assertUnauthorized();
@@ -85,7 +85,7 @@ it('ends a password-only session that is given Console access, so it never becom
 it('leaves a session that DID prove a second factor alone when access changes', function () {
     [$console, $account] = Mfa::signedIn();
 
-    Access::revoke($account, Role::Guardian);
+    Access::revoke($account, Role::GuardianFull);
     $console->me()->assertOk();
     Access::grant($account, Role::PlatformAdministrator);
     $console->me()->assertOk()->assertJsonPath('capabilities', Access::everyCapabilityId());

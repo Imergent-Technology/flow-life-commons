@@ -128,7 +128,7 @@ it('refuses even when the existing administrator is unusable, since the assignme
 
 it('does not count a guardian as an administrator, so bootstrap still proceeds', function () {
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
 
     bootstrapAdministrator();
 
@@ -224,7 +224,7 @@ it('gives a person the Console\'s ordinary role through Access, in a testing env
     app(ConsoleUserFixture::class)($account->personId); // idempotent
 
     expect(DB::table('role_assignments')->where('person_id', $account->personId->value)->count())->toBe(1)
-        ->and(app(RoleAssignmentRepository::class)->forPerson($account->personId)[0]->roleKey)->toBe('guardian');
+        ->and(app(RoleAssignmentRepository::class)->forPerson($account->personId)[0]->roleKey)->toBe(Role::GuardianFull->value);
 });
 
 it('refuses to run anywhere but a local or testing environment', function (string $environment) {

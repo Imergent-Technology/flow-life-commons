@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Access\Application;
 
 use App\Modules\Access\Domain\RoleAssignmentRepository;
+use App\Modules\Access\Domain\SourcedRoleGrantRepository;
 use App\Modules\Identity\Application\ResolveActor;
 use App\Shared\Domain\Actor;
 
@@ -22,9 +23,12 @@ use App\Shared\Domain\Actor;
  *    Actor object claims. An Actor that disagrees with the resolved identity is denied.
  * 3. **The Person's assignments are read fresh** on every call, so revoking a role takes
  *    effect on the very next decision, with no need to recreate the Actor or the session.
+ *    Independent assignments and relationship-sourced grants are one set of roles (ADR 0038).
+ *    Access does not ask Relationships whether a relationship still exists.
  * 4. **Each stored role key goes through the code-owned catalog.** A key the catalog does
- *    not know (corrupt, or a role since removed) grants nothing: it fails closed, and
- *    never affects the person's other, valid roles.
+ *    not know (corrupt, or a role since removed, including the retired `guardian` key)
+ *    grants nothing: it fails closed, and never affects the person's other, valid roles.
+ *    Two sources of one role are one capability set.
  * 5. **Default deny.** Nothing is granted unless a role in the catalog grants it.
  *
  * Nothing is cached, and nothing is ever taken from the client: capabilities in a request
@@ -35,6 +39,7 @@ final readonly class Authorizer
     public function __construct(
         private ResolveActor $resolveActor,
         private RoleAssignmentRepository $assignments,
+        private SourcedRoleGrantRepository $sourcedGrants,
     ) {}
 
     public function allows(Actor $actor, Capability $capability): bool
@@ -56,14 +61,20 @@ final readonly class Authorizer
         }
 
         $held = [];
-        foreach ($this->assignments->forPerson($current->personId) as $assignment) {
-            $role = Role::tryFrom($assignment->roleKey);
+        $grant = static function (string $roleKey) use (&$held): void {
+            $role = Role::tryFrom($roleKey);
             if ($role === null) {
-                continue; // unknown role key: grants nothing
+                return; // unknown role key: grants nothing
             }
             foreach ($role->capabilities() as $capability) {
                 $held[$capability->value] = $capability;
             }
+        };
+        foreach ($this->assignments->forPerson($current->personId) as $assignment) {
+            $grant($assignment->roleKey);
+        }
+        foreach ($this->sourcedGrants->forPerson($current->personId) as $sourced) {
+            $grant($sourced->roleKey);
         }
 
         ksort($held, SORT_STRING);

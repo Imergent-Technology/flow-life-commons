@@ -34,7 +34,7 @@ final class Race
         'resource_card_audiences', 'resource_cards', 'resource_assets', 'resource_pack_audiences', 'resource_packs', 'resource_categories',
         'discussion_messages', 'discussions',
         'contact_interactions', 'contact_tag_assignments', 'contact_methods', 'contact_tags', 'contact_profiles',
-        'security_events', 'sessions', 'password_reset_tokens', 'role_assignments',
+        'security_events', 'sessions', 'password_reset_tokens', 'sourced_role_grants', 'role_assignments',
         'account_recovery_codes', 'account_totp_factors', 'membership_grants',
         'account_invitations', 'accounts', 'people',
     ];

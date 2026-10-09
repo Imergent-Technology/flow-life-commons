@@ -31,7 +31,7 @@ it('resets another Account: factor and codes gone, sessions ended, everything el
     $events = Identity::events('mfa.administratively_reset');
     expect($response->json('mfa'))->toBe(['enrolled' => false, 'recovery_codes_remaining' => 0])
         ->and($response->json('status'))->toBe('active')
-        ->and($response->json('assignments.0.key'))->toBe('guardian')
+        ->and($response->json('assignments.0.key'))->toBe('guardian-full')
         ->and(DB::table('accounts')->where('id', $target->id->value)->first(['password_hash', 'status']))->toEqual($before)
         ->and($events)->toHaveCount(1)
         ->and($events[0]->actor_account_id)->toBe($admin->id->value)

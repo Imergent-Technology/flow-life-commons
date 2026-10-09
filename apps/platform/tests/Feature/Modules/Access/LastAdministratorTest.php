@@ -93,7 +93,7 @@ it('does not count an administrator who has no account at all', function () {
 it('does not count an ordinary guardian as an administrator', function () {
     $ada = Access::admin('ada@example.org', 'Ada');
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
 
     expect(fn () => revokeAdministrator($ada, $ada))->toThrow(LastAdministratorRequired::class);
 });
@@ -122,9 +122,9 @@ it('lets a non-viable administrator be revoked, since that removes no active aut
 
 it('does not apply the guard to other roles', function () {
     $ada = Access::admin('ada@example.org', 'Ada');
-    Access::grant($ada, Role::Guardian);
+    Access::grant($ada, Role::GuardianFull);
 
-    app(RevokeRole::class)(Access::actorFor($ada), $ada->personId, Role::Guardian);
+    app(RevokeRole::class)(Access::actorFor($ada), $ada->personId, Role::GuardianFull);
 
     expect(Access::activeAdministrators())->toBe(1);
 });

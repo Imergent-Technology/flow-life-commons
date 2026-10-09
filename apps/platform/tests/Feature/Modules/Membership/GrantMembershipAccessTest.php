@@ -79,7 +79,7 @@ it('requires no Account for the Person receiving access', function () {
 
 it('denies an actor without membership.records.manage', function () {
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
     $person = Identity::savedPerson();
 
     expect(fn () => app(GrantMembershipAccess::class)(Access::actorFor($guardian), $person->id, Identity::now(), null, MembershipGrantSource::Operator))

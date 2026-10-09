@@ -43,7 +43,7 @@ it('serves the role catalog from Access, so the Console defines none', function 
 
     expect(array_column($catalog, 'key'))->toBe(array_map(fn (Role $r): string => $r->value, Role::cases()))
         ->and(array_keys($catalog[0]))->toBe(['key', 'name', 'description', 'capabilities'])
-        ->and(capabilitiesOf($catalog, Role::Guardian->value))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view'])
+        ->and(capabilitiesOf($catalog, Role::GuardianFull->value))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view'])
         // The administrator's capabilities are the whole catalog: derived, not listed.
         ->and(capabilitiesOf($catalog, Role::PlatformAdministrator->value))->toBe(Access::everyCapabilityId());
 });
@@ -52,10 +52,10 @@ it('grants a catalog role through GrantRole: audited with the actor, and it take
     [$console, $admin] = Mfa::signedInAdmin();
     $target = Identity::savedActiveAccount('target@example.org');
 
-    $response = $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian'])->assertOk();
+    $response = $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian-full'])->assertOk();
 
     $events = Identity::events('role.granted');
-    expect($response->json('assignments.0.key'))->toBe('guardian')
+    expect($response->json('assignments.0.key'))->toBe('guardian-full')
         ->and($events)->toHaveCount(1)
         ->and($events[0]->actor_account_id)->toBe($admin->id->value)
         ->and($events[0]->subject_person_id)->toBe($target->personId->value)
@@ -65,9 +65,9 @@ it('grants a catalog role through GrantRole: audited with the actor, and it take
 it('is idempotent: granting a role already held changes and records nothing', function () {
     [$console] = Mfa::signedInAdmin();
     $target = Identity::savedActiveAccount('target@example.org');
-    $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian'])->assertOk();
+    $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian-full'])->assertOk();
 
-    $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian'])->assertOk()->assertJsonCount(1, 'assignments');
+    $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian-full'])->assertOk()->assertJsonCount(1, 'assignments');
 
     expect(Identity::events('role.granted'))->toHaveCount(1)->and(DB::table('role_assignments')->where('person_id', $target->personId->value)->count())->toBe(1);
 });
@@ -76,8 +76,8 @@ it('revokes through RevokeRole, audited; revoking a role not held is a quiet no-
     [$console, $admin] = Mfa::signedInAdmin();
     $target = Mfa::guardian('target@example.org');
 
-    $console->delete("/api/v1/admin/accounts/{$target->id->value}/assignments/guardian")->assertOk()->assertJsonCount(0, 'assignments');
-    $console->delete("/api/v1/admin/accounts/{$target->id->value}/assignments/guardian")->assertOk();
+    $console->delete("/api/v1/admin/accounts/{$target->id->value}/assignments/guardian-full")->assertOk()->assertJsonCount(0, 'assignments');
+    $console->delete("/api/v1/admin/accounts/{$target->id->value}/assignments/guardian-full")->assertOk();
 
     $events = Identity::events('role.revoked');
     expect($events)->toHaveCount(1)->and($events[0]->actor_account_id)->toBe($admin->id->value);
@@ -87,15 +87,27 @@ it('refuses an unknown role key, and a CAPABILITY named as one: the client can n
     [$console] = Mfa::signedInAdmin();
     $target = Identity::savedActiveAccount('target@example.org');
 
-    foreach (['superuser', 'console.access', 'PLATFORM_ADMINISTRATOR', ''] as $key) {
+    foreach (['superuser', 'console.access', 'PLATFORM_ADMINISTRATOR', 'guardian', ''] as $key) {
         $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => $key])->assertStatus(422);
     }
     $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'superuser'])->assertJson(['code' => 'unknown_role']);
     // An extra field is ignored, never honoured.
-    $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian', 'capabilities' => ['access.roles.assign']])->assertOk();
+    $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian-full', 'capabilities' => ['access.roles.assign']])->assertOk();
     $console->delete("/api/v1/admin/accounts/{$target->id->value}/assignments/superuser")->assertStatus(422)->assertJson(['code' => 'unknown_role']);
 
-    expect(DB::table('role_assignments')->where('person_id', $target->personId->value)->pluck('role_key')->all())->toBe(['guardian']);
+    expect(DB::table('role_assignments')->where('person_id', $target->personId->value)->pluck('role_key')->all())->toBe(['guardian-full']);
+});
+
+it('grants and revokes a hyphenated role through the administration routes', function () {
+    [$console] = Mfa::signedInAdmin();
+    $target = Identity::savedActiveAccount('initiate@example.org');
+
+    $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'guardian-initiate'])->assertOk()
+        ->assertJsonPath('assignments.0.key', 'guardian-initiate');
+    $console->delete("/api/v1/admin/accounts/{$target->id->value}/assignments/guardian-initiate")->assertOk()
+        ->assertJsonCount(0, 'assignments');
+    $console->delete("/api/v1/admin/accounts/{$target->id->value}/assignments/guardian")->assertStatus(422)
+        ->assertJson(['code' => 'unknown_role']);
 });
 
 it('keeps the last-administrator protection through HTTP', function () {

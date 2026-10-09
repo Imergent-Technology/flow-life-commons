@@ -65,7 +65,7 @@ afterEach(function () {
 function enrolledConsoleAccount(string $email = 'target@example.org'): array
 {
     $account = Identity::savedActiveAccount($email);
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     $factor = Mfa::enroll($account);
     $current = app(AccountRepository::class)->find($account->id);
     assert($current !== null);

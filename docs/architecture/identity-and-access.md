@@ -171,6 +171,7 @@ ULIDs are `CHAR(26)`, application-generated. Timestamps UTC. No database `ENUM`,
 | Table | Key fields | Keys and constraints |
 | --- | --- | --- |
 | `role_assignments` | ULID, `person_id`, `role_key`, `granted_by_account_id`, `granted_at` | **FK `person_id → people.id` RESTRICT** (deliberate cross-module); `unique(person_id, role_key)`; no FK on `granted_by_account_id` |
+| `sourced_role_grants` | ULID, `person_id`, `role_key`, `source_type`, `source_id`, `granted_by_account_id`, `granted_at` | **FK `person_id → people.id` RESTRICT**; `unique(source_type, source_id, role_key)`; no FK on `source_id` or `granted_by_account_id`. The `Authorizer` unions this with `role_assignments`. Relationship lifecycle does not write it until WP2B |
 
 **Audit**
 

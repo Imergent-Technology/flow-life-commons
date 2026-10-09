@@ -66,8 +66,8 @@ function adminOperations(): array
         ['POST', '/api/v1/admin/accounts/{a}/enable', []],
         ['POST', '/api/v1/admin/accounts/{a}/mfa/reset', []],
         ['POST', '/api/v1/admin/accounts/{a}/password-reset', []],
-        ['POST', '/api/v1/admin/accounts/{a}/assignments', ['key' => 'guardian']],
-        ['DELETE', '/api/v1/admin/accounts/{a}/assignments/guardian', []],
+        ['POST', '/api/v1/admin/accounts/{a}/assignments', ['key' => 'guardian-full']],
+        ['DELETE', '/api/v1/admin/accounts/{a}/assignments/guardian-initiate', []],
     ];
 }
 
@@ -199,8 +199,8 @@ it('checks the capability again inside every use case, so no other caller can sk
         fn () => app(EnableManagedAccount::class)($actor, $id),
         fn () => app(ResetManagedMfa::class)($actor, $id),
         fn () => app(SendManagedPasswordReset::class)($actor, $id, new ClientContext('127.0.0.1', 'test')),
-        fn () => app(GrantRoleToAccount::class)($actor, $id, 'guardian'),
-        fn () => app(RevokeRoleFromAccount::class)($actor, $id, 'guardian'),
+        fn () => app(GrantRoleToAccount::class)($actor, $id, 'guardian-full'),
+        fn () => app(RevokeRoleFromAccount::class)($actor, $id, 'guardian-full'),
     ] as $call) {
         expect($call)->toThrow(AccessDenied::class);
     }

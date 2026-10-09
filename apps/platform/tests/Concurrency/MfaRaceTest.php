@@ -54,7 +54,7 @@ afterEach(function () {
 function committedChallenge(string $email = 'ada@example.org'): array
 {
     $account = Identity::savedActiveAccount($email);
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     $factor = Mfa::enroll($account);
     $current = app(AccountRepository::class)->find($account->id);
     assert($current !== null);
@@ -210,7 +210,7 @@ it('does not enrol an Account that was disabled while its enrolment proof waited
     // The enrolment's proof (a valid code from the pending secret) is presented while a disable is
     // committed-pending. It must not make MFA real for an Account that can no longer sign in.
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     $current = app(AccountRepository::class)->find($account->id);
     assert($current !== null);
     $pending = new PendingLogin($account->id, app(CredentialMarker::class)->for($current), SecondFactorNeed::Enrollment);

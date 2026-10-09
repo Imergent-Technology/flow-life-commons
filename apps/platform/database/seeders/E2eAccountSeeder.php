@@ -447,6 +447,7 @@ final class E2eAccountSeeder extends Seeder
             DB::table('account_totp_factors')->where('account_id', $account->id)->delete();
             DB::table('account_invitations')->where('account_id', $account->id)->delete();
             DB::table('role_assignments')->where('person_id', $account->person_id)->delete();
+            DB::table('sourced_role_grants')->where('person_id', $account->person_id)->delete();
             DB::table('accounts')->where('id', $account->id)->delete();
             DB::table('people')->where('id', $account->person_id)->delete();
         }

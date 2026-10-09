@@ -100,7 +100,7 @@ it('clamps page and per_page to sane bounds', function () {
 
 it('denies an actor without membership.records.view', function () {
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
 
     expect(fn () => app(PageMembershipRecords::class)(Access::actorFor($guardian), 1, 25))
         ->toThrow(AccessDenied::class);

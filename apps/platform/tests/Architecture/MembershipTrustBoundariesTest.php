@@ -209,7 +209,7 @@ arch('Membership composes a display name only through Identity\'s Application re
 });
 
 it('keeps Membership out of Identity\'s, Access\'s and Audit\'s tables', function () {
-    $foreign = ['people', 'accounts', 'account_invitations', 'sessions', 'account_totp_factors', 'account_recovery_codes', 'password_reset_tokens', 'role_assignments', 'security_events'];
+    $foreign = ['people', 'accounts', 'account_invitations', 'sessions', 'account_totp_factors', 'account_recovery_codes', 'password_reset_tokens', 'role_assignments', 'sourced_role_grants', 'security_events'];
     $offenders = [];
     foreach (SourceScan::phpFiles(['app/Modules/Membership']) as $path) {
         foreach (array_intersect(SourceScan::stringLiterals(SourceScan::read($path)), $foreign) as $table) {

@@ -101,7 +101,7 @@ it('distinguishes not-found from already-revoked', function () {
 
 it('denies an actor without membership.records.manage', function () {
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
     $person = Identity::savedPerson();
     $grant = Membership::savedGrant($person->id);
 

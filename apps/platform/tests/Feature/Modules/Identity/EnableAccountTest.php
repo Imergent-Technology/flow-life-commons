@@ -55,7 +55,7 @@ it('puts an Account that never chose a password back to INVITED, not active', fu
 
 it('creates NO session, changes no password and no role, and keeps the Person and the history', function () {
     $account = Identity::savedActiveAccount('target@example.org');
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     $console = new Console;
     $console->login('target@example.org', Identity::PASSWORD); // a pending sign-in or session exists...
     app(DisableAccount::class)($account->id);                 // ...and disabling ends every session of the Account

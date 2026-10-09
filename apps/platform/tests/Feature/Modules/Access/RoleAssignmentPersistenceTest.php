@@ -58,7 +58,7 @@ it('returns only the requested person\'s assignments, oldest first', function ()
     $bob = Identity::savedActiveAccount('bob@example.org', name: 'Bob');
     assignments()->add(RoleAssignment::grant($ada->personId, 'guardian', null, Identity::now()->modify('+2 hours')));
     assignments()->add(RoleAssignment::grant($ada->personId, 'platform_administrator', null, Identity::now()));
-    Access::grant($bob, Role::Guardian);
+    Access::grant($bob, Role::GuardianFull);
 
     expect(array_map(fn (RoleAssignment $a): string => $a->roleKey, assignments()->forPerson($ada->personId)))
         ->toBe(['platform_administrator', 'guardian'])
@@ -69,10 +69,10 @@ it('reads fresh on every call, so a change is visible to the very next read', fu
     $account = Identity::savedActiveAccount();
     expect(assignments()->forPerson($account->personId))->toBe([]);
 
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     expect(assignments()->forPerson($account->personId))->toHaveCount(1);
 
-    Access::revoke($account, Role::Guardian);
+    Access::revoke($account, Role::GuardianFull);
     expect(assignments()->forPerson($account->personId))->toBe([]);
 });
 
@@ -80,9 +80,9 @@ it('reads fresh on every call, so a change is visible to the very next read', fu
 
 it('holds at most one grant per person and role', function () {
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
 
-    $error = Identity::violation(fn () => Access::grant($account, Role::Guardian));
+    $error = Identity::violation(fn () => Access::grant($account, Role::GuardianFull));
 
     expect($error)->toBeInstanceOf(RoleAlreadyAssigned::class)
         ->and(DB::table('role_assignments')->count())->toBe(1);
@@ -101,9 +101,9 @@ it('lets one person hold several roles, and several people hold one role', funct
     $ada = Identity::savedActiveAccount('ada@example.org');
     $bob = Identity::savedActiveAccount('bob@example.org', name: 'Bob');
 
-    Access::grant($ada, Role::Guardian);
+    Access::grant($ada, Role::GuardianFull);
     Access::grant($ada, Role::PlatformAdministrator);
-    Access::grant($bob, Role::Guardian);
+    Access::grant($bob, Role::GuardianFull);
 
     expect(DB::table('role_assignments')->count())->toBe(3);
 });
@@ -111,7 +111,7 @@ it('lets one person hold several roles, and several people hold one role', funct
 // --- Referential integrity (ADR 0021) ----------------------------------------------------
 
 it('refuses a grant to a person who does not exist', function () {
-    $error = Identity::violation(fn () => Access::grant(PersonId::generate(), Role::Guardian));
+    $error = Identity::violation(fn () => Access::grant(PersonId::generate(), Role::GuardianFull));
 
     expect($error)->toBeInstanceOf(QueryException::class)
         ->and(DB::table('role_assignments')->count())->toBe(0);
@@ -132,9 +132,9 @@ it('refuses to delete a person who still holds a grant (RESTRICT, not CASCADE)',
 it('allows the person to be removed once the grant is explicitly revoked', function () {
     $account = Identity::savedActiveAccount();
     DB::table('accounts')->where('id', $account->id->value)->delete();
-    Access::grant($account->personId, Role::Guardian);
+    Access::grant($account->personId, Role::GuardianFull);
 
-    Access::revoke($account->personId, Role::Guardian);
+    Access::revoke($account->personId, Role::GuardianFull);
     DB::table('people')->where('id', $account->personId->value)->delete();
 
     expect(DB::table('people')->count())->toBe(0);
@@ -144,7 +144,7 @@ it('keeps granted_by_account_id as provenance with no foreign key', function () 
     $account = Identity::savedActiveAccount();
     $vanished = AccountId::generate(); // no such account
 
-    Access::grant($account, Role::Guardian, $vanished);
+    Access::grant($account, Role::GuardianFull, $vanished);
 
     expect(assignments()->forPerson($account->personId)[0]->grantedByAccountId)->toEqual($vanished);
 });
@@ -199,21 +199,21 @@ it('reads a corrupt or obsolete stored key back exactly as stored, without faili
 
 it('removes an assignment and says whether it did', function () {
     $account = Identity::savedActiveAccount();
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
 
-    expect(assignments()->remove($account->personId, 'guardian'))->toBeTrue()
+    expect(assignments()->remove($account->personId, 'guardian-full'))->toBeTrue()
         ->and(DB::table('role_assignments')->count())->toBe(0)
-        ->and(assignments()->remove($account->personId, 'guardian'))->toBeFalse();
+        ->and(assignments()->remove($account->personId, 'guardian-full'))->toBeFalse();
 });
 
 it('removes only the named assignment', function () {
     $ada = Identity::savedActiveAccount('ada@example.org');
     $bob = Identity::savedActiveAccount('bob@example.org', name: 'Bob');
-    Access::grant($ada, Role::Guardian);
+    Access::grant($ada, Role::GuardianFull);
     Access::grant($ada, Role::PlatformAdministrator);
-    Access::grant($bob, Role::Guardian);
+    Access::grant($bob, Role::GuardianFull);
 
-    assignments()->remove($ada->personId, 'guardian');
+    assignments()->remove($ada->personId, 'guardian-full');
 
     expect(DB::table('role_assignments')->count())->toBe(2)
         ->and(assignments()->remove($bob->personId, 'platform_administrator'))->toBeFalse();
@@ -236,7 +236,7 @@ it('lists the holders of a role in a stable order, locked or not', function () {
         Access::grant($account, Role::PlatformAdministrator);
         $people[] = $account->personId->value;
     }
-    Access::grant(Identity::savedActiveAccount('g@example.org', name: 'G'), Role::Guardian);
+    Access::grant(Identity::savedActiveAccount('g@example.org', name: 'G'), Role::GuardianFull);
 
     $plain = array_map(fn (PersonId $p): string => $p->value, assignments()->holdersOf('platform_administrator'));
     $locked = array_map(fn (PersonId $p): string => $p->value, assignments()->lockHoldersOf('platform_administrator'));

@@ -11,9 +11,9 @@ use App\Modules\Access\Application\Capability;
  * strings, numbers, booleans, lists and maps, plus Access's public `Capability` cases.
  * An unknown key is refused, never ignored. Nothing in a document is executable.
  *
- * `default_role` is null until Access has a `ProvisionableRole` allowlist (WP2A) and
- * Guardian's role is wired (WP2B). Any other value is refused, which is that rule with
- * an empty allowlist: fail closed, never a free-form role key.
+ * `default_role` stays null. Access has `ProvisionableRole` (WP2A), but this schema's
+ * allowlist stays empty until WP2B wires Guardian Initiate. Any other value is refused:
+ * fail closed, never a free-form role key.
  */
 final class DefinitionSchema
 {
@@ -412,8 +412,8 @@ final class DefinitionSchema
 
     private static function defaultRole(mixed $value, string $name): void
     {
-        // The allowlist is empty until ProvisionableRole exists (WP2A). Null is the only legal value,
-        // so a definition cannot name a role at all. When a role becomes legal, the same rule requires
+        // The allowlist stays empty until WP2B. Null is the only legal value, so a definition
+        // cannot name a role at all. When a role becomes legal, the same rule requires
         // intake, status and default_role among the verified operations (F5), because each can grant authority.
         if ($value === 'missing' || $value !== null) {
             throw new InvalidRelationshipDefinition($name, 'default_role must be null or a provisionable role');

@@ -26,7 +26,12 @@ use InvalidArgumentException;
  */
 final readonly class RoleAssignment
 {
-    private const string KEY_SHAPE = '/^[a-z][a-z0-9_]{0,63}$/D';
+    /**
+     * Lowercase, starting with a letter, then letters, digits, underscores or hyphens, at most 64
+     * characters (ADR 0038, A10). Hyphens exist for the approved role keys. This is not a general
+     * relaxation: upper case, spaces, leading digits and other punctuation stay refused.
+     */
+    public const string KEY_SHAPE = '/^[a-z][a-z0-9_-]{0,63}$/D';
 
     private function __construct(
         public RoleAssignmentId $id,
@@ -40,7 +45,7 @@ final readonly class RoleAssignment
     public static function grant(PersonId $personId, string $roleKey, ?AccountId $grantedBy, DateTimeImmutable $now): self
     {
         if (preg_match(self::KEY_SHAPE, $roleKey) !== 1) {
-            throw new InvalidArgumentException('A role key is lowercase snake_case, up to 64 characters.');
+            throw new InvalidArgumentException('A role key is lowercase letters, digits, underscores and hyphens, up to 64 characters, and starts with a letter.');
         }
 
         return new self(RoleAssignmentId::generate(), $personId, $roleKey, $grantedBy, $now);

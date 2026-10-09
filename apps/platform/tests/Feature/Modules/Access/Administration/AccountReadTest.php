@@ -27,7 +27,7 @@ it('discloses exactly the approved fields for an Account, and nothing else', fun
 
     $response = $console->get('/api/v1/admin/accounts/'.$target->id->value)->assertOk();
 
-    expect(array_keys(Api::map($response->json())))->toBe(['id', 'person_id', 'display_name', 'email', 'email_verified_at', 'status', 'created_at', 'last_login_at', 'disabled_at', 'mfa', 'invitation', 'assignments'])
+    expect(array_keys(Api::map($response->json())))->toBe(['id', 'person_id', 'display_name', 'email', 'email_verified_at', 'status', 'created_at', 'last_login_at', 'disabled_at', 'mfa', 'invitation', 'assignments', 'sourced_grants'])
         ->and($response->json('id'))->toBe($target->id->value)
         ->and($response->json('person_id'))->toBe($target->personId->value)
         ->and($response->json('display_name'))->toBe('Ada Lovelace')
@@ -160,7 +160,7 @@ it('answers 404 for an Account that does not exist and for an id that is not one
 it('serves a page in a fixed number of queries, however many Accounts it holds', function () {
     [$console] = Mfa::signedInAdmin();
     foreach (range(1, 20) as $n) {
-        Access::grant(Identity::savedActiveAccount("bulk{$n}@example.org"), Role::Guardian);
+        Access::grant(Identity::savedActiveAccount("bulk{$n}@example.org"), Role::GuardianFull);
     }
     $queries = 0;
     DB::listen(function (QueryExecuted $query) use (&$queries): void {

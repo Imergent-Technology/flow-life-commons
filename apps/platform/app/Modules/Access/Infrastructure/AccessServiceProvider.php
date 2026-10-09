@@ -9,6 +9,7 @@ use App\Modules\Access\Application\Capability;
 use App\Modules\Access\Application\ConsoleMultiFactorPolicy;
 use App\Modules\Access\Application\LastAdministratorDeactivationGuard;
 use App\Modules\Access\Domain\RoleAssignmentRepository;
+use App\Modules\Access\Domain\SourcedRoleGrantRepository;
 use App\Modules\Access\Infrastructure\Console\CreateAdministratorCommand;
 use App\Modules\Identity\Application\AccountDeactivationGuard;
 use App\Modules\Identity\Application\EffectiveCapabilities;
@@ -29,6 +30,7 @@ final class AccessServiceProvider extends ServiceProvider
     /** @var array<class-string, class-string> */
     public array $bindings = [
         RoleAssignmentRepository::class => DatabaseRoleAssignmentRepository::class,
+        SourcedRoleGrantRepository::class => DatabaseSourcedRoleGrantRepository::class,
         EffectiveCapabilities::class => AuthorizerEffectiveCapabilities::class,
         // Who must have a second factor (ADR 0023): Identity owns the port, Access the answer.
         MultiFactorPolicy::class => ConsoleMultiFactorPolicy::class,

@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\BootstrapAdministrator;
-use App\Modules\Access\Application\ConsoleUserFixture;
 use App\Modules\Access\Application\Role;
 use App\Modules\Identity\Application\EffectiveCapabilities;
 
@@ -100,7 +99,7 @@ arch('Audit does not depend on Access', function () {
 
 arch('Role is internal to Access: nothing outside it may name the type', function () {
     // A role is how capabilities are bundled and assigned, never how anything is authorized.
-    // Business code that could import Role could write `if ($role === Role::Guardian)`.
+    // Business code that could import Role could write `if ($role === Role::GuardianFull)`.
     // No exceptions: not for seeders, not for fixtures. Code that needs a role's effect asks
     // Access for it (ConsoleUserFixture, BootstrapAdministrator) and never names the role.
     expect(Role::class)->toOnlyBeUsedIn('App\\Modules\\Access');
@@ -113,10 +112,64 @@ arch('The administrator bootstrap has one caller: the operator\'s console comman
         ->toOnlyBeUsedIn('App\\Modules\\Access\\Infrastructure\\Console\\CreateAdministratorCommand');
 });
 
-arch('The Console user fixture is for the development seeder only', function () {
-    // It bypasses authorization and audit, and refuses to run outside local and testing.
-    expect(ConsoleUserFixture::class)
-        ->toOnlyBeUsedIn(['App\\Modules\\Access', 'Database\\Seeders\\E2eAccountSeeder']);
+arch('Role identity stays inside Access', function () {
+    // A role is how capabilities are bundled, never evidence of an organizational relationship (ADR 0038, A10).
+    expect('App\\Modules\\Access\\Application\\Role')->toOnlyBeUsedIn('App\\Modules\\Access');
+    expect('App\\Modules\\Access\\Domain\\RoleAssignmentRepository')->toOnlyBeUsedIn('App\\Modules\\Access');
+    expect('App\\Modules\\Access\\Application\\GrantRole')->toOnlyBeUsedIn('App\\Modules\\Access');
+    expect('App\\Modules\\Access\\Application\\RevokeRole')->toOnlyBeUsedIn('App\\Modules\\Access');
+    expect('App\\Modules\\Access\\Application\\GrantRoleToAccount')->toOnlyBeUsedIn('App\\Modules\\Access');
+    expect('App\\Modules\\Access\\Application\\RevokeRoleFromAccount')->toOnlyBeUsedIn('App\\Modules\\Access');
+    expect('App\\Modules\\Access\\Application\\ConsoleUserFixture')->toOnlyBeUsedIn([
+        'App\\Modules\\Access',
+        'Database\\Seeders\\E2eAccountSeeder',
+    ]);
+});
+
+arch('sourced-grant mutation is not reachable except from Relationships, and Relationships does not call it yet', function () {
+    // WP2B is the only caller (ADR 0038, A10). Until that package replaces NoRelationshipGrants, nothing in
+    // Relationships may call these services: a production path that created a grant with no withdrawal is unsafe.
+    expect('App\\Modules\\Access\\Application\\GrantSourcedRole')->toOnlyBeUsedIn('App\\Modules\\Relationships\\Application');
+    expect('App\\Modules\\Access\\Application\\WithdrawSourcedRoles')->toOnlyBeUsedIn('App\\Modules\\Relationships\\Application');
+    expect('App\\Modules\\Access\\Application\\ProvisionableRole')->toOnlyBeUsedIn([
+        'App\\Modules\\Access',
+        'App\\Modules\\Relationships',
+    ]);
+    expect('App\\Modules\\Access\\Application\\ListSourcedRoleGrants')->toOnlyBeUsedIn([
+        'App\\Modules\\Access',
+        'App\\Modules\\Relationships',
+    ]);
+    expect('App\\Modules\\Access\\Application\\SourcedRoleGrantsOf')->toOnlyBeUsedIn([
+        'App\\Modules\\Access',
+        'App\\Modules\\Relationships',
+    ]);
+});
+
+it('does not let Relationships create or withdraw sourced grants while the no-op adapter is the lifecycle', function () {
+    // WP2B replaces this. A relationship use case that calls GrantSourcedRole before inactivation withdraws
+    // would leave a grant in place. The production binding must stay the no-op until that package.
+    $roots = [
+        dirname(__DIR__, 2).'/app/Modules/Relationships/Application',
+        dirname(__DIR__, 2).'/app/Modules/Relationships/Http',
+        dirname(__DIR__, 2).'/app/Modules/Relationships/Infrastructure',
+    ];
+    $offenders = [];
+    foreach ($roots as $root) {
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)) as $file) {
+            assert($file instanceof SplFileInfo);
+            if ($file->getExtension() !== 'php') {
+                continue;
+            }
+            $source = (string) file_get_contents($file->getPathname());
+            foreach (['GrantSourcedRole', 'WithdrawSourcedRoles', 'sourced_role_grants'] as $needle) {
+                if (str_contains($source, $needle)) {
+                    $offenders[] = $file->getFilename()." names {$needle}";
+                }
+            }
+        }
+    }
+
+    expect($offenders)->toBe([]);
 });
 
 // --- Source scans (each has a positive control, so it cannot pass by matching nothing) ---------
@@ -145,44 +198,28 @@ it('keeps every role key out of code outside Access, so nothing authorizes by ro
     $keys = array_map(fn (Role $r): string => $r->value, Role::cases());
     $offenders = [];
 
-    // Two literals are the same word as a role key and are not authorization. Resources' audience catalog stores its
-    // `guardian` audience under that word (ADR 0036, ADR 0037 decision 38). The Guardian relationship's type key is
-    // the same word (ADR 0038); WP2A renames the role, not the relationship. Exactly those files may hold exactly
-    // that literal. Every other file, and every other literal in those files, is still scanned.
-    $notARole = [
-        'app/Modules/Resources/Domain/Audience.php' => ['guardian'],
-        'app/Modules/Relationships/Definitions/guardian.php' => ['guardian'],
-    ];
-
+    // `guardian` is no longer a role key (ADR 0038, A10). The relationship type and the Resource audience
+    // may hold that word. It is not in $keys, so those files need no exemption.
     foreach (appPhpFilesOutside('Access') as $path) {
         $source = (string) file_get_contents($path);
-        $relative = str_replace(dirname(__DIR__, 2).'/', '', $path);
         foreach ($keys as $key) {
-            if (in_array($key, $notARole[$relative] ?? [], true)) {
-                continue;
-            }
             if (preg_match('/[\'"]'.preg_quote($key, '/').'[\'"]/', $source) === 1) {
                 $offenders[] = str_replace(dirname(__DIR__, 2).'/', '', $path)." names role \"{$key}\"";
             }
         }
     }
 
-    expect($offenders)->toBe([]);
+    expect($offenders)->toBe([])
+        ->and($keys)->toBe([
+            'platform_administrator', 'guardian-full', 'guardian-senior', 'guardian-initiate', 'console-participant',
+        ])
+        ->and(Role::tryFrom('guardian'))->toBeNull();
 
-    // Positive control: the same scan does see the keys where they legitimately live.
+    // Positive control: the same scan does see each key where it legitimately lives.
     $catalog = (string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Access/Application/Role.php');
     foreach ($keys as $key) {
         expect(preg_match('/[\'"]'.preg_quote($key, '/').'[\'"]/', $catalog))->toBe(1);
     }
-
-    // The exemptions are real and exactly as narrow as stated: each file does hold the literal (so the exemption is
-    // needed, not decorative), and they are the only files exempted.
-    expect((string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Resources/Domain/Audience.php'))->toContain("'guardian'")
-        ->and((string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Relationships/Definitions/guardian.php'))->toContain("'type' => 'guardian'")
-        ->and(array_keys($notARole))->toBe([
-            'app/Modules/Resources/Domain/Audience.php',
-            'app/Modules/Relationships/Definitions/guardian.php',
-        ]);
 });
 
 it('keeps Access out of Identity\'s tables', function () {

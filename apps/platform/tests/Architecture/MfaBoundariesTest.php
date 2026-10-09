@@ -156,11 +156,16 @@ arch('Identity: the Actor and the session hold no factor material', function () 
 
 it('never names a role in Identity: the multi-factor requirement is not keyed to who someone is', function () use ($root) {
     $identity = mfaSources("{$root}/app/Modules/Identity");
-    $pattern = '/platform_administrator|[\'"]guardian[\'"]|\bRole::|Access\\\\Application\\\\Role\b|\bis(Guardian|Admin|Administrator)\b|hasRole|->roles?\b/';
+    $pattern = '/platform_administrator|guardian-initiate|guardian-full|guardian-senior|console-participant|[\'"]guardian[\'"]|\bRole::|Access\\\\Application\\\\Role\b|\bis(Guardian|Admin|Administrator)\b|hasRole|->roles?\b/';
 
     expect(mfaMatches($identity, $pattern))->toBe([])
         ->and(preg_match($pattern, 'if ($account->isAdministrator()) { require(); }'))->toBe(1)
-        ->and(preg_match($pattern, "\$role === 'guardian'"))->toBe(1);
+        ->and(preg_match($pattern, "\$role === 'guardian'"))->toBe(1)
+        ->and(preg_match($pattern, "'guardian-full'"))->toBe(1)
+        ->and(preg_match($pattern, "'guardian-senior'"))->toBe(1)
+        ->and(preg_match($pattern, "'guardian-initiate'"))->toBe(1)
+        ->and(preg_match($pattern, "'console-participant'"))->toBe(1)
+        ->and(preg_match($pattern, 'platform_administrator'))->toBe(1);
 });
 
 it('never adds a capability or a role to represent MFA: it is authentication strength, not authorization', function () use ($root) {

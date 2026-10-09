@@ -88,7 +88,7 @@ final class Mfa
     public static function guardian(string $email = 'ada@example.org'): Account
     {
         $account = Identity::savedActiveAccount($email);
-        Access::grant($account, Role::Guardian);
+        Access::grant($account, Role::GuardianFull);
 
         return $account;
     }

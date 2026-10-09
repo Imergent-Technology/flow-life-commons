@@ -41,17 +41,17 @@ it('lets an actor who holds access.roles.assign grant a role', function () {
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
 
-    $result = grantRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    $result = grantRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
     expect($result)->toBe(RoleMutation::Changed)
-        ->and(roleKeysOf($target->personId))->toBe(['guardian']);
+        ->and(roleKeysOf($target->personId))->toBe(['guardian-full']);
 });
 
 it('records who granted the role', function () {
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
 
-    grantRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    grantRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
     expect(app(RoleAssignmentRepository::class)->forPerson($target->personId)[0]->grantedByAccountId)->toEqual($admin->id);
 });
@@ -60,14 +60,14 @@ it('grants to a person who has no account yet', function () {
     $admin = Access::admin('admin@example.org');
     $contact = Identity::savedPerson('A Contact');
 
-    grantRole()(Access::actorFor($admin), $contact->id, Role::Guardian);
+    grantRole()(Access::actorFor($admin), $contact->id, Role::GuardianFull);
 
-    expect(roleKeysOf($contact->id))->toBe(['guardian']);
+    expect(roleKeysOf($contact->id))->toBe(['guardian-full']);
 });
 
 it('denies a grant to an actor without access.roles.assign, changing nothing', function () {
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
 
     expect(fn () => grantRole()(Access::actorFor($guardian), $target->personId, Role::PlatformAdministrator))->toThrow(AccessDenied::class);
@@ -80,7 +80,7 @@ it('denies an actor with no roles at all', function () {
     $nobody = Identity::savedActiveAccount('nobody@example.org', name: 'Nobody');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
 
-    expect(fn () => grantRole()(Access::actorFor($nobody), $target->personId, Role::Guardian))->toThrow(AccessDenied::class);
+    expect(fn () => grantRole()(Access::actorFor($nobody), $target->personId, Role::GuardianFull))->toThrow(AccessDenied::class);
 });
 
 it('denies an administrator whose account has since been disabled', function () {
@@ -90,7 +90,7 @@ it('denies an administrator whose account has since been disabled', function () 
     $actor = Access::actorFor($admin);
     app(AccountRepository::class)->save($admin->disable(Identity::now()->modify('+1 day')));
 
-    expect(fn () => grantRole()($actor, $target->personId, Role::Guardian))->toThrow(AccessDenied::class)
+    expect(fn () => grantRole()($actor, $target->personId, Role::GuardianFull))->toThrow(AccessDenied::class)
         ->and($other->id)->not->toBeNull();
 });
 
@@ -100,13 +100,13 @@ it('denies an actor whose administrator role was revoked after they were resolve
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
     Access::revoke($admin, Role::PlatformAdministrator);
 
-    expect(fn () => grantRole()($actor, $target->personId, Role::Guardian))->toThrow(AccessDenied::class);
+    expect(fn () => grantRole()($actor, $target->personId, Role::GuardianFull))->toThrow(AccessDenied::class);
 });
 
 it('refuses a grant to a person who does not exist', function () {
     $admin = Access::admin('admin@example.org');
 
-    expect(fn () => grantRole()(Access::actorFor($admin), PersonId::generate(), Role::Guardian))->toThrow(UnknownPerson::class)
+    expect(fn () => grantRole()(Access::actorFor($admin), PersonId::generate(), Role::GuardianFull))->toThrow(UnknownPerson::class)
         ->and(Identity::events('role.granted'))->toBe([]);
 });
 
@@ -114,9 +114,9 @@ it('treats a duplicate grant as a successful no-op that changes and records noth
     $admin = Access::admin('admin@example.org');
     $other = Access::admin('other@example.org', 'Other');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
-    grantRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    grantRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
-    $again = grantRole()(Access::actorFor($other), $target->personId, Role::Guardian);
+    $again = grantRole()(Access::actorFor($other), $target->personId, Role::GuardianFull);
 
     expect($again)->toBe(RoleMutation::Unchanged)
         ->and(DB::table('role_assignments')->where('person_id', $target->personId->value)->count())->toBe(1)
@@ -166,7 +166,7 @@ it('treats losing a race with an identical grant as a no-op too', function () {
         }
     });
 
-    expect(grantRole()(Access::actorFor($admin), $target->personId, Role::Guardian))->toBe(RoleMutation::Unchanged)
+    expect(grantRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull))->toBe(RoleMutation::Unchanged)
         ->and(Identity::events('role.granted'))->toBe([]);
 });
 
@@ -174,14 +174,14 @@ it('audits a real grant with the actor, the subject and only the role in context
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
 
-    grantRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    grantRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
     $events = Identity::events('role.granted');
     expect($events)->toHaveCount(1)
         ->and($events[0]->outcome)->toBe('success')
         ->and($events[0]->actor_account_id)->toBe($admin->id->value)
         ->and($events[0]->subject_person_id)->toBe($target->personId->value)
-        ->and(Identity::context($events[0]))->toBe(['role' => 'guardian']);
+        ->and(Identity::context($events[0]))->toBe(['role' => 'guardian-full']);
 });
 
 // --- Revoke -----------------------------------------------------------------------------
@@ -189,9 +189,9 @@ it('audits a real grant with the actor, the subject and only the role in context
 it('lets an actor who holds access.roles.assign revoke a role', function () {
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
-    Access::grant($target, Role::Guardian);
+    Access::grant($target, Role::GuardianFull);
 
-    $result = revokeRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    $result = revokeRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
     expect($result)->toBe(RoleMutation::Changed)
         ->and(roleKeysOf($target->personId))->toBe([])
@@ -201,11 +201,11 @@ it('lets an actor who holds access.roles.assign revoke a role', function () {
 
 it('denies a revoke to an actor without access.roles.assign, changing nothing', function () {
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
 
-    expect(fn () => revokeRole()(Access::actorFor($guardian), $guardian->personId, Role::Guardian))->toThrow(AccessDenied::class);
+    expect(fn () => revokeRole()(Access::actorFor($guardian), $guardian->personId, Role::GuardianFull))->toThrow(AccessDenied::class);
 
-    expect(roleKeysOf($guardian->personId))->toBe(['guardian'])
+    expect(roleKeysOf($guardian->personId))->toBe(['guardian-full'])
         ->and(Identity::events('role.revoked'))->toBe([]);
 });
 
@@ -213,7 +213,7 @@ it('treats revoking a role that is not held as a successful no-op that records n
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
 
-    $result = revokeRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    $result = revokeRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
     expect($result)->toBe(RoleMutation::Unchanged)
         ->and(Identity::events('role.revoked'))->toBe([]);
@@ -222,20 +222,20 @@ it('treats revoking a role that is not held as a successful no-op that records n
 it('treats a second revoke of the same role as a no-op', function () {
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
-    Access::grant($target, Role::Guardian);
-    revokeRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    Access::grant($target, Role::GuardianFull);
+    revokeRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
-    expect(revokeRole()(Access::actorFor($admin), $target->personId, Role::Guardian))->toBe(RoleMutation::Unchanged)
+    expect(revokeRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull))->toBe(RoleMutation::Unchanged)
         ->and(Identity::events('role.revoked'))->toHaveCount(1);
 });
 
 it('leaves the person\'s other roles alone', function () {
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
-    Access::grant($target, Role::Guardian);
+    Access::grant($target, Role::GuardianFull);
     Access::grant($target, Role::PlatformAdministrator);
 
-    revokeRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    revokeRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
     expect(roleKeysOf($target->personId))->toBe(['platform_administrator']);
 });
@@ -243,15 +243,15 @@ it('leaves the person\'s other roles alone', function () {
 it('audits a real revoke with the actor, the subject and only the role in context', function () {
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
-    Access::grant($target, Role::Guardian);
+    Access::grant($target, Role::GuardianFull);
 
-    revokeRole()(Access::actorFor($admin), $target->personId, Role::Guardian);
+    revokeRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull);
 
     $events = Identity::events('role.revoked');
     expect($events)->toHaveCount(1)
         ->and($events[0]->actor_account_id)->toBe($admin->id->value)
         ->and($events[0]->subject_person_id)->toBe($target->personId->value)
-        ->and(Identity::context($events[0]))->toBe(['role' => 'guardian']);
+        ->and(Identity::context($events[0]))->toBe(['role' => 'guardian-full']);
 });
 
 // --- Atomic with the audit event ------------------------------------------------------------------
@@ -267,7 +267,7 @@ it('rolls a grant back when the audit write fails', function () {
         }
     });
 
-    expect(fn () => grantRole()(Access::actorFor($admin), $target->personId, Role::Guardian))->toThrow(RuntimeException::class, 'audit store unavailable');
+    expect(fn () => grantRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull))->toThrow(RuntimeException::class, 'audit store unavailable');
 
     expect(roleKeysOf($target->personId))->toBe([]);
 });
@@ -275,7 +275,7 @@ it('rolls a grant back when the audit write fails', function () {
 it('rolls a revoke back when the audit write fails', function () {
     $admin = Access::admin('admin@example.org');
     $target = Identity::savedActiveAccount('target@example.org', name: 'Target');
-    Access::grant($target, Role::Guardian);
+    Access::grant($target, Role::GuardianFull);
     app()->bind(SecurityEventWriter::class, fn () => new class implements SecurityEventWriter
     {
         public function append(SecurityEvent $event): void
@@ -284,9 +284,9 @@ it('rolls a revoke back when the audit write fails', function () {
         }
     });
 
-    expect(fn () => revokeRole()(Access::actorFor($admin), $target->personId, Role::Guardian))->toThrow(RuntimeException::class);
+    expect(fn () => revokeRole()(Access::actorFor($admin), $target->personId, Role::GuardianFull))->toThrow(RuntimeException::class);
 
-    expect(roleKeysOf($target->personId))->toBe(['guardian']); // the revoke did not survive its failed audit
+    expect(roleKeysOf($target->personId))->toBe(['guardian-full']); // the revoke did not survive its failed audit
 });
 
 // --- No way around authorization ---------------------------------------------------------------------

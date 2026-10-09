@@ -84,7 +84,7 @@ it('does not count a DISABLED administrator as active', function () {
 it('does not count an ordinary guardian as an administrator', function () {
     $ada = Access::admin('ada@example.org', 'Ada');
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
 
     expect(fn () => disable($ada))->toThrow(AccountDeactivationRefused::class);
 });
@@ -100,7 +100,7 @@ it('does not count a wrongly-cased role key as an administrator, on either engin
 it('never blocks disabling an account that is not an administrator, even when the only administrator exists', function () {
     Access::admin('admin@example.org');
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
     $nobody = Identity::savedActiveAccount('nobody@example.org', name: 'Nobody');
 
     disable($guardian);

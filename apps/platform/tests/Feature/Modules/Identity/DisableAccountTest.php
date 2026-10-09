@@ -57,7 +57,7 @@ it('can disable an account that never activated', function () {
 it('keeps the person, the role assignments and the history: disabling is not deleting', function () {
     $admin = Access::admin('admin@example.org', 'Admin');
     $account = Identity::savedActiveAccount('target@example.org', name: 'Target');
-    Access::grant($account, Role::Guardian);
+    Access::grant($account, Role::GuardianFull);
     Identity::savedInvitation($account);
     Mfa::enroll($account);
     (new Console)->loginWithMfa('target@example.org', Identity::PASSWORD)->assertOk();

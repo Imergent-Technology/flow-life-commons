@@ -78,7 +78,7 @@ it('accepts an explicit instant, distinct from now', function () {
 
 it('denies an actor without membership.records.view', function () {
     $guardian = Identity::savedActiveAccount('guardian@example.org', name: 'Guardian');
-    Access::grant($guardian, Role::Guardian);
+    Access::grant($guardian, Role::GuardianFull);
     $person = Identity::savedPerson();
 
     expect(fn () => app(GetMembershipRecord::class)(Access::actorFor($guardian), $person->id))

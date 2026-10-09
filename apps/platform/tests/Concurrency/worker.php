@@ -40,8 +40,12 @@ declare(strict_types=1);
  */
 
 use App\Modules\Access\Application\DisableManagedAccount;
+use App\Modules\Access\Application\GrantSourcedRole;
+use App\Modules\Access\Application\ProvisionableRole;
 use App\Modules\Access\Application\RevokeRole;
 use App\Modules\Access\Application\Role;
+use App\Modules\Access\Application\RoleGrantSource;
+use App\Modules\Access\Application\WithdrawSourcedRoles;
 use App\Modules\Crm\Application\AddContactMethod;
 use App\Modules\Crm\Application\CreateTag;
 use App\Modules\Crm\Application\DeleteTag;
@@ -345,6 +349,18 @@ try {
         $app->make(DeleteRelationship::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
             $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')), (int) $arg('revision'),
+        );
+    } elseif ($operation === 'grant_sourced_role') {
+        $app->make(GrantSourcedRole::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            PersonId::fromString($arg('person')),
+            ProvisionableRole::from($arg('role')),
+            RoleGrantSource::relationship($arg('source')),
+        );
+    } elseif ($operation === 'withdraw_sourced_roles') {
+        $app->make(WithdrawSourcedRoles::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            RoleGrantSource::relationship($arg('source')),
         );
     } elseif ($operation === 'lock_invitation') {
         // Just takes and releases the invitation row lock: it finishes only once it has been granted.

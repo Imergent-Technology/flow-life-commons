@@ -226,7 +226,7 @@ it('gives the tag code no path to authorization, roles, Membership or Volunteer 
         preg_match_all('/Capability::(\w+)/', $planted, $m);
         expect(in_array($m[1][0], ['ViewPeople', 'ManagePeople'], true))->toBeFalse();
     }
-    foreach (['use App\\Modules\\Access\\Application\\Role;', '$this->authorizer', 'MembershipGrant', 'if ($tag->name === "Volunteer")', 'Role::Guardian'] as $planted) {
+    foreach (['use App\\Modules\\Access\\Application\\Role;', '$this->authorizer', 'MembershipGrant', 'if ($tag->name === "Volunteer")', 'Role::GuardianFull'] as $planted) {
         expect(preg_match('/\bRole\b|Authorizer|Membership|Volunteer|Guardian|role_assignments/i', $planted))->toBe(1);
     }
 });

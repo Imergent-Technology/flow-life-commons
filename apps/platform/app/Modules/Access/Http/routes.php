@@ -73,6 +73,6 @@ Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin
 
     Route::middleware('can:access.roles.assign')->group(function () use ($account): void {
         Route::post('accounts/{account}/assignments', GrantRoleController::class)->where('account', $account)->middleware('security.verified')->name('api.v1.admin.assignments.store');
-        Route::delete('accounts/{account}/assignments/{key}', RevokeRoleController::class)->where('account', $account)->where('key', '[a-z][a-z0-9_]{0,63}')->middleware('security.verified')->name('api.v1.admin.assignments.destroy');
+        Route::delete('accounts/{account}/assignments/{key}', RevokeRoleController::class)->where('account', $account)->where('key', '[a-z][a-z0-9_-]{0,63}')->middleware('security.verified')->name('api.v1.admin.assignments.destroy');
     });
 });

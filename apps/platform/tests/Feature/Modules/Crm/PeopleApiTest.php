@@ -124,7 +124,7 @@ it('returns exactly the documented keys, in every response', function () {
 it('discloses nothing about Accounts, access, Membership or security, even for a Person who has all of them', function () {
     [$console] = Mfa::signedIn();
     $operator = Identity::savedActiveAccount('operator.login@example.org', name: 'Operator Person');
-    Access::grant($operator, Role::Guardian);
+    Access::grant($operator, Role::GuardianFull);
     Membership::savedGrant($operator->personId);
     Mfa::enroll($operator);
     $console->post("/api/v1/admin/people/{$operator->personId->value}/contact-methods", ['kind' => 'email', 'value' => 'different.contact@example.org'])->assertCreated();
@@ -147,7 +147,7 @@ it('discloses nothing about Accounts, access, Membership or security, even for a
 it('discloses nothing about Accounts, access, Membership or security in WRITE responses either, nor in a duplicate or error answer', function () {
     [$console] = Mfa::signedIn();
     $operator = Identity::savedActiveAccount('operator.login@example.org', name: 'Operator Person');
-    Access::grant($operator, Role::Guardian);
+    Access::grant($operator, Role::GuardianFull);
     Membership::savedGrant($operator->personId);
     Mfa::enroll($operator);
     $person = $operator->personId->value;

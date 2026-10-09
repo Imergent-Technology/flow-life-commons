@@ -77,7 +77,7 @@ it('NEVER puts the invitation secret in the response, the audit trail, the log o
 
 it('lets the invitee accept, be verified, and be taken to enrolment because they were given Console access', function () {
     [$console] = Mfa::signedInAdmin();
-    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New Person', 'initial_assignments' => ['guardian']])->assertCreated();
+    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New Person', 'initial_assignments' => ['guardian-full']])->assertCreated();
 
     Invitations::accept(mailedToken(), 'a long enough passphrase for the invitee')->assertNoContent();
 
@@ -89,10 +89,10 @@ it('lets the invitee accept, be verified, and be taken to enrolment because they
 it('records initial role assignments through the real use case, audited, all in the same transaction', function () {
     [$console, $admin] = Mfa::signedInAdmin();
 
-    $response = $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New Person', 'initial_assignments' => ['guardian', 'guardian']])->assertCreated();
+    $response = $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New Person', 'initial_assignments' => ['guardian-full', 'guardian-full']])->assertCreated();
 
     $events = Identity::events('role.granted');
-    expect($response->json('account.assignments.0.key'))->toBe('guardian')
+    expect($response->json('account.assignments.0.key'))->toBe('guardian-full')
         ->and($response->json('account.assignments'))->toHaveCount(1) // a repeated key is the same grant
         ->and($events)->toHaveCount(1)
         ->and($events[0]->actor_account_id)->toBe($admin->id->value);
@@ -103,7 +103,7 @@ it('leaves NO partial state and sends NO mail when a role assignment fails', fun
     $before = [DB::table('people')->count(), DB::table('accounts')->count(), DB::table('account_invitations')->count(), DB::table('security_events')->count()];
     Faults::roleAssignmentFails();
 
-    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New Person', 'initial_assignments' => ['guardian']])->assertStatus(500);
+    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New Person', 'initial_assignments' => ['guardian-full']])->assertStatus(500);
 
     expect([DB::table('people')->count(), DB::table('accounts')->count(), DB::table('account_invitations')->count(), DB::table('security_events')->count()])->toBe($before);
     Mail::assertNothingSent();
@@ -112,7 +112,7 @@ it('leaves NO partial state and sends NO mail when a role assignment fails', fun
 it('refuses an unknown role key before anything is created', function () {
     [$console] = Mfa::signedInAdmin();
 
-    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New', 'initial_assignments' => ['guardian', 'console.access']])
+    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New', 'initial_assignments' => ['guardian-full', 'console.access']])
         ->assertStatus(422)->assertJson(['code' => 'unknown_role']);
 
     expect(DB::table('accounts')->count())->toBe(1);
@@ -154,7 +154,7 @@ it('sends the message only AFTER the transaction has committed, and never from i
     $notifier = FakeInvitationNotifier::install();
     [$console] = Mfa::signedInAdmin();
 
-    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New', 'initial_assignments' => ['guardian']])->assertCreated();
+    $console->post('/api/v1/admin/invitations', ['email' => 'new@example.org', 'display_name' => 'New', 'initial_assignments' => ['guardian-full']])->assertCreated();
 
     // Sent once, and by then every transaction the request opened (Person, Account, invitation, role, audit) was closed.
     expect($notifier->sent)->toHaveCount(1)
