@@ -100,7 +100,12 @@ The dev `queue` container reloads code per job (`queue:listen`); the `scheduler`
 
 ## CI parity
 
-CI uses the same `compose.yaml` and `./flow` commands. The only CI-specific step is pre-building the PHP image with layer caching (`docker/bake-action`), then `./flow setup --skip-build`.
+CI uses the same `compose.yaml` and `./flow` commands. Two CI-specific steps sit in front of that:
+
+1. **Docker Hub is not contacted anonymously.** GitHub-hosted runners share egress IPs, and an anonymous Hub HEAD returns HTTP 429 even when the GHA layer cache already has the PHP image. The workflows point the Docker daemon and Buildx at Google's public cache (`mirror.gcr.io`) for every remaining `docker.io` pull (`caddy`, `mariadb`, `node`, `mailpit`, `postgres`, `shellcheck`, `actionlint`, `php:8.3-apache`, and Buildx's own `moby/buildkit`). A daemon mirror still falls back to Hub if a tag is uncached, so the PHP Dockerfile names `mirror.gcr.io` / `ghcr.io` directly for the three images Bake must resolve. The installer pin is the project's own GHCR publish: that tag is not in the Google cache.
+2. **The PHP image is pre-built** with layer caching (`docker/bake-action`), then `./flow setup --skip-build`.
+
+Local `./flow setup` still builds the same `flowlife-dev/php:8.3` tag (PHP 8.3 bookworm, same extensions). Compose service names are unchanged.
 
 ## Not covered yet
 
