@@ -27,6 +27,8 @@ it('has exactly the capability catalog, so adding one is a deliberate decision',
             // Resources (ADR 0037): read the Guardian library, and manage. There is deliberately no resources.delete or
             // .publish: permanent deletion is the same capability behind recent verification, a route-level layer.
             'resources.view', 'resources.manage',
+            // Organizational relationships (ADR 0038): one pair per type, added because the relationship routes check them.
+            'guardians.view', 'guardians.manage', 'volunteers.view', 'volunteers.manage',
         ]);
 });
 
@@ -59,12 +61,14 @@ it('gives the platform administrator every capability, by derivation rather than
     }
 });
 
-it('gives the guardian the Console, the People directory, Guardian Discussions and Resources, and nothing more', function () {
+it('gives the guardian the Console, the People directory, Guardian Discussions, Resources, and the ADR 0038 relationship mapping, and nothing more', function () {
     // CRM access (ADR 0034), Discussions access (ADR 0035) and Resources access (ADR 0037) are accepted owner decisions: each pair deliberately listed, not derived.
+    // Relationships (ADR 0038, A3) on today's guardian role: view Guardians, view and manage Volunteers. Not manage Guardians.
     expect(Role::Guardian->capabilities())->toBe([
         Capability::ConsoleAccess, Capability::ViewPeople, Capability::ManagePeople,
         Capability::ViewDiscussions, Capability::ParticipateInDiscussions,
         Capability::ViewResources, Capability::ManageResources,
+        Capability::ViewGuardians, Capability::ViewVolunteers, Capability::ManageVolunteers,
     ])
         ->and(Role::Guardian->grants(Capability::ViewResources))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ManageResources))->toBeTrue()
@@ -73,7 +77,11 @@ it('gives the guardian the Console, the People directory, Guardian Discussions a
         ->and(Role::Guardian->grants(Capability::ConsoleAccess))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ViewPeople))->toBeTrue()
         ->and(Role::Guardian->grants(Capability::ManagePeople))->toBeTrue()
-        ->and(Role::Guardian->grants(Capability::AssignRoles))->toBeFalse();
+        ->and(Role::Guardian->grants(Capability::AssignRoles))->toBeFalse()
+        ->and(Role::Guardian->grants(Capability::ViewGuardians))->toBeTrue()
+        ->and(Role::Guardian->grants(Capability::ManageGuardians))->toBeFalse()
+        ->and(Role::Guardian->grants(Capability::ViewVolunteers))->toBeTrue()
+        ->and(Role::Guardian->grants(Capability::ManageVolunteers))->toBeTrue();
 });
 
 it('gives the guardian NO administrative capability: being let into the Console is not being let to administer it', function () {
@@ -205,7 +213,7 @@ it('has exactly resources.view and resources.manage: no Resources-specific delet
 });
 
 it('does not give a Member, a Volunteer or any relationship a capability: no role is named after one (ADR 0036)', function () {
-    // A business relationship is not an Access role: Membership is derived at query time and Volunteering has no domain yet.
+    // A business relationship is not an Access role. The Volunteer relationship exists (ADR 0038); a role named volunteer does not.
     // The role catalog must therefore hold no `member` or `volunteer` role, and no Resources capability is reachable except by
     // the two roles that exist.
     expect(array_map(fn (Role $r): string => $r->value, Role::cases()))->not->toContain('member', 'volunteer', 'partner', 'vendor', 'artist');

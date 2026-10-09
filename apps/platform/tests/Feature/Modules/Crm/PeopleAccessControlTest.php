@@ -185,7 +185,7 @@ it('does not let a read capability change data, nor a Guardian\'s tag grant them
 
     $console->put("/api/v1/admin/people/{$guardian->personId->value}/tags", ['tag_ids' => $tags])->assertOk();
 
-    expect(Api::strings($console->me()->json('capabilities')))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view']);
+    expect(Api::strings($console->me()->json('capabilities')))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view']);
 });
 
 it('resolves the caller from the session, never from the request: a person_id in a body is only data', function () {

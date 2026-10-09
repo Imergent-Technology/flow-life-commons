@@ -88,4 +88,26 @@ enum Capability: string
      * `security.verified`. The exemption names this capability for `Resources\Http` routes and nothing else.
      */
     case ManageResources = 'resources.manage';
+
+    /**
+     * May read Guardian relationships: the directory, the record, its history and its visible fields (ADR 0038).
+     * Changes nothing. Holding it is not being a Guardian, and being a Guardian does not grant it.
+     */
+    case ViewGuardians = 'guardians.view';
+
+    /**
+     * May record, change, edit and permanently delete Guardian relationships (ADR 0038). Does not imply
+     * `guardians.view`. Recognition, status changes and deletion also need recent verification; field edits do not.
+     * It does not assign roles: a default-role grant is Access's own check, and that path is not built yet (WP2B).
+     */
+    case ManageGuardians = 'guardians.manage';
+
+    /** May read Volunteer relationships. Changes nothing, and implies no CRM capability (ADR 0038). */
+    case ViewVolunteers = 'volunteers.view';
+
+    /**
+     * May record, change, edit and permanently delete Volunteer relationships (ADR 0038). Does not imply
+     * `volunteers.view`. Only permanent deletion needs recent verification. It grants no role.
+     */
+    case ManageVolunteers = 'volunteers.manage';
 }

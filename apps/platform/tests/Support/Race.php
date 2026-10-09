@@ -30,6 +30,7 @@ final class Race
 {
     /** Tables these tests commit into, children first. */
     private const array TABLES = [
+        'person_relationship_role_provisions', 'person_relationship_field_values', 'person_relationship_status_changes', 'person_relationships',
         'resource_card_audiences', 'resource_cards', 'resource_assets', 'resource_pack_audiences', 'resource_packs', 'resource_categories',
         'discussion_messages', 'discussions',
         'contact_interactions', 'contact_tag_assignments', 'contact_methods', 'contact_tags', 'contact_profiles',

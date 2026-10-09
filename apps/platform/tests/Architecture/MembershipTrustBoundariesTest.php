@@ -202,6 +202,8 @@ arch('Membership composes a display name only through Identity\'s Application re
         'App\\Modules\\Discussions\\Application',
         // Resources composes the creator and last editor of what managers see the same way (ADR 0037), through Application only.
         'App\\Modules\\Resources\\Application',
+        // Relationships composes the Person on a relationship the same way (ADR 0038), through Application only.
+        'App\\Modules\\Relationships\\Application',
         'App\\Modules\\Identity',
     ]);
 });
@@ -232,10 +234,12 @@ arch('Only Identity, Access and the two Resources deletion use cases record secu
     // The one deliberate addition is ADR 0037, decision 55: permanently deleting a Resources Pack or Card is a privileged,
     // irreversible action that leaves nothing behind to describe it, so exactly those two use cases record `resource.pack_deleted`
     // and `resource.card_deleted`. They are named as CLASSES, not as the module: routine Resources work (create, edit, publish,
-    // order, preview) records nothing, and a third use case calling the seam fails here until a decision says it may.
+    // order, preview) records nothing, and a third Resources use case calling the seam fails here until a decision says it may.
+    // ADR 0038 adds exactly `DeleteRelationship`, for `relationship.deleted`. Grant events stay Access's.
     expect(RecordSecurityEvent::class)->toOnlyBeUsedIn([
         'App\\Modules\\Identity', 'App\\Modules\\Access', 'App\\Modules\\Audit',
         'App\\Modules\\Resources\\Application\\DeletePack', 'App\\Modules\\Resources\\Application\\DeleteCard',
+        'App\\Modules\\Relationships\\Application\\DeleteRelationship',
     ]);
 });
 

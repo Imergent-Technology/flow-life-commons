@@ -89,6 +89,12 @@ use App\Modules\Identity\Domain\InvitationToken;
 use App\Modules\Identity\Domain\RecoveryCodeRepository;
 use App\Modules\Membership\Application\RevokeMembershipGrant;
 use App\Modules\Membership\Domain\MembershipGrantId;
+use App\Modules\Relationships\Application\ChangeRelationshipStatus;
+use App\Modules\Relationships\Application\DeleteRelationship;
+use App\Modules\Relationships\Application\EstablishRelationship;
+use App\Modules\Relationships\Application\RelationshipCatalog;
+use App\Modules\Relationships\Application\UpdateRelationshipFields;
+use App\Modules\Relationships\Domain\RelationshipId;
 use App\Modules\Resources\Application\CreateCard;
 use App\Modules\Resources\Application\CreateCategory;
 use App\Modules\Resources\Application\CreatePack;
@@ -314,6 +320,32 @@ try {
         $app->make(InviteAccount::class)->byEmail(InvitationDetails::from($arg('email'), $arg('name')));
     } elseif ($operation === 'invite_existing_person') {
         $app->make(InviteAccountForPerson::class)(PersonId::fromString($arg('person')), $arg('email'));
+    } elseif ($operation === 'relationship_intake') {
+        $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
+        $app->make(EstablishRelationship::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            $type, PersonId::fromString($arg('person')), true, $arg('status'), [], false,
+        );
+    } elseif ($operation === 'relationship_status') {
+        $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
+        $app->make(ChangeRelationshipStatus::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')),
+            (int) $arg('revision'), $arg('status'), false,
+        );
+    } elseif ($operation === 'relationship_fields') {
+        $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
+        $app->make(UpdateRelationshipFields::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')),
+            (int) $arg('revision'), ['interests' => $arg('value')],
+        );
+    } elseif ($operation === 'relationship_delete') {
+        $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
+        $app->make(DeleteRelationship::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')), (int) $arg('revision'),
+        );
     } elseif ($operation === 'lock_invitation') {
         // Just takes and releases the invitation row lock: it finishes only once it has been granted.
         DB::transaction(fn () => $app->make(AccountInvitationRepository::class)->findByTokenForUpdate(InvitationToken::fromPresented($arg('token'))));

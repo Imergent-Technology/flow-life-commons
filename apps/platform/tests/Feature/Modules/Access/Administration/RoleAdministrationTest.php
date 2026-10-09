@@ -43,7 +43,7 @@ it('serves the role catalog from Access, so the Console defines none', function 
 
     expect(array_column($catalog, 'key'))->toBe(array_map(fn (Role $r): string => $r->value, Role::cases()))
         ->and(array_keys($catalog[0]))->toBe(['key', 'name', 'description', 'capabilities'])
-        ->and(capabilitiesOf($catalog, Role::Guardian->value))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view'])
+        ->and(capabilitiesOf($catalog, Role::Guardian->value))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view'])
         // The administrator's capabilities are the whole catalog: derived, not listed.
         ->and(capabilitiesOf($catalog, Role::PlatformAdministrator->value))->toBe(Access::everyCapabilityId());
 });
@@ -122,13 +122,13 @@ it('applies a granted role to the person immediately: a Console user\'s capabili
     $factor = Mfa::enroll($target, 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U');
     $person = new Console;
     $person->loginWithMfa('target@example.org', Identity::PASSWORD, $factor['secret'])->assertOk();
-    expect($person->me()->json('capabilities'))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view']);
+    expect($person->me()->json('capabilities'))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view']);
 
     $console->post("/api/v1/admin/accounts/{$target->id->value}/assignments", ['key' => 'platform_administrator'])->assertOk();
 
     // No new sign-in: the next request sees every capability.
     expect($person->me()->json('capabilities'))->toBe(Access::everyCapabilityId());
     $console->delete("/api/v1/admin/accounts/{$target->id->value}/assignments/platform_administrator")->assertOk();
-    expect($person->me()->json('capabilities'))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view']);
+    expect($person->me()->json('capabilities'))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view']);
     expect(Capability::cases())->not->toBeEmpty();
 });

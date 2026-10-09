@@ -19,7 +19,12 @@ enum Role: string
     /** Resolves to EVERY capability, present and future, and is the only role that does. */
     case PlatformAdministrator = 'platform_administrator';
 
-    /** The Console's ordinary user: may use it, see and manage People (CRM), take part in Guardian discussions and manage Resources. Nothing more yet. */
+    /**
+     * The Console's ordinary user. Today's `guardian` bundle is what ADR 0038 names `guardian-full`
+     * once the role key moves (WP2A). It may see Guardians and see and manage Volunteers. It may not
+     * manage Guardians: recognition is a separate capability, held by the platform administrator until
+     * a role is given it deliberately.
+     */
     case Guardian = 'guardian';
 
     /**
@@ -39,6 +44,9 @@ enum Role: string
                 // Resources access is an accepted owner decision (ADR 0037): Guardians are peers and organizational content has no
                 // owner, so every Guardian may manage it. Both capabilities, listed, not derived.
                 Capability::ViewResources, Capability::ManageResources,
+                // Organizational relationships (ADR 0038, A3), listed, not derived. Managing Guardians is not included:
+                // `guardians.manage` stays with the platform administrator until a role is given it on purpose.
+                Capability::ViewGuardians, Capability::ViewVolunteers, Capability::ManageVolunteers,
             ],
         };
     }
@@ -56,7 +64,7 @@ enum Role: string
     {
         return match ($this) {
             self::PlatformAdministrator => 'Everything the platform can do, including administering other people\'s access.',
-            self::Guardian => 'May use the Guardian Console, see and manage People (contacts, tags), take part in Guardian discussions and manage Resources. Nothing more yet.',
+            self::Guardian => 'May use the Guardian Console, see and manage People (contacts, tags), take part in Guardian discussions, manage Resources, see Guardians, and see and manage Volunteers. May not manage Guardians.',
         };
     }
 

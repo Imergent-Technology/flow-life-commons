@@ -14,8 +14,10 @@ use Tests\Support\Api;
  * The capabilities whose mutations are exempt from recent verification, each pinned to the one module whose routes it may
  * cover. Routine maintenance and discussion (a note about how we know someone, a phone number, a tag, a typo in a name, a
  * reply in a thread) grants and removes no authority, so a fresh password and second factor for it would only make it
- * unusable: CRM's by ADR 0034, Discussions' by ADR 0035, and Resources' (`resources.manage`, ADR 0037), whose two PERMANENT DELETE
- * routes still carry `security.verified` anyway (pinned in ResourcesRoutesTest). Every other administration mutation still needs the proof. The
+ * unusable: CRM's by ADR 0034, Discussions' by ADR 0035, Resources' (`resources.manage`, ADR 0037), whose two PERMANENT DELETE
+ * routes still carry `security.verified` anyway (pinned in ResourcesRoutesTest), and Relationships' two manage capabilities
+ * (ADR 0038, A5). The exemption means a route under the capability MAY skip verification. Which Relationships routes still
+ * carry `security.verified` is pinned in RelationshipsRoutesTest. Every other administration mutation still needs the proof. The
  * exemption is by capability AND by module, and a test below pins that each covers exactly its own module's routes and nothing
  * else. It is a short list on purpose: adding to it is a decision, not a convenience.
  */
@@ -23,6 +25,18 @@ const STEP_UP_EXEMPT = [
     'can:crm.people.manage' => 'App\\Modules\\Crm\\Http\\',
     'can:discussions.participate' => 'App\\Modules\\Discussions\\Http\\',
     'can:resources.manage' => 'App\\Modules\\Resources\\Http\\',
+    'can:guardians.manage' => 'App\\Modules\\Relationships\\Http\\',
+    'can:volunteers.manage' => 'App\\Modules\\Relationships\\Http\\',
+];
+
+/**
+ * GET routes that carry Console admission and no other capability (ADR 0038, A6). WP1 pins the relationship-types
+ * route. The three audience-library routes are WP4.
+ *
+ * @var list<string>
+ */
+const CONSOLE_ONLY_ADMIN_ROUTES = [
+    'api/v1/admin/relationship-types',
 ];
 
 /**
@@ -32,7 +46,7 @@ const STEP_UP_EXEMPT = [
  * @param  list<string>  $methods
  * @return list<string>
  */
-function adminRouteProblems(array $middleware, array $methods): array
+function adminRouteProblems(array $middleware, array $methods, ?string $uri = null): array
 {
     $problems = [];
     foreach (['stateful', 'auth:web', 'can:console.access'] as $required) {
@@ -42,6 +56,19 @@ function adminRouteProblems(array $middleware, array $methods): array
     }
 
     $capabilities = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:') && $m !== 'can:console.access'));
+    if ($uri !== null && in_array($uri, CONSOLE_ONLY_ADMIN_ROUTES, true)) {
+        if ($capabilities !== []) {
+            $problems[] = 'a console-only read names another capability';
+        }
+        if (array_diff($methods, ['GET', 'HEAD']) !== []) {
+            $problems[] = 'a console-only exception is not a read';
+        }
+        if (in_array('security.verified', $middleware, true)) {
+            $problems[] = 'a console-only read asks for recent verification';
+        }
+
+        return $problems;
+    }
     $known = array_map(fn (Capability $c): string => 'can:'.$c->value, Capability::cases());
     if (count($capabilities) !== 1 || ! in_array($capabilities[0], $known, true)) {
         $problems[] = 'does not name exactly one capability from the catalog';
@@ -65,7 +92,7 @@ it('gives every administration route authentication, the Console boundary, exact
     $routes = collect(app('router')->getRoutes()->getRoutes())->filter(fn ($route) => str_starts_with($route->uri(), 'api/v1/admin/'));
     $offenders = [];
     foreach ($routes as $route) {
-        $problems = adminRouteProblems(Api::strings($route->gatherMiddleware()), Api::strings($route->methods()));
+        $problems = adminRouteProblems(Api::strings($route->gatherMiddleware()), Api::strings($route->methods()), $route->uri());
         if ($problems !== []) {
             $offenders[$route->uri().' ['.implode('|', Api::strings($route->methods())).']'] = $problems;
         }
@@ -86,7 +113,12 @@ it('gives every administration route authentication, the Console boundary, exact
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:resources.manage'], ['PATCH']))->toBe([])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:resources.view'], ['POST']))->toBe(['changes something without security.verified'])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:crm.people.view'], ['PATCH']))->toBe(['changes something without security.verified'])
-        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:membership.records.manage'], ['POST']))->toBe(['changes something without security.verified']);
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:membership.records.manage'], ['POST']))->toBe(['changes something without security.verified'])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:guardians.manage'], ['PATCH']))->toBe([])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:volunteers.manage'], ['POST']))->toBe([])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:guardians.view'], ['POST']))->toBe(['changes something without security.verified'])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access'], ['GET'], 'api/v1/admin/relationship-types'))->toBe([])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:guardians.view'], ['GET'], 'api/v1/admin/relationship-types'))->toBe(['a console-only read names another capability']);
 });
 
 it('exempts exactly the CRM, Discussions and Resources mutations from recent verification, each only on its own module\'s routes, and no other administration mutation', function () {
@@ -107,8 +139,8 @@ it('exempts exactly the CRM, Discussions and Resources mutations from recent ver
     }
 
     // Positive control: both exempt surfaces really are here, and the list is exactly these two.
-    expect(array_keys($seen))->toEqualCanonicalizing(['can:crm.people.manage', 'can:discussions.participate', 'can:resources.manage'])
-        ->and(array_keys(STEP_UP_EXEMPT))->toBe(['can:crm.people.manage', 'can:discussions.participate', 'can:resources.manage']);
+    expect(array_keys($seen))->toEqualCanonicalizing(['can:crm.people.manage', 'can:discussions.participate', 'can:resources.manage', 'can:guardians.manage', 'can:volunteers.manage'])
+        ->and(array_keys(STEP_UP_EXEMPT))->toBe(['can:crm.people.manage', 'can:discussions.participate', 'can:resources.manage', 'can:guardians.manage', 'can:volunteers.manage']);
 });
 
 it('keeps every Discussions route under the Console boundary, one catalog capability, and no recent-verification middleware', function () {

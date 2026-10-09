@@ -19,6 +19,9 @@
         <testsuite name="Concurrency">
             <directory>tests/Concurrency</directory>
         </testsuite>
+        <testsuite name="Apprentice">
+            <directory>tests/Apprentice</directory>
+        </testsuite>
     </testsuites>
     <source>
         <include>

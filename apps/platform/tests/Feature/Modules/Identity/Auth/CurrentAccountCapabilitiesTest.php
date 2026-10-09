@@ -53,9 +53,10 @@ it('reports capability identifiers, never role names, in a stable order', functi
 
     foreach ([$login, $me] as $response) {
         expect($response->json('capabilities'))->toBe(Access::everyCapabilityId());
-        // The client learns what it may do, not which label produced it.
+        // The client learns what it may do, not which label produced it. The check is the JSON string, because
+        // capability ids such as guardians.view contain the letters of the role key.
         foreach (['platform_administrator', 'guardian'] as $roleName) {
-            expect((string) $response->getContent())->not->toContain($roleName);
+            expect((string) $response->getContent())->not->toContain('"'.$roleName.'"');
         }
         expect($response->json())->not->toHaveKeys(['roles', 'permissions', 'role']);
     }
@@ -68,7 +69,7 @@ it('reports a guardian\'s Console access and nothing else', function () {
     $console = new Console;
     $console->loginWithMfa('ada@example.org', Identity::PASSWORD)->assertOk();
 
-    expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view']);
+    expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view']);
 });
 
 it('derives capabilities fresh on every request, so a revoked role disappears without signing in again', function () {
@@ -83,7 +84,7 @@ it('derives capabilities fresh on every request, so a revoked role disappears wi
     expect(capabilitiesOfMe($console))->toBe([]);
 
     Access::grant($account, Role::Guardian);
-    expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'resources.manage', 'resources.view']);
+    expect(capabilitiesOfMe($console))->toBe(['console.access', 'crm.people.manage', 'crm.people.view', 'discussions.participate', 'discussions.view', 'guardians.view', 'resources.manage', 'resources.view', 'volunteers.manage', 'volunteers.view']);
 });
 
 it('reports the same list whatever order the roles were assigned in', function () {

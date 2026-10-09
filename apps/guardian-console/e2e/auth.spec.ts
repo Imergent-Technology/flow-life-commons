@@ -153,15 +153,19 @@ test.describe('Guardian Console session authentication', () => {
     expect(done.status).toBe(200)
     expect(done.body).toMatchObject({
       // A Guardian holds the Console and, by accepted owner decisions, both People capabilities (ADR 0034), both
-      // Discussions capabilities (ADR 0035) and both Resources capabilities (ADR 0037); sorted by identifier.
+      // Discussions capabilities (ADR 0035), both Resources capabilities (ADR 0037), and from ADR 0038 the
+      // relationship mapping on today's guardian role: see Guardians, and see and manage Volunteers. Not manage Guardians.
       capabilities: [
         'console.access',
         'crm.people.manage',
         'crm.people.view',
         'discussions.participate',
         'discussions.view',
+        'guardians.view',
         'resources.manage',
         'resources.view',
+        'volunteers.manage',
+        'volunteers.view',
       ],
       mfa: { enrolled: true, recovery_codes_remaining: 10 },
     })

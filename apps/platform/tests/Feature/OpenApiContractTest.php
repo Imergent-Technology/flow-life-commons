@@ -165,15 +165,21 @@ it('documents each administration operation with the capability and the verifica
             $middleware = Api::strings($route->gatherMiddleware());
             $capability = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:') && $m !== 'can:console.access'));
 
-            expect($documented['x-required-capability'])->toBe(substr($capability[0], 4), "{$method} {$path}")
-                ->and($documented['x-requires-recent-verification'])->toBe(in_array('security.verified', $middleware, true), "{$method} {$path}")
-                ->and($documented['security'])->toBe([['sessionCookie' => []]]);
+            if ($capability === []) {
+                expect($path)->toBe('/admin/relationship-types', "{$method} {$path} has no catalog capability and is not the pinned console-only read")
+                    ->and($documented['x-required-capability'])->toBe('console.access', "{$method} {$path}")
+                    ->and($documented['x-requires-recent-verification'])->toBeFalse("{$method} {$path}");
+            } else {
+                expect($documented['x-required-capability'])->toBe(substr($capability[0], 4), "{$method} {$path}")
+                    ->and($documented['x-requires-recent-verification'])->toBe(in_array('security.verified', $middleware, true), "{$method} {$path}");
+            }
+            expect($documented['security'])->toBe([['sessionCookie' => []]]);
             $checked++;
         }
     }
 
-    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, and Resources (ADR 0037) twenty-eight: 25 management, 3 delivery (WP3 added the three file routes).
-    expect($checked)->toBe(72);
+    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, Resources (ADR 0037) twenty-eight, and Relationships (ADR 0038) seventeen: the types read plus eight routes for each of Guardian and Volunteer.
+    expect($checked)->toBe(89);
 });
 
 it('never lets an administration schema name a secret', function () {

@@ -145,16 +145,20 @@ it('keeps every role key out of code outside Access, so nothing authorizes by ro
     $keys = array_map(fn (Role $r): string => $r->value, Role::cases());
     $offenders = [];
 
-    // An AUDIENCE is not a role (ADR 0036): Resources' audience catalog stores its `guardian` audience under that word (ADR 0037,
-    // decision 38). Exactly that file may hold exactly that literal, and nothing in it authorizes anything: Guardian eligibility
-    // is asked as a capability. Every other file in Resources, and every other literal in that file, is still scanned.
-    $audienceCatalog = ['app/Modules/Resources/Domain/Audience.php' => ['guardian']];
+    // Two literals are the same word as a role key and are not authorization. Resources' audience catalog stores its
+    // `guardian` audience under that word (ADR 0036, ADR 0037 decision 38). The Guardian relationship's type key is
+    // the same word (ADR 0038); WP2A renames the role, not the relationship. Exactly those files may hold exactly
+    // that literal. Every other file, and every other literal in those files, is still scanned.
+    $notARole = [
+        'app/Modules/Resources/Domain/Audience.php' => ['guardian'],
+        'app/Modules/Relationships/Definitions/guardian.php' => ['guardian'],
+    ];
 
     foreach (appPhpFilesOutside('Access') as $path) {
         $source = (string) file_get_contents($path);
         $relative = str_replace(dirname(__DIR__, 2).'/', '', $path);
         foreach ($keys as $key) {
-            if (in_array($key, $audienceCatalog[$relative] ?? [], true)) {
+            if (in_array($key, $notARole[$relative] ?? [], true)) {
                 continue;
             }
             if (preg_match('/[\'"]'.preg_quote($key, '/').'[\'"]/', $source) === 1) {
@@ -171,10 +175,14 @@ it('keeps every role key out of code outside Access, so nothing authorizes by ro
         expect(preg_match('/[\'"]'.preg_quote($key, '/').'[\'"]/', $catalog))->toBe(1);
     }
 
-    // The exemption is real and exactly as narrow as stated: the audience file does hold the literal (so the exemption is needed,
-    // not decorative), and it is the only file exempted.
+    // The exemptions are real and exactly as narrow as stated: each file does hold the literal (so the exemption is
+    // needed, not decorative), and they are the only files exempted.
     expect((string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Resources/Domain/Audience.php'))->toContain("'guardian'")
-        ->and(array_keys($audienceCatalog))->toBe(['app/Modules/Resources/Domain/Audience.php']);
+        ->and((string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Relationships/Definitions/guardian.php'))->toContain("'type' => 'guardian'")
+        ->and(array_keys($notARole))->toBe([
+            'app/Modules/Resources/Domain/Audience.php',
+            'app/Modules/Relationships/Definitions/guardian.php',
+        ]);
 });
 
 it('keeps Access out of Identity\'s tables', function () {
@@ -257,6 +265,9 @@ it('has an acyclic module graph limited to the frozen edges', function () {
         // permanent-deletion events (decision 55), through Audit\Application only. It is a deliberate, narrow edge: the use cases that
         // may call the seam are pinned in MembershipTrustBoundariesTest and ResourcesBoundariesTest.
         'Resources' => ['Access', 'Identity', 'Audit'],
+        // Relationships -> Access, Identity, Audit (ADR 0038). The Crm edge is the delegated seam and is taken in WP3,
+        // so a Relationships file that imports Crm fails here until that package. Access never depends on Relationships.
+        'Relationships' => ['Access', 'Identity', 'Audit'],
     ];
     foreach ($graph as $module => $edges) {
         if (! array_key_exists($module, $allowed)) {
@@ -297,7 +308,12 @@ it('has an acyclic module graph limited to the frozen edges', function () {
         ->and($graph['Access'])->toContain('Audit') // role mutation is audited through Audit's Application layer
         ->and($graph['Membership'])->toContain('Access')
         ->and($graph['Membership'])->toContain('Identity')
-        ->and($graph['Membership'])->not->toContain('Audit'); // no direct Audit dependency (ADR 0028)
+        ->and($graph['Membership'])->not->toContain('Audit') // no direct Audit dependency (ADR 0028)
+        ->and($graph['Relationships'])->toContain('Access')
+        ->and($graph['Relationships'])->toContain('Identity')
+        ->and($graph['Relationships'])->toContain('Audit')
+        ->and($graph['Relationships'])->not->toContain('Crm')
+        ->and($graph['Access'])->not->toContain('Relationships');
 });
 
 // --- Operator administration (docs/adr/0024) -------------------------------------------------------------------

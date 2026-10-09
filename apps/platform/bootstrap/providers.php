@@ -8,6 +8,7 @@ use App\Modules\Crm\Infrastructure\CrmServiceProvider;
 use App\Modules\Discussions\Infrastructure\DiscussionsServiceProvider;
 use App\Modules\Identity\Infrastructure\IdentityServiceProvider;
 use App\Modules\Membership\Infrastructure\MembershipServiceProvider;
+use App\Modules\Relationships\Infrastructure\RelationshipsServiceProvider;
 use App\Modules\Release\Infrastructure\ReleaseServiceProvider;
 use App\Modules\Resources\Infrastructure\ResourcesServiceProvider;
 use App\Modules\Security\Infrastructure\SecurityServiceProvider;
@@ -26,6 +27,8 @@ return [
     DiscussionsServiceProvider::class,
     // Depends on Access\Application, Identity\Application and Audit\Application (ADR 0037), so it registers after all three.
     ResourcesServiceProvider::class,
+    // Depends on Access\Application, Identity\Application and Audit\Application (ADR 0038). The CRM edge waits for WP3.
+    RelationshipsServiceProvider::class,
     SecurityServiceProvider::class,
     ReleaseServiceProvider::class,
 ];

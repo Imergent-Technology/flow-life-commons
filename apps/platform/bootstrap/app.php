@@ -56,6 +56,21 @@ use App\Modules\Membership\Application\UnknownPerson as UnknownMembershipPerson;
 use App\Modules\Membership\Domain\InvalidMembershipTerm as InvalidMembershipGrantTerm;
 use App\Modules\Membership\Http\MembershipProblems;
 use App\Modules\Membership\Http\MembershipRecordNotFound;
+use App\Modules\Relationships\Application\ConfirmationRequired;
+use App\Modules\Relationships\Application\DefaultRoleNotApplicable;
+use App\Modules\Relationships\Application\InvalidRelationshipQuery;
+use App\Modules\Relationships\Application\NewPersonNotSupported;
+use App\Modules\Relationships\Application\RelationshipExists;
+use App\Modules\Relationships\Application\RelationshipInUse;
+use App\Modules\Relationships\Application\RelationshipNotFound;
+use App\Modules\Relationships\Application\RelationshipSearchTooBroad;
+use App\Modules\Relationships\Application\StaleRelationshipRevision;
+use App\Modules\Relationships\Application\TransitionNotAllowed;
+use App\Modules\Relationships\Application\UnknownRelationshipPerson;
+use App\Modules\Relationships\Application\UnknownRelationshipStatus;
+use App\Modules\Relationships\Domain\InvalidRelationshipField;
+use App\Modules\Relationships\Domain\UnknownRelationshipField;
+use App\Modules\Relationships\Http\RelationshipsProblems;
 use App\Modules\Resources\Application\AssetLimits;
 use App\Modules\Resources\Application\AssetUnavailable;
 use App\Modules\Resources\Application\CardAudienceConflict;
@@ -304,6 +319,22 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (FileTypeNotAllowed $e) => ResourcesProblems::fileTypeNotAllowed($e->getMessage()));
         $exceptions->render(fn (AssetUnavailable $e) => ResourcesProblems::notFound('asset_unavailable', $e->getMessage()));
         $exceptions->render(fn (FileStoreFailure $e) => ResourcesProblems::fileStorageUnavailable());
+
+        // Organizational relationships (ADR 0038). Scope and staleness before shape.
+        $exceptions->render(fn (RelationshipNotFound $e) => RelationshipsProblems::notFound());
+        $exceptions->render(fn (StaleRelationshipRevision $e) => app(RelationshipsProblems::class)->stale($e));
+        $exceptions->render(fn (RelationshipExists $e) => RelationshipsProblems::exists());
+        $exceptions->render(fn (RelationshipInUse $e) => RelationshipsProblems::inUse());
+        $exceptions->render(fn (ConfirmationRequired $e) => RelationshipsProblems::coded('confirmation_required', $e->getMessage()));
+        $exceptions->render(fn (DefaultRoleNotApplicable $e) => RelationshipsProblems::coded('default_role_not_applicable', $e->getMessage()));
+        $exceptions->render(fn (TransitionNotAllowed $e) => RelationshipsProblems::coded('transition_not_allowed', $e->getMessage()));
+        $exceptions->render(fn (UnknownRelationshipPerson $e) => RelationshipsProblems::coded('unknown_person', $e->getMessage()));
+        $exceptions->render(fn (UnknownRelationshipStatus $e) => RelationshipsProblems::coded('unknown_relationship_status', $e->getMessage()));
+        $exceptions->render(fn (RelationshipSearchTooBroad $e) => RelationshipsProblems::coded('search_too_broad', $e->getMessage()));
+        $exceptions->render(fn (NewPersonNotSupported $e) => RelationshipsProblems::coded('new_person_not_supported', $e->getMessage()));
+        $exceptions->render(fn (UnknownRelationshipField $e) => RelationshipsProblems::unknownField($e));
+        $exceptions->render(fn (InvalidRelationshipField $e) => RelationshipsProblems::invalidField($e));
+        $exceptions->render(fn (InvalidRelationshipQuery $e) => RelationshipsProblems::query($e));
 
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api', 'api/*') || $request->expectsJson(),
