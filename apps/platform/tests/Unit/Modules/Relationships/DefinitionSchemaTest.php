@@ -43,6 +43,21 @@ function relationshipRefused(array $document, string $fragment): void
         ->toThrow(InvalidRelationshipDefinition::class, $fragment);
 }
 
+/** @param  list<array<string, mixed>>  $documents */
+function relationshipCatalogFrom(array $documents): RelationshipCatalog
+{
+    return RelationshipCatalog::load([new class($documents) implements DefinitionSource
+    {
+        /** @param  list<array<string, mixed>>  $documents */
+        public function __construct(private array $documents) {}
+
+        public function documents(): array
+        {
+            return $this->documents;
+        }
+    }]);
+}
+
 it('loads the production Guardian and Volunteer documents', function () {
     $catalog = RelationshipCatalog::load([new DirectoryDefinitionSource]);
     $types = array_map(fn ($definition) => $definition->type->key, $catalog->all());
@@ -171,37 +186,33 @@ it('refuses a field the value type does not take, and a tone outside the closed 
     relationshipRefused($options, 'does not take options');
 });
 
-it('refuses two documents that share a type, a slug or a capability', function () {
+it('refuses two documents that share a type or a slug', function () {
     $guardian = relationshipDocument();
     $volunteer = relationshipDocument('volunteer');
     $again = $volunteer;
     $again['type'] = 'guardian';
 
-    expect(fn () => RelationshipCatalog::load([new class($guardian, $again) implements DefinitionSource
-    {
-        /** @param  array<string, mixed>  $first
-         * @param  array<string, mixed>  $second */
-        public function __construct(private array $first, private array $second) {}
-
-        public function documents(): array
-        {
-            return [$this->first, $this->second];
-        }
-    }]))->toThrow(InvalidRelationshipDefinition::class, 'already defined');
+    expect(fn () => relationshipCatalogFrom([$guardian, $again]))
+        ->toThrow(InvalidRelationshipDefinition::class, 'already defined');
 
     $slug = $volunteer;
     $slug['slug'] = 'guardians';
     $slug['type'] = 'other';
     $slug['capabilities'] = ['view' => Capability::ViewVolunteers, 'manage' => Capability::ManageVolunteers];
-    expect(fn () => RelationshipCatalog::load([new class($guardian, $slug) implements DefinitionSource
-    {
-        /** @param  array<string, mixed>  $first
-         * @param  array<string, mixed>  $second */
-        public function __construct(private array $first, private array $second) {}
+    expect(fn () => relationshipCatalogFrom([$guardian, $slug]))
+        ->toThrow(InvalidRelationshipDefinition::class, 'slug is already used');
+});
 
-        public function documents(): array
-        {
-            return [$this->first, $this->second];
-        }
-    }]))->toThrow(InvalidRelationshipDefinition::class, 'slug is already used');
+it('refuses two documents that share a capability across types', function () {
+    $guardian = relationshipDocument();
+    $other = relationshipDocument('volunteer');
+    $other['type'] = 'apprentice';
+    $other['slug'] = 'apprentices';
+    $other['capabilities'] = [
+        'view' => Capability::ViewGuardians,
+        'manage' => Capability::ManageVolunteers,
+    ];
+
+    expect(fn () => relationshipCatalogFrom([$guardian, $other]))
+        ->toThrow(InvalidRelationshipDefinition::class, 'capability guardians.view already serves guardian');
 });

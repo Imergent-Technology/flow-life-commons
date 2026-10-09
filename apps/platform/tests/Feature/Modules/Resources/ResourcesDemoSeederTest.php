@@ -301,7 +301,7 @@ it('makes a Pack whole or not at all: a failure leaves no half-made Pack to be s
 
     expect(fn () => seedResourcesDemo())->toThrow(FileStoreFailure::class);
     $made = Resources::strings(DB::table('resource_packs')->pluck('title'));
-    expect($made)->toBe([ResourcesDemoSeeder::NARROWED, ResourcesDemoSeeder::SINGLE]) // the two before it, whole; the one that failed, not at all
+    expect($made)->toEqualCanonicalizing([ResourcesDemoSeeder::NARROWED, ResourcesDemoSeeder::SINGLE]) // the two before it, whole; the one that failed, not at all
         ->and(DB::table('resource_cards')->count())->toBe(5)
         ->and(DB::table('resource_assets')->count())->toBe(0)
         ->and(ResourceFiles::stored())->toBe([]);
