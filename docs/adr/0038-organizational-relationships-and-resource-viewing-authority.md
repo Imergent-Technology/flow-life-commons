@@ -1,7 +1,7 @@
 # ADR 0038: Organizational Relationships and Resource Viewing Authority
 
-- **Status:** Proposed. This is the G10 design gate (WP0), remediated after an independent architecture audit and ready for focused verification. Decisions N1–N6 and the audit rulings AR1–AR10 are resolved by the product owner. Nothing is implemented.
-- **Date:** 2026-10-08. Revised three times before acceptance, recorded under *Revision history*. The earlier versions are commits `9eeb4f9` and `30a5443`.
+- **Status:** Proposed. This is the G10 design gate (WP0), remediated after an independent architecture audit and again after that remediation's focused verification, and awaiting acceptance. Decisions N1–N6 and the audit rulings AR1–AR10 are resolved by the product owner. Nothing is implemented.
+- **Date:** 2026-10-08. Revised four times before acceptance, recorded under *Revision history*. The earlier versions are commits `9eeb4f9`, `30a5443` and `96a01ea`.
 - **Supersedes:** none
 - **Superseded by:** none
 - **Amends:**
@@ -41,11 +41,12 @@ Every statement below is one of four kinds:
 
 G5 (Resources) is complete and merged. G10 is next on the [roadmap](../roadmap.md).
 
-This ADR has gone through four versions:
+This ADR has gone through five versions:
 1. **First version** (commit `9eeb4f9`). It designed G10 around the Volunteer relationship only.
 2. **First revision.** It made Guardian an organizational relationship, independent of roles. It put both relationships on one shared foundation whose definitions are centralized and declarative. It raised six questions.
 3. **Second revision** (commit `30a5443`). It recorded the product owner's rulings on those six questions, three of which refined or reversed the revision's recommendation. It also corrected how configuration readiness was described.
-4. **This version.** An independent architecture audit of the second revision found no blocker and no high finding, five medium findings (M1–M5) and ten advisories. This version records the product owner's rulings on them (AR1–AR10) and remediates every finding. The two largest changes are a five-role catalog with real restricted personas (AR1, M5) and relationship-managed provisioning of a default role (AR2, Part K).
+4. **Third revision** (commit `96a01ea`). An independent architecture audit of the second revision found no blocker and no high finding, five medium findings (M1–M5) and ten advisories. That revision records the product owner's rulings on them (AR1–AR10) and remediates every finding. The two largest changes are a five-role catalog with real restricted personas (AR1, M5) and relationship-managed provisioning of a default role (AR2, Part K).
+5. **This version.** A focused, independent verification of the third revision confirmed M1–M5 and the advisories. It found one remaining medium issue and eight low ones, all corrected here without changing any approved decision (*Revision history*).
 
 The rulings that changed the design:
 - **Basic details of Guardians (N5).** A Volunteer manager may edit the approved basic details of a Person in their Volunteer scope even when that Person is a Guardian. The safeguard is a precise boundary on which operation, which fields and which scope is involved, together with a verified separation between contact data and login identity. Guardian affiliation is no longer an automatic block.
@@ -604,8 +605,15 @@ F14. **The eligibility read.** `Relationships\Application\QualifyingRelationship
 F15. **The integrity check.** `php artisan relationships:check` is read-only and exits non-zero on any finding. It reports:
 - stored relationship types, states or field keys the catalog does not know (F2, F7);
 - stored field values that fail their current definition (F8);
-- relationship-managed grants without a matching cause, read through Access's `ListSourcedRoleGrants` and never from Access's table: a grant whose relationship is missing, not in a qualifying-for-grant state, or whose decision is not `granted`, or whose role is not the type's current default role (K11);
+- relationship-managed grants without a matching cause, read through Access's `ListSourcedRoleGrants` and never from Access's table. A grant is reported when any of these holds:
+  - its relationship is missing;
+  - its relationship is not in a qualifying state;
+  - its relationship's decision is not `granted`;
+  - its role is not the type's current default role;
+  - **its `person_id` is not its relationship's `person_id`**. A grant must never be effective for any Person but the subject of the relationship that is its source (K4, K11);
 - a `granted` decision on an Active relationship whose Person has no matching grant.
+
+The check joins Access's answer with Relationships' own rows in Relationships. `ListSourcedRoleGrants` returns each grant's `person_id`, role, source and attribution, and Access never asks Relationships anything. That is the existing `Relationships → Access` edge, with no new dependency and no cycle (A8).
 
 It is part of the release checklist for any release that changes a definition, and of the adoption runbook (M4). It writes nothing; a correction is a reviewed operator action or a migration.
 
@@ -763,8 +771,16 @@ The authorization is specific to the operation, the field and the scope.
 - **What a change does to CRM's records.**
   - Replacing a primary updates that method's `value` in place, under CRM's normalisation and validation.
   - Setting a primary where none exists adds a method and makes it primary.
-  - **Collision with a hidden method.** The manager cannot see the Person's non-primary methods (P2). If `to` has the same `search_value` as an existing non-primary method of the same kind on that Person, the scoped edit **promotes that method to primary** instead of failing, and the previous primary stays on the Person as a non-primary method. Nothing is deleted. The response is the same three basic details a plain replacement would return. So the scoped path never answers `409 duplicate_contact_method`, and its outcome does not reveal whether a hidden method existed. CRM's own screens keep their existing behaviour.
-  - Provenance is recorded on every contact method the edit creates, changes or promotes (P9).
+  - **Collision with a hidden method.** The manager cannot see the Person's non-primary methods (P2). CRM matches contact values by `search_value` (an email lower-cased, a phone number reduced to its digits and a leading plus) but stores and returns the display `value` as entered. So two values can collide while being written differently: `Ana@Example.org` and `ana@example.org`, or `+1 (555) 010-0100` and `+1 555 010 0100`. When `to`'s `search_value` equals that of an existing non-primary method of the same kind on that Person, the scoped edit, holding the profile lock (below):
+    1. validates and normalises `to` by CRM's rules for its kind, exactly as a plain replacement does;
+    2. **promotes that method to primary** instead of adding a duplicate or failing;
+    3. **sets the promoted method's stored `value` to the validated display form of `to`**, the same value a plain replacement would store. Its `search_value` is unchanged by construction, so both of CRM's unique indexes still hold;
+    4. leaves the previous primary on the Person as a non-primary method. Only its primary flag changes;
+    5. stamps provenance on both rows: the promoted method and the demoted former primary (P9).
+
+    Nothing is deleted.
+  - **What the manager observes is identical with and without a hidden match.** The response, and every later read through the seam, carries the display form of `to`, exactly as a plain replacement would. Nothing reveals that a hidden method existed: not its previous value or formatting, its id, its label, or the fact of a match. The scoped path never answers `409 duplicate_contact_method`. CRM's own screens keep their existing behaviour, and a CRM user still sees both methods.
+  - Provenance is recorded on every contact method the edit creates, changes, promotes or demotes (P9).
 - **Concurrency and lock order.** One transaction, locks taken in this order, which extends CRM's own `UpdatePerson` order:
   1. the relationship row (`FOR UPDATE`), to hold the scope against a concurrent deletion;
   2. the `people` row, inside `RenamePerson`, when the name is sent or compared;
@@ -785,7 +801,9 @@ P6. **What scoped editing can never reach** (N5). These limits are pinned by tes
 - **Guardian relationship state, metadata and provisioning.**
   - A Volunteer route can only act on the Volunteer relationship: the type is taken from the route's literal segment (Part H), and a field is always validated against the stored relationship's own type.
   - Nothing in a Volunteer operation can recognize, deactivate, reactivate, edit, provision for or delete a Guardian relationship.
-- **Other CRM data.** Other contact methods' values and labels, profile fields, tags, notes and interactions are untouched. The seam has no operation that writes them. The one effect on a non-primary method is the promotion in P5, which changes its primary flag and its provenance and nothing else.
+- **Other CRM data.** Other contact methods' values and labels, profile fields, tags, notes and interactions are untouched. The seam has no operation that writes them. The only effects on a method other than the primary being replaced are those of the hidden-collision rule in P5:
+  - the promoted method's primary flag, its display `value` (to the validated `to`, with the same `search_value`) and its provenance change, and its label does not;
+  - the demoted former primary's primary flag and its provenance change, and nothing else.
 
 P7. **Minimal creation and intake**, under `people.create_person`.
 - A new Person is created with CRM's duplicate advice: `409 possible_duplicate`, the candidates (id, display name and `matched_on`, as `RegisterContact` returns them), and `confirm_distinct` to proceed anyway.
@@ -811,13 +829,22 @@ P8. **Accepted consequence: a Volunteer manager can bring a Person into scope** 
 
 P9. **Contact-method provenance** (M2, AR4). CRM owns it, and WP3 builds it.
 - **Schema.** `contact_methods.updated_by_account_id`, `char(26)`, nullable, with no foreign key. It is provenance (ADR 0021), as `contact_profiles.updated_by_account_id` is. Existing rows keep `NULL`, which means "before provenance was recorded". There is no backfill, because no truthful source for it exists.
-- **Who writes it.** Every path that creates or changes a contact method sets it to the acting Account, in the same statement as the change:
-  - CRM's `RegisterContact`, `AddContactMethod` and `UpdateContactMethod`, including a primary change that demotes another method (both rows are stamped);
-  - the delegated `RegisterMinimalPerson` and `UpdatePersonBasics`, including the promotion in P5.
-- **What it never does.** It is never inferred from `contact_profiles.updated_by_account_id`, and an edit of profile fields never stamps a contact method. `contact_profiles.updated_by_account_id` keeps its meaning: the last editor of the profile fields.
-- **Removal.** `RemoveContactMethod` deletes the row, as today. The row's provenance goes with it, and no new audit event is added: CRM data is not security data (ADR 0034). The scoped seam never removes a method.
+- **Who writes it.** The rule is one sentence: **every row whose value, label or primary flag changes is stamped with the acting Account, in the same transaction and under the same profile lock as the change.** That includes rows changed as a side effect. Every path that does so today or in G10:
+
+  | Path | Rows stamped |
+  | --- | --- |
+  | `RegisterContact` and `AddContactMethod`, through `ContactMethodWriter::add` | The new method. Where it becomes primary, also the former primary that `clearPrimary` demotes |
+  | `UpdateContactMethod` | The changed method. On a primary change, also the method it demotes |
+  | `RemoveContactMethod`, when it removes a primary | The earliest remaining method of that kind, which it promotes to primary |
+  | Delegated `RegisterMinimalPerson` | Each new method |
+  | Delegated `UpdatePersonBasics` (P5) | The replaced or added primary. On a hidden collision, the promoted method and the demoted former primary |
+
+  `clearPrimary` and any similar bulk update take the acting Account, so a demotion can never be written without its provenance. A future path that changes a contact method joins this table.
+- **What it never does.** It is never inferred from `contact_profiles.updated_by_account_id`, and an edit of profile fields never stamps a contact method. `contact_profiles.updated_by_account_id` keeps its meaning: the last editor of the profile fields. A row that does not change is never stamped.
+- **Concurrency and ownership are unchanged.** CRM owns the column and every write to it. Every stamp happens under the Person's `contact_profiles` lock, which every one of these paths already takes.
+- **Removal.** `RemoveContactMethod` deletes the row, as today. The row's provenance goes with it, and no new audit event is added: CRM data is not security data (ADR 0034). A method it promotes is stamped, as in the table. The scoped seam never removes a method.
 - **Surfaces.** CRM's Person record may show "last changed by" for a method. That is a CRM UI decision and is not required by G10.
-- **Tests (WP3).** Regression tests for both edit paths prove the right actor on the right row, a `NULL` for legacy rows, and that a profile edit never stamps a method.
+- **Tests (WP3).** Regression tests prove, for every row of the table, the right actor on every changed row and no stamp on unchanged rows. They also prove a `NULL` for legacy rows, and that a profile edit never stamps a method. A mutation check drops the stamp from the demotion in `clearPrimary`, and one drops it from `RemoveContactMethod`'s promotion. A test must catch each.
 
 ### Part A — Authorization
 
@@ -842,7 +869,15 @@ A2. **Independence.**
   - `volunteers.view` and `volunteers.manage` are independent;
   - `resources.view` and `resources.manage` remain independent;
   - none of them implies, or is implied by, a CRM capability.
-- Each Relationships use case asks for exactly one capability. A `RelationshipsBoundariesTest` pins this, as `CrmBoundariesTest` does for CRM.
+- **Each Relationships use case authorizes exactly one capability, taken from the validated definition.** The use cases are generic, so a use case names no capability case itself. It asks for the stored or routed type's `view` or `manage` capability, read from that type's `RelationshipDefinition`. Which of the two each operation needs is fixed in code, not in the definition. A literal scan, the method `CrmBoundariesTest` uses, therefore cannot prove this alone. The proof is in three parts:
+  - **Runtime isolation (WP1).** For every type in the catalog, including the third test type, and every operation, a `Gate::before` test holding exactly the expected capability succeeds. The same test with any other single capability is refused `403`, and so is each other type's capabilities, `access.roles.assign` and every CRM capability. A mutation check that makes an operation use another type's definition, or the other half of the pair, must be caught.
+  - **Static pins (WP1).** No `Relationships\Application` or `Relationships\Http` class names a `Capability` case, with exactly one exception (next bullet). Every capability used for authorization comes from a definition, and definitions name only their own pair (F5).
+  - **The route table (WP1).** Each generated route carries exactly the type's capability in its `can:` middleware (A5, A10).
+- **The one exception: the types use case** (`DescribeRelationshipTypes`, behind `GET /admin/relationship-types`, A6).
+  - It authorizes nothing beyond Console admission at the route. It filters types by the Actor's view and manage capabilities, read from the definitions.
+  - To compute `actions.provision_default_role` (F13), it asks Access whether the Actor holds `access.roles.assign`. That is the only place Relationships names `Capability::AssignRoles`.
+  - The answer is a hint for the Console and is never used to authorize. Provisioning itself is still authorized by Access inside `GrantSourcedRole` (K5).
+  - A static pin limits that name to this one class, and a test shows the hint has no effect on any mutation's outcome.
 - **Provisioning authority is Access's own check, not a second Relationships capability.** When a Guardian operation asks for a grant, the Relationships use case still asks only for `guardians.manage`. Access's `GrantSourcedRole` then asks for `access.roles.assign` itself, against the same Actor, as `GrantRole` does (K5). Each module authorizes its own act.
 - The Console infers no capability from another.
 
@@ -929,11 +964,12 @@ A10. **Architecture-test changes, exactly** (M3, AR5). Each change keeps its pro
 | *New:* retired role key | — | `Role::tryFrom('guardian')` is `null`. After the migration no `role_assignments` row holds `guardian` (a migration test). A stored `guardian` key grants nothing (the `Authorizer`'s existing fail-closed rule, re-proved) | WP2A |
 | *New:* role identity stays inside Access | `Role` is "internal to Access" by comment and by the literal guard | An `arch()` test: nothing outside Access uses `Access\Application\Role`, `RoleAssignmentRepository`, `GrantRole`, `RevokeRole`, `GrantRoleToAccount`, `RevokeRoleFromAccount` or `ConsoleUserFixture`, except the existing development seeders. This is the guard against identity inference | WP2A |
 | *New:* sourced-grant services have one caller | — | `Access\Application\GrantSourcedRole` and `WithdrawSourcedRoles` are used only by `Relationships\Application`. `ProvisionableRole` and `ListSourcedRoleGrants` are used only by Access and Relationships. This is the guard that keeps the provisioning integration narrow | WP2B |
-| *New:* authorization is not affiliation | — | `Relationships\Application` use cases name exactly one `Capability` each. No use case outside Relationships calls `QualifyingRelationships` except `Resources\Application\AudienceEligibility` (F14). Resources uses Access only for `AuthorizeAction`/`Capability` | WP1, WP4 |
+| *New:* authorization is not affiliation | — | Each Relationships use case authorizes exactly one capability, from the validated definition, proved by runtime isolation for every type and operation (A2). Static pins: no `Relationships\Application` or `Relationships\Http` class names a `Capability` case except `DescribeRelationshipTypes`, which names `AssignRoles` for its hint only. No use case outside Relationships calls `QualifyingRelationships` except `Resources\Application\AudienceEligibility` (F14). Resources uses Access only for `AuthorizeAction`/`Capability` | WP1, WP2B (the hint), WP4 |
 | `AccessBoundariesTest`, module graph (lines 238–260) | Frozen edges, no `Relationships` | Adds `Relationships → Access, Identity, Crm, Audit` and `Resources → Relationships, Membership`. No edge into `Access` from Relationships' side is reversed: `Access → Relationships` stays forbidden | WP1 (Relationships), WP3 (`Crm`), WP4 (Resources) |
-| `CatalogTest` | Role list is exactly two roles; manage-implies-view pins for CRM, Discussions and Resources cover `platform_administrator` and `guardian`; no role named after a relationship | Role list is exactly the five of A3. The three pairing pins keep their rule; their positive controls name `platform_administrator`, `guardian-full` and `guardian-senior`. The A3 mapping is pinned. `ProvisionableRole` is exactly `guardian-initiate`, never `platform_administrator`, and no provisionable role grants `access.roles.assign`, any `identity.*` capability, `resources.view` or `resources.manage`. "No role named `member` or `volunteer`" stands | WP2A (roles), WP1 (new capabilities), WP2B (`ProvisionableRole`) |
+| `CatalogTest` | Role list is exactly two roles; manage-implies-view pins for CRM, Discussions and Resources cover `platform_administrator` and `guardian`; no role named after a relationship | Role list is exactly the five of A3. The three pairing pins keep their rule; their positive controls name `platform_administrator`, `guardian-full` and `guardian-senior`. The A3 mapping is pinned. `ProvisionableRole` is exactly `guardian-initiate`, never `platform_administrator`, and no provisionable role grants `access.roles.assign` or any `identity.*` capability (standing invariants), or `resources.view` or `resources.manage` (G10 policy, R4; changing it is a deliberate, separately reviewed decision). "No role named `member` or `volunteer`" stands | WP2A (roles and `ProvisionableRole`, which WP2A builds), WP1 (new capabilities) |
 | `RoleAssignment::KEY_SHAPE` and the revoke route's `{key}` pattern | `^[a-z][a-z0-9_]{0,63}$` | `^[a-z][a-z0-9_-]{0,63}$`, so the approved hyphenated keys are storable and revocable. A unit test keeps refusing upper case, spaces, leading digits and over-long keys | WP2A |
 | `MfaBoundariesTest` (lines 157–164) | Pattern names `platform_administrator` and `'guardian'` | Pattern names every key of the new catalog, so Identity still names no role | WP2A |
+| Console `src/guardrails.test.ts`, the "system role names" rule (line 120) | Forbids `platform_administrator`, a quoted `'guardian'`, `isGuardian`/`isAdmin`-style helpers and `.roles`/`roles:` in Console source; one exemption, `api/resources.ts`, for the `guardian` audience | The rule names each of the five role keys as a quoted literal: `platform_administrator`, `guardian-initiate`, `guardian-full`, `guardian-senior`, `console-participant`. Today's pattern matches only a quote directly after `guardian`, so on its own it would miss the hyphenated keys. The helper and `.roles` patterns stay. The quoted `'guardian'` stays forbidden outside `api/resources.ts`: it is no longer a role key, but it is the audience key and the relationship type key, and the Console needs neither in code (types come from served definitions, C2). The rule's message is reworded so that it no longer calls `guardian` a role. Positive controls cover each new key, the audience exemption, and a relationship-type literal | WP2A (WP5 adds its own no-type-name source test) |
 | `CrmBoundariesTest` | Every use case with an `Actor $actor` parameter is in the capability table; nothing outside CRM uses CRM | The `Delegated` namespace is excluded from the capability table, and a new pin asserts that **no** `Delegated` class names a `Capability` or `AuthorizeAction`. "Nothing outside CRM uses CRM" allows exactly `Relationships\Application` → `Crm\Application\Delegated\*`, and nothing else of CRM | WP3 |
 | `AdministrationRoutesTest` | Exactly one catalog capability per admin route; three step-up exemptions | Four pinned console-only GET routes (A6). The exemption list becomes five: `guardians.manage` and `volunteers.manage`, each pinned to `Relationships\Http`. Positive controls for both | WP1 (Relationships), WP4 (`my-resources`) |
 | *New:* Relationships route table | — | Pins A5's verification table for the production catalog, as a hard-coded table (not derived from the definitions), so a definition change cannot silently remove verification | WP1 (WP2B adds the `default-role` route) |
@@ -953,12 +989,18 @@ K2. **The policy.** A definition's `default_role` is null or one case of Access'
 
 | Relationship | Default role | When it may be provisioned |
 | --- | --- | --- |
-| Guardian | `guardian-initiate` | On Active recognition, on any transition into Active, and by a default-role decision while the relationship exists. Always with explicit confirmation |
+| Guardian | `guardian-initiate` | On Active recognition, on any transition into Active, and by a default-role decision while the relationship is Active (K8). Always with explicit confirmation |
 | Volunteer | none | Never |
 | Member | deferred | A future, verified activation policy (*Future architecture*) |
 | Partner | deferred | As Member |
 
-- **`ProvisionableRole` is Access's allowlist** of roles that a source may grant. In G10 it is exactly `guardian-initiate`. Access pins four rules on it: it never contains `platform_administrator`; no provisionable role grants `access.roles.assign` or any `identity.*` capability; no provisionable role grants `resources.view` or `resources.manage` (R4); and every case maps to a `Role`. So no relationship definition, today or under future configuration, can name a role that administers access.
+- **`ProvisionableRole` is Access's allowlist** of roles that a source may grant. In G10 it is exactly `guardian-initiate`, which carries `console.access` only. Access pins four rules on it:
+  - it never contains `platform_administrator`;
+  - no provisionable role grants `access.roles.assign` or any `identity.*` capability;
+  - every case maps to a `Role`;
+  - **in G10**, no provisionable role grants `resources.view` or `resources.manage` (R4).
+
+  The first two are standing invariants: no relationship definition, today or under future configuration, can name a role that administers access or identity. The Resources pin is G10's policy. It is enforced exactly like the others, but it is not a permanent ban. A future default role carrying a Resources capability would need a deliberate role-catalog and `ProvisionableRole` change, with its own security review (R4). That is outside G10.
 - Relationships never sees `Role` or a role key. It holds the `ProvisionableRole` case, and Access turns it into a role internally.
 
 K3. **The decision record** (Relationships' `person_relationship_role_provisions`, F6). It holds the *current* decision for a relationship's default role:
@@ -1002,7 +1044,7 @@ K4. **Access's persistence: grants with a source.** Access gains one table and f
 | --- | --- | --- |
 | `GrantSourcedRole(Actor $by, PersonId, ProvisionableRole, RoleGrantSource)` | **`access.roles.assign`**, by the real `Authorizer`, before any write, exactly as `GrantRole` | Inserts the row if absent and records `role.granted`, in the caller's transaction. Idempotent: an existing row is `Unchanged` and records nothing. Ignores every other grant the Person holds |
 | `WithdrawSourcedRoles(Actor $by, RoleGrantSource)` | Nothing. It only *removes* authority, and it is pinned to one caller (A10). Inactivation and deletion must never be blocked by a missing grant capability | Deletes every row of that source and records `role.revoked` for each. Idempotent: no rows is `Unchanged` |
-| `ListSourcedRoleGrants(RoleGrantSourceType)` | Nothing; read-only, pinned caller | For `relationships:check` |
+| `ListSourcedRoleGrants(RoleGrantSourceType)` | Nothing; read-only, pinned caller | For `relationships:check`. Returns each grant's `person_id`, role, source, `granted_by_account_id` and `granted_at`, so the check can compare the grant's Person with its source's (F15) |
 | `SourcedRoleGrantsOf(list<RoleGrantSource>)` | Nothing; read-only, pinned caller | For the default-role state in Relationships' views (F13) |
 
 **What else in Access changes:**
@@ -1014,15 +1056,27 @@ K4. **Access's persistence: grants with a source.** Access gains one table and f
 K5. **Authorization and confirmation: the non-escalating contract.**
 - **Who may provision.** Provisioning needs two independent authorities, each checked by its own module: the type's manage capability (`guardians.manage`, checked by Relationships) and `access.roles.assign` (checked by Access in `GrantSourcedRole`). In G10 both are held by Platform Administrators.
 - **The API never defaults to granting.** On every operation that can provision, the request must state `default_role`: `grant`, `decline` or `defer`. A missing value is `422 default_role_decision_required`. The server never infers a grant from a missing field, a stored decision or another role.
-  - `grant` requires `access.roles.assign`. Without it the answer is `403 role_provisioning_not_permitted`, and **nothing** changes: not the relationship, not its status, not the decision.
-  - `decline` records the operator's refusal. It needs only the manage capability, because it grants nothing.
-  - `defer` records no decision and removes any existing one, so that someone with role-assignment authority can decide later (K8). It needs only the manage capability.
-- **The Console's confirmation.** The step-up flow and the confirmation show "Grant Guardian Initiate access":
-  - **checked by default** when `RelationshipTypeView.actions.provision_default_role` is true and this is a first recognition, or a reactivation whose stored decision is `granted`;
-  - **unchecked** when the stored decision is `declined`;
-  - **unavailable**, with the explanation "Granting Guardian Initiate access needs permission to assign roles. Someone who has it can grant it from this record later", when the Actor lacks the authority. The Console then sends `defer`.
+  - **`grant`** requires `access.roles.assign`, and is accepted only where the operation leaves the relationship in a qualifying state (Active). Without the authority the answer is `403 role_provisioning_not_permitted`, and **nothing** changes: not the relationship, its status or its decision. Against a relationship that is not Active, the answer is `409 relationship_not_active`, and nothing is written (K8). So a `granted` decision is only ever recorded together with the grant that Access authorized at that moment.
+  - **`decline`** records the operator's refusal, replacing any stored decision, and withdraws any grant from this relationship. It needs only the manage capability, because it grants nothing.
+  - **`defer`** makes no decision. It needs only the manage capability, and it can only reduce what is stored:
+    - **It never creates, replaces or erases a `declined` decision.** A stored `declined` keeps its author and time. Only an authorized operator's explicit `grant`, or a deletion, ever replaces it.
+    - **It removes a stored `granted` decision**, and withdraws any grant from this relationship. A `granted` decision may not stand without its grant on an Active relationship (K3). A `defer` is what an operator sends when they cannot or do not wish to confirm a grant. The removed decision's history stays in Access's audit trail: the original `role.granted` and the `role.revoked` that withdrew it, each with its actor and source (K10).
+    - With nothing stored, it changes nothing.
 
-  The operator may uncheck it, which sends `decline`. Guardian status is recorded the same way whatever is chosen.
+    So an operator without role-assignment authority cannot erase a refusal, and cannot leave a decision behind that later becomes a grant.
+- **The Console's confirmation.** The step-up flow and the confirmation show "Grant Guardian Initiate access". Its initial state depends on the operation, the stored decision and whether the operator may provision (`RelationshipTypeView.actions.provision_default_role`):
+
+  | Situation | Operator may provision | Operator may not provision |
+  | --- | --- | --- |
+  | Active recognition (intake) | **Checked** | Unavailable; sends `defer` |
+  | Reactivation, stored `granted` | **Checked** | Unavailable; sends `defer`, which removes the `granted` decision |
+  | Reactivation, stored `declined` | **Unchecked** | Unavailable; sends `defer`, which keeps the `declined` decision |
+  | Reactivation, no stored decision (never decided, or deferred) | **Checked**, as for recognition (AR2: offered preselected on activation) | Unavailable; sends `defer` |
+
+  - Checked sends `grant`. Unchecked sends `decline`. The operator may change either before confirming.
+  - "Unavailable" shows the explanation "Granting Guardian Initiate access needs permission to assign roles. Someone who has it can grant it from this record later."
+  - A preselection is only the Console's starting point. **The server grants nothing that the request does not explicitly ask for:** an absent stored decision, a stored `granted` and a missing `default_role` never produce a grant on reactivation (`422 default_role_decision_required` for a missing value).
+  - Guardian status is recorded the same way whatever is chosen.
 
 K6. **Account absence and trusted linkage.**
 - **Relationship creation never creates an Account.** Recognizing a Person who has no Account records the relationship, and, if the operator chose `grant`, the decision and a sourced grant on the **Person**.
@@ -1033,6 +1087,10 @@ K6. **Account absence and trusted linkage.**
   - Idempotency and attribution are the grant row's own (K4, K10).
 - **The alternative that was rejected.** Writing no Access row until an Account exists would need Identity or Access to call back into Relationships when an invitation is accepted. That is a dependency cycle (Relationships → Identity, Access) or a domain-event outbox that does not exist yet. It adds machinery without making anything safer, because the inert grant already confers nothing.
 - **Trusted linkage is pinned.** Today every way of giving an *existing* Person an Account is operator-authorized: `InviteExistingPerson` → `InviteAccountForPerson` (`identity.invitations.issue` and recent verification) is the only one. An architecture test pins `Identity\Application\InviteAccountForPerson` to that single caller. A mandatory invariant: **any future self-service or applicant flow creates a new Person, or links to an existing Person only through an operator-authorized step that has its own design gate.** So no applicant can attach themselves to a Person who carries a dormant grant. A future applicant can neither reach a Guardian intake (no `guardians.manage`) nor provision (no `access.roles.assign`).
+- **The trust assumption, stated.** A dormant grant was authorized by an operator who holds `access.roles.assign`. But the operator who later invites the Person decides **which mailbox** receives the Account, and so who exercises the grant. That operator needs only `identity.invitations.issue`. The authority that makes a dormant grant effective is therefore the invitation authority, not the role-assignment authority.
+  - **In G10 the two never separate.** `identity.invitations.issue`, `access.roles.assign` and `guardians.manage` are held only by the Platform Administrator role (A3). The same trusted administrators therefore decide both the grant and the linkage.
+  - **A fresh security review is required** before any of these three capabilities is separated from the others, or delegated beyond the Platform Administrator role. That includes in particular a role holding `identity.invitations.issue` without `access.roles.assign`. That review must decide how an invitation of a Person who carries Console-admitting grants is authorized or disclosed. `CatalogTest`'s A3 mapping pin makes any such catalog change visible and deliberate.
+  - **No new linkage system is built.** `InviteExistingPerson`'s doc comment ("an invited Member holds no capability by default") stops being true for a Person with a dormant grant. WP2B corrects it to describe this assumption.
 
 K7. **Lifecycle effects.** Each happens in the transaction of the operation that causes it (K11).
 
@@ -1041,16 +1099,26 @@ K7. **Lifecycle effects.** Each happens in the transaction of the operation that
 | Intake, initial state `active` | Recorded from `default_role` (`grant`, `decline`, or no row for `defer`) | Made if `grant` |
 | Intake, initial state `inactive` (a former Guardian) | `default_role` must be absent (`422` if sent). No activation, no decision | None |
 | Status → `inactive` | Kept as it is | **Withdrawn**, whatever the decision. No grant capability is needed |
-| Status → `active` (reactivation) | Recorded from the required `default_role`, as at intake | Made if `grant` (K8) |
-| A status request for the current status | Nothing changes; `default_role` is ignored. The default-role route changes a decision while Active | Unchanged |
-| Default-role decision (K8) | Replaced by the new value | Made (`grant`, Active only) or withdrawn (`decline`/`defer`) |
+| Status → `active` (reactivation) | From the required `default_role`, by K5's rules: `grant` records `granted`; `decline` records `declined`; `defer` keeps a `declined` decision and removes a `granted` one | Made if `grant` (K8) |
+| A status request for the current status | Nothing changes; `default_role` is ignored. The default-role route changes a decision | Unchanged |
+| Default-role decision (K8), relationship Active | `grant` and `decline` replace the stored value; `defer` as K5 | Made (`grant`) or withdrawn (`decline`, or `defer` over `granted`) |
+| Default-role decision (K8), relationship Inactive | `grant` is refused, `409 relationship_not_active`, and nothing is written. `decline` replaces the stored value; `defer` as K5 | None exists to withdraw |
 | Field edit | Unchanged | Unchanged |
 | Permanent deletion (F12) | Deleted | **Withdrawn** |
 
 K8. **Reactivation, restoration and changing a decision.**
 - **Restoring a previous grant is a fresh, authorized act.** On reactivation the Console preselects "Grant Guardian Initiate access" when the stored decision is `granted` and the operator may provision. One confirmation restores it, attributed to that operator, with the original decision's author kept in the audit trail. In G10 every holder of `guardians.manage` may provision, so a previously authorized grant is always restorable in one step.
-- **No silent restoration.** If the stored decision is `declined`, the option starts unchecked, and only an authorized operator's explicit `grant` changes it. If the operator lacks role-assignment authority, reactivation can only `decline` or `defer`. The relationship becomes Active, and no role is granted until someone with authority decides. This keeps the rule that every *new* effective grant is authorized by Access at the moment it is made. It matters only for a future role that manages Guardians without assigning roles.
-- **Changing a decision later.** `PUT /admin/relationships/guardians/{person}/default-role` with `{relationship_id, revision, default_role}` (Part H): `guardians.manage`, recent verification, and `access.roles.assign` for `grant`. It is how an administrator grants Initiate access after a `defer`, or withdraws it (`decline`) while the Guardian stays Active. It increments the relationship's revision, so it serializes with status changes and deletion.
+- **No silent restoration.**
+  - If the stored decision is `declined`, the option starts unchecked, and only an authorized operator's explicit `grant` changes it.
+  - If the operator lacks role-assignment authority, reactivation can only `decline` or `defer`. Neither erases a `declined` decision (K5). The relationship becomes Active, and no role is granted until someone with authority decides.
+  - With no stored decision, the option is offered preselected to an operator who may provision, and the grant is made only by the explicit `grant` that operator confirms (K5).
+
+  This keeps the rule that every *new* effective grant is authorized by Access at the moment it is made. Restricting operators without authority matters only for a future role that manages Guardians without assigning roles.
+- **Changing a decision later.** `PUT /admin/relationships/guardians/{person}/default-role` with `{relationship_id, revision, default_role}` (Part H): `guardians.manage`, recent verification, and `access.roles.assign` for `grant`.
+  - It is how an administrator grants Initiate access after a `defer`, or withdraws it (`decline`) while the Guardian stays Active.
+  - **`grant` is accepted only while the relationship is Active.** Against an Inactive relationship it is `409 relationship_not_active`, decided from the locked row before Access is asked, and nothing is written. So no `granted` decision ever exists without the Access authorization of the grant it records. Initiate access for an Inactive Guardian is decided when they are reactivated.
+  - `decline` and `defer` are accepted in either state, under K5's rules.
+  - It increments the relationship's revision when it changes the stored decision, so it serializes with status changes and deletion.
 
 K9. **Coexistence, no hierarchy and no suppression** (AR2, explicit ruling).
 - Provisioning never looks at the Person's other roles or grants. A Person holding `guardian-full`, `guardian-senior` or `platform_administrator` receives `guardian-initiate` if an authorized operator chooses it, exactly as anyone else would.
@@ -1062,10 +1130,16 @@ K10. **Audit.** Grants are security-relevant, so Access records them, in the tra
 - `role.granted`, actor = the operator, subject = the Person, context `{role, source_type, source_id}`;
 - `role.revoked`, the same shape, on withdrawal by inactivation, decision or deletion. The actor is the operator whose act withdrew it.
 
-They hold no relationship content: no field value, no name and no contact detail. The decision row (K3) is attributed business state. Declines and deferrals are not security events, because they change no authority. `relationship.deleted` (F12) adds the count of grants withdrawn.
+They hold no relationship content: no field value, no name and no contact detail. The decision row (K3) is attributed business state. A decline or a deferral is not a security event in itself, because the decision changes no authority. A withdrawal it causes is recorded by Access as `role.revoked`, like any other. `relationship.deleted` (F12) adds the count of grants withdrawn.
 
 K11. **Consistency, failure and fail-closed behaviour.**
 - **One transaction.** Every Relationships use case that can make or withdraw a grant runs as `$database->transaction(fn, 3)`. It locks the relationship row first, checks the instance and the revision, writes its own rows, and calls `GrantSourcedRole` or `WithdrawSourcedRoles`, which join the same transaction (nested savepoints, the `RegisterPersonWithMembershipAccess` precedent). Access's events commit with it. If anything fails, including Access's authorization or an event write, **everything rolls back**: no status change without its grant change, and no grant change without its status change.
+- **The grant's Person is the relationship's subject.** The `PersonId` passed to `GrantSourcedRole` is always read from the locked relationship row. It is never taken from the route, the request body, the Actor or any other source. Access stores it as given, because it cannot check Relationships (A8). So the binding is Relationships' responsibility, and it is verified three ways:
+  - a WP2B mutation check passes the acting operator's Person instead, and a test must catch it;
+  - a WP2B test asserts the stored `person_id` after intake, reactivation and a default-role `grant`;
+  - `relationships:check` reports any grant whose `person_id` differs from its relationship's (F15).
+
+  Because the `Authorizer` applies a Person's grants only to the Account that belongs to that Person, a correctly bound grant can never affect any other Account.
 - **Authorization before writes.** `GrantSourcedRole` authorizes before it writes. A refusal is thrown inside the transaction and rolls back whatever Relationships wrote first. The visible result is `403 role_provisioning_not_permitted` with nothing changed.
 - **Withdrawal never depends on authority.** Inactivation and deletion withdraw grants without any grant capability. A Guardian can therefore always be inactivated, and the privilege goes with them.
 - **Lock order.** The relationship row, then Access's `sourced_role_grants` rows for that source. Access's own `GrantRole`, `RevokeRole` and `AdministratorContinuity` never touch `sourced_role_grants`, so no cycle of locks arises.
@@ -1183,7 +1257,12 @@ R4. **Three access policies.** They are separate, non-interchangeable Applicatio
 - **The three policies are independent.**
   - `resources.manage` does not grant A.
   - Holding A does not change C.
-  - A relationship never grants A or B. Even through Part K it cannot: Access pins that no `ProvisionableRole` carries `resources.view` or `resources.manage` (K2).
+  - **Eligibility never grants A or B.** Being eligible for an audience, through any relationship, never implies `resources.view` or `resources.manage`, and no eligibility rule derives either (D7).
+  - **In G10, no relationship-managed grant carries A or B either.** The only provisionable role is `guardian-initiate`, which carries `console.access` only. Access pins that no `ProvisionableRole` carries `resources.view` or `resources.manage` (K2). That pin is enforced for all of G10, and the allowlist stays exactly `guardian-initiate`.
+  - **This is G10's policy, not a permanent ban.**
+    - `resources.view` stays exceptional: privileged reading of every audience and every publication state, Drafts included.
+    - A future default role that carried `resources.view`, `resources.manage` or another sensitive Resources capability would need a deliberate role-catalog and `ProvisionableRole` change, authorized as such, with its own security review. That is outside G10.
+    - Such a role would still be an operator-authorized grant under Part K, never an eligibility rule.
 
 R5. **Policy A is its own read model.** It is `ViewerLibrary`, with the use cases `BrowseLibrary`, `ReadLibraryPack` and `DownloadLibraryFile`, each asking for `resources.view` alone.
 - It never calls `ResourceProjection` and never receives an audience set.
@@ -1373,7 +1452,7 @@ C4. **Record** (`/relationships/:slug/:personId`). The page uses the view read, 
   - A transition into Active for a type with a default role includes the Initiate option, preselected or unavailable as K5 says.
   - On `stale_revision` the page re-reads and says who changed it and when. If the current `relationship_id` differs from the one shown, it says the relationship was deleted and recorded again. It never resends on the user's behalf.
 - **Fields.** "Edit" sends both.
-- **Default role** (types that have one; Guardian). A small panel: the current decision (granted, declined or not decided), who decided and when, and whether it is in effect, waiting for an Account, or withdrawn because the relationship is Inactive. "Grant" or "Withdraw" sends a default-role decision (K8) through step-up. "Grant" appears only when `actions.provision_default_role` is true. The panel never shows the Person's other roles.
+- **Default role** (types that have one; Guardian). A small panel: the current decision (granted, declined or not decided), who decided and when, and whether it is in effect, waiting for an Account, or withdrawn because the relationship is Inactive. "Grant" or "Withdraw" sends a default-role decision (K8) through step-up. "Grant" appears only when `actions.provision_default_role` is true and the relationship is Active (K8). "Withdraw" sends `decline`. The panel never shows the Person's other roles.
 - **History.** Shown with the view capability only.
 - **Danger zone.** Last on the page: "Delete permanently" (manage).
   - The step-up flow runs first.
@@ -1445,7 +1524,7 @@ All routes are under `/api/v1/admin`, behind `stateful`, `auth:web` and `can:con
 | `GET /admin/relationships/{slug}/candidates?q=` | manage | — | P4. `422` under 3 characters. `candidates` never matches the ULID route pattern |
 | `POST /admin/relationships/{slug}` | manage | Guardians | Intake: `person_id` with `confirm_existing_person: true`, or `new_person`; `status`; optional `fields`; `confirm_distinct`; `default_role` (`grant`/`decline`/`defer`), required for an Active initial state of a type with a default role and refused otherwise. `201` with the management view. Errors: `403 role_provisioning_not_permitted`, `409 relationship_exists`, `409 possible_duplicate`, `422 confirmation_required`, `422 default_role_decision_required`, `422 unknown_person`, `422 transition_not_allowed` (not an initial state), `422 unknown_relationship_field`, `422 invalid_relationship_field` |
 | `PUT /admin/relationships/{slug}/{person}/status` | manage | Guardians | `{relationship_id, revision, status, default_role?}`. `default_role` is required when entering Active for a type with a default role (K7). `409 stale_revision` with `current`. `403 role_provisioning_not_permitted`. `422 transition_not_allowed`, `422 default_role_decision_required`. Same status: `200`, unchanged |
-| `PUT /admin/relationships/{slug}/{person}/default-role` | manage, generated only for types with a default role (Guardians) | Yes | K8. `{relationship_id, revision, default_role}`. `grant` also needs `access.roles.assign` (`403 role_provisioning_not_permitted`). Same decision: `200`, unchanged |
+| `PUT /admin/relationships/{slug}/{person}/default-role` | manage, generated only for types with a default role (Guardians) | Yes | K8. `{relationship_id, revision, default_role}`. `grant` also needs `access.roles.assign` (`403 role_provisioning_not_permitted`) and an Active relationship (`409 relationship_not_active`, nothing written). `defer` never erases a `declined` decision (K5). Same decision, or a `defer` that changes nothing: `200`, unchanged |
 | `PATCH /admin/relationships/{slug}/{person}/fields` | manage | — | `{relationship_id, revision, fields: {key: value or null}}`, partial |
 | `PATCH /admin/relationships/{slug}/{person}/basics` | manage, for types with `people.edit_basics` (Volunteers) | — | P5. `{relationship_id, display_name?, primary_email?, primary_phone?}`, each `{from, to}`, at least one. Errors: `409 stale_person_basics` (with the three current values), `422` per field. Never `409 duplicate_contact_method` (P5) |
 | `DELETE /admin/relationships/{slug}/{person}?relationship_id=&revision=` | manage | All types | F12. `204`. `409 stale_revision`, `409 relationship_in_use`. The instance and revision are query parameters because a `DELETE` body is not reliably carried |
@@ -1455,8 +1534,9 @@ All routes are under `/api/v1/admin`, behind `stateful`, `auth:web` and `can:con
 2. verification (the step-up refusal);
 3. scope (`404`), then instance and revision (`409 stale_revision`);
 4. request shape (`422`), including the default-role decision being present where it is required;
-5. provisioning authority (`403 role_provisioning_not_permitted`), decided by Access inside the transaction, before Access writes, and rolling back anything already written;
-6. the domain's `409`s.
+5. for a default-role `grant`, the relationship's state (`409 relationship_not_active`), decided from the locked row before Access is asked;
+6. provisioning authority (`403 role_provisioning_not_permitted`), decided by Access inside the transaction, before Access writes, and rolling back anything already written;
+7. the domain's other `409`s.
 
 **Resources routes:**
 - **Library.** The three `/admin/resource-library` routes keep their paths, methods and capability. Their responses become policy A's. Browsing gains the `publication` and `audience` filters.
@@ -1614,7 +1694,7 @@ Neither ever makes a relationship and a role interchangeable.
   - trusted payment notifications and reconciliation;
   - administrative access.
 
-  Stripe, or a Quiverly-owned billing component, may be considered later if warranted. Nothing here assumes that Zeffy supports any of these.
+  Stripe, or a billing component owned by Bestside (the separate event-production platform formerly codenamed Quiverly), may be considered later if warranted. Nothing here assumes that Zeffy supports any of these.
 - **Scope.** G10 builds none of this: no billing, agreement signing, approvals, renewals, discounts or coupons. Member stays in Membership (D8).
 
 **Approval workflows** (deferred). The platform may later support:
@@ -1644,7 +1724,7 @@ They would attach here:
 | 4 | Scoped edits against an unrelated Person | Scope comes from the type's own table and the named instance; `404` outside it (P3) | An unrelated Person gets `404` and is unchanged |
 | 4a | **Accepted:** a Volunteer manager brings a Person into scope by recording them (M1) | Not prevented, by product decision (P8). Bounded by the three-field allowlist, the protected operations (P6), and deliberate confirmation. Answerable through creation provenance, contact-method provenance and `person.renamed` | Attaching without `confirm_existing_person` is `422` and creates nothing. After attach and edit: the history names the operator, each changed method carries their Account, and nothing outside the three fields changed |
 | 5 | Scoped edits reaching beyond basic details | One use case, three fields, `{from, to}` only (P5–P6) | Other keys `422`. Other contact methods' values and labels, profile, tags and notes unchanged after the edit |
-| 5a | A scoped edit used as an oracle for hidden contact methods | A collision with a hidden method promotes it, with a response identical to a plain replacement. Never `409 duplicate_contact_method` on the scoped path. `409 stale_person_basics` returns only values the manager may read (P5) | Responses with and without a hidden colliding method are byte-identical apart from timestamps. Mutation check: returning CRM's duplicate error fails |
+| 5a | A scoped edit used as an oracle for hidden contact methods: by an error, or by the promoted method's previous display value | A collision with a hidden method promotes it **and rewrites its display value to the validated `to`**, keeping its `search_value`. The response and later reads match a plain replacement exactly. Never `409 duplicate_contact_method` on the scoped path. `409 stale_person_basics` returns only values the manager may read (P5) | For the same `to`, the response with a hidden colliding method is byte-identical to the response without one, including where the hidden value differs only in email capitalization or phone formatting. Mutation checks: returning CRM's duplicate error fails; keeping the hidden method's previous display value fails |
 | 6 | Contact edits changing login identity | Login email and credentials are Identity's. No dependency from Identity to CRM. Invitations take an operator-typed address (P6) | Edit a Person's CRM email: `accounts.email`, invitations and reset addresses unchanged. Architecture test |
 | 7 | Volunteer authority altering Guardian state | The type comes from the route literal. Fields are validated against the stored type (P6) | A Volunteer route cannot read or change the Guardian relationship of the same Person |
 | 8 | A manage-only holder reading more than management needs | Management reads are a separate, narrow view (A4) | A manage-only holder: no directory, no history, no `RelationshipView`, no CRM; the management view is exact by shape |
@@ -1667,12 +1747,13 @@ They would attach here:
 | 25 | Provisioning an arbitrary or administrative role | Only `ProvisionableRole` cases, pinned to exclude `platform_administrator`, `access.roles.assign`, `identity.*` and Resources capabilities. Only the Guardian definition names one, and the Volunteer type has none (K2, P6) | Catalog pins. A definition naming a non-provisionable role is refused at load. No Volunteer operation reaches the sourced-grant services (architecture test) |
 | 26 | A relationship-managed grant outlives its relationship | Withdrawal in the same transaction as inactivation and deletion, needing no grant authority. Every new grant is re-authorized (K7, K8, K11). `relationships:check` | Inactivate: the next request lacks the role's capabilities. Delete: grant gone. Forced failure of the withdrawal: the inactivation does not commit either. Planted orphan: reported by the check |
 | 27 | Withdrawing a source removes an independent grant, or the reverse | Separate tables. `RevokeRole` touches only `role_assignments`; `WithdrawSourcedRoles` only its source's rows (K4, K9) | Both sources of one role: revoke either, the capability stays; revoke both, it goes |
-| 28 | Silent restoration of a declined or withdrawn grant | Reactivation requires an explicit `default_role`. A stored `declined` is never turned into a grant without an authorized `grant` (K8) | Reactivate after `decline`: no grant unless `grant` is sent with authority |
-| 29 | A dormant grant reached by an untrusted Account linkage | Grants on a Person are inert without a live Account. The only path from an existing Person to an Account is operator-authorized. Mandatory invariant for future applicant flows (K6) | Architecture test: `InviteAccountForPerson` has one caller. A grant on an Account-less Person confers nothing until an invitation is accepted |
+| 28 | Silent restoration of a declined or withdrawn grant, or a decision recorded without authority | Reactivation requires an explicit `default_role`; a preselection is never a grant. A stored `declined` is never turned into a grant without an authorized `grant`, and `defer` never erases it. A `grant` is refused against an Inactive relationship, so no `granted` decision exists without Access's authorization of its grant (K5, K8) | Reactivate after `decline`: no grant unless `grant` is sent with authority. `defer` by an operator without authority leaves `declined` and its author unchanged. Reactivate with no stored decision and no `default_role`: `422`, nothing changed. Default-role `grant` on an Inactive relationship: `409 relationship_not_active`, nothing written |
+| 29 | A dormant grant reached by an untrusted Account linkage | Grants on a Person are inert without a live Account. The only path from an existing Person to an Account is operator-authorized. Mandatory invariant for future applicant flows. The invitation authority decides who exercises a dormant grant: in G10 it is held only by administrators, with provisioning, and separating them needs a fresh security review (K6) | Architecture test: `InviteAccountForPerson` has one caller. A grant on an Account-less Person confers nothing until an invitation is accepted |
 | 30 | A mutation lands on a re-created relationship | Instance id and revision on every mutation (F10, AR8) | Delete, re-create, replay the old request: `409 stale_revision`, nothing written |
 | 31 | Stale or captured identity reaching audience delivery | `AudienceEligibility` re-resolves the Actor and yields `{}` otherwise (R10) | A disabled Account's stale `Actor` gets an empty set at the use-case level |
 | 32 | The role-key migration changes anyone's authority | One `UPDATE`, pre-checked, in the maintenance window. The release is `restore-required` (M6) | Effective capability sets identical before and after on both engines; no `guardian` rows remain |
-| 33 | A test-only or future type bypasses the catalog's security rules | One source seam for every definition, and the catalog invariants, including no capability serving two types (F3, F5) | The extensibility test passes through the same seam. Each invariant has a refusal test |
+| 33 | A test-only or future type bypasses the catalog's security rules | One source seam for every definition, and the catalog invariants, including no capability serving two types (F3, F5). Generic use cases take their capability from the validated definition (A2) | The extensibility test passes through the same seam. Each invariant has a refusal test. Runtime isolation for every type and operation (A2) |
+| 34 | A sourced grant lands on the wrong Person | `GrantSourcedRole`'s Person is read only from the locked relationship row (K11). The `Authorizer` applies a Person's grants only to that Person's own Account. `relationships:check` compares each grant's Person with its relationship's (F15) | Mutation check: passing the operator's Person is caught. The stored `person_id` is asserted after intake, reactivation and a default-role `grant`. A planted wrong-Person grant is reported by the check |
 
 ## Testing strategy
 
@@ -1720,7 +1801,13 @@ How the tests are built:
   - let `RevokeRole` delete sourced rows, or `WithdrawSourcedRoles` delete independent rows;
   - suppress provisioning when another role is held;
   - return `409 duplicate_contact_method` from the scoped path;
+  - keep a promoted hidden method's previous display value;
   - stamp a contact method from the profile's provenance;
+  - drop the stamp from a demotion (`clearPrimary`) or from `RemoveContactMethod`'s promotion;
+  - pass the acting operator's Person, not the relationship's, to `GrantSourcedRole`;
+  - accept a default-role `grant` on an Inactive relationship;
+  - let `defer` erase a `declined` decision;
+  - authorize a Relationships operation with another type's capability;
   - let the migration touch a key other than `guardian`;
   - let the catalog accept a capability shared by two types.
 
@@ -1780,11 +1867,16 @@ Each row is a test to be written by the package named. "Both engines" means Mari
 | | Intent rechecked by construction | Grant to an Account-less Person, inactivate, then invite and accept: no Initiate access | 2B |
 | | Inactivation withdraws only the sourced grant | Initiate grant withdrawn, one `role.revoked`; independent roles untouched; next request lacks the capability | 2B |
 | | Reactivation restores a previously authorized grant | Stored `granted`, reactivate with `grant` by an authorized operator: grant restored and attributed to them | 2B |
-| | Declined is not silently restored | Stored `declined`, reactivate with `decline` or `defer`: no grant. Only an authorized `grant` creates one | 2B |
+| | Declined is not silently restored | Stored `declined`, reactivate with `decline` or `defer`: no grant, and the decision is still `declined` with its original author and time. Only an authorized `grant` creates one | 2B |
+| | `defer` semantics | `defer` over `declined` (at reactivation and on the default-role route): unchanged, `200`. `defer` over `granted` on an Active relationship: decision removed, grant withdrawn with `role.revoked`. `defer` with nothing stored: unchanged | 2B |
+| | Reactivation with no stored decision | `RelationshipTypeView` lets the Console preselect the option. The server: missing `default_role` is `422` and nothing changes; `defer` grants nothing; only an authorized `grant` creates the grant | 2B |
+| | Grant refused while Inactive | Default-role `grant` on an Inactive relationship, by an authorized operator and by one without authority: `409 relationship_not_active`, no decision row, no grant, no event, Access not called | 2B |
+| | Grant bound to the relationship's Person | After intake (existing and new Person), reactivation and a default-role `grant`, the grant's `person_id` is the relationship's. Mutation check: the operator's Person is passed, and a test fails | 2B |
 | | Deletion removes sourced grants and intent | Grant and decision gone; `relationship.deleted` counts the withdrawn grant; independent roles survive | 2B |
 | | Self-service cannot provision | An Actor with `console.access` only (and a future applicant persona) cannot reach intake or the default-role route (`403`) | 2B |
 | | Failure handling | Force Access's event write to fail during inactivation: the status, the grant and the history are all unchanged | 2B |
-| | Policy drift detected | A planted orphan grant and a planted missing grant are reported by `relationships:check` | 2B |
+| | Policy drift detected | A planted orphan grant, a planted missing grant and a planted grant whose `person_id` differs from its relationship's are each reported by `relationships:check` | 2B |
+| | Dormant-grant linkage documented | `InviteExistingPerson`'s doc comment states the K6 trust assumption; `CatalogTest`'s A3 pin shows `identity.invitations.issue`, `access.roles.assign` and `guardians.manage` held only by `platform_administrator` | 2B, 2A |
 | | Trusted linkage | Architecture test: `InviteAccountForPerson` is called only by `InviteExistingPerson` | 2B |
 | **Relationship identity** | Guardian relationship without a Guardian role | Eligible for `guardian`; no capability; no admission | 1, 4 |
 | | Guardian role without a Guardian relationship | Each of `guardian-full`, `guardian-senior` and `guardian-initiate`: granted capabilities work; not `guardian`-eligible; not in the Guardian directory | 2A, 4 |
@@ -1799,6 +1891,8 @@ Each row is a test to be written by the package named. "Both engines" means Mari
 | | Volunteer view-only / manage-only | As above, for Volunteers, plus basic-detail edits for manage-only | 1, 3 |
 | | Resource view-only / manage-only | View-only: policy A, every management route `403`. Manage-only: management and preview; library routes `403`; reads through policy C | 4 |
 | | Independently assignable | `CatalogTest` pins the A3 defaults; isolation tests prove every capability is checked alone; no pairing pin for the new capabilities | 1, 2A |
+| | Definition-selected capability | For every catalog type (and the third test type) and every operation: the expected capability alone succeeds; any other single capability, including the other type's pair, is `403`. Static pins of A2, including `AssignRoles` only in `DescribeRelationshipTypes` | 1, 2B |
+| | Provisioning hint never authorizes | `actions.provision_default_role` is true exactly for the type's manage capability plus `access.roles.assign`; a `grant` sent without the authority is still `403` whatever the hint said | 2B |
 | **Lifecycle** | Create, deactivate, reactivate | Initial states only; fields and history kept; same row on reactivation | 1 |
 | | History auditable | One row per change; a forced failure leaves neither row nor change | 1 |
 | | Authorized permanent deletion | Verified; values, history and relationship gone; one `relationship.deleted` with counts and no values; Person and other relationships intact | 1 |
@@ -1812,8 +1906,12 @@ Each row is a test to be written by the package named. "Both engines" means Mari
 | | Fields grant nothing | Setting every field changes no capability, role or eligibility | 1 |
 | **Volunteer management and scoped People edits** | Deliberate attachment | `person_id` without `confirm_existing_person`: `422 confirmation_required`, nothing created. With it: relationship created, creation history names the operator | 3 (1 for the flag) |
 | | Edit within scope, Guardians included | A Volunteer manager edits the three fields of an Active Guardian who is also a Volunteer; CRM's validation applies; `person.renamed` for a name | 3 |
-| | Contact provenance | Each changed or created method carries the acting Account; legacy rows stay `NULL`; a profile edit stamps no method; CRM's own edits stamp too | 3 |
-| | Hidden-method collision | `to` equal to a hidden non-primary value: that method becomes primary, nothing is deleted, and the response is identical to a plain replacement. Never `409 duplicate_contact_method` | 3 |
+| | Contact provenance | For every path in P9's table, each created or changed method carries the acting Account, unchanged rows are not stamped, legacy rows stay `NULL`, and a profile edit stamps no method. Includes `AddContactMethod` demoting a primary through `clearPrimary`, `UpdateContactMethod`'s primary change, and `RemoveContactMethod` promoting the earliest remaining method | 3 |
+| | Hidden collision: email capitalization | Hidden non-primary `Ana@Example.org`; scoped `to` = `ana@example.org`: the hidden method becomes primary with `value` `ana@example.org` and the same `search_value`; the former primary stays, non-primary; nothing deleted; both unique indexes hold | 3 |
+| | Hidden collision: phone formatting | Hidden non-primary `+1 (555) 010-0100`; scoped `to` = `+1 555 010 0100`: promoted with `value` `+1 555 010 0100`, same `search_value` | 3 |
+| | Hidden collision: identical value | Hidden non-primary value written exactly as `to`: promoted; observable result identical to the two cases above | 3 |
+| | Hidden collision is not disclosed | For each case above, the response and the next `ReadPersonBasics` are byte-identical to the same edit on a Person with no hidden method. No id, label, previous value or match indicator appears; never `409 duplicate_contact_method` | 3 |
+| | Hidden collision provenance | The promoted method and the demoted former primary both carry the acting Account; no other method is stamped | 3 |
 | | Expected values | `from` compared exactly with `ReadPersonBasics`' values; a case-only CRM change is reported as stale | 3 |
 | | Unrelated Person | `404`; unchanged | 3 |
 | | Account security protected | Account email, `email_canonical`, credentials, sessions, roles, grants and capabilities unchanged after any scoped edit; extra keys `422` | 3 |
@@ -1854,10 +1952,10 @@ Every package is gated on `./flow check all --pgsql`. Browser packages are also 
 
 | WP | Scope | Depends on | Acceptance and required tests | Security focus | Build / audit |
 | --- | --- | --- | --- | --- | --- |
-| **WP1** | **Relationship foundation backend.** The `Relationships` module: `RelationshipType` (value object), `DefinitionSource` (seam) with the directory source, `DefinitionSchema` and the F5 invariants, `RelationshipCatalog`, and the Guardian and Volunteer definitions with their N4 fields (`default_role` null for both until WP2B). The four tables, with `person_relationship_role_provisions` created but unused until WP2B. Lifecycle, revision, **instance id**, locks and history. Metadata validation, with the UTC+14 date bound. Deletion with verification, `relationship.deleted` and the dependents registry. The four capabilities with the A3 defaults on today's roles. The exemption entries and the A5 verification table. The generated per-type routes for directory (names only), record, management view, candidates (names only), intake of an existing Person by id with `confirm_existing_person`, status, fields and deletion. `GET /admin/relationship-types` and its pinned exception. `QualifyingRelationships`. `relationships:check` (types, states, fields). OpenAPI | WP0 accepted | The relationship identity, capability, lifecycle, metadata and extensibility rows of the matrix, including the third-type test through the real seam and one refusal test per catalog invariant. Races on both engines, mutation-checked. Boundary tests: module graph, no `Access → Relationships`, one capability per use case, definitions only in the catalog, the A5 route table, audit callers | Uniqueness; instance identity; verification contract; deletion and audit; type taken from the route; catalog invariants; affiliation never authority; manage-only reads narrow | Opus build, **Opus deep audit** |
-| **WP2A** | **Access: role catalog, role-key migration and sourced grants.** The five roles of A3 with their descriptors. `KEY_SHAPE` and the revoke-route pattern. The `guardian` → `guardian-full` migration (M6), `restore-required`. `ConsoleUserFixture` (now granting `guardian-full`) and the restricted-persona fixtures. `sourced_role_grants`, `RoleGrantSource`, `ProvisionableRole` (exactly `guardian-initiate`), `GrantSourcedRole`, `WithdrawSourcedRoles`, `ListSourcedRoleGrants`, `SourcedRoleGrantsOf`. The `Authorizer` union. `AccountViews` with sourced grants. `PeopleHoldingCapability`. Every test that names `Role::Guardian` moved. The A10 changes to the role-key guard, `CatalogTest` and `MfaBoundariesTest`, plus the new role-identity and retired-key tests | WP1 | The role catalog and migration rows of the matrix. The sourced-grant service contracts tested in Access alone: authorization, idempotency, both-sources coexistence, events with source context, `RevokeRole` untouched, administrator continuity untouched. The migration on both engines, capability sets identical before and after | Every Console user's authority preserved exactly; no role made provisionable that administers access or Resources; no path from a sourced grant into `role_assignments` | Opus build, **Opus deep audit** |
-| **WP2B** | **Guardian default-role provisioning and adoption.** Guardian's `default_role` and verified operations. `default_role` (`grant`/`decline`/`defer`) on intake and status, and the `default-role` route. The decision record and the K3 invariant in every lifecycle use case, including deletion's withdrawal. `relationships:check` for grants. `relationships:guardian-adoption-report`. The adoption runbook entry (adoption ≠ migration). The `InviteAccountForPerson` single-caller pin. OpenAPI | WP1, WP2A | Every relationship-managed-grants row of the matrix, including the Account-less Person, the forced-failure rollback, no suppression and no silent restoration. Provisioning races on both engines (T1). Independence tests with real personas. The bootstrap path with no Guardian relationships | No provisioning without Access's authority; withdrawal never blocked; no grant outlives its cause; no applicant path to a dormant grant | Opus build, **Opus deep audit** |
-| **WP3** | **Relationship-scoped People access and contact provenance.** `contact_methods.updated_by_account_id`, stamped by CRM's own contact-method use cases and by the seam (P9). `Crm\Application\Delegated` and its pinned caller. Basic details in the directory, record and management view. Contact search. Lookup with contact matching. Intake of a new Person with duplicate advice. Scoped basic-detail edits with the expected-value contract, the lock order and hidden-collision promotion (P5). `RenamePerson`'s expected name. The `CrmBoundariesTest` changes of A10 | WP1 | The Volunteer-management and scoped-People rows, including the Volunteer-who-is-a-Guardian edit, provenance on both paths and the Account-unchanged proofs. Basic-detail and rename races on both engines. CRM's suite unchanged apart from the new provenance assertions. Mutation checks for scope, fields, type isolation, the duplicate oracle and provenance | Writes to another module's data; login identity untouched; no backdoor beyond the accepted P8 scope; no oracle | Opus build, **Opus deep audit** |
+| **WP1** | **Relationship foundation backend.** The `Relationships` module: `RelationshipType` (value object), `DefinitionSource` (seam) with the directory source, `DefinitionSchema` and the F5 invariants, `RelationshipCatalog`, and the Guardian and Volunteer definitions with their N4 fields (`default_role` null for both until WP2B). The four tables, with `person_relationship_role_provisions` created but unused until WP2B. Lifecycle, revision, **instance id**, locks and history. Metadata validation, with the UTC+14 date bound. Deletion with verification, `relationship.deleted` and the dependents registry. The four capabilities with the A3 defaults on today's roles. The exemption entries and the A5 verification table. The generated per-type routes for directory (names only), record, management view, candidates (names only), intake of an existing Person by id with `confirm_existing_person`, status, fields and deletion. `GET /admin/relationship-types` and its pinned exception. `QualifyingRelationships`. `relationships:check` (types, states, fields). OpenAPI | WP0 accepted | The relationship identity, capability, lifecycle, metadata and extensibility rows of the matrix, including the third-type test through the real seam and one refusal test per catalog invariant. Races on both engines, mutation-checked. Boundary tests: module graph, no `Access → Relationships`, one definition-selected capability per use case proved by runtime isolation for every type and operation plus the A2 static pins, definitions only in the catalog, the A5 route table, audit callers | Uniqueness; instance identity; verification contract; deletion and audit; type taken from the route; catalog invariants; affiliation never authority; manage-only reads narrow | Opus build, **Opus deep audit** |
+| **WP2A** | **Access: role catalog, role-key migration and sourced grants.** The five roles of A3 with their descriptors. `KEY_SHAPE` and the revoke-route pattern. The `guardian` → `guardian-full` migration (M6), `restore-required`. `ConsoleUserFixture` (now granting `guardian-full`) and the restricted-persona fixtures. `sourced_role_grants`, `RoleGrantSource`, `ProvisionableRole` (exactly `guardian-initiate`, with K2's pins), `GrantSourcedRole`, `WithdrawSourcedRoles`, `ListSourcedRoleGrants` (returning each grant's `person_id`, F15), `SourcedRoleGrantsOf`. The `Authorizer` union. `AccountViews` with sourced grants. `PeopleHoldingCapability`. Every test that names `Role::Guardian` moved. The A10 changes to the role-key guard, `CatalogTest`, `MfaBoundariesTest` and the Console's `guardrails.test.ts` role-name rule, plus the new role-identity and retired-key tests | WP1 | The role catalog and migration rows of the matrix. The sourced-grant service contracts tested in Access alone: authorization, idempotency, both-sources coexistence, events with source context, `RevokeRole` untouched, administrator continuity untouched. The migration on both engines, capability sets identical before and after | Every Console user's authority preserved exactly; no role made provisionable that administers access or Resources; no path from a sourced grant into `role_assignments` | Opus build, **Opus deep audit** |
+| **WP2B** | **Guardian default-role provisioning and adoption.** Guardian's `default_role` and verified operations. `default_role` (`grant`/`decline`/`defer`) on intake and status, and the `default-role` route. The decision record and the K3 invariant in every lifecycle use case, including deletion's withdrawal. K5's `defer` semantics (never erasing `declined`) and the Console-preselection contract. `409 relationship_not_active` for a default-role `grant` on an Inactive relationship. The grant's Person read only from the locked row (K11). `relationships:check` for grants, including the wrong-Person rule (F15). The `provision_default_role` hint in `DescribeRelationshipTypes` and its static pin (A2). `relationships:guardian-adoption-report`. The adoption runbook entry (adoption ≠ migration). The `InviteAccountForPerson` single-caller pin, and `InviteExistingPerson`'s doc comment corrected to state K6's trust assumption. OpenAPI | WP1, WP2A | Every relationship-managed-grants row of the matrix, including the Account-less Person, the forced-failure rollback, no suppression, no silent restoration, `defer` over `declined`, reactivation with no stored decision, the Inactive `grant` refusal, and the wrong-Person mutation check. Provisioning races on both engines (T1). Independence tests with real personas. The bootstrap path with no Guardian relationships | No provisioning without Access's authority; withdrawal never blocked; no grant outlives its cause; no applicant path to a dormant grant | Opus build, **Opus deep audit** |
+| **WP3** | **Relationship-scoped People access and contact provenance.** `contact_methods.updated_by_account_id`, stamped on every changed row by every path in P9's table: CRM's own use cases (including `clearPrimary` demotions and `RemoveContactMethod`'s promotion) and the seam (P9). `Crm\Application\Delegated` and its pinned caller. Basic details in the directory, record and management view. Contact search. Lookup with contact matching. Intake of a new Person with duplicate advice. Scoped basic-detail edits with the expected-value contract, the lock order and hidden-collision promotion, which rewrites the promoted method's display value to the validated `to` (P5). `RenamePerson`'s expected name. The `CrmBoundariesTest` changes of A10 | WP1 | The Volunteer-management and scoped-People rows, including the Volunteer-who-is-a-Guardian edit, the hidden-collision cases (email capitalization, phone formatting, identical value, non-disclosure, promotion and demotion provenance), provenance on every P9 path and the Account-unchanged proofs. Basic-detail and rename races on both engines. CRM's suite unchanged apart from the new provenance assertions. Mutation checks for scope, fields, type isolation, the duplicate oracle and provenance | Writes to another module's data; login identity untouched; no backdoor beyond the accepted P8 scope; no oracle | Opus build, **Opus deep audit** |
 | **WP4** | **Resources authorization transition.** The `volunteer` audience. Policy A (`ViewerLibrary`) behind the library routes, with its filters, search and fields. Policy C (`AudienceEligibility` with Actor re-resolution, over Relationships and Membership; `AudienceDelivery`; three use cases). The three `/admin/my-resources` routes and their pinned exception. Preview's management file paths. Revised boundary tests (A10, R15). OpenAPI | WP1, WP2A (for the real restricted personas) | Every Resources row of the matrix, with real `guardian-initiate` and `console-participant` personas. G5's non-disclosure suite passes on policy C through the `my-resources` routes. R15's architecture tests, each mutation-checked | Highest risk: who reads what, and admission | Opus build, **Opus deep audit** |
 | **WP5** | **Relationships Console.** Navigation from definitions. The generic directory, record, panel, intake (existing-Person confirmation, ambiguous names), status, fields, basic-details and history components. Instance id and revision on every mutation. The Initiate option (K5) and the default-role panel (C4). The management-view path for manage-only holders. Deletion and Guardian changes through the shared step-up flow. The Person record's Relationships tabs. The extension registry. The Access account page's sourced-grants list | WP1, WP2B, WP3 | Vitest per component and state: both conflict flows, the re-created-instance conflict, step-up, the default-role option's three presentations, manage-only and view-only states. Two control types. Source-boundary tests (no role key, no type name outside the registry). axe and layout | No client-side authority; the Console never defaults to granting a role; no type names outside the registry | Sonnet build, Opus audit (focused) |
 | **WP6** | **Resources Console.** `volunteer` in authoring, filters and preview. The library's two modes: viewer mode's filters, markers, Uncategorized group and provenance; audience mode on the `my-resources` contract. The `/resource-library` guard becomes `console.access` with the mode taken from `/me`. One client and one file allowlist per mode. The `403` mode transition (C1) | WP4 | Vitest for both modes and the transition, proving no policy A data survives it. Extended library boundary tests (each mode uses only its client; no management or editor code). axe and layout | The client cannot elevate; the library stays read-only; nothing privileged is shown after a downgrade | Sonnet build, Opus audit (focused) |
@@ -2004,7 +2102,7 @@ Recorded for the G6 audit:
 
 *Unchanged:* every approved decision 1–14 and D1–D8, the shared persistence, the delegated seam, policy A, non-disclosure, and the earlier threat mitigations.
 
-**This version (2026-10-08): remediation of the independent architecture audit.** The audit found no blocker, no high finding, five medium findings and ten advisories. The product owner's rulings are AR1–AR10.
+**Third revision (`96a01ea`, 2026-10-08): remediation of the independent architecture audit.** The audit found no blocker, no high finding, five medium findings and ten advisories. The product owner's rulings are AR1–AR10.
 
 *Medium findings:*
 
@@ -2023,3 +2121,19 @@ Recorded for the G6 audit:
 *Work packages.* WP2 is split into WP2A (Access) and WP2B (provisioning and adoption), each with a deep audit.
 
 *Unchanged:* every approved decision 1–14, D1–D8 (D1 qualified only as AR2 states) and N1–N6; the shared persistence; the delegated seam; the three Resource policies; non-disclosure.
+
+**This version (2026-10-08): remediation of the focused verification.** An independent verification of `96a01ea` confirmed that M1–M5 and the ten advisories were resolved. It found one medium issue and eight low ones. All are corrected. No approved decision, product ruling or work-package boundary changes.
+
+| Finding | Correction | Where |
+| --- | --- | --- |
+| MEDIUM-1: promoting a hidden contact method kept its previous display value. CRM matches by `search_value` but returns the stored `value`, so the response could reveal that a hidden method existed and how it was written | The promoted method's display value is rewritten to the validated `to`, keeping its `search_value`. Responses and later reads are identical to a plain replacement. Regression cases cover email capitalization, phone formatting, identical values, non-disclosure and provenance | P5, P6, P9, threat 5a, *Verification matrix*, WP3 |
+| LOW-1: `relationships:check` did not bind a grant to its relationship's Person | The check reports a grant whose `person_id` differs from its relationship's. `GrantSourcedRole`'s Person is read only from the locked row. A WP2B mutation check passes the operator's Person | F15, K4, K11, threat 34, WP2B |
+| LOW-2: decision edge cases | A default-role `grant` on an Inactive relationship is `409 relationship_not_active`, and nothing is written. `defer` never erases a `declined` decision and removes only a `granted` one. Reactivation with no stored decision is preselected in the Console but grants only on an explicit, authorized `grant` | K2, K5, K7, K8, C4, Part H, threat 28, WP2B |
+| LOW-3: who makes a dormant grant effective | The trust assumption is stated. The invitation authority decides which mailbox exercises a dormant grant; in G10 it is held only by administrators, together with provisioning; any separation or delegation needs a fresh security review. WP2B corrects `InviteExistingPerson`'s doc comment | K6, threat 29, WP2B |
+| LOW-4: provenance paths incomplete | P9 stamps every changed row on every path, including `clearPrimary` demotions and `RemoveContactMethod`'s promotion | P9, WP3 |
+| LOW-5: the Resources pin read as a permanent ban | Restated as G10 policy, enforced exactly as before. Eligibility never implies `resources.view` (D7). A future default role with a Resources capability would be a deliberate, separately reviewed catalog decision | K2, R4, A10 |
+| LOW-6: the Console's role-name guardrail was missing from A10 | Added, owned by WP2A, re-keyed to the five roles | A10, WP2A |
+| LOW-7: one capability per use case could not be proved by a literal scan | Capabilities come from the validated definition, proved by runtime isolation per type and operation. `DescribeRelationshipTypes` is the one exception: it names `AssignRoles`, for a hint only | A2, A10, threat 33, WP1, WP2B |
+| LOW-8: terminology | "Quiverly" is now Bestside, noting its former codename, here and in the roadmap and module map. Accepted ADR 0037 keeps its original wording as a historical record | *Future architecture* |
+
+*Also corrected:* `CatalogTest`'s `ProvisionableRole` pin is assigned to WP2A, which builds the enum.
