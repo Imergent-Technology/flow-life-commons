@@ -129,6 +129,9 @@ services:
   postgres:
     profiles: [postgres]
     image: postgres:16-alpine
+    # Race workers open a second process against the same server. The default 100
+    # connections is enough locally and was exhausted in CI once WP1 added more races.
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_DB: flowlife
       POSTGRES_USER: flowlife
