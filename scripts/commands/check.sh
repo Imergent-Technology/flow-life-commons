@@ -94,14 +94,14 @@ shellcheck_scripts() {
     (
         cd "$FLOW_ROOT" &&
             docker run --rm --user "$(id -u):$(id -g)" -v "$FLOW_ROOT:/mnt:ro" -w /mnt \
-                koalaman/shellcheck:v0.11.0 -x flow scripts/lib/*.sh scripts/commands/*.sh scripts/tests/*.sh
+                mirror.gcr.io/koalaman/shellcheck:v0.11.0 -x flow scripts/lib/*.sh scripts/commands/*.sh scripts/tests/*.sh
     )
 }
 
 actionlint_workflows() {
     # Files are passed explicitly so this works without a git repository.
     docker run --rm --user "$(id -u):$(id -g)" -v "$FLOW_ROOT:/repo:ro" -w /repo \
-        rhysd/actionlint:1.7.12 -color .github/workflows/*.yml
+        mirror.gcr.io/rhysd/actionlint:1.7.12 -color .github/workflows/*.yml
 }
 
 lint_wordpress_companion() {

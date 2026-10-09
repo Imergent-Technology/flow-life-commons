@@ -3,6 +3,11 @@
 # Driven by ./flow (see docs/development/docker.md). Development only:
 # production is cPanel shared hosting and uses none of this.
 #
+# Service images are the official / upstream tags via Google's public Docker Hub
+# cache, not docker.io short names. `docker pull` still HEADs the named registry
+# even when the image is already local; GitHub-hosted CI shares egress IPs and
+# anonymous Hub HEADs return 429. Same image contents as the Docker Hub tags.
+#
 # Default services : gateway, platform, queue, scheduler, mariadb, guardian, mailpit
 # Optional profiles: postgres (portability), redis (not consumed yet), e2e (Playwright)
 #
@@ -21,7 +26,7 @@ x-php-service: &php-service
 
 services:
   gateway:
-    image: caddy:2-alpine
+    image: mirror.gcr.io/library/caddy:2-alpine
     environment:
       FLOW_GATEWAY_PORT: ${FLOW_GATEWAY_PORT:-18080}
     ports:
@@ -70,7 +75,7 @@ services:
         condition: service_healthy
 
   mariadb:
-    image: mariadb:10.11
+    image: mirror.gcr.io/library/mariadb:10.11
     # UTC session/default time zone: persisted timestamps are UTC.
     command:
       - --character-set-server=utf8mb4
@@ -94,7 +99,7 @@ services:
       start_period: 10s
 
   guardian:
-    image: node:24-bookworm-slim
+    image: mirror.gcr.io/library/node:24-bookworm-slim
     user: "${FLOW_UID:-1000}:${FLOW_GID:-1000}"
     working_dir: /app
     command: npm run dev
@@ -120,7 +125,7 @@ services:
       start_period: 5s
 
   mailpit:
-    image: axllent/mailpit:v1.31.2
+    image: mirror.gcr.io/axllent/mailpit:v1.31.2
     ports:
       - "127.0.0.1:${FLOW_MAILPIT_WEB_PORT:-18025}:8025"
 
@@ -128,7 +133,7 @@ services:
 
   postgres:
     profiles: [postgres]
-    image: postgres:16-alpine
+    image: mirror.gcr.io/library/postgres:16-alpine
     # Race workers open a second process against the same server. The default 100
     # connections is enough locally and was exhausted in CI once WP1 added more races.
     command: ["postgres", "-c", "max_connections=200"]
@@ -149,7 +154,7 @@ services:
   redis:
     # Redis is optional and not consumed by the application yet.
     profiles: [redis]
-    image: redis:7-alpine
+    image: mirror.gcr.io/library/redis:7-alpine
     ports:
       - "127.0.0.1:${FLOW_REDIS_PORT:-16379}:6379"
 

@@ -11,7 +11,7 @@
 # Keep in step with compose.yaml (scripts/tests/release.sh fails if they drift): the build runs in the
 # project's own images so the extension set is what production requires, not what the builder has.
 RELEASE_PHP_IMAGE="flowlife-dev/php:8.3"
-RELEASE_NODE_IMAGE="node:24-bookworm-slim"
+RELEASE_NODE_IMAGE="mirror.gcr.io/library/node:24-bookworm-slim"
 
 RELEASE_PLATFORM="apps/platform"
 RELEASE_CONSOLE="apps/guardian-console"

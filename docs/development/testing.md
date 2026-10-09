@@ -83,7 +83,7 @@ The lazy-loaded editor is proved at three layers, because a source assertion alo
 
 ## CI
 
-`.github/workflows/ci.yml` runs on pushes to `main`, on pull requests (docs-only changes are skipped), and on manual dispatch, cancels superseded runs on the same ref, uses Linux runners, routes Docker Hub through Google's public cache (and names non-Hub registries in the PHP Dockerfile) so shared runner IPs do not receive anonymous 429s, caches the PHP image layers, and runs `./flow setup --skip-build` then `./flow check --pgsql`. See also [Docker environment](docker.md#ci-parity). No deployment happens from CI.
+`.github/workflows/ci.yml` runs on pushes to `main`, on pull requests (docs-only changes are skipped), and on manual dispatch, cancels superseded runs on the same ref, uses Linux runners, resolves development images from Google's public cache / GHCR so shared runner IPs do not receive anonymous Docker Hub 429s, caches the PHP image layers, and runs `./flow setup --skip-build` then `./flow check --pgsql`. See also [Docker environment](docker.md#ci-parity). No deployment happens from CI.
 
 ## Triggering and reviewing CI
 

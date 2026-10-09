@@ -20,30 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Same Docker Hub 429 avoidance as ci.yml: daemon + Buildx use Google's
-      # public cache; the PHP Dockerfile does not name docker.io.
-      - name: Route Docker Hub through mirror.gcr.io
-        run: |
-          sudo python3 - <<'PY'
-          import json
-          from pathlib import Path
-          path = Path("/etc/docker/daemon.json")
-          path.parent.mkdir(parents=True, exist_ok=True)
-          cfg = {}
-          if path.exists() and path.stat().st_size:
-              cfg = json.loads(path.read_text())
-          mirrors = list(cfg.get("registry-mirrors") or [])
-          if "https://mirror.gcr.io" not in mirrors:
-              mirrors.append("https://mirror.gcr.io")
-          cfg["registry-mirrors"] = mirrors
-          path.write_text(json.dumps(cfg, indent=2) + "\n")
-          PY
-          sudo systemctl restart docker
-          docker info >/dev/null
-
+      # Same Docker Hub 429 avoidance as ci.yml. Do not restart dockerd.
       - uses: docker/setup-buildx-action@v4
         with:
-          config-inline: |
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+          buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["https://mirror.gcr.io"]
 
