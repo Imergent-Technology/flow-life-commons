@@ -48,14 +48,14 @@ Consequently:
 
 ## Volunteer extension seam
 
-**Decided, as corrected by [ADR 0036](../adr/0036-business-relationships-are-independent-and-not-access-roles.md):** Volunteering and Membership are separate business relationships; a Person may be a Volunteer, a Member, both or neither. (This page previously said Volunteers are Members with elevated duties or privileges; that is superseded.) A Volunteer is not a second identity type and Volunteering is not merely an Access role. A Volunteer with an Account reaches the same `/my/` surface any signed-in Account reaches, whether or not they are also a Member, and Volunteer-specific capabilities, when they exist, extend it, gated by capability (derived from the Volunteer relationship, never standing in for it) rather than by any special routing. Holding a volunteer capability never implies `console.access`; the Guardian Console remains Guardian/operator-only, unaffected by this design.
+**Decided, as corrected by [ADR 0036](../adr/0036-business-relationships-are-independent-and-not-access-roles.md):** Volunteering and Membership are separate business relationships; a Person may be a Volunteer, a Member, both or neither. (This page previously said Volunteers are Members with elevated duties or privileges; that is superseded.) A Volunteer is not a second identity type and Volunteering is not merely an Access role. A Volunteer with an Account reaches the same `/my/` surface any signed-in Account reaches, whether or not they are also a Member, and Volunteer-specific capabilities, when they exist, extend it, gated by capability (derived from the Volunteer relationship, never standing in for it) rather than by any special routing. A Volunteer relationship never implies `console.access`: Console admission comes only from Access grants, and [ADR 0038](../adr/0038-organizational-relationships-and-resource-viewing-authority.md) gives the Volunteer type no default role. (The `volunteers.view` and `volunteers.manage` capabilities that ADR 0038 proposes are for *managing* Volunteers in the Console, not Volunteer-facing tools.)
 
-**Deliberately undecided, and not designed here** — the relationship above is settled; the *Volunteering domain model* is not:
+**Proposed by [ADR 0038](../adr/0038-organizational-relationships-and-resource-viewing-authority.md) (G10), not yet accepted or built:** the Volunteer relationship is owned by a `Relationships` module, as a durable relationship with Pending, Active and Inactive states, status history, reactivation and verified deletion, and only Active Volunteers qualify for the `volunteer` Resource audience.
 
-- whether Volunteering eventually gets its own domain aggregate, distinct from a plain Access role;
-- the lifecycle or history of volunteer status (durable assignment, term-bounded like membership grants, or something else);
-- duties, assignments, schedules, or any other volunteer business data;
-- whether a future Access role for volunteers mirrors or derives from some later Volunteering relationship, or is independent of it.
+**Still deliberately undecided, and not designed here:**
+
+- duties, assignments, schedules, hours, or any other volunteer business data;
+- Volunteer-facing tools on `/my/`, and whether any capability for them is derived from the relationship at query time (the mechanism above) — never a stored role standing in for the relationship.
 
 Whatever shape Volunteering eventually takes, it composes with what this document decides — an authenticated Account reaching a capability-gated area of the same surface — without requiring this document to be revisited.
 

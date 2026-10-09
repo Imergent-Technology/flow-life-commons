@@ -5,6 +5,7 @@
 - **Supersedes:** none
 - **Superseded by:** none
 - **Refines:** [ADR 0008](0008-platform-owned-authorization.md), [ADR 0009](0009-authorization-separate-from-approval.md)
+- **Amended by:** [ADR 0038](0038-organizational-relationships-and-resource-viewing-authority.md) (**proposed**, taking effect when accepted): assignments still are the only authorization data that persists, now in two Access tables. `role_assignments` keeps independent assignments unchanged, and `sourced_role_grants` holds grants an authorized operator made through a relationship, with their source. The catalog grows to five roles, and the `guardian` key becomes `guardian-full`. Roles and capabilities stay code
 
 ## Context
 
