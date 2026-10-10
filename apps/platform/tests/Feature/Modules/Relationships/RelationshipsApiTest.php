@@ -8,6 +8,7 @@ use App\Modules\Relationships\Domain\RelationshipId;
 use App\Modules\Relationships\Domain\RelationshipRecord;
 use App\Modules\Relationships\Domain\RelationshipRepository;
 use App\Modules\Relationships\Domain\RelationshipType;
+use App\Modules\Relationships\Domain\StoredRoleProvision;
 use App\Shared\Domain\PersonId;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -52,6 +53,7 @@ it('records one Guardian and one Volunteer for a Person, and refuses a second of
         'person_id' => $person,
         'confirm_existing_person' => true,
         'status' => 'active',
+        'default_role' => 'defer',
         'fields' => ['recognized_on' => '2020-01-15', 'stewardship' => 'Choir'],
     ])->assertCreated();
     $volunteer = $console->post('/api/v1/admin/relationships/volunteers', [
@@ -102,8 +104,14 @@ it('refuses intake that is unconfirmed, for an unknown Person, for a new Person,
     $console->post('/api/v1/admin/relationships/guardians', [
         'person_id' => $person,
         'confirm_existing_person' => true,
-        'status' => 'active',
+        'status' => 'inactive',
         'default_role' => 'grant',
+    ])->assertStatus(422)->assertJson(['code' => 'default_role_not_applicable']);
+    $console->post('/api/v1/admin/relationships/volunteers', [
+        'person_id' => $person,
+        'confirm_existing_person' => true,
+        'status' => 'pending',
+        'default_role' => 'defer',
     ])->assertStatus(422)->assertJson(['code' => 'default_role_not_applicable']);
 
     expect(DB::table('person_relationships')->count())->toBe(0)
@@ -134,7 +142,7 @@ it('follows each type\'s transitions, keeps history, and treats the same status 
     ])->assertOk()->assertJson(['status' => 'pending', 'revision' => 3]);
 
     $console->post('/api/v1/admin/relationships/guardians', [
-        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active',
+        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active', 'default_role' => 'defer',
     ])->assertCreated();
     $console->put("/api/v1/admin/relationships/guardians/{$person}/status", [
         'relationship_id' => DB::table('person_relationships')->where('relationship_type', 'guardian')->value('id'),
@@ -147,7 +155,7 @@ it('rejects a stale revision before a bad field, and a stale instance after the 
     [$console] = Mfa::signedInAdmin();
     $person = relationshipPerson();
     $created = $console->post('/api/v1/admin/relationships/guardians', [
-        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active',
+        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active', 'default_role' => 'defer',
         'fields' => ['stewardship' => 'Choir'],
     ])->assertCreated();
     $id = relationshipText($created->json('relationship_id'));
@@ -166,7 +174,7 @@ it('rejects a stale revision before a bad field, and a stale instance after the 
 
     $console->delete("/api/v1/admin/relationships/guardians/{$person}?relationship_id={$id}&revision=2")->assertNoContent();
     $recreated = $console->post('/api/v1/admin/relationships/guardians', [
-        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active',
+        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active', 'default_role' => 'defer',
     ])->assertCreated();
     expect($recreated->json('revision'))->toBe(1)->and($recreated->json('relationship_id'))->not->toBe($id);
 
@@ -181,7 +189,7 @@ it('validates metadata, clears with null, and does not move the revision when no
     [$console] = Mfa::signedInAdmin();
     $person = relationshipPerson();
     $console->post('/api/v1/admin/relationships/guardians', [
-        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active',
+        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active', 'default_role' => 'defer',
         'fields' => ['recognized_on' => '2020-01-15', 'stewardship' => 'Choir'],
     ])->assertCreated();
 
@@ -220,7 +228,7 @@ it('deletes one relationship, keeps the Person and the other type, and records c
     [$console] = Mfa::signedInAdmin();
     $person = relationshipPerson('Kept Person');
     $console->post('/api/v1/admin/relationships/guardians', [
-        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active',
+        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active', 'default_role' => 'defer',
         'fields' => ['stewardship' => 'Secret choir note'],
     ])->assertCreated();
     $console->post('/api/v1/admin/relationships/volunteers', [
@@ -284,18 +292,23 @@ it('lists names and status only, and looks up candidates by display name', funct
     $console->get('/api/v1/admin/relationships/volunteers/candidates?q=a')->assertStatus(422);
 });
 
-it('describes types the actor may see and never offers a default role', function () {
+it('describes types the actor may see, and offers Guardian Initiate only to someone who can assign roles', function () {
     [$console] = Mfa::signedInAdmin();
     $types = $console->get('/api/v1/admin/relationship-types')->assertOk()->json('data');
     assert(is_array($types));
     expect(array_column($types, 'type'))->toBe(['guardian', 'volunteer']);
+    $byType = [];
     foreach ($types as $type) {
-        assert(is_array($type));
-        $actions = $type['actions'] ?? null;
-        assert(is_array($actions));
-        expect($type['default_role'])->toBeNull()
-            ->and($actions['provision_default_role'])->toBeFalse();
+        assert(is_array($type) && is_string($type['type']));
+        $byType[$type['type']] = $type;
     }
+    $guardianActions = $byType['guardian']['actions'] ?? null;
+    $volunteerActions = $byType['volunteer']['actions'] ?? null;
+    assert(is_array($guardianActions) && is_array($volunteerActions));
+    expect($byType['guardian']['default_role'])->toBe(['display_name' => 'Guardian Initiate'])
+        ->and($guardianActions['provision_default_role'])->toBeTrue()
+        ->and($byType['volunteer']['default_role'])->toBeNull()
+        ->and($volunteerActions['provision_default_role'])->toBeFalse();
 });
 
 it('qualifies only a status the catalog marks, in definition order', function () {
@@ -315,6 +328,7 @@ it('qualifies only a status the catalog marks, in definition order', function ()
         'relationship_id' => DB::table('person_relationships')->where('relationship_type', 'guardian')->value('id'),
         'revision' => 1,
         'status' => 'active',
+        'default_role' => 'defer',
     ])->assertOk();
     $both = array_map(fn (RelationshipType $type): string => $type->key, app(QualifyingRelationships::class)(PersonId::fromString($person)));
     expect($both)->toBe(['guardian', 'volunteer']);
@@ -363,7 +377,7 @@ it('isolates each route to its own capability', function () {
     [$console] = Mfa::signedInAdmin();
     $person = relationshipPerson('Isolated');
     $console->post('/api/v1/admin/relationships/guardians', [
-        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active',
+        'person_id' => $person, 'confirm_existing_person' => true, 'status' => 'active', 'default_role' => 'defer',
     ])->assertCreated();
     $id = DB::table('person_relationships')->value('id');
 
@@ -423,6 +437,21 @@ it('refuses a directory whose person set is larger than a search can compose', f
             return $this->inner->saveStatus($updated, $expectedRevision);
         }
 
+        public function saveRevision(RelationshipRecord $updated, int $expectedRevision): bool
+        {
+            return $this->inner->saveRevision($updated, $expectedRevision);
+        }
+
+        public function saveProvision(RelationshipId $id, StoredRoleProvision $provision): void
+        {
+            $this->inner->saveProvision($id, $provision);
+        }
+
+        public function deleteProvision(RelationshipId $id, string $role): void
+        {
+            $this->inner->deleteProvision($id, $role);
+        }
+
         public function saveFields(RelationshipRecord $updated, int $expectedRevision, array $written, array $cleared, PersonId $by, DateTimeImmutable $at): bool
         {
             return $this->inner->saveFields($updated, $expectedRevision, $written, $cleared, $by, $at);
@@ -449,6 +478,16 @@ it('refuses a directory whose person set is larger than a search can compose', f
         }
 
         public function storedFieldValues(): array
+        {
+            return [];
+        }
+
+        public function storedInstances(): array
+        {
+            return [];
+        }
+
+        public function storedProvisions(): array
         {
             return [];
         }

@@ -30,5 +30,6 @@ final readonly class RelationshipRecordView
         public NamedPerson $createdBy,
         public array $fields,
         public array $history,
+        public ?DefaultRoleState $defaultRole = null,
     ) {}
 }

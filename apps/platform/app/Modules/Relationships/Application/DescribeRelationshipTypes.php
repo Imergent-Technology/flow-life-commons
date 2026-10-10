@@ -12,8 +12,7 @@ use App\Shared\Domain\Actor;
 /**
  * Describes the types an Actor may view or manage (ADR 0038, F13, A6). It authorizes nothing
  * beyond the route's Console admission: it filters. `Capability::AssignRoles` is named here,
- * and only here, to compute the provisioning hint. The hint authorizes nothing. No type has a
- * default role in WP1, so the hint is false for every Actor.
+ * and only here, to compute the provisioning hint. The hint authorizes nothing.
  */
 final readonly class DescribeRelationshipTypes
 {

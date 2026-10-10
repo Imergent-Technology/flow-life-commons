@@ -21,7 +21,7 @@ use App\Modules\Access\Application\UnknownPerson;
 use App\Modules\Access\Application\WithdrawSourcedRoles;
 use App\Modules\Audit\Domain\SecurityEvent;
 use App\Modules\Audit\Domain\SecurityEventWriter;
-use App\Modules\Relationships\Application\NoRelationshipGrants;
+use App\Modules\Relationships\Application\AccessRelationshipGrants;
 use App\Modules\Relationships\Application\RelationshipGrantWithdrawal;
 use App\Modules\Resources\Application\BrowseResourceLibrary;
 use App\Shared\Domain\Actor;
@@ -271,7 +271,9 @@ it('shows sourced grants apart from assignments and does not offer them to revok
         ->and(DB::table('role_assignments')->where('person_id', $account->personId->value)->count())->toBe(0);
 });
 
-it('keeps the relationship withdrawal adapter a no-op until WP2B', function () {
+it('binds relationship withdrawal to Access, so a lifecycle cannot keep a sourced grant', function () {
     expect(app(RelationshipGrantWithdrawal::class))
-        ->toBeInstanceOf(NoRelationshipGrants::class);
+        ->toBeInstanceOf(AccessRelationshipGrants::class)
+        ->and((string) file_get_contents(dirname(__DIR__, 4).'/app/Modules/Relationships/Infrastructure/RelationshipsServiceProvider.php'))
+        ->not->toContain('NoRelationshipGrants');
 });

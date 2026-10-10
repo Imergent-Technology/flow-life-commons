@@ -14,6 +14,6 @@ final class DefaultRoleNotApplicable extends RuntimeException
 {
     public function __construct()
     {
-        parent::__construct('This relationship has no default role to decide.');
+        parent::__construct('A default-role decision does not apply to this request.');
     }
 }

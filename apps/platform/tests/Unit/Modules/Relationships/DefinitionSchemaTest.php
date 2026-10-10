@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\Capability;
+use App\Modules\Access\Application\ProvisionableRole;
 use App\Modules\Relationships\Application\DefinitionSource;
 use App\Modules\Relationships\Application\RelationshipCatalog;
 use App\Modules\Relationships\Domain\DefinitionSchema;
@@ -67,9 +68,9 @@ it('loads the production Guardian and Volunteer documents', function () {
     assert($guardian !== null && $volunteer !== null);
 
     expect($types)->toBe(['guardian', 'volunteer'])
-        ->and($catalog->definition($guardian)->defaultRole)->toBeNull()
+        ->and($catalog->definition($guardian)->defaultRole)->toBe(ProvisionableRole::GuardianInitiate)
         ->and($catalog->definition($volunteer)->defaultRole)->toBeNull()
-        ->and($catalog->definition($guardian)->verification)->toBe(['intake', 'status', 'delete'])
+        ->and($catalog->definition($guardian)->verification)->toBe(['intake', 'status', 'default_role', 'delete'])
         ->and($catalog->definition($volunteer)->verification)->toBe(['delete']);
 });
 
@@ -93,6 +94,10 @@ it('refuses a type key, a slug, an unknown key and a missing default role', func
     $named = relationshipDocument();
     $named['default_role'] = 'guardian';
     relationshipRefused($named, 'default_role must be null or a provisionable role');
+
+    $unverified = relationshipDocument();
+    $unverified['verification'] = ['intake', 'status', 'delete'];
+    relationshipRefused($unverified, 'a default role requires verified intake, status and default_role');
 });
 
 it('refuses a lifecycle that is not a closed map of declared states', function () {

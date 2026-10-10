@@ -3,11 +3,13 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\Capability;
+use App\Modules\Access\Application\ProvisionableRole;
 
 /*
  * The Guardian relationship (ADR 0038, G1–G7). Data only.
- * `default_role` stays null until WP2B. Recognition still requires recent verification (A5):
- * it confers Guardian eligibility. Field edits do not.
+ * The default role is Guardian Initiate. It is not applied because the relationship exists:
+ * an authorized operator chooses it (Part K). Recognition, status, that choice and deletion
+ * require recent verification (A5). Field edits do not.
  */
 
 return [
@@ -62,8 +64,8 @@ return [
         'manage' => Capability::ManageGuardians,
     ],
     'features' => ['directory', 'people.lookup', 'people.create_person', 'people.read_basics'],
-    'verification' => ['intake', 'status', 'delete'],
+    'verification' => ['intake', 'status', 'default_role', 'delete'],
     'deletion' => true,
-    'default_role' => null,
+    'default_role' => ProvisionableRole::GuardianInitiate,
     'presentation' => ['position' => 10],
 ];

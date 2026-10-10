@@ -16,6 +16,7 @@ final readonly class RelationshipRecord
     /**
      * @param  array<string, string>  $fields
      * @param  list<StatusChange>  $history
+     * @param  list<StoredRoleProvision>  $provisions  current decisions, one per stored role
      */
     public function __construct(
         public RelationshipId $id,
@@ -31,6 +32,7 @@ final readonly class RelationshipRecord
         public PersonId $updatedBy,
         public array $fields,
         public array $history,
+        public array $provisions = [],
     ) {}
 
     public function withStatus(string $status, PersonId $by, DateTimeImmutable $at): self
@@ -39,6 +41,27 @@ final readonly class RelationshipRecord
             $this->id, $this->personId, $this->typeKey, $status, $this->revision + 1,
             $at, $by, $this->createdAt, $this->createdBy, $at, $by, $this->fields,
             [...$this->history, new StatusChange($this->status, $status, $at, $by)],
+            $this->provisions,
+        );
+    }
+
+    /** A decision changed and the status did not. History is untouched. */
+    public function withRevision(PersonId $by, DateTimeImmutable $at): self
+    {
+        return new self(
+            $this->id, $this->personId, $this->typeKey, $this->status, $this->revision + 1,
+            $this->statusChangedAt, $this->statusChangedBy, $this->createdAt, $this->createdBy,
+            $at, $by, $this->fields, $this->history, $this->provisions,
+        );
+    }
+
+    /** @param  list<StoredRoleProvision>  $provisions */
+    public function withProvisions(array $provisions): self
+    {
+        return new self(
+            $this->id, $this->personId, $this->typeKey, $this->status, $this->revision,
+            $this->statusChangedAt, $this->statusChangedBy, $this->createdAt, $this->createdBy,
+            $this->updatedAt, $this->updatedBy, $this->fields, $this->history, $provisions,
         );
     }
 
@@ -48,7 +71,7 @@ final readonly class RelationshipRecord
         return new self(
             $this->id, $this->personId, $this->typeKey, $this->status, $this->revision + 1,
             $this->statusChangedAt, $this->statusChangedBy, $this->createdAt, $this->createdBy,
-            $at, $by, $fields, $this->history,
+            $at, $by, $fields, $this->history, $this->provisions,
         );
     }
 }

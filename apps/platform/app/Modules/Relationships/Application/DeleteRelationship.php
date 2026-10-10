@@ -19,7 +19,7 @@ use Illuminate\Database\ConnectionInterface;
  * Permanently deletes one relationship (ADR 0038, F12). The type's manage capability, then recent
  * verification on the route. One security event, in the same transaction, holding ids and counts
  * and none of the field values. The Person and their other relationships are not touched.
- * G10 registers no dependents. Grant withdrawal is the WP2B seam and removes nothing today.
+ * G10 registers no dependents. Sourced grants are withdrawn in this transaction before the rows go.
  */
 final readonly class DeleteRelationship
 {

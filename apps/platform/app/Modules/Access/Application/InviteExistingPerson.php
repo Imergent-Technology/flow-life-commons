@@ -19,8 +19,13 @@ use App\Shared\Domain\PersonId;
  *
  * This is the operator-facing sibling of `InviteOperator`, sharing its authority (`identity.invitations.issue`:
  * the same capability governs issuing any account invitation, existing person or not) and its delivery/response
- * shape, but composing a different Identity use case: `InviteAccountForPerson`, which creates no new Person. There
- * is no role assignment here — an invited Member holds no capability by default, unlike an invited operator.
+ * shape, but composing a different Identity use case: `InviteAccountForPerson`, which creates no new Person.
+ * There is no role assignment here. An invitation does not grant a role. A sourced grant already stored for
+ * that Person stays as it is: an operator who holds `access.roles.assign` authorized it, and it takes effect
+ * when this invitation is accepted and the Account can authenticate (ADR 0038, K6). Choosing the mailbox
+ * needs only `identity.invitations.issue`. In G10 that capability is not separated from `access.roles.assign`
+ * or `guardians.manage`; only the platform administrator holds any of them, and separating them needs a new
+ * security review. An applicant cannot choose this linkage. `InviteAccountForPerson` has this single caller.
  *
  * - **Authorized first**: `identity.invitations.issue`, decided from current state before anything is written.
  * - **The message is sent AFTER commit, and outside it**, exactly as `InviteOperator`: if delivery fails, the

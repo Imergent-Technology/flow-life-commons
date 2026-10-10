@@ -15,7 +15,8 @@ it('registers the third type through the catalog and generates its routes', func
     $catalog = app(RelationshipCatalog::class);
     expect(array_map(fn ($definition) => $definition->type->key, $catalog->all()))->toBe(['volunteer', 'apprentice'])
         ->and(app('router')->getRoutes()->getByName('api.v1.admin.relationships.apprentices.store'))->not->toBeNull()
-        ->and(app('router')->getRoutes()->getByName('api.v1.admin.relationships.guardians.store'))->toBeNull();
+        ->and(app('router')->getRoutes()->getByName('api.v1.admin.relationships.guardians.store'))->toBeNull()
+        ->and(app('router')->getRoutes()->getByName('api.v1.admin.relationships.apprentices.default-role'))->toBeNull();
 
     $delete = app('router')->getRoutes()->getByName('api.v1.admin.relationships.apprentices.destroy');
     $intake = app('router')->getRoutes()->getByName('api.v1.admin.relationships.apprentices.store');
