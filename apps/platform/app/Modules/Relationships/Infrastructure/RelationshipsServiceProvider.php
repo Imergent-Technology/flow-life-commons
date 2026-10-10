@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Relationships\Infrastructure;
 
-use App\Modules\Relationships\Application\DefinitionSource;
 use App\Modules\Relationships\Application\AccessRelationshipGrants;
+use App\Modules\Relationships\Application\DefinitionSource;
 use App\Modules\Relationships\Application\RelationshipCatalog;
 use App\Modules\Relationships\Application\RelationshipDependents;
 use App\Modules\Relationships\Application\RelationshipGrantWithdrawal;

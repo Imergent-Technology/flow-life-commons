@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\Role;
+use App\Modules\Identity\Domain\Person;
 use App\Modules\Relationships\Application\ChangeRelationshipStatus;
 use App\Modules\Relationships\Application\DecideDefaultRole;
 use App\Modules\Relationships\Application\DefaultRoleChoice;
@@ -13,6 +14,7 @@ use App\Modules\Relationships\Application\RelationshipExists;
 use App\Modules\Relationships\Application\RelationshipNotFound;
 use App\Modules\Relationships\Application\StaleRelationshipRevision;
 use App\Modules\Relationships\Domain\RelationshipId;
+use App\Modules\Relationships\Domain\RelationshipType;
 use App\Shared\Domain\Actor;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -158,7 +160,7 @@ it('does not let a status change land on a relationship a deletion removed', fun
 });
 
 /**
- * @return array{actor: Actor, person: \App\Modules\Identity\Domain\Person, type: \App\Modules\Relationships\Domain\RelationshipType, id: string}
+ * @return array{actor: Actor, person: Person, type: RelationshipType, id: string}
  */
 function contendedGuardian(string $name, string $decision): array
 {
@@ -171,7 +173,11 @@ function contendedGuardian(string $name, string $decision): array
     return ['actor' => $actor, 'person' => $person, 'type' => $type, 'id' => $created->id->value];
 }
 
-/** @param  array{actor: Actor, person: \App\Modules\Identity\Domain\Person, id: string}  $row */
+/**
+ * @param  array{actor: Actor, person: Person, id: string}  $row
+ * @param  array<string, string>  $extra
+ * @return array<string, string>
+ */
 function raceArguments(array $row, string $revision, array $extra = []): array
 {
     return [

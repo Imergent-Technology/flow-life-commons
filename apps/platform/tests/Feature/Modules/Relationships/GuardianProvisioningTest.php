@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use App\Modules\Access\Application\AuthorizeAction;
 use App\Modules\Access\Application\Authorizer;
-use App\Modules\Access\Application\Capability;
 use App\Modules\Access\Application\GrantSourcedRole;
 use App\Modules\Access\Application\Role;
 use App\Modules\Access\Domain\RoleAssignment;
@@ -18,15 +17,14 @@ use App\Modules\Audit\Domain\SecurityEventWriter;
 use App\Modules\Identity\Application\PersonExists;
 use App\Modules\Identity\Application\ResolveActor;
 use App\Modules\Identity\Domain\AccountRepository;
+use App\Modules\Identity\Infrastructure\Mail\InvitationMail;
 use App\Modules\Relationships\Application\ChangeRelationshipStatus;
 use App\Modules\Relationships\Application\DecideDefaultRole;
 use App\Modules\Relationships\Application\DefaultRoleChoice;
 use App\Modules\Relationships\Application\QualifyingRelationships;
 use App\Modules\Relationships\Application\RelationshipCatalog;
 use App\Modules\Relationships\Domain\RelationshipId;
-use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
-use App\Modules\Identity\Infrastructure\Mail\InvitationMail;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -361,7 +359,7 @@ it('treats reactivation as a fresh decision and does not restore a grant silentl
 
     expect($view->status)->toBe('active')
         ->and($view->defaultRole?->decision)->toBe('granted')
-        ->and($view->defaultRole->decidedBy?->id->value)->toBe($restorer->personId->value)
+        ->and($view->defaultRole?->decidedBy?->id->value)->toBe($restorer->personId->value)
         ->and(DB::table('sourced_role_grants')->where('person_id', $person)->value('granted_by_account_id'))->toBe($restorer->accountId->value)
         ->and(DB::table('sourced_role_grants')->value('person_id'))->toBe($person)
         ->and(Identity::events('role.granted'))->toHaveCount(2);
@@ -509,12 +507,14 @@ it('removes a granted decision and withdraws its grant when an Active relationsh
 it('reactivates with no stored decision only on an explicit grant', function () {
     [$console] = Mfa::signedInAdmin();
     $person = provisionedGuardian($console, 'Never Decided', decision: 'defer');
+    /** @param  array<string, mixed>  $extra */
     $change = function (string $to, array $extra = []) use ($console, $person) {
         [$id, $revision] = guardianCursor($person);
 
-        return $console->put("/api/v1/admin/relationships/guardians/{$person}/status", [
-            'relationship_id' => $id, 'revision' => $revision, 'status' => $to, ...$extra,
-        ]);
+        /** @var array<string, mixed> $body */
+        $body = ['relationship_id' => $id, 'revision' => $revision, 'status' => $to, ...$extra];
+
+        return $console->put("/api/v1/admin/relationships/guardians/{$person}/status", $body);
     };
     $change('inactive')->assertOk();
 
