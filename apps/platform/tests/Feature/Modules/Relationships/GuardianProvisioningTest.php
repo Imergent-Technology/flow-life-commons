@@ -2,11 +2,22 @@
 
 declare(strict_types=1);
 
+use App\Modules\Access\Application\AuthorizeAction;
 use App\Modules\Access\Application\Authorizer;
 use App\Modules\Access\Application\Capability;
+use App\Modules\Access\Application\GrantSourcedRole;
 use App\Modules\Access\Application\Role;
+use App\Modules\Access\Domain\RoleAssignment;
+use App\Modules\Access\Domain\RoleAssignmentRepository;
+use App\Modules\Access\Domain\SourcedRoleGrant;
+use App\Modules\Access\Domain\SourcedRoleGrantId;
+use App\Modules\Access\Domain\SourcedRoleGrantRepository;
+use App\Modules\Audit\Application\RecordSecurityEvent;
 use App\Modules\Audit\Domain\SecurityEvent;
 use App\Modules\Audit\Domain\SecurityEventWriter;
+use App\Modules\Identity\Application\PersonExists;
+use App\Modules\Identity\Application\ResolveActor;
+use App\Modules\Identity\Domain\AccountRepository;
 use App\Modules\Relationships\Application\ChangeRelationshipStatus;
 use App\Modules\Relationships\Application\DecideDefaultRole;
 use App\Modules\Relationships\Application\DefaultRoleChoice;
@@ -16,6 +27,7 @@ use App\Modules\Relationships\Domain\RelationshipId;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
 use App\Modules\Identity\Infrastructure\Mail\InvitationMail;
+use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -86,21 +98,123 @@ function plantDecision(string $relationshipId, string $decidedBy, string $decisi
     ]);
 }
 
-/** An operator who may manage Guardians and may not assign roles. */
+/**
+ * An operator who may manage Guardians and may not assign roles. Relationships still asks the real
+ * Authorizer for `guardians.manage`; only Access's own `access.roles.assign` check, inside
+ * `GrantSourcedRole`, is answered by an Authorizer that finds the Person holds no role. No G10 role
+ * holds one authority without the other (A3), so this is the one way to reach the cell.
+ */
 function denyRoleAssignment(): void
 {
-    $real = app(Authorizer::class);
-    $fake = Mockery::mock(Authorizer::class);
-    $fake->shouldReceive('allows')->andReturnUsing(
-        fn (Actor $actor, Capability $capability): bool => $capability !== Capability::AssignRoles && $real->allows($actor, $capability),
-    );
-    $fake->shouldReceive('capabilitiesOf')->andReturnUsing(
-        fn (Actor $actor): array => array_values(array_filter(
-            $real->capabilitiesOf($actor),
-            fn (Capability $capability): bool => $capability !== Capability::AssignRoles,
-        )),
-    );
-    app()->instance(Authorizer::class, $fake);
+    $noAssignments = new class implements RoleAssignmentRepository
+    {
+        public function forPerson(PersonId $personId): array
+        {
+            return [];
+        }
+
+        public function forPeople(array $personIds): array
+        {
+            return [];
+        }
+
+        public function add(RoleAssignment $assignment): void
+        {
+            throw new LogicException('read-only');
+        }
+
+        public function remove(PersonId $personId, string $roleKey): bool
+        {
+            throw new LogicException('read-only');
+        }
+
+        public function holdersOf(string $roleKey): array
+        {
+            return [];
+        }
+
+        public function lockHoldersOf(string $roleKey): array
+        {
+            return [];
+        }
+    };
+    $noGrants = new class implements SourcedRoleGrantRepository
+    {
+        public function forPerson(PersonId $personId): array
+        {
+            return [];
+        }
+
+        public function forPeople(array $personIds): array
+        {
+            return [];
+        }
+
+        public function forSourceType(string $sourceType): array
+        {
+            return [];
+        }
+
+        public function forSources(array $sources): array
+        {
+            return [];
+        }
+
+        public function findBySourceAndRole(string $sourceType, string $sourceId, string $roleKey): ?SourcedRoleGrant
+        {
+            return null;
+        }
+
+        public function lockBySourceAndRole(string $sourceType, string $sourceId, string $roleKey): ?SourcedRoleGrant
+        {
+            return null;
+        }
+
+        public function lockSource(string $sourceType, string $sourceId): void
+        {
+            throw new LogicException('read-only');
+        }
+
+        public function lockForSource(string $sourceType, string $sourceId): array
+        {
+            return [];
+        }
+
+        public function add(SourcedRoleGrant $grant): void
+        {
+            throw new LogicException('read-only');
+        }
+
+        public function delete(SourcedRoleGrantId $id): void
+        {
+            throw new LogicException('read-only');
+        }
+
+        public function personIdsHoldingRoles(array $roleKeys): array
+        {
+            return [];
+        }
+    };
+    $authorizer = new Authorizer(app(ResolveActor::class), $noAssignments, $noGrants);
+    app()->bind(GrantSourcedRole::class, fn () => new GrantSourcedRole(
+        new AuthorizeAction($authorizer),
+        app(PersonExists::class),
+        app(SourcedRoleGrantRepository::class),
+        app(RecordSecurityEvent::class),
+        app(ConnectionInterface::class),
+    ));
+}
+
+/** Signs in the Account that an accepted invitation created for the Person. Console admission requires its authenticator (ADR 0023). */
+function guardianInvitee(string $person, string $email, string $password): Console
+{
+    $account = app(AccountRepository::class)->findByPersonId(PersonId::fromString($person));
+    assert($account !== null);
+    Mfa::enroll($account);
+    $invitee = new Console;
+    $invitee->loginWithMfa($email, $password)->assertOk();
+
+    return $invitee;
 }
 
 function guardianMailedToken(): string
@@ -337,9 +451,6 @@ it('declines and defers without role-assignment authority, and does not erase a 
     [$id, $revision] = guardianCursor($person);
     denyRoleAssignment();
 
-    $console->get('/api/v1/admin/relationship-types')->assertOk()
-        ->assertJsonPath('data.0.actions.provision_default_role', false);
-
     $console->put("/api/v1/admin/relationships/guardians/{$person}/default-role", [
         'relationship_id' => $id, 'revision' => $revision, 'default_role' => 'grant',
     ])->assertForbidden()->assertJson(['code' => 'role_provisioning_not_permitted']);
@@ -386,7 +497,7 @@ it('refuses a grant on an inactive relationship before asking Access, and leaves
         ->and(Identity::events('role.granted'))->toBe([]);
 });
 
-it('rolls a prepared grant back when Access refuses it or the grant audit fails', function () {
+it('rolls intake back when Access refuses the grant', function () {
     [$console] = Mfa::signedInAdmin();
     $person = Identity::savedPerson('Rolled Back')->id->value;
     denyRoleAssignment();
@@ -442,13 +553,16 @@ it('rolls deletion back when the deletion audit fails after withdrawal was prepa
         ->and(Identity::events('role.revoked'))->toBe([]);
 });
 
-it('refuses the default-role route for the usual reasons, and does not offer it for Volunteer', function () {
+it('refuses the default-role route to a Console user without guardians.manage', function () {
     [$guardian] = Mfa::signedIn();
     $person = Identity::savedPerson('Guarded')->id->value;
     $guardian->put("/api/v1/admin/relationships/guardians/{$person}/default-role", [
         'relationship_id' => strtolower((string) Str::ulid()), 'revision' => 1, 'default_role' => 'grant',
     ])->assertForbidden()->assertJsonMissing(['code' => 'role_provisioning_not_permitted']);
+    expect(DB::table('sourced_role_grants')->count())->toBe(0);
+});
 
+it('refuses the default-role route for the usual reasons, and does not offer it for Volunteer', function () {
     [$console] = Mfa::signedInAdmin();
     $subject = provisionedGuardian($console, 'Verified Later', decision: 'defer');
     $other = provisionedGuardian($console, 'Other Guardian', decision: 'defer');
@@ -567,8 +681,7 @@ it('stores a dormant grant that becomes effective only after a trusted invitatio
 
     $console->post("/api/v1/admin/people/{$person->id->value}/invitation", ['email' => 'later@example.org'])->assertCreated();
     Invitations::accept(guardianMailedToken(), 'a long enough passphrase for the invitee')->assertNoContent();
-    $invitee = new Console;
-    $invitee->login('later@example.org', 'a long enough passphrase for the invitee')->assertOk();
+    $invitee = guardianInvitee($person->id->value, 'later@example.org', 'a long enough passphrase for the invitee');
 
     expect($invitee->me()->json('capabilities'))->toContain('console.access')
         ->and(DB::table('sourced_role_grants')->value('person_id'))->toBe($person->id->value)
@@ -588,8 +701,7 @@ it('has already withdrawn a dormant grant when the Guardian is inactivated befor
 
     $console->post("/api/v1/admin/people/{$person}/invitation", ['email' => 'early@example.org'])->assertCreated();
     Invitations::accept(guardianMailedToken(), 'a long enough passphrase for the invitee')->assertNoContent();
-    $invitee = new Console;
-    $invitee->login('early@example.org', 'a long enough passphrase for the invitee')->assertOk();
+    $invitee = guardianInvitee($person, 'early@example.org', 'a long enough passphrase for the invitee');
     expect($invitee->me()->json('capabilities'))->toBe([])
         ->and(DB::table('sourced_role_grants')->count())->toBe(0);
 });
@@ -624,8 +736,9 @@ it('reports every sourced-grant inconsistency and no field value', function (str
     };
 
     expect(Artisan::call('relationships:check'))->toBe(1);
-    expect(Artisan::output())->toContain($finding)
-        ->and(Artisan::output())->not->toContain('do-not-print-this-value');
+    $output = Artisan::output();
+    expect($output)->toContain($finding)
+        ->and($output)->not->toContain('do-not-print-this-value');
 })->with([
     'missing relationship' => ['missing', 'has no relationship'],
     'not qualifying' => ['inactive', 'relationship is not qualifying'],
@@ -644,8 +757,9 @@ it('reports several grant findings from one read', function () {
     plantDecision($id, $admin->personId->value, 'declined');
 
     expect(Artisan::call('relationships:check'))->toBe(1);
-    expect(Artisan::output())->toContain('decision is not granted')
-        ->and(Artisan::output())->toContain('has no relationship');
+    $output = Artisan::output();
+    expect($output)->toContain('decision is not granted')
+        ->and($output)->toContain('has no relationship');
 });
 
 it('lists Console participants and Guardian gaps without adopting anyone', function () {

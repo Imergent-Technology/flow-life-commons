@@ -91,6 +91,7 @@ it('refuses intake that is unconfirmed, for an unknown Person, for a new Person,
         'person_id' => PersonId::generate()->value,
         'confirm_existing_person' => true,
         'status' => 'active',
+        'default_role' => 'defer',
     ])->assertStatus(422)->assertJson(['code' => 'unknown_person']);
 
     $console->post('/api/v1/admin/relationships/volunteers', [
@@ -506,7 +507,8 @@ it('reports an unknown stored status without echoing a field value', function ()
     DB::table('person_relationships')->update(['status' => 'retired']);
 
     Artisan::call('relationships:check');
-    expect(Artisan::output())->toContain('unknown status retired')
-        ->and(Artisan::output())->not->toContain('do-not-print-this-value');
+    $output = Artisan::output();
+    expect($output)->toContain('unknown status retired')
+        ->and($output)->not->toContain('do-not-print-this-value');
     expect(Artisan::call('relationships:check'))->toBe(1);
 });

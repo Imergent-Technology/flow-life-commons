@@ -75,7 +75,6 @@ final class DefinitionSchema
         $features = self::vocabulary($document['features'] ?? null, self::FEATURES, $name, 'feature');
         $verification = self::vocabulary($document['verification'] ?? null, self::OPERATIONS, $name, 'verification operation');
         $deletion = self::bool($document['deletion'] ?? null, $name, 'deletion must be a boolean');
-        $defaultRole = self::defaultRole(array_key_exists('default_role', $document) ? $document['default_role'] : 'missing', $verification, $name);
         $position = self::presentation($document['presentation'] ?? null, $name);
         $components = self::components($document['components'] ?? [], $name);
 
@@ -85,6 +84,7 @@ final class DefinitionSchema
         if (! $deletion && in_array('delete', $verification, true)) {
             throw new InvalidRelationshipDefinition($name, 'delete is verified but deletion is not allowed');
         }
+        $defaultRole = self::defaultRole(array_key_exists('default_role', $document) ? $document['default_role'] : 'missing', $verification, $name);
 
         return new RelationshipDefinition(
             RelationshipType::issue($typeKey), $slug, $version, $labels, $states, $initial, $transitions, $fields,
