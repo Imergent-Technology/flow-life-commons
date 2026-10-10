@@ -40,6 +40,7 @@ declare(strict_types=1);
  */
 
 use App\Modules\Access\Application\DisableManagedAccount;
+use App\Modules\Access\Application\GrantRole;
 use App\Modules\Access\Application\GrantSourcedRole;
 use App\Modules\Access\Application\ProvisionableRole;
 use App\Modules\Access\Application\RevokeRole;
@@ -360,6 +361,12 @@ try {
         $app->make(DeleteRelationship::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
             $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')), (int) $arg('revision'),
+        );
+    } elseif ($operation === 'grant_role') {
+        $app->make(GrantRole::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            PersonId::fromString($arg('person')),
+            Role::from($arg('role')),
         );
     } elseif ($operation === 'grant_sourced_role') {
         $app->make(GrantSourcedRole::class)(

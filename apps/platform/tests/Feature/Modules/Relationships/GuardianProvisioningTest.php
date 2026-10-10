@@ -481,6 +481,84 @@ it('declines and defers without role-assignment authority, and does not erase a 
         ->and(Identity::events('role.revoked'))->toHaveCount(1);
 });
 
+it('removes a granted decision and withdraws its grant when an Active relationship defers', function () {
+    [$console, $admin] = Mfa::signedInAdmin();
+    $person = provisionedGuardian($console, 'Backs Out', decision: 'grant');
+    [$id, $revision] = guardianCursor($person);
+
+    $deferred = $console->put("/api/v1/admin/relationships/guardians/{$person}/default-role", [
+        'relationship_id' => $id, 'revision' => $revision, 'default_role' => 'defer',
+    ])->assertOk();
+
+    expect($deferred->json('revision'))->toBe(2)
+        ->and($deferred->json('default_role.decision'))->toBeNull()
+        ->and($deferred->json('default_role.effective'))->toBeFalse()
+        ->and(DB::table('person_relationship_role_provisions')->count())->toBe(0)
+        ->and(DB::table('sourced_role_grants')->count())->toBe(0)
+        ->and(Identity::events('role.granted'))->toHaveCount(1)
+        ->and(Identity::events('role.revoked'))->toHaveCount(1)
+        ->and(Identity::events('role.revoked')[0]->actor_account_id)->toBe($admin->id->value);
+
+    // Nothing is stored now, so a second defer changes nothing and records nothing.
+    $console->put("/api/v1/admin/relationships/guardians/{$person}/default-role", [
+        'relationship_id' => $id, 'revision' => 2, 'default_role' => 'defer',
+    ])->assertOk()->assertJsonPath('revision', 2);
+    expect(Identity::events('role.revoked'))->toHaveCount(1);
+});
+
+it('reactivates with no stored decision only on an explicit grant', function () {
+    [$console] = Mfa::signedInAdmin();
+    $person = provisionedGuardian($console, 'Never Decided', decision: 'defer');
+    $change = function (string $to, array $extra = []) use ($console, $person) {
+        [$id, $revision] = guardianCursor($person);
+
+        return $console->put("/api/v1/admin/relationships/guardians/{$person}/status", [
+            'relationship_id' => $id, 'revision' => $revision, 'status' => $to, ...$extra,
+        ]);
+    };
+    $change('inactive')->assertOk();
+
+    $change('active')->assertStatus(422)->assertJson(['code' => 'default_role_decision_required']);
+    expect(DB::table('person_relationships')->where('person_id', $person)->value('status'))->toBe('inactive');
+
+    $change('active', ['default_role' => 'defer'])->assertOk();
+    expect(DB::table('person_relationships')->where('person_id', $person)->value('status'))->toBe('active')
+        ->and(DB::table('person_relationship_role_provisions')->count())->toBe(0)
+        ->and(DB::table('sourced_role_grants')->count())->toBe(0);
+
+    $change('inactive')->assertOk();
+    $change('active', ['default_role' => 'grant'])->assertOk();
+    expect(DB::table('sourced_role_grants')->where('person_id', $person)->count())->toBe(1)
+        ->and(DB::table('person_relationship_role_provisions')->value('decision'))->toBe('granted');
+});
+
+it('lets a manager without role-assignment authority reactivate only by deferring or declining', function () {
+    [$console] = Mfa::signedInAdmin();
+    $person = provisionedGuardian($console, 'Needs Authority', decision: 'grant');
+    [$id, $revision] = guardianCursor($person);
+    $console->put("/api/v1/admin/relationships/guardians/{$person}/status", [
+        'relationship_id' => $id, 'revision' => $revision, 'status' => 'inactive',
+    ])->assertOk();
+    [, $revision] = guardianCursor($person);
+    $history = DB::table('person_relationship_status_changes')->count();
+    denyRoleAssignment();
+    $status = fn (string $choice) => $console->put("/api/v1/admin/relationships/guardians/{$person}/status", [
+        'relationship_id' => $id, 'revision' => $revision, 'status' => 'active', 'default_role' => $choice,
+    ]);
+
+    $status('grant')->assertForbidden()->assertJson(['code' => 'role_provisioning_not_permitted']);
+    expect(DB::table('person_relationships')->where('id', $id)->value('status'))->toBe('inactive')
+        ->and(DB::table('person_relationships')->where('id', $id)->value('revision'))->toBe($revision)
+        ->and(DB::table('person_relationship_status_changes')->count())->toBe($history)
+        ->and(DB::table('person_relationship_role_provisions')->value('decision'))->toBe('granted')
+        ->and(DB::table('sourced_role_grants')->count())->toBe(0);
+
+    $status('defer')->assertOk();
+    expect(DB::table('person_relationships')->where('id', $id)->value('status'))->toBe('active')
+        ->and(DB::table('person_relationship_role_provisions')->count())->toBe(0)
+        ->and(DB::table('sourced_role_grants')->count())->toBe(0);
+});
+
 it('refuses a grant on an inactive relationship before asking Access, and leaves no write', function () {
     [$console] = Mfa::signedInAdmin();
     $person = provisionedGuardian($console, 'Inactive Grant', 'inactive', null);

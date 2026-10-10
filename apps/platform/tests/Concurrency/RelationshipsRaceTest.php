@@ -299,3 +299,21 @@ it('does not let a stale deletion remove a grant that committed', function () {
         ->and(DB::table('person_relationships')->where('id', $row['id'])->exists())->toBeTrue()
         ->and(DB::table('sourced_role_grants')->where('source_id', $row['id'])->where('person_id', $row['person']->id->value)->count())->toBe(1);
 });
+
+it('lets an independent grant of the same role commit beside a relationship-managed one', function () {
+    $row = contendedGuardian('Both Sources', 'defer');
+
+    $race = Race::against(function (Closure $pause) use ($row): void {
+        app(DecideDefaultRole::class)($row['actor'], $row['type'], $row['person']->id, RelationshipId::fromString($row['id']), 1, DefaultRoleChoice::Grant);
+    }, 'role.granted', 'grant_role', [
+        'actor_account' => $row['actor']->accountId->value,
+        'actor_person' => $row['actor']->personId->value,
+        'person' => $row['person']->id->value,
+        'role' => 'guardian-initiate',
+    ]);
+
+    expect($race['blocked'])->toBeFalse()
+        ->and($race['exit'])->toBe(0)
+        ->and(DB::table('sourced_role_grants')->where('person_id', $row['person']->id->value)->count())->toBe(1)
+        ->and(DB::table('role_assignments')->where('person_id', $row['person']->id->value)->where('role_key', 'guardian-initiate')->count())->toBe(1);
+});
