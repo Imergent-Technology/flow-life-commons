@@ -5204,7 +5204,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: Confirmation, an unknown Person, a status that is not initial, a field, a missing Active decision (`default_role_decision_required`), or a decision on an Inactive intake (`default_role_not_applicable`).
+          description: Confirmation, an unknown Person, a status that is not initial, a field, a missing Active decision (`default_role_decision_required`), a decision on an Inactive intake (`default_role_not_applicable`), or a present `default_role` that is not `grant`, `decline` or `defer` (`invalid_relationship_query`).
           content:
             application/json:
               schema:
@@ -5417,7 +5417,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/RelationshipConflict'
         '422':
-          description: The transition is not allowed (`transition_not_allowed`), reactivation omitted `default_role` (`default_role_decision_required`), or inactivation carried one (`default_role_not_applicable`).
+          description: The transition is not allowed (`transition_not_allowed`), reactivation omitted `default_role` (`default_role_decision_required`), inactivation carried one (`default_role_not_applicable`), or a present `default_role` on reactivation is not `grant`, `decline` or `defer` (`invalid_relationship_query`).
           content:
             application/json:
               schema:

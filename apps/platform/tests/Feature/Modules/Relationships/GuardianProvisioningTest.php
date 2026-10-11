@@ -406,6 +406,29 @@ it('ignores default_role on a same-status request', function () {
         ->and(DB::table('sourced_role_grants')->count())->toBe(0);
 });
 
+it('refuses an invalid default_role on the status route and writes nothing', function () {
+    [$console] = Mfa::signedInAdmin();
+    $person = provisionedGuardian($console, 'Invalid Choice', decision: 'grant');
+    [$id, $revision] = guardianCursor($person);
+    $console->put("/api/v1/admin/relationships/guardians/{$person}/status", [
+        'relationship_id' => $id, 'revision' => $revision, 'status' => 'inactive',
+    ])->assertOk();
+    [, $revision] = guardianCursor($person);
+    $history = DB::table('person_relationship_status_changes')->count();
+    $grants = DB::table('sourced_role_grants')->count();
+
+    $console->put("/api/v1/admin/relationships/guardians/{$person}/status", [
+        'relationship_id' => $id, 'revision' => $revision, 'status' => 'active', 'default_role' => 'promote',
+    ])->assertStatus(422)->assertJson(['code' => 'invalid_relationship_query']);
+
+    expect(DB::table('person_relationships')->where('id', $id)->value('status'))->toBe('inactive')
+        ->and(DB::table('person_relationships')->where('id', $id)->value('revision'))->toBe($revision)
+        ->and(DB::table('person_relationship_status_changes')->count())->toBe($history)
+        ->and(DB::table('person_relationship_role_provisions')->where('relationship_id', $id)->value('decision'))->toBe('granted')
+        ->and(DB::table('sourced_role_grants')->count())->toBe($grants)
+        ->and(Identity::events('role.granted'))->toHaveCount(1);
+});
+
 it('decides the default role on its own route, and an identical decision does not rewrite it', function () {
     [$console, $admin] = Mfa::signedInAdmin();
     $person = provisionedGuardian($console, 'Later Grant', decision: 'defer');
@@ -602,16 +625,20 @@ it('rolls intake back when the grant audit fails after the decision was prepared
         ->and(Identity::events('role.granted'))->toBe([]);
 });
 
-it('rolls inactivation and deletion back when their audit fails', function () {
+it('rolls inactivation back when the withdrawal audit fails', function () {
     [$console] = Mfa::signedInAdmin();
     $person = provisionedGuardian($console, 'Audit Withdraw', decision: 'grant');
     [$id, $revision] = guardianCursor($person);
+    $history = DB::table('person_relationship_status_changes')->count();
     failOnSecurityEvent('role.revoked');
 
     $console->put("/api/v1/admin/relationships/guardians/{$person}/status", [
         'relationship_id' => $id, 'revision' => $revision, 'status' => 'inactive',
     ])->assertStatus(500);
     expect(DB::table('person_relationships')->where('id', $id)->value('status'))->toBe('active')
+        ->and(DB::table('person_relationships')->where('id', $id)->value('revision'))->toBe($revision)
+        ->and(DB::table('person_relationship_status_changes')->count())->toBe($history)
+        ->and(DB::table('person_relationship_role_provisions')->where('relationship_id', $id)->value('decision'))->toBe('granted')
         ->and(DB::table('sourced_role_grants')->count())->toBe(1)
         ->and(Identity::events('role.revoked'))->toBe([]);
 });
@@ -620,12 +647,15 @@ it('rolls deletion back when the deletion audit fails after withdrawal was prepa
     [$console] = Mfa::signedInAdmin();
     $person = provisionedGuardian($console, 'Audit Delete', decision: 'grant');
     [$id, $revision] = guardianCursor($person);
+    $history = DB::table('person_relationship_status_changes')->where('relationship_id', $id)->count();
     failOnSecurityEvent('relationship.deleted');
 
     $console->delete("/api/v1/admin/relationships/guardians/{$person}?relationship_id={$id}&revision={$revision}")
         ->assertStatus(500);
 
     expect(DB::table('person_relationships')->where('id', $id)->exists())->toBeTrue()
+        ->and(DB::table('person_relationship_status_changes')->where('relationship_id', $id)->count())->toBe($history)
+        ->and(DB::table('person_relationship_role_provisions')->where('relationship_id', $id)->value('decision'))->toBe('granted')
         ->and(DB::table('sourced_role_grants')->count())->toBe(1)
         ->and(Identity::events('relationship.deleted'))->toBe([])
         ->and(Identity::events('role.revoked'))->toBe([]);
