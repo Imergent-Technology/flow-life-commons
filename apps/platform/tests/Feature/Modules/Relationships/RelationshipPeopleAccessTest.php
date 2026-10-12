@@ -397,7 +397,10 @@ it('applies only what is sent, normalizes by CRM\'s rules, and treats an unchang
  * One Person with a primary of a kind, a hidden NON-primary method of the same kind, and a labelled hidden method; another with
  * the same primary and nothing hidden. The same scoped edit is made on both.
  *
- * @return array{hidden: TestResponse<Response>, control: TestResponse<Response>, person: string, controlPerson: string, console: Console}
+ * `planter` is the Account that planted every method before the edit, a different Account from the operator who edits, so a
+ * row the edit changed but did not stamp still names the planter and cannot pass for the operator.
+ *
+ * @return array{hidden: TestResponse<Response>, control: TestResponse<Response>, person: string, controlPerson: string, console: Console, planter: string}
  */
 function paCollide(ContactMethodKind $kind, string $primary, string $hiddenValue, string $to): array
 {
@@ -420,6 +423,7 @@ function paCollide(ContactMethodKind $kind, string $primary, string $hiddenValue
         'person' => $person,
         'controlPerson' => $control,
         'console' => $console,
+        'planter' => $by->accountId->value,
     ];
 }
 
@@ -470,6 +474,15 @@ it('promotes a hidden phone written differently, storing the requested form', fu
         ->and(DB::table('contact_methods')->where('person_id', $result['person'])->where('kind', 'phone')->where('value', '+1 (555) 010-0199')->exists())->toBeFalse()
         ->and(paShape($result['hidden']))->toBe(paShape($result['control']))
         ->and($result['hidden']->getContent())->not->toContain('(555)');
+
+    // Provenance (P9): the promoted hidden method and the demoted former primary both name the operator, not whoever planted them.
+    $operator = Mfa::text(DB::table('accounts')->where('email', 'admin@example.org')->value('id'));
+    $demoted = array_values(array_filter(paMethods($result['person'], 'phone'), fn (array $row): bool => ! $row['primary']));
+    expect($operator)->not->toBe($result['planter'])
+        ->and($primary[0]['stamp'])->toBe($operator)
+        ->and($demoted)->toHaveCount(1)
+        ->and($demoted[0]['value'])->toBe('+1 555 010 0100')
+        ->and($demoted[0]['stamp'])->toBe($operator);
 });
 
 it('promotes a hidden method whose value is exactly the one asked for', function () {
@@ -481,6 +494,16 @@ it('promotes a hidden method whose value is exactly the one asked for', function
     expect($rows)->toHaveCount(2)
         ->and(array_values(array_filter($rows, fn (array $row): bool => $row['primary']))[0]['value'])->toBe('same@example.org')
         ->and(paShape($result['hidden']))->toBe(paShape($result['control']));
+
+    // Provenance (P9): the promoted method and the demoted former primary both name the operator, not whoever planted them.
+    $operator = Mfa::text(DB::table('accounts')->where('email', 'admin@example.org')->value('id'));
+    $promoted = array_values(array_filter($rows, fn (array $row): bool => $row['primary']))[0];
+    $demoted = array_values(array_filter($rows, fn (array $row): bool => ! $row['primary']));
+    expect($operator)->not->toBe($result['planter'])
+        ->and($promoted['stamp'])->toBe($operator)
+        ->and($demoted)->toHaveCount(1)
+        ->and($demoted[0]['value'])->toBe('first@example.org')
+        ->and($demoted[0]['stamp'])->toBe($operator);
 });
 
 it('never answers duplicate_contact_method, and leaves a later read identical with or without a hidden match', function () {

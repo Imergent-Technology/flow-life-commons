@@ -108,6 +108,22 @@ function delegatedCallers(): array
     ];
 }
 
+/*
+ * The scan below reads fully qualified names as text, which a grouped import (`use …\Delegated\{UpdatePersonBasics}`) or a
+ * namespace alias (`use …\Delegated as D;`) never spells out. Pest's architecture expectation resolves every name through
+ * PhpParser's NameResolver, so it sees the class however it was imported, in `app/` and in the seeders alike. It is the guard
+ * that holds. The textual scan stays as a second, independent mechanism. Measured against unlisted Relationships classes (2026-10,
+ * Pest 4.7.8): a grouped import is seen only by this guard, a namespace alias only by this guard, a single-class alias by both.
+ */
+foreach (delegatedCallers() as $service => $allowed) {
+    arch("{$service} is used by its named Relationships Application caller only, however it is imported", function () use ($service, $allowed) {
+        expect("App\\Modules\\Crm\\Application\\Delegated\\{$service}")->toOnlyBeUsedIn([
+            ...array_map(fn (string $class): string => "App\\Modules\\Relationships\\Application\\{$class}", $allowed),
+            'App\\Modules\\Crm\\Application\\Delegated',
+        ]);
+    });
+}
+
 it('lets only Relationships\' named Application classes call each delegated service', function () {
     $callers = [];
     foreach (SourceScan::phpFiles(['app', 'database']) as $path) {
