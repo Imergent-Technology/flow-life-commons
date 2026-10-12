@@ -8,15 +8,16 @@ use App\Modules\Crm\Application\Delegated\FindPersonCandidates;
 use App\Modules\Crm\Application\Delegated\InvalidPersonBasics;
 use App\Modules\Crm\Application\Delegated\PeopleMatchingContact;
 use App\Modules\Crm\Application\Delegated\PersonBasicsChanged;
+use App\Modules\Crm\Application\Delegated\PossibleDuplicatePerson;
 use App\Modules\Crm\Application\Delegated\ReadPersonBasics;
 use App\Modules\Crm\Application\Delegated\RegisterMinimalPerson;
 use App\Modules\Crm\Application\Delegated\UpdatePersonBasics;
-use App\Modules\Crm\Application\Delegated\PossibleDuplicatePerson;
 use App\Modules\Identity\Application\PeopleQuery;
 use App\Modules\Identity\Application\PersonNameChanged;
 use App\Modules\Identity\Application\RenamePerson;
 use App\Shared\Domain\PersonId;
 use Illuminate\Support\Facades\DB;
+use PHPUnit\Framework\Assert;
 use Tests\Support\Crm;
 use Tests\Support\Identity;
 
@@ -108,7 +109,7 @@ it('registers a minimal Person with primary methods stamped, and refuses an inva
     foreach ([['Bad', 'nope', null, 'email'], ['Bad', null, '12', 'phone'], ['', null, null, 'display_name']] as [$name, $email, $phone, $field]) {
         try {
             app(RegisterMinimalPerson::class)($name, $email, $phone, false, $by);
-            $this->fail('expected a refusal');
+            Assert::fail('expected a refusal');
         } catch (InvalidPersonBasics $e) {
             expect($e->field)->toBe($field);
         }
@@ -117,7 +118,7 @@ it('registers a minimal Person with primary methods stamped, and refuses an inva
 
     try {
         app(RegisterMinimalPerson::class)('Minimal', null, null, false, $by);
-        $this->fail('expected duplicate advice');
+        Assert::fail('expected duplicate advice');
     } catch (PossibleDuplicatePerson $e) {
         expect($e->candidates)->toHaveCount(1)->and($e->candidates[0]->id->value)->toBe($registered->id->value)
             ->and($e->candidates[0]->matchedOn)->toBe(['display_name']);
@@ -138,7 +139,7 @@ it('refuses the whole update, and reports the three current values, when any exp
             new FieldChange('atomic@example.org', 'changed@example.org'),
             new FieldChange('+1 555 010 0199', '+1 555 010 0100'), // stale: the stored phone is different
         ), $by);
-        $this->fail('expected a conflict');
+        Assert::fail('expected a conflict');
     } catch (PersonBasicsChanged $e) {
         expect($e->current->displayName)->toBe('Atomic')
             ->and($e->current->primaryEmail)->toBe('atomic@example.org')
@@ -178,7 +179,7 @@ it('names the expected current name in a rename, compared exactly after the lock
     foreach (['exact name', 'Exact  Name', 'Exact Name '] as $stale) {
         try {
             $rename($person->id, 'Other', $by, $stale);
-            $this->fail('expected a refusal');
+            Assert::fail('expected a refusal');
         } catch (PersonNameChanged $e) {
             expect($e->currentName)->toBe('Exact Name');
         }

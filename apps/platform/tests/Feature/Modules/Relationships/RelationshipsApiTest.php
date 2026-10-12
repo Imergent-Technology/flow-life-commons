@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Response;
+use Tests\Support\Api;
 use Tests\Support\Console;
 use Tests\Support\Identity;
 use Tests\Support\Mfa;
@@ -281,7 +282,7 @@ it('lists names, status and the two primary details only, and looks up candidate
     expect($page->json('data'))->toHaveCount(1)
         ->and($page->json('data.0.person.display_name'))->toBe('Ada Lovelace')
         ->and($page->json('data.0'))->not->toHaveKey('email')
-        ->and(array_keys($page->json('data.0.basics')))->toBe(['primary_email', 'primary_phone'])
+        ->and(array_keys(Api::map($page->json('data.0.basics'))))->toBe(['primary_email', 'primary_phone'])
         ->and($page->json('data.0.basics'))->toBe(['primary_email' => null, 'primary_phone' => null]);
 
     $console->get('/api/v1/admin/relationships/volunteers?status=former')->assertStatus(422)->assertJson(['code' => 'unknown_relationship_status']);

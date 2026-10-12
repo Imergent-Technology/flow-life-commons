@@ -15,6 +15,7 @@ use App\Modules\Crm\Domain\ContactMethodKind;
 use App\Shared\Domain\Actor;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Tests\Support\Api;
 use Tests\Support\Crm;
 use Tests\Support\Identity;
 
@@ -67,8 +68,8 @@ it('stamps every method a registration creates with the registering Account', fu
         new NewContactMethod(ContactMethodKind::Email, 'second@example.org'),
     ], false);
 
-    $stamps = DB::table('contact_methods')->where('person_id', $record->person->id->value)->pluck('updated_by_account_id')->all();
-    expect($stamps)->toHaveCount(3)->and(array_unique($stamps))->toBe([actorAccount($ada)]);
+    $stamps = DB::table('contact_methods')->where('person_id', $record->person->id->value)->pluck('updated_by_account_id')->map(fn ($stamp): string => Api::string($stamp))->all();
+    expect($stamps)->toHaveCount(3)->and(array_values(array_unique($stamps)))->toBe([actorAccount($ada)]);
 });
 
 it('stamps an added method, and the former primary an added primary demotes, with the adding Account', function () {

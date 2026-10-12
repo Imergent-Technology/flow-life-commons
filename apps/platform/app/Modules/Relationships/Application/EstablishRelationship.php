@@ -140,7 +140,6 @@ final readonly class EstablishRelationship
                         ));
                     }
                 }
-                assert($person !== null);
                 if ($this->relationships->lock($person, $type->key) !== null) {
                     throw new RelationshipExists;
                 }

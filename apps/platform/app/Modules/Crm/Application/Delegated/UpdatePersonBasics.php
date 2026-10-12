@@ -97,7 +97,7 @@ final readonly class UpdatePersonBasics
                 foreach ([[ContactMethodKind::Email, $changes->primaryEmail], [ContactMethodKind::Phone, $changes->primaryPhone]] as [$kind, $change]) {
                     if ($change !== null && $change->from !== $this->primaryOf($methods, $kind)?->value) {
                         // The name may already be renamed in this transaction, which is about to roll back: report what is stored.
-                        throw new PersonBasicsChanged($this->basics($personId, $name?->from ?? $storedName, $methods));
+                        throw new PersonBasicsChanged($this->basics($personId, $name->from ?? $storedName, $methods));
                     }
                 }
 

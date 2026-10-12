@@ -11,11 +11,14 @@ use App\Modules\Crm\Application\ProfileChanges;
 use App\Modules\Crm\Application\SetPersonTags;
 use App\Modules\Crm\Application\UpdatePerson;
 use App\Modules\Crm\Domain\ContactMethodKind;
+use App\Shared\Domain\PersonId;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Tests\Support\Access;
+use Tests\Support\Api;
 use Tests\Support\Console;
 use Tests\Support\Crm;
 use Tests\Support\Identity;
@@ -31,12 +34,59 @@ use Tests\Support\Mfa;
 
 const PA_API = '/api/v1/admin/relationships';
 
+/**
+ * The rows of a paged or listed response, narrowed.
+ *
+ * @param  TestResponse<Response>  $response
+ * @return list<array<string, mixed>>
+ */
+function paRows(TestResponse $response): array
+{
+    return Api::rows($response->json('data'));
+}
+
+/**
+ * The display names of a response's rows, in order.
+ *
+ * @param  TestResponse<Response>  $response
+ * @return list<string>
+ */
+function paNames(TestResponse $response): array
+{
+    return array_map(fn (array $row): string => Api::string(Api::map($row['person'])['display_name']), paRows($response));
+}
+
+/**
+ * The Person ids of a response's rows, in order.
+ *
+ * @param  TestResponse<Response>  $response
+ * @return list<string>
+ */
+function paPersonIds(TestResponse $response): array
+{
+    return array_map(fn (array $row): string => Api::string(Api::map($row['person'])['id']), paRows($response));
+}
+
+/**
+ * The keys of an object a response carries.
+ *
+ * @param  TestResponse<Response>  $response
+ * @return list<string>
+ */
+function paKeys(TestResponse $response, ?string $path = null): array
+{
+    return array_map(strval(...), array_keys(Api::map($response->json($path))));
+}
+
 /** @return array{0: string, 1: int} the relationship id and revision */
 function paVolunteer(Console $console, string $person, string $status = 'active'): array
 {
     $created = $console->post(PA_API.'/volunteers', ['person_id' => $person, 'confirm_existing_person' => true, 'status' => $status])->assertCreated();
 
-    return [Mfa::text($created->json('relationship_id')), (int) $created->json('revision')];
+    $revision = $created->json('revision');
+    assert(is_int($revision));
+
+    return [Mfa::text($created->json('relationship_id')), $revision];
 }
 
 /**
@@ -140,8 +190,8 @@ it('answers one 404 for a Person out of scope, whether or not the Person exists,
     $guardianOnly = paPerson('Only A Guardian', 'g@example.org');
     $console->post(PA_API.'/guardians', ['person_id' => $guardianOnly, 'confirm_existing_person' => true, 'status' => 'active', 'default_role' => 'defer'])->assertCreated();
     $nobody = paPerson('Nobody Special', 'n@example.org');
-    $missing = strtolower((string) Illuminate\Support\Str::ulid());
-    $someId = strtolower((string) Illuminate\Support\Str::ulid());
+    $missing = strtolower((string) Str::ulid());
+    $someId = strtolower((string) Str::ulid());
 
     $answers = [];
     foreach ([$guardianOnly, $nobody, $missing] as $person) {
@@ -155,7 +205,7 @@ it('answers one 404 for a Person out of scope, whether or not the Person exists,
 
     expect($answers[0])->toBe($answers[1])->and($answers[1])->toBe($answers[2])
         ->and($malformed->json())->toBe($answers[0])
-        ->and($answers[0]['code'])->toBe('relationship_not_found')
+        ->and(Api::map($answers[0])['code'])->toBe('relationship_not_found')
         ->and(paMethods($guardianOnly, 'email')[0]['value'])->toBe('g@example.org')
         ->and(paMethods($nobody, 'email')[0]['value'])->toBe('n@example.org')
         ->and(paName($nobody))->toBe('Nobody Special');
@@ -173,7 +223,7 @@ it('refuses a stale or foreign instance, and a re-created relationship, with 409
         ->and($stale->json('current.relationship_id'))->toBe($new)
         ->and(paMethods($person, 'email')[0]['value'])->toBe('old@example.org');
 
-    paEdit($console, $person, strtolower((string) Illuminate\Support\Str::ulid()), ['primary_email' => paChange('old@example.org', 'x@example.org')])->assertStatus(409);
+    paEdit($console, $person, strtolower((string) Str::ulid()), ['primary_email' => paChange('old@example.org', 'x@example.org')])->assertStatus(409);
     $console->patch(PA_API."/volunteers/{$person}/basics", ['primary_email' => paChange('old@example.org', 'x@example.org')])->assertStatus(409); // no instance named at all
     expect(paMethods($person, 'email')[0]['value'])->toBe('old@example.org');
 });
@@ -232,6 +282,7 @@ it('asks for volunteers.manage alone: a Console user without it is refused, and 
 // --- Shape, expected values and normalization ------------------------------------------------------------------------------------
 
 it('refuses what is not exactly the three details as {from, to}, with 422 and nothing written', function (array $body) {
+    /** @var array<string, mixed> $body */
     [$console] = Mfa::signedInAdmin();
     $person = paPerson('Shaped', 'shaped@example.org', '+1 555 010 0100');
     [$id] = paVolunteer($console, $person);
@@ -357,9 +408,9 @@ function paCollide(ContactMethodKind $kind, string $primary, string $hiddenValue
     $person = Identity::savedPerson('Has A Hidden Method')->id->value;
     $control = Identity::savedPerson('Has A Hidden Method')->id->value;
     foreach ([$person, $control] as $id) {
-        Crm::method($by, App\Shared\Domain\PersonId::fromString($id), $kind, $primary, true);
+        Crm::method($by, PersonId::fromString($id), $kind, $primary, true);
     }
-    Crm::method($by, App\Shared\Domain\PersonId::fromString($person), $kind, $hiddenValue, false, 'work');
+    Crm::method($by, PersonId::fromString($person), $kind, $hiddenValue, false, 'work');
     [$relationship] = paVolunteer($console, $person);
     [$controlRelationship] = paVolunteer($console, $control);
 
@@ -378,9 +429,10 @@ function paCollide(ContactMethodKind $kind, string $primary, string $hiddenValue
  */
 function paShape(TestResponse $response): array
 {
-    $body = $response->json();
-    assert(is_array($body));
-    unset($body['relationship_id'], $body['person']['id']);
+    $body = Api::map($response->json());
+    $person = Api::map($body['person']);
+    unset($body['relationship_id'], $person['id']);
+    $body['person'] = $person;
 
     return $body;
 }
@@ -450,15 +502,15 @@ it('stops matching the demoted former primary in the directory search after a hi
 
     $byFormer = $console->get(PA_API.'/volunteers?q=former@example.org')->assertOk();
     $byNew = $console->get(PA_API.'/volunteers?q=promoted@example.org')->assertOk();
-    expect(array_column($byFormer->json('data'), 'relationship_id'))->toBe([])
+    expect(paRows($byFormer))->toBe([])
         ->and($byFormer->json('meta.total'))->toBe(0)
-        ->and(collect($byNew->json('data'))->map(fn (array $row): string => $row['person']['id'])->sort()->values()->all())
+        ->and(collect(paPersonIds($byNew))->sort()->values()->all())
         ->toBe(collect([$result['person'], $result['controlPerson']])->sort()->values()->all()); // the same edit was made on both
 
     // ...yet the exact-match lookup still finds the retained former primary, but only by its exact value (P4): the Person who
     // kept a hidden method is found, and the control, whose former primary was replaced in place, is not.
     $lookup = $console->get(PA_API.'/volunteers/candidates?q=former@example.org')->assertOk();
-    expect(array_map(fn (array $row): string => $row['person']['id'], $lookup->json('data')))->toBe([$result['person']]);
+    expect(paPersonIds($lookup))->toBe([$result['person']]);
 });
 
 // --- Reads, directory search and lookup ------------------------------------------------------------------------------------------
@@ -467,10 +519,10 @@ it('shows the Person\'s primary email and phone beside the name, and nothing els
     [$console] = Mfa::signedInAdmin();
     $by = Crm::manager('crm.manager@example.org');
     $person = paPerson('Visible', 'primary@example.org', '+1 555 010 0100');
-    Crm::method($by, App\Shared\Domain\PersonId::fromString($person), ContactMethodKind::Email, 'secondary@example.org', false, 'private');
-    app(UpdatePerson::class)($by, App\Shared\Domain\PersonId::fromString($person), null, new ProfileChanges(['how_we_know' => 'Marker profile text', 'affiliation' => 'Marker affiliation']));
+    Crm::method($by, PersonId::fromString($person), ContactMethodKind::Email, 'secondary@example.org', false, 'private');
+    app(UpdatePerson::class)($by, PersonId::fromString($person), null, new ProfileChanges(['how_we_know' => 'Marker profile text', 'affiliation' => 'Marker affiliation']));
     $tag = app(CreateTag::class)($by, 'Marker tag')->tag->id;
-    app(SetPersonTags::class)($by, App\Shared\Domain\PersonId::fromString($person), [$tag]);
+    app(SetPersonTags::class)($by, PersonId::fromString($person), [$tag]);
     [$id] = paVolunteer($console, $person);
 
     $record = $console->get(PA_API."/volunteers/{$person}")->assertOk();
@@ -505,7 +557,7 @@ it('gives Guardians basics on the view, never on the management read of a type t
     expect($record->json('basics'))->toBe(['primary_email' => 'guard@example.org', 'primary_phone' => '+1 555 010 0100'])
         ->and($directory->json('data.0.basics'))->toBe(['primary_email' => 'guard@example.org', 'primary_phone' => '+1 555 010 0100'])
         ->and($management->json('basics'))->toBeNull() // Guardians do not edit basics: management carries none (F13)
-        ->and(array_keys($management->json()))->toEqualCanonicalizing([
+        ->and(paKeys($management))->toEqualCanonicalizing([
             'relationship_id', 'type', 'person', 'status', 'revision', 'transitions', 'fields', 'default_role', 'basics',
         ]);
 });
@@ -515,7 +567,7 @@ it('keeps the management read available to a manage-only holder, without the dir
     $person = paPerson('Manage Only', 'only@example.org');
     paVolunteer($console, $person);
 
-    Gate::before(fn ($user, string $ability): ?bool => in_array($ability, ['console.access', 'volunteers.manage'], true) ? true : false);
+    Gate::before(fn ($user, string $ability): bool => in_array($ability, ['console.access', 'volunteers.manage'], true));
 
     $console->get(PA_API."/volunteers/{$person}/management")->assertOk()->assertJsonPath('basics.primary_email', 'only@example.org');
     $console->get(PA_API.'/volunteers')->assertForbidden();
@@ -526,18 +578,15 @@ it('searches names and the PRIMARY contact values of this type\'s People only, a
     [$console] = Mfa::signedInAdmin();
     $by = Crm::manager('crm.manager@example.org');
     $ada = paPerson('Ada Zephyr', 'ada.primary@example.org', '+1 (555) 010-0100');
-    Crm::method($by, App\Shared\Domain\PersonId::fromString($ada), ContactMethodKind::Email, 'ada.hidden@example.org', false);
-    Crm::method($by, App\Shared\Domain\PersonId::fromString($ada), ContactMethodKind::Phone, '+44 20 7946 0958', false);
+    Crm::method($by, PersonId::fromString($ada), ContactMethodKind::Email, 'ada.hidden@example.org', false);
+    Crm::method($by, PersonId::fromString($ada), ContactMethodKind::Phone, '+44 20 7946 0958', false);
     $grace = paPerson('Grace Quill', 'grace@example.org', '+1 555 010 0200');
     $outsider = paPerson('Not A Volunteer', 'outsider.volunteer@example.org', '+1 555 010 0300');
     paVolunteer($console, $ada);
     paVolunteer($console, $grace, 'pending');
     $console->post(PA_API.'/guardians', ['person_id' => $outsider, 'confirm_existing_person' => true, 'status' => 'active', 'default_role' => 'defer'])->assertCreated();
 
-    $people = fn (string $query): array => array_map(
-        fn (array $row): string => $row['person']['display_name'],
-        $console->get(PA_API.'/volunteers?q='.urlencode($query))->assertOk()->json('data'),
-    );
+    $people = fn (string $query): array => paNames($console->get(PA_API.'/volunteers?q='.urlencode($query))->assertOk());
 
     expect($people('ada.primary'))->toBe(['Ada Zephyr'])             // a primary email fragment
         ->and($people('GRACE@EXAMPLE'))->toBe(['Grace Quill'])        // case-insensitive
@@ -554,18 +603,18 @@ it('searches names and the PRIMARY contact values of this type\'s People only, a
 
     // Ordering, paging and the status filter are unchanged.
     $all = $console->get(PA_API.'/volunteers?per_page=1&page=2')->assertOk();
-    expect(array_map(fn (array $row): string => $row['person']['display_name'], $all->json('data')))->toBe(['Grace Quill'])
+    expect(paNames($all))->toBe(['Grace Quill'])
         ->and($all->json('meta'))->toBe(['page' => 2, 'per_page' => 1, 'total' => 2])
         ->and($people('555010'))->toBe(['Ada Zephyr', 'Grace Quill']);
-    expect(array_map(fn (array $row): string => $row['person']['display_name'], $console->get(PA_API.'/volunteers?status=pending&q=555')->json('data')))->toBe(['Grace Quill']);
+    expect(paNames($console->get(PA_API.'/volunteers?status=pending&q=555')))->toBe(['Grace Quill']);
 });
 
 it('looks candidates up by exact address, exact phone digits, or name, and returns no contact value', function () {
     [$console] = Mfa::signedInAdmin();
     $by = Crm::manager('crm.manager@example.org');
     $ada = paPerson('Ada Lookup', 'ada@lookup.org', '+1 555 010 0100');
-    Crm::method($by, App\Shared\Domain\PersonId::fromString($ada), ContactMethodKind::Email, 'ada.second@lookup.org', false);
-    Crm::method($by, App\Shared\Domain\PersonId::fromString($ada), ContactMethodKind::Phone, '+44 20 7946 0958', false);
+    Crm::method($by, PersonId::fromString($ada), ContactMethodKind::Email, 'ada.second@lookup.org', false);
+    Crm::method($by, PersonId::fromString($ada), ContactMethodKind::Phone, '+44 20 7946 0958', false);
     $already = paPerson('Already Volunteer', 'already@lookup.org');
     $guardian = paPerson('Guardian Only', 'guardian.only@lookup.org');
     paVolunteer($console, $already, 'pending');
@@ -573,7 +622,7 @@ it('looks candidates up by exact address, exact phone digits, or name, and retur
     $login = Identity::savedActiveAccount('login.only@example.org', name: 'Has A Login');
 
     $lookup = fn (string $query): TestResponse => $console->get(PA_API.'/volunteers/candidates?q='.urlencode($query));
-    $names = fn (TestResponse $response): array => array_map(fn (array $row): string => $row['person']['display_name'], $response->json('data'));
+    $names = fn (TestResponse $response): array => paNames($response);
 
     $byEmail = $lookup('ADA@lookup.org')->assertOk();
     expect($names($byEmail))->toBe(['Ada Lookup'])
@@ -598,8 +647,8 @@ it('looks candidates up by exact address, exact phone digits, or name, and retur
         ->and($lookup('Has A Login')->json('data.0.matched_on'))->toBe('display_name');
 
     foreach ([$byEmail, $byPhone, $byName, $lookup('guardian only')] as $response) {
-        expect(array_keys($response->json('data.0')))->toBe(['person', 'matched_on', 'status'])
-            ->and(array_keys($response->json('data.0.person')))->toBe(['id', 'display_name'])
+        expect(paKeys($response, 'data.0'))->toBe(['person', 'matched_on', 'status'])
+            ->and(paKeys($response, 'data.0.person'))->toBe(['id', 'display_name'])
             ->and($response->getContent())->not->toContain('@')
             ->and($response->getContent())->not->toContain('555')
             ->and($response->getContent())->not->toContain('guardian"')
@@ -632,7 +681,7 @@ it('lets only a holder of the manage capability look People up', function () {
     $guardian->get(PA_API.'/volunteers/candidates?q=anything')->assertOk(); // guardian-full holds volunteers.manage
 
     [$admin] = Mfa::signedInAdmin();
-    Gate::before(fn ($user, string $ability): ?bool => in_array($ability, ['console.access', 'volunteers.view'], true) ? true : false);
+    Gate::before(fn ($user, string $ability): bool => in_array($ability, ['console.access', 'volunteers.view'], true));
     $admin->get(PA_API.'/volunteers/candidates?q=anything')->assertForbidden(); // the view capability does not look anyone up
 });
 
@@ -714,7 +763,7 @@ it('registers nothing when a detail of the new Person is invalid, and refuses un
     ] as $case) {
         $response = $console->post(PA_API.'/volunteers', ['new_person' => $case['new_person'], 'status' => 'active'])->assertStatus(422);
         expect($response->json('code'))->toBe('invalid_person_basics')
-            ->and(array_keys($response->json('errors')))->toBe([$case['field']]);
+            ->and(paKeys($response, 'errors'))->toBe([$case['field']]);
     }
     $console->post(PA_API.'/volunteers', ['new_person' => ['display_name' => 'Both'], 'person_id' => $existing, 'confirm_existing_person' => true, 'status' => 'active'])
         ->assertStatus(422)->assertJson(['code' => 'invalid_relationship_query']);
@@ -843,4 +892,24 @@ it('leaves the Account, credentials, sessions, roles, grants, Guardian state and
         ->and(paName($person))->toBe('Target Renamed');
     $targetConsole->me()->assertOk(); // the Person's own session still stands
     expect($admin->id->value)->not->toBe('');
+});
+
+it('grants and withdraws no role through any Volunteer operation, intake of a new Person included', function () {
+    [$console] = Mfa::signedInAdmin();
+    $existing = paPerson('Existing Volunteer', 'ev@example.org');
+    $events = DB::table('security_events')->whereIn('type', ['role.granted', 'role.revoked'])->count();
+    $assignments = DB::table('role_assignments')->count();
+
+    [$id] = paVolunteer($console, $existing, 'pending');
+    $new = $console->post(PA_API.'/volunteers', ['new_person' => ['display_name' => 'New Volunteer', 'email' => 'nv@example.org'], 'status' => 'active'])->assertCreated();
+    $console->put(PA_API."/volunteers/{$existing}/status", ['relationship_id' => $id, 'revision' => 1, 'status' => 'active'])->assertOk();
+    $console->patch(PA_API."/volunteers/{$existing}/fields", ['relationship_id' => $id, 'revision' => 2, 'fields' => ['interests' => 'Gardening']])->assertOk();
+    paEdit($console, $existing, $id, ['display_name' => paChange('Existing Volunteer', 'Existing Renamed')])->assertOk();
+    $console->delete(PA_API.'/volunteers/'.Api::string($new->json('person.id')).'?relationship_id='.Api::string($new->json('relationship_id')).'&revision=1')->assertNoContent();
+    $console->delete(PA_API."/volunteers/{$existing}?relationship_id={$id}&revision=3")->assertNoContent();
+
+    expect(DB::table('security_events')->whereIn('type', ['role.granted', 'role.revoked'])->count())->toBe($events)
+        ->and(DB::table('sourced_role_grants')->count())->toBe(0)
+        ->and(DB::table('role_assignments')->count())->toBe($assignments)
+        ->and(DB::table('person_relationship_role_provisions')->count())->toBe(0);
 });

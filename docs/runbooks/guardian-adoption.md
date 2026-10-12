@@ -38,7 +38,7 @@ Nothing creates a Guardian relationship because a Person holds a Guardian-named 
 
 ## Steps, for each Guardian
 
-1. **Look the Person up** (`GET /api/v1/admin/relationships/guardians/candidates?q=`, at least three characters) and confirm it is the right Person. If the Person has no record yet, that is WP3; it is not available here.
+1. **Look the Person up** (`GET /api/v1/admin/relationships/guardians/candidates?q=`, at least three characters; a name, or an exact email address or phone number) and confirm it is the right Person. If the Person has no record yet, send `new_person` (a display name and optionally one email and one phone) instead of `person_id` in step 2: CRM gives its duplicate advice (`possible_duplicate`; review the candidates, then repeat with `confirm_distinct: true` only if the Person is distinct), and registers the Person with the relationship in one transaction.
 2. **Record the relationship** (`POST /api/v1/admin/relationships/guardians`):
    - `person_id` with `confirm_existing_person: true`;
    - `status`: `active`, or `inactive` to record a former Guardian;

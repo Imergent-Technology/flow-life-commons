@@ -91,11 +91,9 @@ final readonly class EstablishRelationshipController
             return RelationshipsProblems::field('invalid_relationship_query', 'confirm_distinct', 'confirm_distinct must be true or false.');
         }
 
-        return new NewPersonDetails(
-            $name,
-            isset($given['email']) ? $given['email'] : null,
-            isset($given['phone']) ? $given['phone'] : null,
-            $distinct,
-        );
+        $email = $given['email'] ?? null;
+        $phone = $given['phone'] ?? null;
+
+        return new NewPersonDetails($name, is_string($email) ? $email : null, is_string($phone) ? $phone : null, $distinct);
     }
 }

@@ -6,8 +6,8 @@ namespace App\Modules\Relationships\Application;
 
 use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Access\Application\AuthorizeAction;
-use App\Modules\Identity\Application\PeopleQuery;
 use App\Modules\Crm\Application\Delegated\PeopleMatchingContact;
+use App\Modules\Identity\Application\PeopleQuery;
 use App\Modules\Identity\Application\SearchPeople;
 use App\Modules\Relationships\Domain\RelationshipId;
 use App\Modules\Relationships\Domain\RelationshipRepository;

@@ -10,7 +10,6 @@ use App\Modules\Crm\Domain\InvalidContactInput;
 use App\Modules\Identity\Application\FindPeople;
 use App\Modules\Identity\Application\PeopleQuery;
 use App\Modules\Identity\Application\SearchPeople;
-use App\Shared\Domain\PersonId;
 
 /**
  * The bounded lookup a relationship's intake uses to find a Person who may already exist (ADR 0038, P4).

@@ -6,21 +6,21 @@ use App\Modules\Access\Application\Role;
 use App\Modules\Crm\Application\ProfileChanges;
 use App\Modules\Crm\Application\UpdateContactMethod;
 use App\Modules\Crm\Application\UpdatePerson;
+use App\Modules\Crm\Domain\ContactMethod;
 use App\Modules\Identity\Domain\Person;
 use App\Modules\Relationships\Application\ChangeRelationshipStatus;
 use App\Modules\Relationships\Application\DecideDefaultRole;
 use App\Modules\Relationships\Application\DefaultRoleChoice;
 use App\Modules\Relationships\Application\DeleteRelationship;
 use App\Modules\Relationships\Application\EstablishRelationship;
+use App\Modules\Relationships\Application\NewPersonDetails;
 use App\Modules\Relationships\Application\RelationshipCatalog;
 use App\Modules\Relationships\Application\RelationshipExists;
-use App\Modules\Relationships\Application\NewPersonDetails;
 use App\Modules\Relationships\Application\RelationshipNotFound;
 use App\Modules\Relationships\Application\StaleBasicDetails;
-use App\Modules\Relationships\Application\UpdateRelationshipPersonBasics;
 use App\Modules\Relationships\Application\StaleRelationshipRevision;
+use App\Modules\Relationships\Application\UpdateRelationshipPersonBasics;
 use App\Modules\Relationships\Domain\RelationshipId;
-use App\Modules\Crm\Domain\ContactMethod;
 use App\Modules\Relationships\Domain\RelationshipType;
 use App\Shared\Domain\Actor;
 use Illuminate\Support\Facades\Artisan;
@@ -373,7 +373,10 @@ function basicsArguments(array $row, array $payload): array
 /** @param array{person: Person} $row */
 function currentMethod(array $row, string $kind): string
 {
-    return (string) DB::table('contact_methods')->where('person_id', $row['person']->id->value)->where('kind', $kind)->whereNotNull('primary_kind')->value('value');
+    $value = DB::table('contact_methods')->where('person_id', $row['person']->id->value)->where('kind', $kind)->whereNotNull('primary_kind')->value('value');
+    assert(is_string($value));
+
+    return $value;
 }
 
 it('makes a scoped email edit wait for a CRM change in flight, then refuse it as stale, and loses nothing', function () {
