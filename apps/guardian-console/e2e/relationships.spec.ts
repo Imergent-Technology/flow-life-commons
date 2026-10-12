@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from '@playwright/test'
+import { expect, test, type Browser, type Locator, type Page } from '@playwright/test'
 
 import { axeViolations, inTheme, THEMES, type Theme } from './axe.ts'
 import { apiFrom, nextCode, recoveryCodesFor, signedInAs, type FixtureSession } from './support.ts'
@@ -131,6 +131,58 @@ async function makeVolunteer(
   })
   expect(made.status, JSON.stringify(made.body)).toBe(201)
   return (made.body as { person: { id: string } }).person.id
+}
+
+/** Records a new person as a Guardian through the API (the administrator is verified and may assign roles), and returns their id. */
+async function makeGuardian(
+  page: Page,
+  name: string,
+  status: 'active' | 'inactive' = 'active',
+  defaultRole: 'grant' | 'decline' | 'defer' = 'decline',
+): Promise<string> {
+  const made = await apiFrom(page, 'POST', `${ROOT}/guardians`, {
+    new_person: {
+      display_name: name,
+      email: `${crypto.randomUUID().slice(0, 12)}@example.org`,
+      phone: null,
+    },
+    status,
+    fields: {},
+    ...(status === 'active' && { default_role: defaultRole }),
+  })
+  expect(made.status, JSON.stringify(made.body)).toBe(201)
+  return (made.body as { person: { id: string } }).person.id
+}
+
+/** Changes a Guardian's status through the API, as someone else working at the same time would. */
+async function setGuardianStatus(
+  page: Page,
+  personId: string,
+  status: 'active' | 'inactive',
+  defaultRole?: 'grant' | 'decline' | 'defer',
+): Promise<void> {
+  const current = await relationshipOf(page, 'guardians', personId)
+  expect(current).not.toBeNull()
+  const changed = await apiFrom(page, 'PUT', `${ROOT}/guardians/${personId}/status`, {
+    relationship_id: current?.id,
+    revision: current?.revision,
+    status,
+    ...(defaultRole !== undefined && { default_role: defaultRole }),
+  })
+  expect(changed.status, JSON.stringify(changed.body)).toBe(200)
+}
+
+/** Whether pressing Tab, from where focus is, reaches this control within a few presses (it is reachable by the keyboard). */
+async function reachableByTab(page: Page, control: Locator, presses = 10): Promise<boolean> {
+  for (let press = 0; press <= presses; press++) {
+    const focused = await control.evaluate((el: unknown) => {
+      const node = el as { ownerDocument: { activeElement: unknown } }
+      return node === node.ownerDocument.activeElement
+    })
+    if (focused) return true
+    await page.keyboard.press('Tab')
+  }
+  return false
 }
 
 async function openNavigation(page: Page): Promise<void> {
@@ -512,7 +564,52 @@ test.describe('what the platform lets each real persona do', () => {
     }
   })
 
-  test('a relationship deleted and recorded again under a working operator is a conflict, and nothing is resent', async ({
+  test('a relationship deleted and recorded again while the operator confirms a change is a different relationship, and the old decision is not applied to it', async ({
+    browser,
+    baseURL,
+  }) => {
+    const page = await signedIn(browser, baseURL, 'plain-guardian')
+    const name = `E2E Recreated Volunteer ${tag()}`
+    const personId = await makeVolunteer(page, name, {}, 'pending')
+    try {
+      await page.goto(`/relationships/volunteers/${personId}`)
+      await expect(page.getByRole('heading', { level: 1, name })).toBeVisible()
+      await page.getByRole('button', { name: 'Change to Active' }).click()
+      const dialog = page.getByRole('dialog', { name: `Change ${name} to Active?` })
+      await expect(dialog).toBeVisible()
+
+      // Behind the operator's back, the relationship they are looking at is deleted and the same person is recorded again, as
+      // a new instance that starts at the same revision (the case a revision alone cannot tell apart).
+      const before = await relationshipOf(page, 'volunteers', personId)
+      expect(before).not.toBeNull()
+      await adminRemove(browser, baseURL, 'volunteers', personId)
+      const again = await apiFrom(page, 'POST', `${ROOT}/volunteers`, {
+        person_id: personId,
+        confirm_existing_person: true,
+        status: 'pending',
+        fields: {},
+      })
+      expect(again.status, JSON.stringify(again.body)).toBe(201)
+      const recreated = again.body as { relationship_id: string; revision: number }
+      expect(recreated.relationship_id).not.toBe(before?.id)
+      expect(recreated.revision).toBe(before?.revision)
+
+      await dialog.getByRole('button', { name: 'Change to Active' }).click()
+      await expect(page.getByText('This volunteer was deleted and recorded again.')).toBeVisible()
+      await expect(page.getByText(/not applied to this one/)).toBeVisible()
+      // The platform holds the new relationship exactly as it was recorded: the old decision never reached it.
+      const now = (await apiFrom(page, 'GET', `${ROOT}/volunteers/${personId}/management`))
+        .body as { relationship_id: string; revision: number; status: string }
+      expect(now.relationship_id).toBe(recreated.relationship_id)
+      expect(now.status).toBe('pending')
+      expect(now.revision).toBe(recreated.revision)
+    } finally {
+      await page.context().close()
+      await adminRemove(browser, baseURL, 'volunteers', personId)
+    }
+  })
+
+  test('a relationship changed by someone else while the operator confirms a change is a conflict, and nothing is resent', async ({
     browser,
     baseURL,
   }) => {
@@ -675,5 +772,175 @@ test.describe('layout', () => {
         .body,
     ).toMatchObject({ data: [] })
     await page.context().close()
+  })
+})
+
+for (const theme of THEMES) {
+  test.describe(`${theme} theme, Guardian screens`, () => {
+    test('no accessibility violation, colour contrast included, in the Guardian record, the Initiate choice, the default-role dialogs, duplicate advice and a stale-details conflict', async ({
+      browser,
+      baseURL,
+    }) => {
+      const admin = await signedIn(browser, baseURL, 'relationships-admin', theme)
+      await ensureVerified(admin, ADMIN_PASSWORD, ADMIN_SECRET)
+      const name = `E2E Audited Guardian ${tag()}`
+      const personId = await makeGuardian(admin, name, 'active', 'decline')
+      let volunteerId = ''
+      try {
+        // The Guardian record, with the default-role panel: a declined decision, which Grant can change.
+        await admin.goto(`/relationships/guardians/${personId}`)
+        await expect(admin.getByRole('heading', { level: 1, name })).toBeVisible()
+        await expect(admin.getByRole('region', { name: 'Guardian Initiate access' })).toContainText(
+          'Declined',
+        )
+        expect(await axeViolations(admin), 'the Guardian record').toEqual([])
+
+        // The access-granting dialog opened from the panel.
+        await admin.getByRole('button', { name: 'Grant access' }).click()
+        const grant = admin.getByRole('dialog', {
+          name: `Grant Guardian Initiate access to ${name}?`,
+        })
+        await expect(grant).toBeVisible()
+        expect(await axeViolations(admin), 'the grant dialog').toEqual([])
+        expect(
+          await reachableByTab(admin, grant.getByRole('button', { name: 'Grant access' })),
+          'the grant button is reachable by Tab',
+        ).toBe(true)
+        await admin.keyboard.press('Escape')
+        await expect(grant).toHaveCount(0)
+
+        // The Initiate choice on reactivation: a declined decision starts unchecked, and the operator can change it.
+        await setGuardianStatus(admin, personId, 'inactive')
+        await admin.goto(`/relationships/guardians/${personId}`)
+        await admin.getByRole('button', { name: 'Change to Active' }).click()
+        const reactivate = admin.getByRole('dialog', { name: `Change ${name} to Active?` })
+        const option = reactivate.getByRole('checkbox', { name: 'Grant Guardian Initiate access' })
+        await expect(option).not.toBeChecked()
+        expect(await axeViolations(admin), 'the Initiate choice on reactivation').toEqual([])
+        expect(await reachableByTab(admin, option), 'the Initiate option is reachable by Tab').toBe(
+          true,
+        )
+        await admin.keyboard.press('Space')
+        await expect(option).toBeChecked()
+        expect(await axeViolations(admin), 'the Initiate choice, checked').toEqual([])
+        await admin.keyboard.press('Escape')
+
+        // The withdraw dialog, for a grant that is in effect.
+        await setGuardianStatus(admin, personId, 'active', 'grant')
+        await admin.goto(`/relationships/guardians/${personId}`)
+        await expect(admin.getByRole('region', { name: 'Guardian Initiate access' })).toContainText(
+          'Granted, and in effect',
+        )
+        await admin.getByRole('button', { name: 'Withdraw access' }).click()
+        const withdraw = admin.getByRole('dialog', {
+          name: `Withdraw Guardian Initiate access from ${name}?`,
+        })
+        await expect(withdraw).toBeVisible()
+        expect(await axeViolations(admin), 'the withdraw dialog').toEqual([])
+        await admin.keyboard.press('Escape')
+
+        // Intake: the Initiate choice, the access-granting confirmation, and duplicate advice for a name that is already known.
+        await admin.goto('/relationships/guardians/new')
+        await admin.getByRole('searchbox', { name: 'Name, email or phone' }).fill('zzzz-nobody')
+        await admin.getByRole('button', { name: 'Search' }).click()
+        await expect(admin.getByText(/No one matches/)).toBeVisible()
+        await admin.getByRole('button', { name: 'Add someone new' }).click()
+        await admin.getByLabel('Display name').fill(name)
+        await admin.getByLabel('Initial status').selectOption('active')
+        const intakeOption = admin.getByRole('checkbox', { name: 'Grant Guardian Initiate access' })
+        await expect(intakeOption).toBeChecked()
+        expect(await axeViolations(admin), 'the intake Initiate choice').toEqual([])
+        expect(
+          await reachableByTab(admin, intakeOption),
+          'the intake Initiate option is reachable by Tab',
+        ).toBe(true)
+
+        await admin.getByRole('button', { name: 'Review and record' }).click()
+        const review = admin.getByRole('dialog', { name: `Record ${name} as a Guardian?` })
+        await expect(review).toContainText('Guardian Initiate access will be granted.')
+        expect(await axeViolations(admin), 'the access-granting confirmation').toEqual([])
+        await review.getByRole('button', { name: 'Record' }).click()
+
+        const advice = admin.getByRole('list', { name: 'Possible duplicates' })
+        await expect(advice).toBeVisible()
+        // Advice only: nobody can be picked from it, and nothing was recorded.
+        await expect(admin.getByRole('button', { name: /^Record .* instead$/ })).toHaveCount(0)
+        await expect(
+          admin.getByRole('button', { name: 'This is a different person: record anyway' }),
+        ).toBeVisible()
+        expect(await axeViolations(admin), 'the duplicate advice').toEqual([])
+
+        // A stale-details conflict: the details moved while the operator was editing them.
+        const volunteerName = `E2E Conflicted Volunteer ${tag()}`
+        volunteerId = await makeVolunteer(admin, volunteerName)
+        await admin.goto(`/relationships/volunteers/${volunteerId}`)
+        await expect(admin.getByRole('heading', { level: 1, name: volunteerName })).toBeVisible()
+        await admin.getByRole('button', { name: 'Edit contact details' }).click()
+        const email = admin.getByRole('textbox', { name: 'Primary email' })
+        const shown = await email.inputValue()
+        const volunteer = await relationshipOf(admin, 'volunteers', volunteerId)
+        const elsewhere = await apiFrom(
+          admin,
+          'PATCH',
+          `${ROOT}/volunteers/${volunteerId}/basics`,
+          {
+            relationship_id: volunteer?.id,
+            primary_email: { from: shown, to: `elsewhere.${tag()}@example.org` },
+          },
+        )
+        expect(elsewhere.status, JSON.stringify(elsewhere.body)).toBe(200)
+        await email.fill(`mine.${tag()}@example.org`)
+        await admin.getByRole('button', { name: 'Save contact details' }).click()
+        await expect(
+          admin.getByRole('table', { name: 'Your values beside the current values' }),
+        ).toBeVisible()
+        expect(await axeViolations(admin), 'the stale-details conflict').toEqual([])
+      } finally {
+        await remove(admin, 'guardians', personId)
+        if (volunteerId !== '') await remove(admin, 'volunteers', volunteerId)
+        await admin.context().close()
+      }
+    })
+  })
+}
+
+test.describe('layout, Guardian screens', () => {
+  test('the Guardian record and its dialogs do not scroll sideways at 320, 375 and 1280px, with a very long name', async ({
+    browser,
+    baseURL,
+  }) => {
+    const admin = await signedIn(browser, baseURL, 'relationships-admin')
+    await ensureVerified(admin, ADMIN_PASSWORD, ADMIN_SECRET)
+    const name = `E2E ${'G'.repeat(120)}${tag()}`
+    const personId = await makeGuardian(admin, name, 'active', 'decline')
+    try {
+      for (const width of [320, 375, 1280]) {
+        await admin.setViewportSize({ width, height: 800 })
+        await admin.goto(`/relationships/guardians/${personId}`)
+        await expect(admin.getByRole('heading', { level: 1 })).toBeVisible()
+        expect(
+          await horizontalOverflow(admin),
+          `the Guardian record at ${String(width)}px`,
+        ).toBeLessThanOrEqual(0)
+        for (const button of ['Grant access', 'Change to Inactive']) {
+          await admin.getByRole('button', { name: button }).click()
+          await expect(admin.getByRole('dialog')).toBeVisible()
+          expect(
+            await horizontalOverflow(admin),
+            `the ${button} dialog at ${String(width)}px`,
+          ).toBeLessThanOrEqual(0)
+          await admin.keyboard.press('Escape')
+        }
+        await admin.goto('/relationships/guardians/new')
+        await expect(admin.getByRole('heading', { level: 1 })).toBeVisible()
+        expect(
+          await horizontalOverflow(admin),
+          `Guardian intake at ${String(width)}px`,
+        ).toBeLessThanOrEqual(0)
+      }
+    } finally {
+      await remove(admin, 'guardians', personId)
+      await admin.context().close()
+    }
   })
 })
