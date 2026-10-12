@@ -210,7 +210,7 @@ test.describe.serial('inviting, changing access, disabling and re-enabling someo
     await admin.getByLabel('Display name').fill(invitee.name)
     await admin.getByLabel('Email address').fill(invitee.email)
     // The access on offer comes from the server; the Console names none of it.
-    await admin.getByRole('checkbox', { name: /Guardian/ }).check()
+    await admin.getByRole('checkbox', { name: 'Guardian', exact: true }).check()
     await admin.getByRole('button', { name: 'Send invitation' }).click()
 
     await expect(admin.getByRole('heading', { level: 1, name: 'Invitation sent' })).toBeVisible()
