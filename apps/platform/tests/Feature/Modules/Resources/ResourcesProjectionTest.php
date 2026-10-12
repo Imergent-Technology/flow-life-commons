@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Access\Application\Authorizer;
+use App\Modules\Identity\Application\DisableAccount;
 use App\Modules\Resources\Application\BrowseDeliveredResources;
 use App\Modules\Resources\Application\CreateCard;
 use App\Modules\Resources\Application\DeliveredCategory;
 use App\Modules\Resources\Application\DeliveredPack;
+use App\Modules\Resources\Application\DownloadDeliveredFile;
 use App\Modules\Resources\Application\GetDeliveredPack;
 use App\Modules\Resources\Application\PackPreview;
 use App\Modules\Resources\Application\PreviewPack;
@@ -34,6 +36,7 @@ use Illuminate\Support\Facades\Schema;
 use Tests\Support\Access;
 use Tests\Support\Api;
 use Tests\Support\Audiences;
+use Tests\Support\ResourceFiles;
 use Tests\Support\Resources;
 
 /*
@@ -41,6 +44,10 @@ use Tests\Support\Resources;
  * a single Pack, search and preview. An invisible Card is not there: not its id, title, summary, position, count or slot, and an
  * invisible Pack answers exactly what a missing one does. Runs on MariaDB and PostgreSQL.
  */
+
+beforeEach(function () {
+    ResourceFiles::fake();
+});
 
 /** A signed-in Person eligible for what `$relations` say (default: an Active Guardian), through real relationships. */
 /** @param  list<string>  $relations */
@@ -489,4 +496,23 @@ it('keeps a Card\'s edit and publication state from affecting other Cards\' numb
     app(UpdateCard::class)($by, $live->pack->id, $draft->card->id, 1, ['title' => 'Still draft']);
 
     expect(array_map(fn ($c): int => $c->index, app(GetDeliveredPack::class)(reader(), $live->pack->id)->cards))->toBe([1, 2]);
+});
+
+it('serves a captured Actor nothing once its Account can no longer authenticate, at the use-case level, whatever the HTTP edge does (ADR 0038, R10)', function () {
+    $by = Resources::editor();
+    $live = Resources::published($by, [Audience::Guardian], 1, 'Deck');
+    $file = ResourceFiles::publishedCard($by, $live, 'Plan', 'plan.pdf');
+    $account = Audiences::reader(['guardian']);
+    $captured = Access::actorFor($account);
+
+    expect(app(BrowseDeliveredResources::class)($captured, null, null))->not->toBe([])
+        ->and(app(GetDeliveredPack::class)($captured, $live->pack->id)->cards)->toHaveCount(2);
+    $opened = app(DownloadDeliveredFile::class)($captured, $live->pack->id, $file->card->id);
+    fclose($opened->stream);
+
+    app(DisableAccount::class)($account->id);
+
+    expect(app(BrowseDeliveredResources::class)($captured, null, null))->toBe([])
+        ->and(fn () => app(GetDeliveredPack::class)($captured, $live->pack->id))->toThrow(ResourcePackNotFound::class)
+        ->and(fn () => app(DownloadDeliveredFile::class)($captured, $live->pack->id, $file->card->id))->toThrow(ResourcePackNotFound::class);
 });

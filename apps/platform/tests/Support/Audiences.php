@@ -67,14 +67,24 @@ final class Audiences
         return $account;
     }
 
-    /** Records the relationship through the real use case, as the operator. `$grant` also provisions Guardian Initiate access (WP2B). */
-    public static function relate(PersonId $person, string $type, string $status = 'active', bool $grant = false): void
+    /**
+     * Records the relationship through the real use case, as the operator, in `$status`: a state that is not an initial one (a Volunteer
+     * cannot be recorded Inactive) is reached by recording it in its first initial state and moving it. `$grant` also provisions Guardian
+     * Initiate access (WP2B). `$fields` are the relationship's descriptive fields.
+     *
+     * @param  array<string, string>  $fields
+     */
+    public static function relate(PersonId $person, string $type, string $status = 'active', bool $grant = false, array $fields = []): void
     {
         $definition = app(RelationshipCatalog::class)->definition(self::type($type));
-        $decides = $definition->defaultRole !== null && $definition->qualifies($status);
+        $initial = $definition->isInitial($status) ? $status : $definition->initialStates[0];
+        $decides = $definition->defaultRole !== null && $definition->qualifies($initial);
         app(EstablishRelationship::class)(
-            self::operator(), self::type($type), $person, true, $status, [], $decides, $decides ? ($grant ? 'grant' : 'defer') : null,
+            self::operator(), self::type($type), $person, true, $initial, $fields, $decides, $decides ? ($grant ? 'grant' : 'defer') : null,
         );
+        if ($initial !== $status) {
+            self::change($person, $type, $status);
+        }
     }
 
     /** Moves the relationship to `$status` through the real use case. */
