@@ -26,21 +26,26 @@ const rules: Rule[] = [
   {
     name: 'a relationship type named in the source',
     because:
-      "types, labels and slugs arrive as served definitions (ADR 0038, C1, C2); a name written here would be a second catalog that drifts, and would make a type's screens different from another's. The registry of extensions is the one place a type key may be written, and the resources client holds the audience key",
+      "types, labels and slugs arrive as served definitions (ADR 0038, C1, C2); a name written here would be a second catalog that drifts, and would make a type's screens different from another's. The registry of extensions is the one place a type key may be written. The Resources client and its wording hold the audience keys and their labels, which are a different catalog (ADR 0037) that WP6 extends",
     appliesTo: anyProduction,
-    allowedIn: /^\.\/(?:relationships\/extensions\.ts|api\/resources\.ts)$/,
+    allowedIn:
+      /^\.\/(?:relationships\/extensions\.ts|api\/resources\.ts|admin\/resourcesWording\.ts)$/,
+    // Case does not matter: a label compared to a type's name is the same second catalog as its key.
     pattern:
-      /['"`](?:guardians?|volunteers?|apprentices?)['"`]|\/relationships\/(?:guardians?|volunteers?)\b/,
+      /['"`](?:guardians?|volunteers?|apprentices?)['"`]|\/relationships\/(?:guardians?|volunteers?)\b/i,
     offends: [
       "const slug = 'volunteers'",
       "const type = 'volunteer'",
       "navigate('/relationships/guardians/new')",
       'const path = `/relationships/volunteers/${id}`',
+      "if (type.labels.singular === 'Guardian') {",
+      'const isOne = label === "VOLUNTEER"',
     ],
     fine: [
       'const path = `/relationships/${type.slug}/${id}`',
       "const sentence = 'Volunteers are people who help'",
       "to: '/relationships'",
+      'const heading = `Record ${withArticle(type.labels.singular)}`',
     ],
   },
   {
@@ -90,15 +95,43 @@ const rules: Rule[] = [
   {
     name: 'a relationship screen deciding from a capability',
     because:
-      'what the operator may do comes from the served `actions`, and the server decides every request (ADR 0038, A2, A9). The one capability a screen may ask about is People view, for the link to the full record',
+      'what the operator may do comes from the served `actions`, and the server decides every request (ADR 0038, A2, A9). The one capability a screen may ask about is People view, for a link to the full record; a capability read any other way (a helper, a method on the list, or a destructured `capabilities`) is the Console deciding from a hint, or from another capability, what only the server decides',
     appliesTo: relationshipScreens,
-    allowedIn: /^\.\/relationships\/RelationshipRecord\.tsx$/,
-    pattern: /auth\/capabilities|hasCapability|\.capabilities\.(?:includes|some|find|has)\b/,
+    allowedIn: /^\.\/relationships\/(?:RelationshipRecord|RelationshipIntake)\.tsx$/,
+    pattern:
+      /auth\/capabilities|hasCapability|\bcapabilities\s*\??\.\s*(?:includes|some|find|findIndex|has|indexOf|every|filter)\b|\{[^}]*\bcapabilities\b[^}]*\}\s*=\s*use/,
     offends: [
       "import { hasCapability } from '../auth/capabilities.ts'",
       'if (current.capabilities.includes(x)) show()',
+      'const { capabilities } = useCurrentAccount()',
+      "if (capabilities.includes('crm.people.view')) show()",
+      "current.capabilities.indexOf('volunteers.manage') >= 0",
+      'const allowed = account?.capabilities.some((c) => c === x)',
     ],
-    fine: ['if (type.actions.manage) show()', 'const actions = type.actions'],
+    fine: [
+      'if (type.actions.manage) show()',
+      'const actions = type.actions',
+      'const capabilityKey = current.capabilities.join(" ")',
+      '// the capabilities an operator holds decide what the server serves',
+    ],
+  },
+  {
+    name: 'a relationship screen making its own request',
+    because:
+      'every request a relationship screen makes goes through api/relationships.ts, which names the instance and revision each mutation needs and parses each reply strictly (ADR 0038, C4, P2). A screen that writes an API path, or calls the request helpers itself, can reach any route with none of that: it must not',
+    appliesTo: relationshipScreens,
+    pattern: /\/api\/v1\/|\brequest(?:Json|Void)\b/,
+    offends: [
+      "requestJson({ method: 'GET', path: '/api/v1/admin/people' }, ok)",
+      "const path = '/api/v1/admin/people'",
+      "import { requestVoid } from '../api/http.ts'",
+      'fetch(`/api/v1/admin/accounts/${id}`)',
+    ],
+    fine: [
+      "import type { Failure, Result } from '../api/http.ts'",
+      "const page = '/relationships'",
+      "import { getRelationship } from '../api/relationships.ts'",
+    ],
   },
   {
     name: 'a default-role word written outside the code that owns the choice',
