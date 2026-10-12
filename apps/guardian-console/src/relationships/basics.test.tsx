@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -195,6 +195,157 @@ describe("keeping a Volunteer's basic details up", () => {
         relationship_id: REL_ID,
         primary_email: { from: 'ada.new@example.org', to: 'ana@example.org' },
       })
+    })
+
+    // The values below are chosen so that an old prefilled value sent back would be visible in the body: every detail
+    // the other person changed differs from what the editor opened with.
+    const savedAfterwards = () =>
+      json(
+        managedBasics({
+          basics: { primary_email: 'ana@example.org', primary_phone: '+1 (555) 010-0100' },
+        }),
+      )
+
+    async function editThenConflict(
+      user: ReturnType<typeof userEvent.setup>,
+      edits: Record<string, string>,
+      current: { display_name: string; primary_email: string; primary_phone: string },
+    ) {
+      const { api } = await open()
+      api.on(`PATCH ${V}/basics`, stalePersonBasics(current))
+      await user.click(screen.getByRole('button', { name: 'Edit contact details' }))
+      for (const [label, value] of Object.entries(edits)) {
+        const input = screen.getByRole('textbox', { name: label })
+        await user.clear(input)
+        await user.type(input, value)
+      }
+      await user.click(screen.getByRole('button', { name: 'Save contact details' }))
+      await screen.findByText(/changed by someone else while you were editing/)
+      return api
+    }
+
+    it("does not turn a detail the operator never touched into their own change: an email edit meets someone else's rename", async () => {
+      const user = userEvent.setup()
+      const api = await editThenConflict(
+        user,
+        { 'Primary email': 'ana@example.org' },
+        {
+          display_name: 'Ada King',
+          primary_email: 'Ana@Example.org',
+          primary_phone: '+1 (555) 010-0100',
+        },
+      )
+      // The form now shows the rename as current; the operator's email is still theirs.
+      expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('Ada King')
+      expect(screen.getByRole('textbox', { name: 'Primary email' })).toHaveValue('ana@example.org')
+      expect(api.callsTo(`PATCH ${V}/basics`)).toHaveLength(1) // nothing was retried
+
+      api.on(`PATCH ${V}/basics`, savedAfterwards())
+      await user.click(screen.getByRole('button', { name: 'Save contact details' }))
+      await screen.findByText('Contact details saved.')
+      expect(bodyOf(api, `PATCH ${V}/basics`, 1)).toEqual({
+        relationship_id: REL_ID,
+        primary_email: { from: 'Ana@Example.org', to: 'ana@example.org' },
+      })
+    })
+
+    it("does not turn a detail the operator never touched into their own change: a rename meets someone else's phone change", async () => {
+      const user = userEvent.setup()
+      const api = await editThenConflict(
+        user,
+        { 'Display name': 'Ada King' },
+        {
+          display_name: 'Ada Lovelace',
+          primary_email: 'Ana@Example.org',
+          primary_phone: '+1 555 999 0000',
+        },
+      )
+      expect(screen.getByRole('textbox', { name: 'Primary phone' })).toHaveValue('+1 555 999 0000')
+      expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('Ada King')
+
+      api.on(`PATCH ${V}/basics`, savedAfterwards())
+      await user.click(screen.getByRole('button', { name: 'Save contact details' }))
+      await screen.findByText('Contact details saved.')
+      expect(bodyOf(api, `PATCH ${V}/basics`, 1)).toEqual({
+        relationship_id: REL_ID,
+        display_name: { from: 'Ada Lovelace', to: 'Ada King' },
+      })
+    })
+
+    it('keeps every detail the operator really edited, and only those, when someone else changed a third', async () => {
+      const user = userEvent.setup()
+      const api = await editThenConflict(
+        user,
+        { 'Display name': 'Ada King', 'Primary email': 'ana@example.org' },
+        {
+          display_name: 'Ada Lovelace',
+          primary_email: 'Ana@Example.org',
+          primary_phone: '+1 555 999 0000',
+        },
+      )
+      expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('Ada King')
+      expect(screen.getByRole('textbox', { name: 'Primary email' })).toHaveValue('ana@example.org')
+      expect(screen.getByRole('textbox', { name: 'Primary phone' })).toHaveValue('+1 555 999 0000')
+
+      api.on(`PATCH ${V}/basics`, savedAfterwards())
+      await user.click(screen.getByRole('button', { name: 'Save contact details' }))
+      await screen.findByText('Contact details saved.')
+      expect(bodyOf(api, `PATCH ${V}/basics`, 1)).toEqual({
+        relationship_id: REL_ID,
+        display_name: { from: 'Ada Lovelace', to: 'Ada King' },
+        primary_email: { from: 'Ana@Example.org', to: 'ana@example.org' },
+      })
+    })
+
+    it("stays safe through a second conflict: the details taken from the first one are still not the operator's", async () => {
+      const user = userEvent.setup()
+      const api = await editThenConflict(
+        user,
+        { 'Primary email': 'ana@example.org' },
+        {
+          display_name: 'Ada King',
+          primary_email: 'Ana@Example.org',
+          primary_phone: '+1 (555) 010-0100',
+        },
+      )
+      api.on(
+        `PATCH ${V}/basics`,
+        stalePersonBasics({
+          display_name: 'Ada Byron',
+          primary_email: 'Ana@Example.org',
+          primary_phone: '+1 (555) 010-0100',
+        }),
+      )
+      await user.click(screen.getByRole('button', { name: 'Save contact details' }))
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('Ada Byron')
+      })
+      expect(api.callsTo(`PATCH ${V}/basics`)).toHaveLength(2)
+
+      api.on(`PATCH ${V}/basics`, savedAfterwards())
+      await user.click(screen.getByRole('button', { name: 'Save contact details' }))
+      await screen.findByText('Contact details saved.')
+      expect(bodyOf(api, `PATCH ${V}/basics`, 2)).toEqual({
+        relationship_id: REL_ID,
+        primary_email: { from: 'Ana@Example.org', to: 'ana@example.org' },
+      })
+    })
+
+    it('still offers no clearing after a conflict, even for a detail that was re-based', async () => {
+      const user = userEvent.setup()
+      const api = await editThenConflict(
+        user,
+        { 'Primary email': 'ana@example.org' },
+        {
+          display_name: 'Ada King',
+          primary_email: 'Ana@Example.org',
+          primary_phone: '+1 (555) 010-0100',
+        },
+      )
+      await user.clear(screen.getByRole('textbox', { name: 'Display name' }))
+      await user.click(screen.getByRole('button', { name: 'Save contact details' }))
+      expect(await screen.findByText('This cannot be cleared here.')).toBeVisible()
+      expect(api.callsTo(`PATCH ${V}/basics`)).toHaveLength(1)
     })
   })
 

@@ -50,6 +50,19 @@ const asTyped = (baseline: Baseline): Typed => ({
 })
 
 /**
+ * What the form holds after the server says the details moved: the operator's own edits are kept, and every detail they did
+ * not change (it still equals what they were shown) takes the current value. A detail is the operator's only if they typed it.
+ */
+function rebasedOnto(typed: Typed, shownBefore: Baseline, current: CurrentBasics): Typed {
+  const now = asTyped(current)
+  const next = { ...typed }
+  for (const key of KEYS) {
+    if (typed[key].trim() === (shownBefore[key] ?? '').trim()) next[key] = now[key]
+  }
+  return next
+}
+
+/**
  * The three basic details a relationship's manager may keep up (ADR 0038, P5): the display name, the primary email and the
  * primary phone, nothing else. It exists only where the type enables it. Each change is sent as `{from, to}`, where `from`
  * is exactly what the operator was shown (casing and spacing included) and an unchanged detail is left out. Clearing is not
@@ -144,8 +157,11 @@ export function BasicsForm({
       case 'failed': {
         const current = staleBasicsCurrent(outcome.failure)
         if (current !== null) {
-          // Keep what the operator typed; compare against what is there now; send nothing until they decide again.
+          // Keep only what the operator actually changed. A detail still equal to what they were shown was merely prefilled,
+          // so it takes the current value: otherwise the next Save would send a reversion of someone else's change as if it
+          // were theirs. Compare against what is there now; send nothing until they decide again.
           setStale(current)
+          setTyped(rebasedOnto(typed, baseline, current))
           setBaseline({
             displayName: current.displayName,
             primaryEmail: current.primaryEmail,
