@@ -1244,7 +1244,7 @@ R1. **The audience catalog is `guardian`, `member` and `volunteer`.**
 
 R2. **OR combination, narrowing and publication are unchanged** (ADR 0037, decisions 13–14 and 39–41). No audience implies another.
 
-R3. **Preview** (`resources.manage`) accepts every catalog audience. Its file `download_path` points at the **management** file route, so that a manage-only previewer can open what preview shows, Draft Cards included.
+R3. **Preview** (`resources.manage`) accepts every catalog audience. Its file `download_path` points at the **management** file route, so that a manage-only previewer can open what preview shows. What preview shows is ADR 0037, decision 49, unchanged: it sets aside the **Pack's** own publication, so the Published Cards of a Draft Pack appear, and it still applies each Card's own publication, audiences and narrowing, so a **Draft Card** never appears in a preview. The management file route is a separate capability: it serves any File Card of an existing Pack, Draft Cards included, to `resources.manage`, whether or not preview shows it.
 
 R4. **Three access policies.** They are separate, non-interchangeable Application services. None takes its authority from a request parameter.
 
@@ -2034,7 +2034,7 @@ WP4 implements Part R exactly as accepted. This section records how, so that an 
 - **The `audience` filter** matches the Packs *targeted at* that audience (the Pack's own set, as management's filter does). A Card narrowed away from an audience does not remove its Pack from that filter.
 - **`publication=draft`** is Draft Packs plus Published Packs that hold a Draft Card, as R8 says, so "has unpublished work" is one filter.
 - **Policy A's file route.** A Pack that does not exist, or a Card that is not in it, is `resource_pack_not_found`; a Card in the Pack with no file is `asset_unavailable`, because the privileged viewer may know the Card exists.
-- **Policy C with no eligibility** short-circuits to an empty library or `resource_pack_not_found`, before any Pack is read.
+- **Policy C with no eligibility** discloses nothing, by either path. The list (`AudienceDelivery::library`) returns an empty library before it reads any Pack. A Pack or file read (`AudienceDelivery::visible`, shared by the Pack and file use cases) may load the Pack, its Card outlines and its Category internally, because the projection with an empty set simply leaves no visible Card; it then raises the same `resource_pack_not_found` as a missing, Draft or ineligible Pack. Those internal reads reach no response: the contract is the identical status, body and headers, not an absence of database reads. A hidden Card's content is still never loaded (`DeliveredPacks` loads only visible Cards).
 - **Revocation and admission.** A restricted Guardian whose Console admission came from a relationship-managed Initiate grant loses admission with the relationship (the grant is withdrawn in the same transaction, K7), so their next request is `403` at the door. A Person whose admission is independent (a `console-participant` or an independently granted `guardian-initiate`) keeps it and meets the `404` of R13. Both are tested.
 - **Renamed types.** G5's `LibraryCategory` and `LibraryPack` became `DeliveredCategory` and `DeliveredListedPack` (policy C), so a policy A type cannot be mistaken for one.
 
@@ -2044,6 +2044,13 @@ WP4 implements Part R exactly as accepted. This section records how, so that an 
 - The management screens' guard still knows two audiences. A Pack or Card that someone targets at `volunteer` through the API reads as an unexpected response there until WP6.
 - No restricted user reaches `my-resources` in the Console yet, because no route or navigation entry points at it.
 - The Playwright library journeys written for G5 assume Guardian-only delivery for a `resources.view` holder, and are rewritten by WP6 and WP7.
+
+These are the known WP6 incompatibilities, deliberately not repaired in WP4. **The intermediate milestone (WP4 without WP6) is not approved for deployment.**
+
+**Audit remediation (2026-10-12).** The independent audit of `1020a45` found the three policies correctly separated at runtime and no production defect. It found test-boundary gaps, all closed by tests alone, with no production change:
+- `ViewerLibrary` and `AudienceDelivery`, which perform no capability check themselves, now have exact caller pins (`ViewerLibrary`: `BrowseLibrary`, `ReadLibraryPack`, `DownloadLibraryFile`; `AudienceDelivery`: `BrowseDeliveredResources`, `GetDeliveredPack`, `DownloadDeliveredFile`).
+- The controller-family rules are `arch()` rules, so an import, grouped import, alias, namespace alias or same-namespace reference cannot hide a dependency. Reader controllers are allowlists (`toOnlyUse`); management controllers are checked one at a time, because Pest's `not->toUse` over a list fails only when every listed class uses the dependency.
+- Negated multi-value `toContain` assertions passed whenever any one value was absent, and a message passed as a second argument counted as such a value. The WP4 assertions that used either form were rewritten as one assertion per value.
 
 ## Consequences
 
