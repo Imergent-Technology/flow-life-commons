@@ -711,7 +711,7 @@ it('shows the default-role state on the Guardian record and management views onl
     }
     $directory = $console->get('/api/v1/admin/relationships/guardians')->assertOk()->json('data.0');
     assert(is_array($directory));
-    expect(array_keys($directory))->toEqualCanonicalizing(['relationship_id', 'person', 'status', 'status_changed_at']);
+    expect(array_keys($directory))->toEqualCanonicalizing(['relationship_id', 'person', 'status', 'status_changed_at', 'basics']);
 
     $volunteer = Identity::savedPerson('Volunteer')->id->value;
     $console->post('/api/v1/admin/relationships/volunteers', [

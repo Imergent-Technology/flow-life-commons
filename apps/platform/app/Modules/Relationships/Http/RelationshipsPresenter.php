@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Relationships\Http;
 
+use App\Modules\Relationships\Application\BasicDetails;
 use App\Modules\Relationships\Application\DefaultRoleState;
 use App\Modules\Relationships\Application\NamedPerson;
 use App\Modules\Relationships\Application\RelationshipCandidate;
@@ -74,6 +75,7 @@ final readonly class RelationshipsPresenter
                 'person' => $this->person($entry->person),
                 'status' => $entry->status,
                 'status_changed_at' => $this->instant($entry->statusChangedAt),
+                'basics' => $this->basics($entry->basics),
             ], $page->entries),
             'meta' => ['page' => $page->page, 'per_page' => $page->perPage, 'total' => $page->total],
         ];
@@ -99,6 +101,7 @@ final readonly class RelationshipsPresenter
             'created_by' => $this->person($view->createdBy),
             'fields' => (object) $this->fields($definition === null ? null : $this->catalog->definition($definition), $view->fields),
             'default_role' => $this->defaultRole($view->defaultRole),
+            'basics' => $this->basics($view->basics),
             'history' => array_map(fn (RelationshipHistoryEntry $entry): array => [
                 'from_status' => $entry->fromStatus,
                 'to_status' => $entry->toStatus,
@@ -122,7 +125,19 @@ final readonly class RelationshipsPresenter
             'transitions' => $view->transitions,
             'fields' => (object) $this->fields($type === null ? null : $this->catalog->definition($type), $view->fields),
             'default_role' => $this->defaultRole($view->defaultRole),
+            'basics' => $this->basics($view->basics),
         ];
+    }
+
+    /**
+     * The Person's primary email and primary phone, as CRM stores them, or null where the type does not offer them. The
+     * name is already in `person`. Nothing else of the Person's contact data is ever in it (ADR 0038, P2).
+     *
+     * @return array{primary_email: string|null, primary_phone: string|null}|null
+     */
+    private function basics(?BasicDetails $basics): ?array
+    {
+        return $basics === null ? null : ['primary_email' => $basics->primaryEmail, 'primary_phone' => $basics->primaryPhone];
     }
 
     /** @return array<string, mixed>|null */

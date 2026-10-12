@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Crm\Domain;
 
+use App\Shared\Domain\AccountId;
 use App\Shared\Domain\PersonId;
 use DateTimeImmutable;
 
@@ -26,6 +27,7 @@ final readonly class ContactMethod
         public bool $isPrimary,
         public DateTimeImmutable $createdAt,
         public DateTimeImmutable $updatedAt,
+        public ?AccountId $updatedBy,
     ) {}
 
     /** @throws InvalidContactInput */
@@ -37,10 +39,11 @@ final readonly class ContactMethod
         ?string $label,
         bool $isPrimary,
         DateTimeImmutable $now,
+        ?AccountId $by = null,
     ): self {
         $display = $kind->display($value);
 
-        return new self($id, $personId, $kind, $display, $kind->searchValue($display), self::label($label), $isPrimary, $now, $now);
+        return new self($id, $personId, $kind, $display, $kind->searchValue($display), self::label($label), $isPrimary, $now, $now, $by);
     }
 
     public static function reconstitute(
@@ -53,27 +56,28 @@ final readonly class ContactMethod
         bool $isPrimary,
         DateTimeImmutable $createdAt,
         DateTimeImmutable $updatedAt,
+        ?AccountId $updatedBy = null,
     ): self {
-        return new self($id, $personId, $kind, $value, $searchValue, $label, $isPrimary, $createdAt, $updatedAt);
+        return new self($id, $personId, $kind, $value, $searchValue, $label, $isPrimary, $createdAt, $updatedAt, $updatedBy);
     }
 
     /** @throws InvalidContactInput */
-    public function withValue(string $value, DateTimeImmutable $now): self
+    public function withValue(string $value, DateTimeImmutable $now, AccountId $by): self
     {
         $display = $this->kind->display($value);
 
-        return new self($this->id, $this->personId, $this->kind, $display, $this->kind->searchValue($display), $this->label, $this->isPrimary, $this->createdAt, $now);
+        return new self($this->id, $this->personId, $this->kind, $display, $this->kind->searchValue($display), $this->label, $this->isPrimary, $this->createdAt, $now, $by);
     }
 
     /** @throws InvalidContactInput */
-    public function withLabel(?string $label, DateTimeImmutable $now): self
+    public function withLabel(?string $label, DateTimeImmutable $now, AccountId $by): self
     {
-        return new self($this->id, $this->personId, $this->kind, $this->value, $this->searchValue, self::label($label), $this->isPrimary, $this->createdAt, $now);
+        return new self($this->id, $this->personId, $this->kind, $this->value, $this->searchValue, self::label($label), $this->isPrimary, $this->createdAt, $now, $by);
     }
 
-    public function withPrimary(bool $isPrimary, DateTimeImmutable $now): self
+    public function withPrimary(bool $isPrimary, DateTimeImmutable $now, AccountId $by): self
     {
-        return new self($this->id, $this->personId, $this->kind, $this->value, $this->searchValue, $this->label, $isPrimary, $this->createdAt, $now);
+        return new self($this->id, $this->personId, $this->kind, $this->value, $this->searchValue, $this->label, $isPrimary, $this->createdAt, $now, $by);
     }
 
     /** @throws InvalidContactInput */

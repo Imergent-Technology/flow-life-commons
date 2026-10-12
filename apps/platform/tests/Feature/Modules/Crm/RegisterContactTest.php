@@ -13,8 +13,10 @@ use App\Modules\Crm\Domain\ContactMethodId;
 use App\Modules\Crm\Domain\ContactMethodKind;
 use App\Modules\Crm\Domain\ContactMethodRepository;
 use App\Modules\Crm\Domain\InvalidContactInput;
+use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
+use DateTimeImmutable;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Assert;
 use Tests\Support\Access;
@@ -217,6 +219,16 @@ it('rolls the new Person back with it when a CRM write fails after the Person wa
             return $this->real->forPeople($personIds);
         }
 
+        public function forPersonLocked(PersonId $personId): array
+        {
+            return $this->real->forPersonLocked($personId);
+        }
+
+        public function primaryValues(array $personIds): array
+        {
+            return $this->real->primaryValues($personIds);
+        }
+
         public function add(ContactMethod $method): void
         {
             throw new RuntimeException('contact store unavailable');
@@ -232,14 +244,19 @@ it('rolls the new Person back with it when a CRM write fails after the Person wa
             $this->real->remove($id);
         }
 
-        public function clearPrimary(PersonId $personId, ContactMethodKind $kind): void
+        public function clearPrimary(PersonId $personId, ContactMethodKind $kind, AccountId $by, DateTimeImmutable $now): void
         {
-            $this->real->clearPrimary($personId, $kind);
+            $this->real->clearPrimary($personId, $kind, $by, $now);
         }
 
-        public function personIdsWithSearchValue(ContactMethodKind $kind, string $searchValue): array
+        public function personIdsWithSearchValue(ContactMethodKind $kind, string $searchValue, ?int $limit = null): array
         {
-            return $this->real->personIdsWithSearchValue($kind, $searchValue);
+            return $this->real->personIdsWithSearchValue($kind, $searchValue, $limit);
+        }
+
+        public function personIdsMatchingPrimary(string $text, array $within, int $limit): array
+        {
+            return $this->real->personIdsMatchingPrimary($text, $within, $limit);
         }
 
         public function personIdsMatching(string $text, int $limit): array

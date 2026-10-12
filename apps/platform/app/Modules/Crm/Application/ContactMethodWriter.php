@@ -8,6 +8,7 @@ use App\Modules\Crm\Domain\ContactMethod;
 use App\Modules\Crm\Domain\ContactMethodId;
 use App\Modules\Crm\Domain\ContactMethodRepository;
 use App\Modules\Crm\Domain\InvalidContactInput;
+use App\Shared\Domain\AccountId;
 use App\Shared\Domain\PersonId;
 use DateTimeImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -26,12 +27,15 @@ final readonly class ContactMethodWriter
      * The first method of a kind a Person has becomes their primary of that kind, whatever was asked; a later one only
      * if it is asked to be, which demotes the one before it. Exactly one primary per kind, at most.
      *
+     * Every row this changes is stamped with `$by`, the acting Account (ADR 0038, P9): the new method, and the former
+     * primary it demotes. The caller's profile lock covers both writes.
+     *
      * @throws InvalidContactInput
      * @throws DuplicateContactMethod the Person already has that kind and value
      */
-    public function add(PersonId $personId, NewContactMethod $new, DateTimeImmutable $now): ContactMethod
+    public function add(PersonId $personId, NewContactMethod $new, DateTimeImmutable $now, AccountId $by): ContactMethod
     {
-        $method = ContactMethod::create(ContactMethodId::generate(), $personId, $new->kind, $new->value, $new->label, false, $now);
+        $method = ContactMethod::create(ContactMethodId::generate(), $personId, $new->kind, $new->value, $new->label, false, $now, $by);
 
         $ofKind = [];
         foreach ($this->methods->forPerson($personId) as $existing) {
@@ -46,10 +50,10 @@ final readonly class ContactMethodWriter
 
         $primary = $new->isPrimary || $ofKind === [];
         if ($primary && $ofKind !== []) {
-            $this->methods->clearPrimary($personId, $method->kind);
+            $this->methods->clearPrimary($personId, $method->kind, $by, $now);
         }
 
-        $method = $method->withPrimary($primary, $now);
+        $method = $method->withPrimary($primary, $now, $by);
         try {
             $this->methods->add($method);
         } catch (UniqueConstraintViolationException) {

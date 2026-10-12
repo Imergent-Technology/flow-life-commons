@@ -8,8 +8,9 @@ use Tests\Support\SourceScan;
  * The Relationships module's boundaries (ADR 0038). Modules are discovered from disk, so ModuleBoundariesTest and the
  * frozen graph already cover it. These are the Relationships-specific statements.
  *
- * WP1 may use Access, Identity and Audit through their Application layers. It does not take the CRM edge: that seam is WP3.
- * QualifyingRelationships has no caller outside the module until Resources' audience eligibility (WP4).
+ * Relationships may use Access, Identity and Audit through their Application layers, and CRM only through
+ * `Crm\Application\Delegated` (WP3, P1): which Relationships class may call which delegated service is pinned in
+ * CrmBoundariesTest. QualifyingRelationships has no caller outside the module until Resources' audience eligibility (WP4).
  */
 
 $relationships = 'App\\Modules\\Relationships';
@@ -31,8 +32,9 @@ arch('Relationships uses Audit only through its Application layer, and only Dele
     ]);
 });
 
-arch('Relationships does not depend on CRM, Membership, Resources or WordPress', function () use ($relationships) {
-    expect($relationships)->not->toUse(['App\\Modules\\Crm', 'App\\Modules\\Membership', 'App\\Modules\\Resources', 'WP_', 'wp_']);
+arch('Relationships does not depend on Membership, Resources or WordPress, and takes from CRM nothing but its delegated services', function () use ($relationships) {
+    expect($relationships)->not->toUse(['App\\Modules\\Membership', 'App\\Modules\\Resources', 'WP_', 'wp_'])
+        ->and($relationships)->not->toUse(['App\\Modules\\Crm\\Domain', 'App\\Modules\\Crm\\Infrastructure', 'App\\Modules\\Crm\\Http']);
 });
 
 arch('Relationships Domain is plain PHP: no framework and no other layer', function () use ($relationships) {
@@ -74,6 +76,7 @@ arch('view use cases ask for the definition view capability and manage use cases
         ->and(SourceScan::code(SourceScan::read($root.'/UpdateRelationshipFields.php')))->toContain('manageCapability')
         ->and(SourceScan::code(SourceScan::read($root.'/DeleteRelationship.php')))->toContain('manageCapability')
         ->and(SourceScan::code(SourceScan::read($root.'/DecideDefaultRole.php')))->toContain('manageCapability')
+        ->and(SourceScan::code(SourceScan::read($root.'/UpdateRelationshipPersonBasics.php')))->toContain('manageCapability')
         ->and(SourceScan::code(SourceScan::read($root.'/ListRelationshipCandidates.php')))->toContain('manageCapability');
 });
 

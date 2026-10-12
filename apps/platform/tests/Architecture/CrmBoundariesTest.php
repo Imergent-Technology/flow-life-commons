@@ -79,10 +79,137 @@ arch('Audit does not depend on Crm', function () {
     expect('App\\Modules\\Audit')->not->toUse('App\\Modules\\Crm');
 });
 
-arch('nothing outside Crm uses Crm, but the development-only demo seeder, which uses its public use cases as an operator would', function () use ($crm) {
-    // The one exception is `Database\Seeders\CrmDemoSeeder`: opt-in, refused outside local and testing, and referenced by
-    // nothing in the application (CrmDemoSeederTest pins each). It writes through Crm's own use cases (its one direct write is repairing provenance that names a Person who no longer exists).
-    expect($crm)->toOnlyBeUsedIn([$crm, 'Database\\Seeders\\CrmDemoSeeder']);
+arch('nothing outside Crm uses Crm, but the development-only demo seeder and Relationships\' use of the delegated seam', function () use ($crm) {
+    // `Database\Seeders\CrmDemoSeeder`: opt-in, refused outside local and testing, and referenced by nothing in the application
+    // (CrmDemoSeederTest pins each). It writes through Crm's own use cases (its one direct write is repairing provenance that names
+    // a Person who no longer exists). Relationships' Application layer is the other: it may use `Crm\Application\Delegated`, and ONLY
+    // that, from the named classes below (ADR 0038, P1). The scans after this one pin both of those restrictions.
+    expect($crm)->toOnlyBeUsedIn([$crm, 'Database\\Seeders\\CrmDemoSeeder', 'App\\Modules\\Relationships\\Application']);
+});
+
+arch('Crm does not depend on Relationships: it does not know which relationship, or which capability, asked', function () use ($crm) {
+    expect($crm)->not->toUse('App\\Modules\\Relationships');
+});
+
+/**
+ * The delegated services (ADR 0038, P1) and the ONLY classes allowed to name each one. A class that names one is a caller:
+ * its authorization and scope check are what make the call safe, so a new caller is a deliberate change to this table.
+ *
+ * @return array<string, list<string>> delegated class => the Relationships Application classes that may use it
+ */
+function delegatedCallers(): array
+{
+    return [
+        'ReadPersonBasics' => ['RelationshipPresentation'],
+        'PeopleMatchingContact' => ['ListRelationshipDirectory'],
+        'FindPersonCandidates' => ['ListRelationshipCandidates'],
+        'RegisterMinimalPerson' => ['EstablishRelationship'],
+        'UpdatePersonBasics' => ['UpdateRelationshipPersonBasics'],
+    ];
+}
+
+/*
+ * The scan below reads fully qualified names as text, which a grouped import (`use …\Delegated\{UpdatePersonBasics}`) or a
+ * namespace alias (`use …\Delegated as D;`) never spells out. Pest's architecture expectation resolves every name through
+ * PhpParser's NameResolver, so it sees the class however it was imported, in `app/` and in the seeders alike. It is the guard
+ * that holds. The textual scan stays as a second, independent mechanism. Measured against unlisted Relationships classes (2026-10,
+ * Pest 4.7.8): a grouped import is seen only by this guard, a namespace alias only by this guard, a single-class alias by both.
+ */
+foreach (delegatedCallers() as $service => $allowed) {
+    arch("{$service} is used by its named Relationships Application caller only, however it is imported", function () use ($service, $allowed) {
+        expect("App\\Modules\\Crm\\Application\\Delegated\\{$service}")->toOnlyBeUsedIn([
+            ...array_map(fn (string $class): string => "App\\Modules\\Relationships\\Application\\{$class}", $allowed),
+            'App\\Modules\\Crm\\Application\\Delegated',
+        ]);
+    });
+}
+
+it('lets only Relationships\' named Application classes call each delegated service', function () {
+    $callers = [];
+    foreach (SourceScan::phpFiles(['app', 'database']) as $path) {
+        $relative = SourceScan::relative($path);
+        if (str_starts_with($relative, 'app/Modules/Crm/Application/Delegated/')) {
+            continue;
+        }
+        $code = SourceScan::code(SourceScan::read($path));
+        foreach (array_keys(delegatedCallers()) as $service) {
+            if (preg_match('/Crm\\\\Application\\\\Delegated\\\\'.$service.'\\b/', $code) === 1) {
+                $callers[$service][] = $relative;
+            }
+        }
+    }
+
+    foreach (delegatedCallers() as $service => $allowed) {
+        $expected = array_map(fn (string $class): string => "app/Modules/Relationships/Application/{$class}.php", $allowed);
+        expect($callers[$service] ?? [])->toBe($expected, "{$service} may be called only from ".implode(', ', $allowed));
+    }
+});
+
+it('lets Relationships name nothing of Crm but its delegated Application services', function () {
+    $offenders = [];
+    foreach (SourceScan::phpFiles(['app/Modules/Relationships']) as $path) {
+        preg_match_all('/App\\\\Modules\\\\Crm\\\\([A-Za-z\\\\]+)/', SourceScan::code(SourceScan::read($path)), $matches);
+        foreach ($matches[1] as $name) {
+            if (! str_starts_with($name, 'Application\\Delegated\\')) {
+                $offenders[] = SourceScan::relative($path).' names Crm\\'.$name;
+            }
+        }
+    }
+
+    // Positive control: the scan reads a Crm Domain name and a non-delegated Application name as offenders.
+    preg_match_all('/App\\\\Modules\\\\Crm\\\\([A-Za-z\\\\]+)/', SourceScan::code('<?php use App\\Modules\\Crm\\Domain\\ContactMethod; use App\\Modules\\Crm\\Application\\AddContactMethod;'), $control);
+
+    expect($offenders)->toBe([])
+        ->and($control[1])->toBe(['Domain\\ContactMethod', 'Application\\AddContactMethod']);
+});
+
+it('keeps the delegated services free of authorization, capabilities and any relationship vocabulary', function () {
+    // They authorize nothing and know nothing of relationships: their caller decided both (ADR 0038, P1).
+    $forbidden = '/Capability|AuthorizeAction|Authorizer|App\\\\Modules\\\\Access|App\\\\Modules\\\\Relationships|guardian|volunteer|relationship/i';
+    $offenders = [];
+    foreach (SourceScan::phpFiles(['app/Modules/Crm/Application/Delegated']) as $path) {
+        if (preg_match($forbidden, SourceScan::code(SourceScan::read($path))) === 1) {
+            $offenders[] = SourceScan::relative($path);
+        }
+    }
+
+    expect($offenders)->toBe([])
+        ->and(preg_match($forbidden, 'Capability::ManagePeople'))->toBe(1)
+        ->and(preg_match($forbidden, 'the Volunteer type'))->toBe(1);
+});
+
+it('puts no HTTP class in reach of the delegated services', function () {
+    $offenders = [];
+    foreach (SourceScan::phpFiles(['app']) as $path) {
+        $relative = SourceScan::relative($path);
+        if (preg_match('~app/Modules/\w+/Http/~', $relative) !== 1) {
+            continue;
+        }
+        if (str_contains(SourceScan::code(SourceScan::read($path)), 'Crm\\Application\\Delegated')) {
+            $offenders[] = $relative;
+        }
+    }
+
+    expect($offenders)->toBe([]);
+});
+
+it('lets PersonRegistration be used only by RegisterContact and the delegated RegisterMinimalPerson', function () {
+    $users = [];
+    foreach (SourceScan::phpFiles(['app', 'database']) as $path) {
+        $relative = SourceScan::relative($path);
+        if ($relative === 'app/Modules/Crm/Application/PersonRegistration.php') {
+            continue;
+        }
+        if (preg_match('/\bPersonRegistration\b/', SourceScan::code(SourceScan::read($path))) === 1) {
+            $users[] = $relative;
+        }
+    }
+    sort($users);
+
+    expect($users)->toBe([
+        'app/Modules/Crm/Application/Delegated/RegisterMinimalPerson.php',
+        'app/Modules/Crm/Application/RegisterContact.php',
+    ]);
 });
 
 // --- Layers -------------------------------------------------------------------------------------------------------
@@ -272,8 +399,14 @@ it('has every read ask for crm.people.view alone and every change ask for crm.pe
     }
 
     // Every Application class in Crm that is a use case (it takes an Actor) is listed above: a new one cannot skip the check.
+    // The two carve-outs authorize nothing by design: `PersonRegistration` is the shared registration implementation its two
+    // callers authorize before calling, and the delegated services (a different namespace, pinned by their own tests above)
+    // are authorized by Relationships. Both are pinned to their callers.
     foreach (SourceScan::phpFiles(['app/Modules/Crm/Application']) as $path) {
         $name = basename($path, '.php');
+        if (str_contains($path, '/Delegated/') || $name === 'PersonRegistration') {
+            continue;
+        }
         if (str_contains(SourceScan::code(SourceScan::read($path)), 'Actor $actor')) {
             expect(array_key_exists($name, $expected))->toBeTrue("{$name} takes an Actor but is not in the capability table");
         }

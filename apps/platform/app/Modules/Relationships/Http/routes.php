@@ -13,6 +13,7 @@ use App\Modules\Relationships\Http\ListRelationshipTypesController;
 use App\Modules\Relationships\Http\ShowRelationshipController;
 use App\Modules\Relationships\Http\ShowRelationshipManagementController;
 use App\Modules\Relationships\Http\UpdateRelationshipFieldsController;
+use App\Modules\Relationships\Http\UpdateRelationshipPersonBasicsController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -28,7 +29,8 @@ use Illuminate\Support\Facades\Route;
  * so a route under them may omit `security.verified`. The routes that still carry it are the table.
  *
  * `GET relationship-types` carries only Console admission (A6). The default-role route is
- * generated only for a type that names a default role. No basics route: that is WP3.
+ * generated only for a type that names a default role, and the basics route only for a type that
+ * enables `people.edit_basics`. A basics edit needs no recent verification: it changes no authority (P6).
  */
 
 $catalog = app(RelationshipCatalog::class);
@@ -79,6 +81,12 @@ Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin
                     ->defaults('relationship_type', $type)
                     ->middleware($verified('default_role'))
                     ->name("api.v1.admin.relationships.{$slug}.default-role");
+            }
+            if ($definition->hasFeature('people.edit_basics')) {
+                Route::patch("relationships/{$slug}/{person}/basics", UpdateRelationshipPersonBasicsController::class)
+                    ->where('person', $person)
+                    ->defaults('relationship_type', $type)
+                    ->name("api.v1.admin.relationships.{$slug}.basics");
             }
             Route::patch("relationships/{$slug}/{person}/fields", UpdateRelationshipFieldsController::class)
                 ->where('person', $person)

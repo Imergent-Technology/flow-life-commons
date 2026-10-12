@@ -322,9 +322,10 @@ it('has an acyclic module graph limited to the frozen edges', function () {
         // permanent-deletion events (decision 55), through Audit\Application only. It is a deliberate, narrow edge: the use cases that
         // may call the seam are pinned in MembershipTrustBoundariesTest and ResourcesBoundariesTest.
         'Resources' => ['Access', 'Identity', 'Audit'],
-        // Relationships -> Access, Identity, Audit (ADR 0038). The Crm edge is the delegated seam and is taken in WP3,
-        // so a Relationships file that imports Crm fails here until that package. Access never depends on Relationships.
-        'Relationships' => ['Access', 'Identity', 'Audit'],
+        // Relationships -> Access, Identity, Audit, Crm (ADR 0038). The Crm edge is the delegated seam (WP3, P1): only
+        // `Crm\Application\Delegated`, only from named Relationships Application classes, pinned in CrmBoundariesTest and
+        // RelationshipsBoundariesTest. Crm never depends on Relationships, and Access never depends on Relationships.
+        'Relationships' => ['Access', 'Identity', 'Audit', 'Crm'],
     ];
     foreach ($graph as $module => $edges) {
         if (! array_key_exists($module, $allowed)) {
@@ -369,7 +370,7 @@ it('has an acyclic module graph limited to the frozen edges', function () {
         ->and($graph['Relationships'])->toContain('Access')
         ->and($graph['Relationships'])->toContain('Identity')
         ->and($graph['Relationships'])->toContain('Audit')
-        ->and($graph['Relationships'])->not->toContain('Crm')
+        ->and($graph['Relationships'])->toContain('Crm') // only the delegated seam: CrmBoundariesTest pins which classes and which services
         ->and($graph['Access'])->not->toContain('Relationships');
 });
 

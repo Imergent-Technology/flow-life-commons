@@ -59,15 +59,18 @@ use App\Modules\Membership\Http\MembershipRecordNotFound;
 use App\Modules\Relationships\Application\ConfirmationRequired;
 use App\Modules\Relationships\Application\DefaultRoleDecisionRequired;
 use App\Modules\Relationships\Application\DefaultRoleNotApplicable;
+use App\Modules\Relationships\Application\InvalidBasicDetail;
 use App\Modules\Relationships\Application\InvalidDefaultRoleChoice;
 use App\Modules\Relationships\Application\InvalidRelationshipQuery;
 use App\Modules\Relationships\Application\NewPersonNotSupported;
+use App\Modules\Relationships\Application\PossibleDuplicatePersonAdvice;
 use App\Modules\Relationships\Application\RelationshipExists;
 use App\Modules\Relationships\Application\RelationshipInUse;
 use App\Modules\Relationships\Application\RelationshipNotActive;
 use App\Modules\Relationships\Application\RelationshipNotFound;
 use App\Modules\Relationships\Application\RelationshipSearchTooBroad;
 use App\Modules\Relationships\Application\RoleProvisioningNotPermitted;
+use App\Modules\Relationships\Application\StaleBasicDetails;
 use App\Modules\Relationships\Application\StaleRelationshipRevision;
 use App\Modules\Relationships\Application\TransitionNotAllowed;
 use App\Modules\Relationships\Application\UnknownRelationshipPerson;
@@ -327,6 +330,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Organizational relationships (ADR 0038). Scope and staleness before shape.
         $exceptions->render(fn (RelationshipNotFound $e) => RelationshipsProblems::notFound());
         $exceptions->render(fn (StaleRelationshipRevision $e) => app(RelationshipsProblems::class)->stale($e));
+        $exceptions->render(fn (StaleBasicDetails $e) => RelationshipsProblems::staleBasics($e));
+        $exceptions->render(fn (PossibleDuplicatePersonAdvice $e) => RelationshipsProblems::possibleDuplicate($e));
+        $exceptions->render(fn (InvalidBasicDetail $e) => RelationshipsProblems::invalidBasics($e));
         $exceptions->render(fn (RelationshipExists $e) => RelationshipsProblems::exists());
         $exceptions->render(fn (RelationshipInUse $e) => RelationshipsProblems::inUse());
         $exceptions->render(fn (ConfirmationRequired $e) => RelationshipsProblems::coded('confirmation_required', $e->getMessage()));

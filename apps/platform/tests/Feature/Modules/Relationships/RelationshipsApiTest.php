@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Response;
+use Tests\Support\Api;
 use Tests\Support\Console;
 use Tests\Support\Identity;
 use Tests\Support\Mfa;
@@ -99,7 +100,7 @@ it('refuses intake that is unconfirmed, for an unknown Person, for a new Person,
         'confirm_existing_person' => true,
         'status' => 'pending',
         'new_person' => ['display_name' => 'Should Not Exist'],
-    ])->assertStatus(422)->assertJson(['code' => 'new_person_not_supported']);
+    ])->assertStatus(422)->assertJson(['code' => 'invalid_relationship_query']); // an existing Person and a new one, never both
 
     $person = relationshipPerson('Role Person');
     $console->post('/api/v1/admin/relationships/guardians', [
@@ -266,7 +267,7 @@ it('answers a missing relationship as not found, whether or not the Person exist
     $console->get("/api/v1/admin/relationships/guardians/{$present}/management")->assertNotFound();
 });
 
-it('lists names and status only, and looks up candidates by display name', function () {
+it('lists names, status and the two primary details only, and looks up candidates by display name', function () {
     [$console] = Mfa::signedInAdmin();
     $ada = relationshipPerson('Ada Lovelace');
     $grace = relationshipPerson('Grace Hopper');
@@ -281,7 +282,8 @@ it('lists names and status only, and looks up candidates by display name', funct
     expect($page->json('data'))->toHaveCount(1)
         ->and($page->json('data.0.person.display_name'))->toBe('Ada Lovelace')
         ->and($page->json('data.0'))->not->toHaveKey('email')
-        ->and(json_encode($page->json()))->not->toContain('phone');
+        ->and(array_keys(Api::map($page->json('data.0.basics'))))->toBe(['primary_email', 'primary_phone'])
+        ->and($page->json('data.0.basics'))->toBe(['primary_email' => null, 'primary_phone' => null]);
 
     $console->get('/api/v1/admin/relationships/volunteers?status=former')->assertStatus(422)->assertJson(['code' => 'unknown_relationship_status']);
     $console->get('/api/v1/admin/relationships/volunteers?per_page=0')->assertStatus(422)->assertJson(['code' => 'invalid_relationship_query']);

@@ -9,7 +9,8 @@ use DateTimeImmutable;
 
 /**
  * The view-capability read (ADR 0038, F13). History is included. Manage-only fields are not.
- * Basic contact details are not: that read is the CRM seam (WP3).
+ * `basics` is the Person's primary email and phone, present only for a type that reads basic details (ADR 0038, F13, P2)
+ * and null otherwise. Nothing else of the Person's contact data is in it.
  */
 final readonly class RelationshipRecordView
 {
@@ -31,5 +32,6 @@ final readonly class RelationshipRecordView
         public array $fields,
         public array $history,
         public ?DefaultRoleState $defaultRole = null,
+        public ?BasicDetails $basics = null,
     ) {}
 }

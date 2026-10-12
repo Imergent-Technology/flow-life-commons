@@ -43,7 +43,7 @@ final readonly class RemoveContactMethod
             throw new UnknownPerson;
         }
 
-        $this->database->transaction(function () use ($personId, $methodId): void {
+        $this->database->transaction(function () use ($actor, $personId, $methodId): void {
             $now = DateTimeImmutable::createFromInterface(now());
             $this->profiles->lock($personId, $now);
 
@@ -57,7 +57,7 @@ final readonly class RemoveContactMethod
             if ($method->isPrimary) {
                 foreach ($this->methods->forPerson($personId) as $other) {
                     if ($other->kind === $method->kind) {
-                        $this->methods->save($other->withPrimary(true, $now));
+                        $this->methods->save($other->withPrimary(true, $now, $actor->accountId));
                         break; // forPerson is ordered by kind, then creation: the earliest remaining
                     }
                 }

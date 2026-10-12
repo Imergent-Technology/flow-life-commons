@@ -6,6 +6,7 @@ use App\Modules\Relationships\Application\QualifyingRelationships;
 use App\Modules\Relationships\Application\RelationshipCatalog;
 use App\Shared\Domain\PersonId;
 use Illuminate\Routing\Route;
+use Illuminate\Support\Facades\DB;
 use Tests\Support\Identity;
 use Tests\Support\Mfa;
 use Tests\Support\Resources;
@@ -79,4 +80,31 @@ it('is unknown to Resources', function () {
     }
 
     expect($hits)->toBe([]);
+});
+
+it('offers a type with neither People feature nothing of the scoped People access', function () {
+    [$console] = Mfa::signedInAdmin();
+    $person = Identity::savedPerson('Plain Apprentice');
+    $created = $console->post('/api/v1/admin/relationships/apprentices', [
+        'person_id' => $person->id->value, 'confirm_existing_person' => true, 'status' => 'prospective',
+    ])->assertCreated();
+
+    // No basics route is generated, and the views carry no basic details: both come from the definition's features.
+    expect(app('router')->getRoutes()->getByName('api.v1.admin.relationships.apprentices.basics'))->toBeNull()
+        ->and($created->json('basics'))->toBeNull()
+        ->and($console->get('/api/v1/admin/relationships/apprentices/'.$person->id->value)->json('basics'))->toBeNull()
+        ->and($console->get('/api/v1/admin/relationships/apprentices')->json('data.0.basics'))->toBeNull();
+    $console->patch('/api/v1/admin/relationships/apprentices/'.$person->id->value.'/basics', [
+        'relationship_id' => $created->json('relationship_id'),
+        'display_name' => ['from' => 'Plain Apprentice', 'to' => 'Edited'],
+    ])->assertStatus(404);
+    expect(DB::table('people')->where('id', $person->id->value)->value('display_name'))->toBe('Plain Apprentice');
+
+    // A type without `people.create_person` records no new Person, and a type with `people.lookup` can look People up.
+    $people = DB::table('people')->count();
+    $console->post('/api/v1/admin/relationships/apprentices', [
+        'new_person' => ['display_name' => 'Should Not Exist'], 'status' => 'prospective',
+    ])->assertStatus(422)->assertJson(['code' => 'new_person_not_supported']);
+    expect(DB::table('people')->count())->toBe($people);
+    $console->get('/api/v1/admin/relationships/apprentices/candidates?q=Plain')->assertOk()->assertJsonPath('data.0.person.display_name', 'Plain Apprentice');
 });

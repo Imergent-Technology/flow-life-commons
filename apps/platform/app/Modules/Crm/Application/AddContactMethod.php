@@ -41,11 +41,11 @@ final readonly class AddContactMethod
             throw new UnknownPerson;
         }
 
-        return $this->database->transaction(function () use ($personId, $new): ContactMethod {
+        return $this->database->transaction(function () use ($actor, $personId, $new): ContactMethod {
             $now = DateTimeImmutable::createFromInterface(now());
             $this->profiles->lock($personId, $now); // CRM's per-Person write lock, then decide
 
-            return $this->writer->add($personId, $new, $now);
+            return $this->writer->add($personId, $new, $now, $actor->accountId);
         }, 3);
     }
 }
