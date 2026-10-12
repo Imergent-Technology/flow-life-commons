@@ -57,13 +57,17 @@ use App\Modules\Membership\Domain\InvalidMembershipTerm as InvalidMembershipGran
 use App\Modules\Membership\Http\MembershipProblems;
 use App\Modules\Membership\Http\MembershipRecordNotFound;
 use App\Modules\Relationships\Application\ConfirmationRequired;
+use App\Modules\Relationships\Application\DefaultRoleDecisionRequired;
 use App\Modules\Relationships\Application\DefaultRoleNotApplicable;
+use App\Modules\Relationships\Application\InvalidDefaultRoleChoice;
 use App\Modules\Relationships\Application\InvalidRelationshipQuery;
 use App\Modules\Relationships\Application\NewPersonNotSupported;
 use App\Modules\Relationships\Application\RelationshipExists;
 use App\Modules\Relationships\Application\RelationshipInUse;
+use App\Modules\Relationships\Application\RelationshipNotActive;
 use App\Modules\Relationships\Application\RelationshipNotFound;
 use App\Modules\Relationships\Application\RelationshipSearchTooBroad;
+use App\Modules\Relationships\Application\RoleProvisioningNotPermitted;
 use App\Modules\Relationships\Application\StaleRelationshipRevision;
 use App\Modules\Relationships\Application\TransitionNotAllowed;
 use App\Modules\Relationships\Application\UnknownRelationshipPerson;
@@ -327,6 +331,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->render(fn (RelationshipInUse $e) => RelationshipsProblems::inUse());
         $exceptions->render(fn (ConfirmationRequired $e) => RelationshipsProblems::coded('confirmation_required', $e->getMessage()));
         $exceptions->render(fn (DefaultRoleNotApplicable $e) => RelationshipsProblems::coded('default_role_not_applicable', $e->getMessage()));
+        $exceptions->render(fn (DefaultRoleDecisionRequired $e) => RelationshipsProblems::coded('default_role_decision_required', $e->getMessage()));
+        $exceptions->render(fn (InvalidDefaultRoleChoice $e) => RelationshipsProblems::field('invalid_relationship_query', 'default_role', $e->getMessage()));
+        $exceptions->render(fn (RelationshipNotActive $e) => RelationshipsProblems::coded('relationship_not_active', $e->getMessage(), 409));
+        $exceptions->render(fn (RoleProvisioningNotPermitted $e) => RelationshipsProblems::coded('role_provisioning_not_permitted', $e->getMessage(), 403));
         $exceptions->render(fn (TransitionNotAllowed $e) => RelationshipsProblems::coded('transition_not_allowed', $e->getMessage()));
         $exceptions->render(fn (UnknownRelationshipPerson $e) => RelationshipsProblems::coded('unknown_person', $e->getMessage()));
         $exceptions->render(fn (UnknownRelationshipStatus $e) => RelationshipsProblems::coded('unknown_relationship_status', $e->getMessage()));

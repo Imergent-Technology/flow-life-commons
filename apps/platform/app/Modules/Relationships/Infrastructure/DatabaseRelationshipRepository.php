@@ -9,6 +9,7 @@ use App\Modules\Relationships\Domain\RelationshipId;
 use App\Modules\Relationships\Domain\RelationshipRecord;
 use App\Modules\Relationships\Domain\RelationshipRepository;
 use App\Modules\Relationships\Domain\StatusChange;
+use App\Modules\Relationships\Domain\StoredRoleProvision;
 use App\Shared\Domain\PersonId;
 use DateTimeImmutable;
 use Illuminate\Database\ConnectionInterface;
@@ -103,6 +104,54 @@ final readonly class DatabaseRelationshipRepository implements RelationshipRepos
         }
 
         return true;
+    }
+
+    public function saveRevision(RelationshipRecord $updated, int $expectedRevision): bool
+    {
+        $affected = $this->database->table(self::INSTANCES)
+            ->where('id', $updated->id->value)
+            ->where('revision', $expectedRevision)
+            ->update([
+                'revision' => $updated->revision,
+                'updated_at' => SqlTime::to($updated->updatedAt),
+                'updated_by' => $updated->updatedBy->value,
+            ]);
+
+        return $affected === 1;
+    }
+
+    public function saveProvision(RelationshipId $id, StoredRoleProvision $provision): void
+    {
+        $row = [
+            'decision' => $provision->decision,
+            'decided_at' => SqlTime::to($provision->decidedAt),
+            'decided_by' => $provision->decidedBy->value,
+        ];
+        $exists = $this->database->table(self::DECISIONS)
+            ->where('relationship_id', $id->value)
+            ->where('role_key', $provision->role)
+            ->exists();
+        if ($exists) {
+            $this->database->table(self::DECISIONS)
+                ->where('relationship_id', $id->value)
+                ->where('role_key', $provision->role)
+                ->update($row);
+
+            return;
+        }
+        $this->database->table(self::DECISIONS)->insert([
+            'relationship_id' => $id->value,
+            'role_key' => $provision->role,
+            ...$row,
+        ]);
+    }
+
+    public function deleteProvision(RelationshipId $id, string $role): void
+    {
+        $this->database->table(self::DECISIONS)
+            ->where('relationship_id', $id->value)
+            ->where('role_key', $role)
+            ->delete();
     }
 
     public function saveFields(RelationshipRecord $updated, int $expectedRevision, array $written, array $cleared, PersonId $by, DateTimeImmutable $at): bool
@@ -242,6 +291,39 @@ final readonly class DatabaseRelationshipRepository implements RelationshipRepos
         return $rows;
     }
 
+    public function storedInstances(): array
+    {
+        $rows = [];
+        foreach ($this->database->table(self::INSTANCES)->orderBy('id')->get(['id', 'person_id', 'relationship_type', 'status']) as $row) {
+            if (is_string($row->id) && is_string($row->person_id) && is_string($row->relationship_type) && is_string($row->status)) {
+                $rows[] = [
+                    'id' => $row->id,
+                    'person_id' => $row->person_id,
+                    'type' => $row->relationship_type,
+                    'status' => $row->status,
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
+    public function storedProvisions(): array
+    {
+        $rows = [];
+        foreach ($this->database->table(self::DECISIONS)->orderBy('relationship_id')->orderBy('role_key')->get(['relationship_id', 'role_key', 'decision']) as $row) {
+            if (is_string($row->relationship_id) && is_string($row->role_key) && is_string($row->decision)) {
+                $rows[] = [
+                    'relationship_id' => $row->relationship_id,
+                    'role' => $row->role_key,
+                    'decision' => $row->decision,
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
     private function hydrate(stdClass $row, bool $lock): RelationshipRecord
     {
         assert(is_string($row->id) && is_string($row->person_id) && is_string($row->relationship_type) && is_string($row->status));
@@ -257,7 +339,18 @@ final readonly class DatabaseRelationshipRepository implements RelationshipRepos
             $historyQuery->lockForUpdate();
             $decisions->lockForUpdate();
         }
-        $decisions->pluck('role_key');
+        $provisions = [];
+        foreach ($decisions->get(['role_key', 'decision', 'decided_at', 'decided_by']) as $decision) {
+            if (! is_string($decision->role_key) || ! is_string($decision->decision) || ! is_string($decision->decided_at) || ! is_string($decision->decided_by)) {
+                continue;
+            }
+            $provisions[] = new StoredRoleProvision(
+                $decision->role_key,
+                $decision->decision,
+                SqlTime::from($decision->decided_at),
+                PersonId::fromString($decision->decided_by),
+            );
+        }
 
         $fields = [];
         foreach ($fieldsQuery->get(['field_key', 'value']) as $field) {
@@ -291,6 +384,7 @@ final readonly class DatabaseRelationshipRepository implements RelationshipRepos
             PersonId::fromString($row->updated_by),
             $fields,
             $history,
+            $provisions,
         );
     }
 

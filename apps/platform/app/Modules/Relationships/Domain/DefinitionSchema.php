@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace App\Modules\Relationships\Domain;
 
 use App\Modules\Access\Application\Capability;
+use App\Modules\Access\Application\ProvisionableRole;
 
 /**
  * Validates one relationship definition document (ADR 0038, F5). Definitions are data:
  * strings, numbers, booleans, lists and maps, plus Access's public `Capability` cases.
  * An unknown key is refused, never ignored. Nothing in a document is executable.
  *
- * `default_role` stays null. Access has `ProvisionableRole` (WP2A), but this schema's
- * allowlist stays empty until WP2B wires Guardian Initiate. Any other value is refused:
- * fail closed, never a free-form role key.
+ * `default_role` is null or one case of Access's `ProvisionableRole`. A string, including
+ * a role key, is refused. A type that names a role must verify intake, status and default_role.
  */
 final class DefinitionSchema
 {
@@ -75,7 +75,6 @@ final class DefinitionSchema
         $features = self::vocabulary($document['features'] ?? null, self::FEATURES, $name, 'feature');
         $verification = self::vocabulary($document['verification'] ?? null, self::OPERATIONS, $name, 'verification operation');
         $deletion = self::bool($document['deletion'] ?? null, $name, 'deletion must be a boolean');
-        self::defaultRole(array_key_exists('default_role', $document) ? $document['default_role'] : 'missing', $name);
         $position = self::presentation($document['presentation'] ?? null, $name);
         $components = self::components($document['components'] ?? [], $name);
 
@@ -85,10 +84,11 @@ final class DefinitionSchema
         if (! $deletion && in_array('delete', $verification, true)) {
             throw new InvalidRelationshipDefinition($name, 'delete is verified but deletion is not allowed');
         }
+        $defaultRole = self::defaultRole(array_key_exists('default_role', $document) ? $document['default_role'] : 'missing', $verification, $name);
 
         return new RelationshipDefinition(
             RelationshipType::issue($typeKey), $slug, $version, $labels, $states, $initial, $transitions, $fields,
-            $view, $manage, $features, $verification, $deletion, $position, $components, null,
+            $view, $manage, $features, $verification, $deletion, $position, $components, $defaultRole,
         );
     }
 
@@ -410,14 +410,24 @@ final class DefinitionSchema
         return $built;
     }
 
-    private static function defaultRole(mixed $value, string $name): void
+    /**
+     * @param  list<string>  $verification
+     */
+    private static function defaultRole(mixed $value, array $verification, string $name): ?ProvisionableRole
     {
-        // The allowlist stays empty until WP2B. Null is the only legal value, so a definition
-        // cannot name a role at all. When a role becomes legal, the same rule requires
-        // intake, status and default_role among the verified operations (F5), because each can grant authority.
-        if ($value === 'missing' || $value !== null) {
+        // A string is refused, including a role key. Relationships hold the enum case (F5, A10).
+        if ($value === 'missing' || ($value !== null && ! $value instanceof ProvisionableRole)) {
             throw new InvalidRelationshipDefinition($name, 'default_role must be null or a provisionable role');
         }
+        if ($value instanceof ProvisionableRole) {
+            foreach (['intake', 'status', 'default_role'] as $operation) {
+                if (! in_array($operation, $verification, true)) {
+                    throw new InvalidRelationshipDefinition($name, 'a default role requires verified intake, status and default_role');
+                }
+            }
+        }
+
+        return $value;
     }
 
     private static function presentation(mixed $presentation, string $name): int

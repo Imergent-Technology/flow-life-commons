@@ -73,6 +73,7 @@ arch('view use cases ask for the definition view capability and manage use cases
         ->and(SourceScan::code(SourceScan::read($root.'/ChangeRelationshipStatus.php')))->toContain('manageCapability')
         ->and(SourceScan::code(SourceScan::read($root.'/UpdateRelationshipFields.php')))->toContain('manageCapability')
         ->and(SourceScan::code(SourceScan::read($root.'/DeleteRelationship.php')))->toContain('manageCapability')
+        ->and(SourceScan::code(SourceScan::read($root.'/DecideDefaultRole.php')))->toContain('manageCapability')
         ->and(SourceScan::code(SourceScan::read($root.'/ListRelationshipCandidates.php')))->toContain('manageCapability');
 });
 

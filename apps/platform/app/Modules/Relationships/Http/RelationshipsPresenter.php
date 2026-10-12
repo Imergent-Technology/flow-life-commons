@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Modules\Relationships\Http;
 
+use App\Modules\Relationships\Application\DefaultRoleState;
 use App\Modules\Relationships\Application\NamedPerson;
 use App\Modules\Relationships\Application\RelationshipCandidate;
 use App\Modules\Relationships\Application\RelationshipCandidateList;
@@ -52,7 +53,9 @@ final readonly class RelationshipsPresenter
             'fields' => array_map($this->field(...), $view->fields),
             'features' => $definition->features,
             'presentation' => ['position' => $definition->position],
-            'default_role' => $definition->defaultRole,
+            'default_role' => $definition->defaultRole === null ? null : [
+                'display_name' => $definition->defaultRole->displayName(),
+            ],
             'actions' => [
                 'view' => $view->canView,
                 'manage' => $view->canManage,
@@ -95,6 +98,7 @@ final readonly class RelationshipsPresenter
             'created_at' => $this->instant($view->createdAt),
             'created_by' => $this->person($view->createdBy),
             'fields' => (object) $this->fields($definition === null ? null : $this->catalog->definition($definition), $view->fields),
+            'default_role' => $this->defaultRole($view->defaultRole),
             'history' => array_map(fn (RelationshipHistoryEntry $entry): array => [
                 'from_status' => $entry->fromStatus,
                 'to_status' => $entry->toStatus,
@@ -117,6 +121,23 @@ final readonly class RelationshipsPresenter
             'revision' => $view->revision,
             'transitions' => $view->transitions,
             'fields' => (object) $this->fields($type === null ? null : $this->catalog->definition($type), $view->fields),
+            'default_role' => $this->defaultRole($view->defaultRole),
+        ];
+    }
+
+    /** @return array<string, mixed>|null */
+    private function defaultRole(?DefaultRoleState $state): ?array
+    {
+        if ($state === null) {
+            return null;
+        }
+
+        return [
+            'display_name' => $state->displayName,
+            'decision' => $state->decision,
+            'decided_by' => $state->decidedBy === null ? null : $this->person($state->decidedBy),
+            'decided_at' => $state->decidedAt === null ? null : $this->instant($state->decidedAt),
+            'effective' => $state->effective,
         ];
     }
 

@@ -126,34 +126,46 @@ arch('Role identity stays inside Access', function () {
     ]);
 });
 
-arch('sourced-grant mutation is not reachable except from Relationships, and Relationships does not call it yet', function () {
-    // WP2B is the only caller (ADR 0038, A10). Until that package replaces NoRelationshipGrants, nothing in
-    // Relationships may call these services: a production path that created a grant with no withdrawal is unsafe.
-    expect('App\\Modules\\Access\\Application\\GrantSourcedRole')->toOnlyBeUsedIn('App\\Modules\\Relationships\\Application');
-    expect('App\\Modules\\Access\\Application\\WithdrawSourcedRoles')->toOnlyBeUsedIn('App\\Modules\\Relationships\\Application');
+arch('sourced-grant services are reached only through the relationship provisioning seam', function () {
+    // ADR 0038, A10. The adapters are the only Relationships callers. Nothing else, including Http, may name them.
+    expect('App\\Modules\\Access\\Application\\GrantSourcedRole')->toOnlyBeUsedIn('App\\Modules\\Relationships\\Application\\GrantRelationshipRole');
+    expect('App\\Modules\\Access\\Application\\WithdrawSourcedRoles')->toOnlyBeUsedIn('App\\Modules\\Relationships\\Application\\AccessRelationshipGrants');
     expect('App\\Modules\\Access\\Application\\ProvisionableRole')->toOnlyBeUsedIn([
         'App\\Modules\\Access',
         'App\\Modules\\Relationships',
     ]);
     expect('App\\Modules\\Access\\Application\\ListSourcedRoleGrants')->toOnlyBeUsedIn([
         'App\\Modules\\Access',
-        'App\\Modules\\Relationships',
+        'App\\Modules\\Relationships\\Application\\CheckRelationships',
     ]);
     expect('App\\Modules\\Access\\Application\\SourcedRoleGrantsOf')->toOnlyBeUsedIn([
         'App\\Modules\\Access',
-        'App\\Modules\\Relationships',
+        'App\\Modules\\Relationships\\Application\\RelationshipPresentation',
+        'App\\Modules\\Relationships\\Application\\AccessRelationshipGrants',
     ]);
+    expect('App\\Modules\\Access\\Application\\PeopleHoldingCapability')->toOnlyBeUsedIn(
+        'App\\Modules\\Relationships\\Infrastructure\\Console\\GuardianAdoptionReportCommand',
+    );
 });
 
-it('does not let Relationships create or withdraw sourced grants while the no-op adapter is the lifecycle', function () {
-    // WP2B replaces this. A relationship use case that calls GrantSourcedRole before inactivation withdraws
-    // would leave a grant in place. The production binding must stay the no-op until that package.
+it('permits sourced-grant names only in the adapters, and never queries Access tables from Relationships', function () {
+    $allowed = [
+        'GrantRelationshipRole.php' => ['GrantSourcedRole'],
+        'AccessRelationshipGrants.php' => ['WithdrawSourcedRoles', 'SourcedRoleGrantsOf'],
+        'CheckRelationships.php' => ['ListSourcedRoleGrants'],
+        'RelationshipPresentation.php' => ['SourcedRoleGrantsOf'],
+        'GuardianAdoptionReportCommand.php' => ['PeopleHoldingCapability'],
+    ];
+    $needles = ['GrantSourcedRole', 'WithdrawSourcedRoles', 'ListSourcedRoleGrants', 'SourcedRoleGrantsOf', 'PeopleHoldingCapability', 'sourced_role_grants'];
     $roots = [
         dirname(__DIR__, 2).'/app/Modules/Relationships/Application',
         dirname(__DIR__, 2).'/app/Modules/Relationships/Http',
         dirname(__DIR__, 2).'/app/Modules/Relationships/Infrastructure',
+        dirname(__DIR__, 2).'/app/Modules/Relationships/Domain',
+        dirname(__DIR__, 2).'/app/Modules/Relationships/Definitions',
     ];
     $offenders = [];
+    $seen = [];
     foreach ($roots as $root) {
         foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)) as $file) {
             assert($file instanceof SplFileInfo);
@@ -161,15 +173,23 @@ it('does not let Relationships create or withdraw sourced grants while the no-op
                 continue;
             }
             $source = (string) file_get_contents($file->getPathname());
-            foreach (['GrantSourcedRole', 'WithdrawSourcedRoles', 'sourced_role_grants'] as $needle) {
-                if (str_contains($source, $needle)) {
+            foreach ($needles as $needle) {
+                if (! str_contains($source, $needle)) {
+                    continue;
+                }
+                $seen[$file->getFilename()][$needle] = true;
+                $permitted = $allowed[$file->getFilename()] ?? [];
+                if (! in_array($needle, $permitted, true)) {
                     $offenders[] = $file->getFilename()." names {$needle}";
                 }
             }
         }
     }
 
-    expect($offenders)->toBe([]);
+    expect($offenders)->toBe([])
+        ->and($seen['GrantRelationshipRole.php'] ?? [])->toHaveKey('GrantSourcedRole')
+        ->and($seen['AccessRelationshipGrants.php'] ?? [])->toHaveKey('WithdrawSourcedRoles')
+        ->and($seen)->not->toHaveKey('sourced_role_grants');
 });
 
 // --- Source scans (each has a positive control, so it cannot pass by matching nothing) ---------
@@ -411,9 +431,23 @@ arch('Identity\'s account directory is read only through Access\'s presenting us
         // Member detail page — its own route, entirely outside Membership (MembershipDisclosureTest
         // keeps Membership's own responses free of anything account-shaped, Work Package 7).
         'App\\Modules\\Access\\Application\\DescribeCommonsAccess',
+        'App\\Modules\\Identity\\Application\\PersonAccountPresence',
         'App\\Modules\\Identity\\Infrastructure\\IdentityServiceProvider',
         'App\\Modules\\Identity\\Infrastructure\\Persistence\\DatabaseAccountDirectory',
     ]);
+});
+
+arch('whether a Person has an Account is read only by the Guardian adoption report', function () {
+    expect('App\\Modules\\Identity\\Application\\PersonAccountPresence')->toOnlyBeUsedIn(
+        'App\\Modules\\Relationships\\Application\\ReportGuardianAdoption',
+    );
+});
+
+it('grants the relationship subject, never the acting operator', function () {
+    $source = (string) file_get_contents(dirname(__DIR__, 2).'/app/Modules/Relationships/Application/GrantRelationshipRole.php');
+
+    expect($source)->toContain('$relationship->personId')
+        ->and($source)->not->toContain('actor->personId');
 });
 
 arch('An invitation channel is Identity\'s own concept: Access chooses it by which method it calls, never by naming it', function () {

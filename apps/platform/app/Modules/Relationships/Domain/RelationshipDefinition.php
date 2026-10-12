@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Relationships\Domain;
 
 use App\Modules\Access\Application\Capability;
+use App\Modules\Access\Application\ProvisionableRole;
 
 /**
  * One validated relationship type (ADR 0038, F3). Immutable. Built only by `DefinitionSchema`,
@@ -21,7 +22,6 @@ final readonly class RelationshipDefinition
      * @param  list<string>  $features
      * @param  list<string>  $verification
      * @param  list<string>  $components
-     * @param  ?string  $defaultRole  null until a type names a provisionable role (WP2B)
      */
     public function __construct(
         public RelationshipType $type,
@@ -39,7 +39,7 @@ final readonly class RelationshipDefinition
         public bool $deletion,
         public int $position,
         public array $components,
-        public ?string $defaultRole,
+        public ?ProvisionableRole $defaultRole,
     ) {}
 
     public function isInitial(string $status): bool

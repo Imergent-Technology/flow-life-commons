@@ -8,6 +8,7 @@ use App\Modules\Relationships\Domain\DeletionCounts;
 use App\Modules\Relationships\Domain\RelationshipId;
 use App\Modules\Relationships\Domain\RelationshipRecord;
 use App\Modules\Relationships\Domain\RelationshipRepository;
+use App\Modules\Relationships\Domain\StoredRoleProvision;
 use App\Shared\Domain\PersonId;
 use Closure;
 use DateTimeImmutable;
@@ -52,6 +53,21 @@ final class PausingRelationshipRepository implements RelationshipRepository
         return $this->inner->saveStatus($updated, $expectedRevision);
     }
 
+    public function saveRevision(RelationshipRecord $updated, int $expectedRevision): bool
+    {
+        return $this->inner->saveRevision($updated, $expectedRevision);
+    }
+
+    public function saveProvision(RelationshipId $id, StoredRoleProvision $provision): void
+    {
+        $this->inner->saveProvision($id, $provision);
+    }
+
+    public function deleteProvision(RelationshipId $id, string $role): void
+    {
+        $this->inner->deleteProvision($id, $role);
+    }
+
     public function saveFields(RelationshipRecord $updated, int $expectedRevision, array $written, array $cleared, PersonId $by, DateTimeImmutable $at): bool
     {
         return $this->inner->saveFields($updated, $expectedRevision, $written, $cleared, $by, $at);
@@ -85,6 +101,16 @@ final class PausingRelationshipRepository implements RelationshipRepository
     public function storedFieldValues(): array
     {
         return $this->inner->storedFieldValues();
+    }
+
+    public function storedInstances(): array
+    {
+        return $this->inner->storedInstances();
+    }
+
+    public function storedProvisions(): array
+    {
+        return $this->inner->storedProvisions();
     }
 
     private function fire(string $method): void

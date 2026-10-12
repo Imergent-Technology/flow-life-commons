@@ -247,6 +247,14 @@ it('does not give a Member, a Volunteer or any relationship a capability: no rol
     expect(array_map(fn (Role $r): string => $r->value, Role::cases()))->not->toContain('member', 'volunteer', 'partner', 'vendor', 'artist', 'guardian');
 });
 
+it('holds invitations, role assignment and guardian management only on the platform administrator', function () {
+    // ADR 0038, K6. Separating any of these three from the others needs a fresh security review.
+    foreach ([Capability::IssueInvitations, Capability::AssignRoles, Capability::ManageGuardians] as $capability) {
+        $holders = array_values(array_filter(Role::cases(), fn (Role $role): bool => $role->grants($capability)));
+        expect($holders)->toBe([Role::PlatformAdministrator]);
+    }
+});
+
 it('lets a source provision exactly guardian-initiate, and that role cannot administer access, identity or Resources', function () {
     expect(array_map(fn (ProvisionableRole $role): string => $role->value, ProvisionableRole::cases()))->toBe(['guardian-initiate'])
         ->and(ProvisionableRole::GuardianInitiate->role())->toBe(Role::GuardianInitiate);

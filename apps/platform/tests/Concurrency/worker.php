@@ -40,6 +40,7 @@ declare(strict_types=1);
  */
 
 use App\Modules\Access\Application\DisableManagedAccount;
+use App\Modules\Access\Application\GrantRole;
 use App\Modules\Access\Application\GrantSourcedRole;
 use App\Modules\Access\Application\ProvisionableRole;
 use App\Modules\Access\Application\RevokeRole;
@@ -94,6 +95,8 @@ use App\Modules\Identity\Domain\RecoveryCodeRepository;
 use App\Modules\Membership\Application\RevokeMembershipGrant;
 use App\Modules\Membership\Domain\MembershipGrantId;
 use App\Modules\Relationships\Application\ChangeRelationshipStatus;
+use App\Modules\Relationships\Application\DecideDefaultRole;
+use App\Modules\Relationships\Application\DefaultRoleChoice;
 use App\Modules\Relationships\Application\DeleteRelationship;
 use App\Modules\Relationships\Application\EstablishRelationship;
 use App\Modules\Relationships\Application\RelationshipCatalog;
@@ -326,16 +329,25 @@ try {
         $app->make(InviteAccountForPerson::class)(PersonId::fromString($arg('person')), $arg('email'));
     } elseif ($operation === 'relationship_intake') {
         $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
+        $sent = array_key_exists('default_role', $decoded);
         $app->make(EstablishRelationship::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
-            $type, PersonId::fromString($arg('person')), true, $arg('status'), [], false,
+            $type, PersonId::fromString($arg('person')), true, $arg('status'), [], $sent, $sent ? $arg('default_role') : null,
         );
     } elseif ($operation === 'relationship_status') {
         $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
+        $sent = array_key_exists('default_role', $decoded);
         $app->make(ChangeRelationshipStatus::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
             $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')),
-            (int) $arg('revision'), $arg('status'), false,
+            (int) $arg('revision'), $arg('status'), $sent, $sent ? $arg('default_role') : null,
+        );
+    } elseif ($operation === 'relationship_default_role') {
+        $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
+        $app->make(DecideDefaultRole::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')),
+            (int) $arg('revision'), DefaultRoleChoice::fromRequest($arg('default_role')),
         );
     } elseif ($operation === 'relationship_fields') {
         $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
@@ -349,6 +361,12 @@ try {
         $app->make(DeleteRelationship::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
             $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')), (int) $arg('revision'),
+        );
+    } elseif ($operation === 'grant_role') {
+        $app->make(GrantRole::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            PersonId::fromString($arg('person')),
+            Role::from($arg('role')),
         );
     } elseif ($operation === 'grant_sourced_role') {
         $app->make(GrantSourcedRole::class)(

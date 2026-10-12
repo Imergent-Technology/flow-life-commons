@@ -21,9 +21,11 @@ use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\UniqueConstraintViolationException;
 
 /**
- * Records a relationship for an existing Person (ADR 0038, F9, P3). One capability: the type's manage
- * capability, from the definition. Creating a new Person is WP3. A default-role decision is refused
- * until a type has one (WP2B).
+ * Records a relationship for an existing Person (ADR 0038, F9, P3, K7). One capability: the type's
+ * manage capability, from the definition. Creating a new Person is WP3.
+ *
+ * A type with a default role requires an explicit decision when the initial state qualifies, and
+ * refuses one when it does not. The grant's Person is read back from the locked row.
  */
 final readonly class EstablishRelationship
 {
@@ -33,6 +35,7 @@ final readonly class EstablishRelationship
         private RelationshipRepository $relationships,
         private FindPeople $people,
         private RelationshipPresentation $presentation,
+        private ApplyDefaultRoleDecision $decisions,
         private ConnectionInterface $database,
     ) {}
 
@@ -42,6 +45,9 @@ final readonly class EstablishRelationship
      * @throws AccessDenied
      * @throws ConfirmationRequired
      * @throws DefaultRoleNotApplicable
+     * @throws DefaultRoleDecisionRequired
+     * @throws InvalidDefaultRoleChoice
+     * @throws RoleProvisioningNotPermitted
      * @throws TransitionNotAllowed
      * @throws UnknownRelationshipField
      * @throws InvalidRelationshipField
@@ -56,6 +62,7 @@ final readonly class EstablishRelationship
         string $status,
         array $fields,
         bool $defaultRoleSent,
+        mixed $defaultRole = null,
     ): RelationshipManagementView {
         $definition = $this->catalog->definition($type);
         ($this->authorize)($actor, $definition->manageCapability);
@@ -63,12 +70,11 @@ final readonly class EstablishRelationship
         if (! $confirmExistingPerson) {
             throw new ConfirmationRequired;
         }
-        if ($defaultRoleSent) {
-            throw new DefaultRoleNotApplicable;
-        }
+        $choice = DefaultRoleRequest::choice($defaultRoleSent, $defaultRole);
         if (! $definition->isInitial($status)) {
             throw new TransitionNotAllowed;
         }
+        DefaultRoleRequest::guard($definition, $status, $choice);
         if (($this->people)([$person]) === []) {
             throw new UnknownRelationshipPerson;
         }
@@ -95,7 +101,7 @@ final readonly class EstablishRelationship
                 $this->database->statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
             }
 
-            return $this->database->transaction(function () use ($actor, $type, $person, $status, $stored, $now, $definition): RelationshipManagementView {
+            return $this->database->transaction(function () use ($actor, $type, $person, $status, $stored, $now, $definition, $choice): RelationshipManagementView {
                 if ($this->driver() === 'pgsql' && $this->database->transactionLevel() === 1) {
                     $this->database->statement('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
                 }
@@ -108,8 +114,13 @@ final readonly class EstablishRelationship
                     $stored, [new StatusChange(null, $status, $now, $actor->personId)],
                 );
                 $this->relationships->add($record);
+                $locked = $this->relationships->lock($person, $type->key) ?? throw new RelationshipExists;
+                if ($choice !== null && $definition->defaultRole !== null) {
+                    $outcome = ($this->decisions)($actor, $definition->defaultRole, $locked, $choice, $definition->qualifies($status));
+                    $locked = $locked->withProvisions($outcome->provisions);
+                }
 
-                return $this->presentation->management($definition, $record);
+                return $this->presentation->management($definition, $locked);
             }, 3);
         } catch (UniqueConstraintViolationException) {
             throw new RelationshipExists;

@@ -18,6 +18,7 @@ const RELATIONSHIP_ROUTE_TABLE = [
     'GET api/v1/admin/relationships/guardians/candidates' => ['guardians.manage', false],
     'POST api/v1/admin/relationships/guardians' => ['guardians.manage', true],
     'PUT api/v1/admin/relationships/guardians/{person}/status' => ['guardians.manage', true],
+    'PUT api/v1/admin/relationships/guardians/{person}/default-role' => ['guardians.manage', true],
     'PATCH api/v1/admin/relationships/guardians/{person}/fields' => ['guardians.manage', false],
     'DELETE api/v1/admin/relationships/guardians/{person}' => ['guardians.manage', true],
     'GET api/v1/admin/relationships/volunteers' => ['volunteers.view', false],

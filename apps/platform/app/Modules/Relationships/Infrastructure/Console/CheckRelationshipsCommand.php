@@ -8,8 +8,8 @@ use App\Modules\Relationships\Application\CheckRelationships;
 use Illuminate\Console\Command;
 
 /**
- * `relationships:check`: types, states and stored field values against the current catalog (ADR 0038, F15).
- * Read-only. A finding names a type and a key, never a stored value. Grant findings arrive with WP2B.
+ * `relationships:check`: types, states, field values and sourced-grant causes (ADR 0038, F15).
+ * Read-only. A finding names a type, a key or an id, never a stored field value.
  */
 final class CheckRelationshipsCommand extends Command
 {

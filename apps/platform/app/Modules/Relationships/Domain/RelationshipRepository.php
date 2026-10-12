@@ -22,6 +22,13 @@ interface RelationshipRepository
     /** Writes the new status, revision and exactly one history row. Conditional on the revision it replaces. */
     public function saveStatus(RelationshipRecord $updated, int $expectedRevision): bool;
 
+    /** Moves the revision when a decision changed and the status did not. Conditional on the revision it replaces. */
+    public function saveRevision(RelationshipRecord $updated, int $expectedRevision): bool;
+
+    public function saveProvision(RelationshipId $id, StoredRoleProvision $provision): void;
+
+    public function deleteProvision(RelationshipId $id, string $role): void;
+
     /**
      * Writes the new revision, the changed field values and the cleared keys. Conditional on the
      * revision it replaces. Unchanged fields keep their provenance.
@@ -62,4 +69,14 @@ interface RelationshipRepository
      * @return list<array{type: string, field: string, value: string}>
      */
     public function storedFieldValues(): array;
+
+    /**
+     * @return list<array{id: string, person_id: string, type: string, status: string}>
+     */
+    public function storedInstances(): array;
+
+    /**
+     * @return list<array{relationship_id: string, role: string, decision: string}>
+     */
+    public function storedProvisions(): array;
 }

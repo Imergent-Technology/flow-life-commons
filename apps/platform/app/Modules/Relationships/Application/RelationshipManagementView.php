@@ -24,5 +24,6 @@ final readonly class RelationshipManagementView
         public int $revision,
         public array $transitions,
         public array $fields,
+        public ?DefaultRoleState $defaultRole = null,
     ) {}
 }

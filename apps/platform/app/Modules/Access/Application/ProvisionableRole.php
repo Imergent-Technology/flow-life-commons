@@ -20,4 +20,10 @@ enum ProvisionableRole: string
             self::GuardianInitiate => Role::GuardianInitiate,
         };
     }
+
+    /** The words an operator sees. Relationships ask for this and never for the role's capabilities. */
+    public function displayName(): string
+    {
+        return $this->role()->displayName();
+    }
 }

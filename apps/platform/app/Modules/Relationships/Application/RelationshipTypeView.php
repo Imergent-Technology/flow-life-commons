@@ -9,7 +9,8 @@ use App\Modules\Relationships\Domain\RelationshipField;
 
 /**
  * The presentation contract for one type (ADR 0038, F13). `provisionDefaultRole` is a hint.
- * It is false for every type in WP1, because no type has a default role yet, and no mutation reads it.
+ * It is true only when the Actor may manage the type and Access would let them assign roles.
+ * No mutation reads it.
  */
 final readonly class RelationshipTypeView
 {

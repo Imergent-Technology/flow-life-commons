@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Modules\Relationships\Application\RelationshipCatalog;
 use App\Modules\Relationships\Http\ChangeRelationshipStatusController;
+use App\Modules\Relationships\Http\DecideDefaultRoleController;
 use App\Modules\Relationships\Http\DeleteRelationshipController;
 use App\Modules\Relationships\Http\EstablishRelationshipController;
 use App\Modules\Relationships\Http\ListRelationshipCandidatesController;
@@ -26,8 +27,8 @@ use Illuminate\Support\Facades\Route;
  * `can:guardians.manage` and `can:volunteers.manage` are step-up exemptions pinned to this module,
  * so a route under them may omit `security.verified`. The routes that still carry it are the table.
  *
- * `GET relationship-types` carries only Console admission (A6). No default-role route and no basics
- * route: those are WP2B and WP3.
+ * `GET relationship-types` carries only Console admission (A6). The default-role route is
+ * generated only for a type that names a default role. No basics route: that is WP3.
  */
 
 $catalog = app(RelationshipCatalog::class);
@@ -72,6 +73,13 @@ Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin
                 ->defaults('relationship_type', $type)
                 ->middleware($verified('status'))
                 ->name("api.v1.admin.relationships.{$slug}.status");
+            if ($definition->defaultRole !== null) {
+                Route::put("relationships/{$slug}/{person}/default-role", DecideDefaultRoleController::class)
+                    ->where('person', $person)
+                    ->defaults('relationship_type', $type)
+                    ->middleware($verified('default_role'))
+                    ->name("api.v1.admin.relationships.{$slug}.default-role");
+            }
             Route::patch("relationships/{$slug}/{person}/fields", UpdateRelationshipFieldsController::class)
                 ->where('person', $person)
                 ->defaults('relationship_type', $type)

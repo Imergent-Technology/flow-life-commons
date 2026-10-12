@@ -21,6 +21,7 @@ final readonly class ChangeRelationshipStatusController
             RelationshipInput::wholeNumber($request->input('revision')) ?? -1,
             is_string($status) ? $status : '',
             $request->exists('default_role'),
+            $request->input('default_role'),
         );
 
         return response()->json($presenter->management($view));

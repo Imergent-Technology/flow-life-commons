@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace App\Modules\Relationships\Infrastructure;
 
+use App\Modules\Relationships\Application\AccessRelationshipGrants;
 use App\Modules\Relationships\Application\DefinitionSource;
-use App\Modules\Relationships\Application\NoRelationshipGrants;
 use App\Modules\Relationships\Application\RelationshipCatalog;
 use App\Modules\Relationships\Application\RelationshipDependents;
 use App\Modules\Relationships\Application\RelationshipGrantWithdrawal;
 use App\Modules\Relationships\Domain\RelationshipRepository;
 use App\Modules\Relationships\Infrastructure\Console\CheckRelationshipsCommand;
+use App\Modules\Relationships\Infrastructure\Console\GuardianAdoptionReportCommand;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
 
@@ -19,7 +20,7 @@ final class RelationshipsServiceProvider extends ServiceProvider
     /** @var array<class-string, class-string> */
     public array $bindings = [
         RelationshipRepository::class => DatabaseRelationshipRepository::class,
-        RelationshipGrantWithdrawal::class => NoRelationshipGrants::class,
+        RelationshipGrantWithdrawal::class => AccessRelationshipGrants::class,
     ];
 
     public function register(): void
@@ -39,7 +40,7 @@ final class RelationshipsServiceProvider extends ServiceProvider
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
-            $this->commands([CheckRelationshipsCommand::class]);
+            $this->commands([CheckRelationshipsCommand::class, GuardianAdoptionReportCommand::class]);
         }
     }
 }

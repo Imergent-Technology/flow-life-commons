@@ -8,9 +8,9 @@ use App\Modules\Relationships\Domain\RelationshipId;
 use App\Shared\Domain\Actor;
 
 /**
- * Withdraws grants sourced from one relationship, inside the caller's transaction (ADR 0038, F12).
- * WP1 has no sourced grants. The production binding removes nothing and returns zero. WP2B replaces
- * it with Access's withdrawal, which must join this transaction and must never block deletion.
+ * Withdraws grants sourced from one relationship, inside the caller's transaction (ADR 0038, F12, K11).
+ * The production binding is Access's withdrawal. It joins this transaction, removes only that
+ * source's grants, and must never block inactivation or deletion by asking for a grant capability.
  */
 interface RelationshipGrantWithdrawal
 {

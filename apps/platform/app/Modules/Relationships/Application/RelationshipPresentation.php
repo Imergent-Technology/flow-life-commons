@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Modules\Relationships\Application;
 
+use App\Modules\Access\Application\RoleGrantSource;
+use App\Modules\Access\Application\SourcedRoleGrantsOf;
 use App\Modules\Identity\Application\FindPeople;
 use App\Modules\Relationships\Domain\RelationshipDefinition;
 use App\Modules\Relationships\Domain\RelationshipRecord;
@@ -12,7 +14,10 @@ use App\Shared\Domain\PersonId;
 /** Turns a stored relationship into the two reads, resolving names through Identity. */
 final readonly class RelationshipPresentation
 {
-    public function __construct(private FindPeople $people) {}
+    public function __construct(
+        private FindPeople $people,
+        private SourcedRoleGrantsOf $grants,
+    ) {}
 
     public function management(RelationshipDefinition $definition, RelationshipRecord $record): RelationshipManagementView
     {
@@ -24,6 +29,7 @@ final readonly class RelationshipPresentation
             $record->revision,
             $definition->transitions[$record->status] ?? [],
             $record->fields,
+            $this->defaultRole($definition, $record),
         );
     }
 
@@ -60,6 +66,40 @@ final readonly class RelationshipPresentation
             $this->name($record->createdBy),
             $fields,
             $history,
+            $this->defaultRole($definition, $record),
+        );
+    }
+
+    /**
+     * The type's own default role, its stored decision, and whether that source's grant
+     * is in effect. Other roles and other sources are not read into the view.
+     */
+    private function defaultRole(RelationshipDefinition $definition, RelationshipRecord $record): ?DefaultRoleState
+    {
+        $role = $definition->defaultRole;
+        if ($role === null) {
+            return null;
+        }
+        $decision = null;
+        foreach ($record->provisions as $provision) {
+            if ($provision->role === $role->value) {
+                $decision = $provision;
+                break;
+            }
+        }
+        $effective = false;
+        foreach (($this->grants)([RoleGrantSource::relationship($record->id->value)]) as $grant) {
+            if ($grant->roleKey === $role->value && $grant->personId->equals($record->personId)) {
+                $effective = true;
+            }
+        }
+
+        return new DefaultRoleState(
+            $role->displayName(),
+            $decision?->decision,
+            $decision === null ? null : $this->name($decision->decidedBy),
+            $decision?->decidedAt,
+            $effective,
         );
     }
 

@@ -8,6 +8,7 @@ Operational procedures live here: step-by-step, tested, written for someone unde
 | [Create the first (or a recovery) administrator](administrator-bootstrap.md) | `identity:create-administrator`: bootstrap and lockout recovery |
 | [Recover a lost second factor](mfa-recovery.md) | An operator's reset in the Console, and `identity:reset-mfa` when no other administrator can |
 | [Production readiness](production-readiness.md) | What must be true before serving real people, and who can establish each thing |
+| [Guardian adoption](guardian-adoption.md) | Recording Guardians one at a time after G10, the Initiate-access decision, `relationships:guardian-adoption-report` and `relationships:check` |
 | [Rotate the application key](app-key-rotation.md) | `APP_KEY` and `APP_PREVIOUS_KEYS`, without locking anyone out of their authenticator |
 | [Backup and restore](backup-and-restore.md) | The keyring pairing rule and the contract a restore must satisfy |
 

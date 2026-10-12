@@ -45,6 +45,7 @@ final readonly class EstablishRelationshipController
             $status,
             $fields,
             $request->exists('default_role'),
+            $request->input('default_role'),
         );
 
         return response()->json($presenter->management($view), 201);

@@ -5083,7 +5083,7 @@ paths:
       summary: Describe the relationship types this operator may view or manage
       description: >-
         Console admission only (ADR 0038, A6). The response holds the types the caller may view or manage, and no Person.
-        `actions.provision_default_role` is a hint and authorizes nothing. It is false for every type until a type has a default role.
+        `actions.provision_default_role` is a hint and authorizes nothing. It is true only when the caller may manage that type and may assign roles, and the type has a default role.
       tags: [Relationships]
       security:
         - sessionCookie: []
@@ -5163,7 +5163,10 @@ paths:
       summary: Record a Guardian relationship for an existing Person
       description: >-
         Needs `guardians.manage` and recent verification. `person_id` with `confirm_existing_person: true`. Creating a Person
-        is not available (`new_person_not_supported`). A `default_role` decision is refused (`default_role_not_applicable`).
+        is not available (`new_person_not_supported`). Active recognition requires `default_role` of `grant`, `decline` or
+        `defer` (`default_role_decision_required`). Inactive recognition refuses that field (`default_role_not_applicable`).
+        `grant` also needs `access.roles.assign`, decided inside Access (`role_provisioning_not_permitted`), and the grant's
+        Person is the relationship's, never the operator's.
       tags: [Relationships]
       security:
         - sessionCookie: []
@@ -5189,7 +5192,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '403':
-          description: Signed in, but without the capability this route requires, or without recent verification where the route requires it.
+          description: Signed in, but without `guardians.manage` or recent verification, or a `grant` without `access.roles.assign` (`role_provisioning_not_permitted`).
           content:
             application/json:
               schema:
@@ -5201,7 +5204,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
         '422':
-          description: Confirmation, an unknown Person, a status that is not initial, a field, or a default-role decision.
+          description: Confirmation, an unknown Person, a status that is not initial, a field, a missing Active decision (`default_role_decision_required`), a decision on an Inactive intake (`default_role_not_applicable`), or a present `default_role` that is not `grant`, `decline` or `defer` (`invalid_relationship_query`).
           content:
             application/json:
               schema:
@@ -5396,11 +5399,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '403':
-          description: Signed in, but without the capability this route requires, or without recent verification where the route requires it.
+          description: Without `guardians.manage` or recent verification, or a reactivation `grant` without `access.roles.assign` (`role_provisioning_not_permitted`). A refused grant rolls the status change back.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Message'
+                $ref: '#/components/schemas/CodedMessage'
         '404':
           description: No such relationship (`relationship_not_found`).
           content:
@@ -5414,7 +5417,67 @@ paths:
               schema:
                 $ref: '#/components/schemas/RelationshipConflict'
         '422':
-          description: The transition is not allowed, or a default-role decision was sent (`transition_not_allowed`, `default_role_not_applicable`).
+          description: The transition is not allowed (`transition_not_allowed`), reactivation omitted `default_role` (`default_role_decision_required`), inactivation carried one (`default_role_not_applicable`), or a present `default_role` on reactivation is not `grant`, `decline` or `defer` (`invalid_relationship_query`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+
+  /admin/relationships/guardians/{person}/default-role:
+    put:
+      operationId: decideGuardianDefaultRole
+      summary: Record the Guardian default-role decision
+      description: >-
+        Guardian only. Needs `guardians.manage` and recent verification. `grant` also needs `access.roles.assign`,
+        decided inside Access, and only while the locked relationship is Active (`relationship_not_active` otherwise,
+        with nothing written). `decline` and `defer` create no authority. An identical decision does not move the revision.
+        There is no equivalent route for a type without a default role.
+      tags: [Relationships]
+      security:
+        - sessionCookie: []
+      x-required-capability: guardians.manage
+      x-requires-recent-verification: true
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecideDefaultRoleRequest'
+      responses:
+        '200':
+          description: The management view. An unchanged decision leaves the revision where it was.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipManagement'
+        '401':
+          description: Not signed in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Without `guardians.manage` or recent verification, or a `grant` without `access.roles.assign` (`role_provisioning_not_permitted`). A refused grant writes nothing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '404':
+          description: No such relationship (`relationship_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: A stale instance or revision (`stale_revision`), or `grant` while the relationship is not Active (`relationship_not_active`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipConflict'
+        '422':
+          description: A missing or unknown `default_role` (`default_role_decision_required`, `invalid_relationship_query`).
           content:
             application/json:
               schema:
@@ -7452,7 +7515,10 @@ components:
           required: [position]
           properties:
             position: {type: integer}
-        default_role: {type: ['string', 'null']}
+        default_role:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/RelationshipDefaultRoleOffer'
         actions:
           type: object
           required: [view, manage, delete, provision_default_role]
@@ -7461,6 +7527,25 @@ components:
             manage: {type: boolean}
             delete: {type: boolean}
             provision_default_role: {type: boolean}
+    RelationshipDefaultRoleOffer:
+      type: object
+      required: [display_name]
+      description: Whether this type offers a default role, and that role's display name. Never a capability list.
+      properties:
+        display_name: {type: string}
+    RelationshipDefaultRoleState:
+      type: object
+      required: [display_name, decision, decided_by, decided_at, effective]
+      description: The current decision for this relationship's own default role, and whether that source's grant is in effect. No other role is included.
+      properties:
+        display_name: {type: string}
+        decision: {type: [string, 'null'], enum: [granted, declined, null]}
+        decided_by:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/RelationshipPerson'
+        decided_at: {type: [string, 'null'], format: date-time}
+        effective: {type: boolean}
     RelationshipFieldDescription:
       type: object
       required: [key, value_type, max_length, not_after, required, visibility, label, help, order, group, options]
@@ -7501,7 +7586,7 @@ components:
             total: {type: integer}
     RelationshipRecord:
       type: object
-      required: [relationship_id, type, definition_version, person, status, revision, created_at, created_by, fields, history]
+      required: [relationship_id, type, definition_version, person, status, revision, created_at, created_by, fields, default_role, history]
       properties:
         relationship_id: {type: string}
         type: {type: string}
@@ -7520,6 +7605,10 @@ components:
         fields:
           type: object
           additionalProperties: true
+        default_role:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/RelationshipDefaultRoleState'
         history:
           type: array
           items:
@@ -7532,7 +7621,7 @@ components:
               changed_by: {$ref: '#/components/schemas/RelationshipPerson'}
     RelationshipManagement:
       type: object
-      required: [relationship_id, type, person, status, revision, transitions, fields]
+      required: [relationship_id, type, person, status, revision, transitions, fields, default_role]
       properties:
         relationship_id: {type: string}
         type: {type: string}
@@ -7545,6 +7634,10 @@ components:
         fields:
           type: object
           additionalProperties: true
+        default_role:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/RelationshipDefaultRoleState'
     RelationshipCandidateList:
       type: object
       required: [data, truncated]
@@ -7573,6 +7666,7 @@ components:
         person_id: {type: string}
         confirm_existing_person: {type: boolean}
         status: {type: string}
+        default_role: {type: string, enum: [grant, decline, defer]}
         fields:
           type: object
           additionalProperties: true
@@ -7583,6 +7677,14 @@ components:
         relationship_id: {type: string}
         revision: {type: integer}
         status: {type: string}
+        default_role: {type: string, enum: [grant, decline, defer]}
+    DecideDefaultRoleRequest:
+      type: object
+      required: [relationship_id, revision, default_role]
+      properties:
+        relationship_id: {type: string}
+        revision: {type: integer}
+        default_role: {type: string, enum: [grant, decline, defer]}
     UpdateRelationshipFieldsRequest:
       type: object
       required: [relationship_id, revision, fields]
