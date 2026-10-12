@@ -10,6 +10,7 @@ import { bodyOf, guardianBoth, serveRecord, volunteerBoth } from '../test/relati
 import {
   PERSON,
   REL_ID,
+  stale,
   wireApprenticeType,
   wireManagement,
   wireRecord,
@@ -61,6 +62,59 @@ describe("editing a relationship's fields", () => {
     // A field edit is only a field edit: no status, no default role, no verification.
     expect(api.calls.filter((c) => c.method === 'PUT')).toHaveLength(0)
     expect(api.callsTo('POST /api/v1/security/verify')).toHaveLength(0)
+  })
+
+  describe('when the relationship moves on while the editor is open', () => {
+    const moved = { revision: 4, fields: { interests: 'Gardening', availability: 'Weekends' } }
+
+    it('closes the editor on the current values, and does not send what the operator only had prefilled', async () => {
+      const user = userEvent.setup()
+      const { api } = volunteerBoth({
+        management: { fields: { interests: 'Gardening', availability: 'Evenings' } },
+      })
+      renderApp(`/relationships/volunteers/${PERSON}`)
+      await screen.findByRole('heading', { level: 1, name: 'Ada Lovelace' })
+      await user.click(screen.getByRole('button', { name: 'Edit details' }))
+      expect(screen.getByRole('textbox', { name: 'Availability' })).toHaveValue('Evenings')
+      await user.type(screen.getByRole('textbox', { name: 'Interests and skills' }), ' and baking')
+
+      // Elsewhere on the page the operator tries a status change that meets someone else's edit: the page re-reads.
+      const current = {
+        type: 'volunteer',
+        transitions: ['active', 'inactive'],
+        status: 'pending',
+        default_role: null,
+        basics: { primary_email: 'ada@example.org', primary_phone: '+1 555 010 0100' },
+        ...moved,
+      }
+      api.on(`PUT ${V}/status`, () => stale(wireManagement(current)))
+      api.on(`GET ${V}/management`, json(wireManagement(current)))
+      api.on(`GET ${V}`, json(wireRecord({ type: 'volunteer', default_role: null, ...moved })))
+      await user.click(screen.getByRole('button', { name: 'Change to Active' }))
+      await user.click(
+        within(await screen.findByRole('dialog')).getByRole('button', { name: 'Change to Active' }),
+      )
+      await screen.findByText('This volunteer was changed while you were working.')
+
+      // The editor is gone and the current values are what is shown: no stale draft is waiting to be saved.
+      expect(screen.queryByRole('button', { name: 'Save details' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('textbox', { name: 'Availability' })).not.toBeInTheDocument()
+      expect(screen.getByText('Weekends')).toBeVisible()
+      expect(api.callsTo(`PATCH ${V}/fields`)).toHaveLength(0)
+
+      // Editing again starts from the current state, and sends only what is changed there, at the current revision.
+      api.on(`PATCH ${V}/fields`, json(wireManagement({ ...current, revision: 5 })))
+      await user.click(screen.getByRole('button', { name: 'Edit details' }))
+      expect(screen.getByRole('textbox', { name: 'Availability' })).toHaveValue('Weekends')
+      await user.type(screen.getByRole('textbox', { name: 'Interests and skills' }), ' and baking')
+      await user.click(screen.getByRole('button', { name: 'Save details' }))
+      await screen.findByText('Saved.')
+      expect(bodyOf(api, `PATCH ${V}/fields`)).toEqual({
+        relationship_id: REL_ID,
+        revision: 4,
+        fields: { interests: 'Gardening and baking' },
+      })
+    })
   })
 
   it('sends nothing, and says nothing was saved, when nothing changed', async () => {

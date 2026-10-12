@@ -30,11 +30,18 @@ export function FieldsForm({
   headingLevel?: 2 | 3
 }) {
   const { type, management, view } = data
-  const [editing, setEditing] = useState(false)
+  // The instance and revision the editor was opened on. One revision guards fields and status together (F10), so when what is
+  // shown moves on (a conflict refresh, a status change), a draft built on the old state is not the operator's edit of the
+  // new one: the editor closes and the current values are shown, rather than sending untouched fields as if they were theirs.
+  const [openedOn, setOpenedOn] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft>({})
   const [pending, setPending] = useState(false)
   const [errors, setErrors] = useState<FieldErrors>({})
   const [problem, setProblem] = useState<{ message: string; attempt: number } | null>(null)
+
+  const shownNow =
+    management === null ? null : `${management.relationshipId}:${String(management.revision)}`
+  const editing = openedOn !== null && openedOn === shownNow
 
   if (type.fields.length === 0) return null
 
@@ -47,7 +54,7 @@ export function FieldsForm({
     setDraft(draftFrom(fields, values))
     setErrors({})
     setProblem(null)
-    setEditing(true)
+    setOpenedOn(shownNow)
   }
 
   async function save() {
@@ -58,7 +65,7 @@ export function FieldsForm({
       return
     }
     if (Object.keys(prepared.changes).length === 0) {
-      setEditing(false)
+      setOpenedOn(null)
       return
     }
     setPending(true)
@@ -72,11 +79,11 @@ export function FieldsForm({
     setPending(false)
     switch (outcome.status) {
       case 'done':
-        setEditing(false)
+        setOpenedOn(null)
         onNotice('Saved.')
         return
       case 'stale':
-        setEditing(false) // the page re-read and explained; the form starts again from what is current
+        setOpenedOn(null) // the page re-read and explained; the form starts again from what is current
         return
       case 'verify':
         setProblem({
@@ -138,7 +145,7 @@ export function FieldsForm({
             <Button
               disabled={pending}
               onClick={() => {
-                setEditing(false)
+                setOpenedOn(null)
               }}
             >
               Cancel
