@@ -128,7 +128,8 @@ it('keeps nothing of a deleted Pack: no Trash, no Restore, no Archive, no copy, 
         }
         $dump = json_encode(DB::table($table)->get()->all(), JSON_THROW_ON_ERROR);
         foreach (['Wibblesnort', 'Flumphwords', 'Plinkth', 'Quuxmarker', 'Zorblax pack', 'Zorblax card'] as $marker) {
-            expect($dump)->not->toContain($marker, "{$table} still holds {$marker}");
+            // One value per assertion: a second argument to a negated `toContain` is another needle, not a message.
+            expect(str_contains($dump, $marker))->toBeFalse("{$table} still holds {$marker}");
         }
     }
     expect(count($cards))->toBe(3);

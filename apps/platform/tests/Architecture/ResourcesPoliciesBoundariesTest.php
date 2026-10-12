@@ -143,6 +143,58 @@ arch('policy A\'s use cases are used only by the privileged-library controllers'
     expect(DownloadLibraryFile::class)->toOnlyBeUsedIn(['App\\Modules\\Resources\\Http\\DownloadLibraryFileController']);
 });
 
+// Pest's `toOnlyBeUsedIn` takes the allowed callers out of the scan by fully qualified name PREFIX, so a class named
+// `Application\BrowseLibraryUnchecked` would be excused along with `BrowseLibrary` and could inject `ViewerLibrary` unseen. The pins above are
+// exact only if no class or directory shares an allowed caller's name as a prefix. This is that check, over every allowed caller in this file.
+
+/** @var list<string> the allowed callers of the pins above, relative to the Resources module and without extension */
+const RESOURCES_PINNED_CALLERS = [
+    'Application/AudienceDelivery', 'Application/BrowseLibrary', 'Application/ReadLibraryPack', 'Application/DownloadLibraryFile',
+    'Application/BrowseDeliveredResources', 'Application/GetDeliveredPack', 'Application/DownloadDeliveredFile',
+    'Http/BrowseLibraryController', 'Http/ShowLibraryPackController', 'Http/DownloadLibraryFileController',
+    'Http/BrowseMyResourcesController', 'Http/ShowMyResourcePackController', 'Http/DownloadMyResourceFileController',
+];
+
+/**
+ * The paths (relative to the Resources module, without extension) that begin with an allowed caller's path but are not that caller: a class
+ * named for it (`BrowseLibraryUnchecked`) or anything inside a directory named for it (`BrowseLibrary/Export`).
+ *
+ * @param  list<string>  $relatives
+ * @return list<string>
+ */
+function resourcesPrefixImpostors(array $relatives): array
+{
+    $impostors = [];
+    foreach ($relatives as $relative) {
+        foreach (RESOURCES_PINNED_CALLERS as $caller) {
+            if ($relative !== $caller && str_starts_with($relative, $caller)) {
+                $impostors[] = $relative;
+            }
+        }
+    }
+
+    return $impostors;
+}
+
+it('lets no Resources class or directory borrow an allowed caller\'s name as a prefix, so the caller pins stay exact', function () {
+    $relatives = array_map(
+        fn (string $path): string => substr(SourceScan::relative($path), strlen(RESOURCES_ROOT) + 1, -4),
+        SourceScan::phpFiles([RESOURCES_ROOT]),
+    );
+
+    // Every allowed caller exists exactly as named: the exact names are not rejected, and a rename cannot leave the list pointing at nothing.
+    foreach (RESOURCES_PINNED_CALLERS as $caller) {
+        expect($relatives)->toContain($caller);
+    }
+    expect(resourcesPrefixImpostors($relatives))->toBe([])
+        // Positive controls: a helper class, a longer name, a directory of the name, for each layer, and none of the exact names.
+        ->and(resourcesPrefixImpostors(['Application/BrowseLibraryUnchecked', 'Application/ReadLibraryPackForExport', 'Application/DownloadLibraryFile/Export']))
+        ->toBe(['Application/BrowseLibraryUnchecked', 'Application/ReadLibraryPackForExport', 'Application/DownloadLibraryFile/Export'])
+        ->and(resourcesPrefixImpostors(['Application/AudienceDeliveryRaw', 'Application/GetDeliveredPackUnchecked', 'Http/BrowseMyResourcesControllerCopy']))
+        ->toBe(['Application/AudienceDeliveryRaw', 'Application/GetDeliveredPackUnchecked', 'Http/BrowseMyResourcesControllerCopy'])
+        ->and(resourcesPrefixImpostors(RESOURCES_PINNED_CALLERS))->toBe([]);
+});
+
 // --- The controllers of the three families cannot reach each other ---------------------------------------------------------------
 //
 // These are `arch()` rules, not text scans: Pest resolves every reference in a class (an import, a grouped import, a class alias, a
