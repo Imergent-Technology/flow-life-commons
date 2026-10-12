@@ -32,6 +32,9 @@ declare(strict_types=1);
  *   php worker.php resources_<operation> '{"actor_account":"...","actor_person":"...",...}'   (see the branches below: publish_pack, unpublish_pack, delete_pack,
  *       delete_card, publish_card, unpublish_card, set_pack_audiences, set_card_audiences, create_card, create_pack, create_category, reorder_cards,
  *       reorder_categories, update_pack, update_card, delete_category, move_pack, replace_file with "name" and base64 "bytes")
+ *   php worker.php relationship_basics '{"actor_account":"...","actor_person":"...","type":"volunteer","person":"...","relationship":"...","payload":"<JSON>"}'
+ *   php worker.php crm_update_method '{"actor_account":"...","actor_person":"...","person":"...","method":"...","value":"..."}'
+ *   php worker.php crm_update_person '{"actor_account":"...","actor_person":"...","person":"...","name":"..."}'
  *   php worker.php discussion_edit|discussion_remove '{"actor_account":"...","actor_person":"...","discussion":"...","message":"..."[,"body":"..."]}'
  *
  * It prints READY just before it starts the use case, then one JSON line, and exits 0 when
@@ -54,7 +57,9 @@ use App\Modules\Crm\Application\NewContactMethod;
 use App\Modules\Crm\Application\RegisterContact;
 use App\Modules\Crm\Application\RenameTag;
 use App\Modules\Crm\Application\SetPersonTags;
+use App\Modules\Crm\Application\ProfileChanges;
 use App\Modules\Crm\Application\UpdateContactMethod;
+use App\Modules\Crm\Application\UpdatePerson;
 use App\Modules\Crm\Domain\ContactMethodId;
 use App\Modules\Crm\Domain\ContactMethodKind;
 use App\Modules\Crm\Domain\ContactTagId;
@@ -100,7 +105,9 @@ use App\Modules\Relationships\Application\DefaultRoleChoice;
 use App\Modules\Relationships\Application\DeleteRelationship;
 use App\Modules\Relationships\Application\EstablishRelationship;
 use App\Modules\Relationships\Application\RelationshipCatalog;
+use App\Modules\Relationships\Application\NewPersonDetails;
 use App\Modules\Relationships\Application\UpdateRelationshipFields;
+use App\Modules\Relationships\Application\UpdateRelationshipPersonBasics;
 use App\Modules\Relationships\Domain\RelationshipId;
 use App\Modules\Resources\Application\CreateCard;
 use App\Modules\Resources\Application\CreateCategory;
@@ -249,6 +256,16 @@ try {
             PersonId::fromString($arg('person')),
             new NewContactMethod(ContactMethodKind::from($arg('kind')), $arg('value'), null, $arg('primary') === '1'),
         );
+    } elseif ($operation === 'crm_update_method') {
+        $app->make(UpdateContactMethod::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            PersonId::fromString($arg('person')), ContactMethodId::fromString($arg('method')), ['value' => $arg('value')],
+        );
+    } elseif ($operation === 'crm_update_person') {
+        $app->make(UpdatePerson::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            PersonId::fromString($arg('person')), $arg('name'), new ProfileChanges,
+        );
     } elseif ($operation === 'crm_set_primary') {
         $app->make(UpdateContactMethod::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
@@ -330,9 +347,11 @@ try {
     } elseif ($operation === 'relationship_intake') {
         $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
         $sent = array_key_exists('default_role', $decoded);
+        $newName = array_key_exists('new_person_name', $decoded) ? $arg('new_person_name') : null;
         $app->make(EstablishRelationship::class)(
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
-            $type, PersonId::fromString($arg('person')), true, $arg('status'), [], $sent, $sent ? $arg('default_role') : null,
+            $type, $newName === null ? PersonId::fromString($arg('person')) : null, true, $arg('status'), [], $sent, $sent ? $arg('default_role') : null,
+            $newName === null ? null : new NewPersonDetails($newName, array_key_exists('new_person_email', $decoded) ? $arg('new_person_email') : null),
         );
     } elseif ($operation === 'relationship_status') {
         $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
@@ -348,6 +367,13 @@ try {
             Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
             $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')),
             (int) $arg('revision'), DefaultRoleChoice::fromRequest($arg('default_role')),
+        );
+    } elseif ($operation === 'relationship_basics') {
+        $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
+        $app->make(UpdateRelationshipPersonBasics::class)(
+            Actor::user(AccountId::fromString($arg('actor_account')), PersonId::fromString($arg('actor_person'))),
+            $type, PersonId::fromString($arg('person')), RelationshipId::fromString($arg('relationship')),
+            json_decode($arg('payload'), true, 512, JSON_THROW_ON_ERROR),
         );
     } elseif ($operation === 'relationship_fields') {
         $type = $app->make(RelationshipCatalog::class)->type($arg('type')) ?? throw new InvalidArgumentException('type');
