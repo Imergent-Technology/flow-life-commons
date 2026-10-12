@@ -1,6 +1,6 @@
 # ADR 0038: Organizational Relationships and Resource Viewing Authority
 
-- **Status:** Accepted (the G10 design gate, WP0, 2026-10-08). The design was remediated after an independent architecture audit and again after that remediation's focused verification, and accepted without further review. Decisions N1–N6 and the audit rulings AR1–AR10 are resolved by the product owner. **Nothing is implemented:** acceptance covers the design only, and G10's implementation packages (WP1–WP7) are planned and unstarted.
+- **Status:** Accepted (the G10 design gate, WP0, 2026-10-08). The design was remediated after an independent architecture audit and again after that remediation's focused verification, and accepted without further review. Decisions N1–N6 and the audit rulings AR1–AR10 are resolved by the product owner. Acceptance covers the design; its implementation proceeds by work package (WP1–WP3 are on `main`, WP4's notes are below, and WP5–WP7 are unstarted).
 - **Date:** 2026-10-08. Revised four times before acceptance, recorded under *Revision history*. The earlier versions are commits `9eeb4f9`, `30a5443`, `96a01ea` and `f57e50c`.
 - **Supersedes:** none
 - **Superseded by:** none
@@ -2014,6 +2014,36 @@ Not designed here, and nothing is built for any of it:
 Recorded for the G6 audit:
 - Resources parses a stored `state` and `audience_mode` with `::from` (`DatabaseCardRepository.php:392,422,432`, `DatabasePackRepository.php:252`), so a corrupt value is a `500` rather than a fail-closed omission.
 - The library's delivered file has no `available` field (ADR 0037 follow-ups).
+
+## Implementation notes (WP4, 2026-10-12)
+
+WP4 implements Part R exactly as accepted. This section records how, so that an auditor can trace any returned Pack, Card or file to the one policy that authorized it, and the interpretations where the wording left room.
+
+**Route to policy.** Each route family has its own controllers, use cases, request class and presenter. None can answer for another.
+
+| Family and routes | Policy | Authority | Use cases | Read model / projection | Presenter | Shape |
+| --- | --- | --- | --- | --- | --- | --- |
+| `/admin/resources/*` | B | `resources.manage` | the management use cases, `PreviewPack` | repositories; preview calls `ResourceProjection::visibleCards` with the Pack's own publication set aside | `ResourcesPresenter` (preview delegates to `DeliveryPresenter`, with the **management** file route) | management |
+| `/admin/resource-library/*` | A | `resources.view` | `BrowseLibrary`, `ReadLibraryPack`, `DownloadLibraryFile` | `ViewerLibrary` (no projection, no eligibility) | `ViewerPresenter` | `ViewerLibrary`, `ViewerPack` |
+| `/admin/my-resources/*` | C | `console.access` only (A6) | `BrowseDeliveredResources`, `GetDeliveredPack`, `DownloadDeliveredFile` | `AudienceDelivery` over `ResourceProjection`, with the set from `AudienceEligibility` | `DeliveryPresenter` (`my-resources` file route) | `ResourceLibrary`, `ResourcePack` |
+
+`ResourceProjection::visibleCards` has exactly two callers, `AudienceDelivery` and `PreviewPack`. `AudienceEligibility` has exactly one, `AudienceDelivery`. `ResolveActor` is named in exactly two Resources classes, `RequestActor` (once per request) and `AudienceEligibility` (again, so a captured Actor carries nothing). All of this is pinned in `ResourcesPoliciesBoundariesTest` and `ResourcesBoundariesTest`.
+
+**Interpretations.**
+- **Policy A listing.** `GET /admin/resource-library` returns `{data: [{category, packs}]}` as G5's library did. A Pack with no Category is in a final group whose `category` is `null`; a Category with no Pack is not listed. A listed Pack carries `state`, `audiences`, `card_count` (every Card, Drafts included), `draft_card_count`, `updated_at` and `updated_by`. A Card carries `index` (1..n across all the Pack's Cards), `state`, `audience_mode`, its effective `audiences`, `updated_at` and `updated_by`. `updated_by` is `{display_name}` only: a name is all `resources.view` needs of an editor, so no Person id is offered.
+- **The `audience` filter** matches the Packs *targeted at* that audience (the Pack's own set, as management's filter does). A Card narrowed away from an audience does not remove its Pack from that filter.
+- **`publication=draft`** is Draft Packs plus Published Packs that hold a Draft Card, as R8 says, so "has unpublished work" is one filter.
+- **Policy A's file route.** A Pack that does not exist, or a Card that is not in it, is `resource_pack_not_found`; a Card in the Pack with no file is `asset_unavailable`, because the privileged viewer may know the Card exists.
+- **Policy C with no eligibility** short-circuits to an empty library or `resource_pack_not_found`, before any Pack is read.
+- **Revocation and admission.** A restricted Guardian whose Console admission came from a relationship-managed Initiate grant loses admission with the relationship (the grant is withdrawn in the same transaction, K7), so their next request is `403` at the door. A Person whose admission is independent (a `console-participant` or an independently granted `guardian-initiate`) keeps it and meets the `404` of R13. Both are tested.
+- **Renamed types.** G5's `LibraryCategory` and `LibraryPack` became `DeliveredCategory` and `DeliveredListedPack` (policy C), so a policy A type cannot be mistaken for one.
+
+**Console behaviour until WP6 (documented, not built).** WP4 changes the platform and the OpenAPI contract and leaves the Console as it is.
+- `/resource-library` still requires `resources.view` in the Console and calls policy A. Its response is a superset of the old delivery shape, so a viewer's Packs still open, but they now include Drafts and every audience, unmarked.
+- The library page's response guard still expects a Category on every group and Pack. An uncategorized Pack therefore makes the viewer's library show its error state until WP6.
+- The management screens' guard still knows two audiences. A Pack or Card that someone targets at `volunteer` through the API reads as an unexpected response there until WP6.
+- No restricted user reaches `my-resources` in the Console yet, because no route or navigation entry points at it.
+- The Playwright library journeys written for G5 assume Guardian-only delivery for a `resources.view` holder, and are rewritten by WP6 and WP7.
 
 ## Consequences
 

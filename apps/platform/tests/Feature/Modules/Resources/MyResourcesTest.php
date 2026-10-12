@@ -491,3 +491,22 @@ it('builds its personas from real roles and relationships: a restricted Guardian
         ->and(Access::actorFor($account))->toBeInstanceOf(Actor::class)
         ->and(Membership::class)->toBeString();
 });
+
+it('offers a visible file as an attachment, or inline only when asked and only for a PDF or a raster image', function () {
+    $by = Resources::editor('ed.editor@example.org', 'Ed Editor');
+    $pack = Resources::pack($by, 'Files', Resources::category($by, 'Guides')->category->id);
+    $png = ResourceFiles::publishedCard($by, $pack, 'Picture', 'map.png', ResourceFiles::png());
+    $text = ResourceFiles::publishedCard($by, $pack, 'Notes', 'notes.txt', "plain notes\n");
+    app(SetPackAudiences::class)($by, $pack->pack->id, [Audience::Volunteer]);
+    app(PublishPack::class)($by, $pack->pack->id);
+    $console = Audiences::signIn(Audiences::reader(['volunteer'], Role::ConsoleParticipant, 'ivy.inline@example.org'));
+    $base = MINE_ROOT.'/packs/'.$pack->pack->id->value.'/cards/';
+
+    $disposition = fn (string $card, string $query): string => (string) $console->get($base.$card.'/file'.$query)->assertOk()->headers->get('Content-Disposition');
+
+    expect($disposition($png->card->id->value, ''))->toStartWith('attachment;')
+        ->and($disposition($png->card->id->value, '?disposition=inline'))->toStartWith('inline;')
+        ->and($disposition($text->card->id->value, '?disposition=inline'))->toStartWith('attachment;')
+        ->and($disposition($text->card->id->value, '?disposition=attachment'))->toStartWith('attachment;');
+    $console->get($base.$png->card->id->value.'/file?disposition=render')->assertStatus(422);
+});
