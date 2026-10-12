@@ -2,8 +2,8 @@
 
 declare(strict_types=1);
 
-use App\Modules\Resources\Application\BrowseResourceLibrary;
-use App\Modules\Resources\Application\GetResourcePack;
+use App\Modules\Resources\Application\BrowseDeliveredResources;
+use App\Modules\Resources\Application\GetDeliveredPack;
 use App\Modules\Resources\Application\PruneOrphanedAssets;
 use App\Modules\Resources\Application\ResourcePackNotFound;
 use App\Modules\Resources\Domain\FileStoreFailure;
@@ -14,6 +14,8 @@ use Carbon\Carbon;
 use Database\Seeders\DatabaseSeeder;
 use Database\Seeders\ResourcesDemoSeeder;
 use Illuminate\Support\Facades\DB;
+use Tests\Support\Access;
+use Tests\Support\Audiences;
 use Tests\Support\FaultyFileStore;
 use Tests\Support\Identity;
 use Tests\Support\ResourceFiles;
@@ -101,11 +103,17 @@ function demoGuardian(): Actor
     return Resources::editor('demo.guardian@example.org', 'Demo Guardian');
 }
 
+/** A real reader: an Account whose Person is an Active Guardian (eligibility is a relationship, never the operator's role). */
+function demoReader(): Actor
+{
+    return Access::actorFor(Audiences::reader(['guardian']));
+}
+
 /** @return list<string> */
 function demoLibraryTitles(Actor $as, ?string $search = null): array
 {
     $titles = [];
-    foreach (app(BrowseResourceLibrary::class)($as, null, $search) as $entry) {
+    foreach (app(BrowseDeliveredResources::class)($as, null, $search) as $entry) {
         foreach ($entry->packs as $listed) {
             $titles[] = $listed->pack->title;
         }
@@ -313,10 +321,11 @@ it('makes a Pack whole or not at all: a failure leaves no half-made Pack to be s
 });
 
 it('shows a Guardian only the Cards they may read: a Series with a Member-only Card is A, C and D as 1, 2 and 3 of 3', function () {
-    $guardian = demoGuardian();
+    $guardian = demoReader();
+    demoGuardian();
     seedResourcesDemo();
 
-    $delivered = app(GetResourcePack::class)($guardian, PackId::fromString(Resources::str(demoPackRow(ResourcesDemoSeeder::NARROWED)->id)));
+    $delivered = app(GetDeliveredPack::class)($guardian, PackId::fromString(Resources::str(demoPackRow(ResourcesDemoSeeder::NARROWED)->id)));
     expect(array_map(fn ($c): string => $c->card->title, $delivered->cards))->toBe(['Welcome to the team', 'Your first shift', 'Handover and support'])
         ->and(array_map(fn ($c): int => $c->index, $delivered->cards))->toBe([1, 2, 3])
         ->and($delivered->pack->isSeries)->toBeTrue()
@@ -324,15 +333,16 @@ it('shows a Guardian only the Cards they may read: a Series with a Member-only C
         ->and(json_encode($delivered->cards, JSON_THROW_ON_ERROR))->not->toContain(ResourcesDemoSeeder::HIDDEN_WORD);
 
     // A Pack with a Draft Card in it delivers the three that are Published.
-    $operations = app(GetResourcePack::class)($guardian, PackId::fromString(Resources::str(demoPackRow(ResourcesDemoSeeder::OPERATIONS)->id)));
+    $operations = app(GetDeliveredPack::class)($guardian, PackId::fromString(Resources::str(demoPackRow(ResourcesDemoSeeder::OPERATIONS)->id)));
     expect(array_map(fn ($c): string => $c->card->title, $operations->cards))->toBe(['Keys, alarm and access', 'Cleaning and supplies', 'Shift rota template']);
 });
 
 it('lists three Categories and six Packs to a Guardian, in order, with no Draft, no Member-only Pack and no Member-only Category', function () {
-    $guardian = demoGuardian();
+    $guardian = demoReader();
+    demoGuardian();
     seedResourcesDemo();
 
-    $library = app(BrowseResourceLibrary::class)($guardian, null, null);
+    $library = app(BrowseDeliveredResources::class)($guardian, null, null);
     expect(array_map(fn ($entry): string => $entry->category->name, $library))->toBe([ResourcesDemoSeeder::GETTING_STARTED, ResourcesDemoSeeder::RUNNING, ResourcesDemoSeeder::SAFETY])
         ->and(demoLibraryTitles($guardian))->toBe([
             ResourcesDemoSeeder::NARROWED, ResourcesDemoSeeder::SINGLE, ResourcesDemoSeeder::OPERATIONS, ResourcesDemoSeeder::LINK, ResourcesDemoSeeder::IMAGE, ResourcesDemoSeeder::SERIES,
@@ -351,16 +361,18 @@ it('lists three Categories and six Packs to a Guardian, in order, with no Draft,
 });
 
 it('answers a Draft Pack and a Member-only Pack exactly as a Pack that does not exist', function () {
-    $guardian = demoGuardian();
+    $guardian = demoReader();
+    demoGuardian();
     seedResourcesDemo();
 
     foreach ([ResourcesDemoSeeder::DRAFT, ResourcesDemoSeeder::MEMBERS_ONLY] as $title) {
-        expect(fn () => app(GetResourcePack::class)($guardian, PackId::fromString(Resources::str(demoPackRow($title)->id))))->toThrow(ResourcePackNotFound::class);
+        expect(fn () => app(GetDeliveredPack::class)($guardian, PackId::fromString(Resources::str(demoPackRow($title)->id))))->toThrow(ResourcePackNotFound::class);
     }
 });
 
 it('does not find hidden content by search: a Member-only Card, a Member-only Pack or a Draft by any of their words', function () {
-    $guardian = demoGuardian();
+    $guardian = demoReader();
+    demoGuardian();
     seedResourcesDemo();
 
     expect(demoLibraryTitles($guardian, ResourcesDemoSeeder::HIDDEN_WORD))->toBe([])

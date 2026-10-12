@@ -65,6 +65,15 @@ interface PackRepository
     public function published(?CategoryId $category): array;
 
     /**
+     * Every Pack in any state, with or without a Category, in library order: Category position, Pack position, id, and the Packs with
+     * no Category last (in their own position, id order). Optionally the Packs of one Category only. For the privileged viewer's
+     * library, which reads everything; nothing decides here who may see what.
+     *
+     * @return list<Pack>
+     */
+    public function every(?CategoryId $category): array;
+
+    /**
      * How many Packs each Category holds, in any state, keyed by Category id.
      *
      * @param  list<CategoryId>  $categories

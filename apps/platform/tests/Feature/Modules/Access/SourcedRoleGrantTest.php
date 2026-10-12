@@ -23,7 +23,8 @@ use App\Modules\Audit\Domain\SecurityEvent;
 use App\Modules\Audit\Domain\SecurityEventWriter;
 use App\Modules\Relationships\Application\AccessRelationshipGrants;
 use App\Modules\Relationships\Application\RelationshipGrantWithdrawal;
-use App\Modules\Resources\Application\BrowseResourceLibrary;
+use App\Modules\Resources\Application\BrowseLibrary;
+use App\Modules\Resources\Application\LibraryFilter;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
 use Illuminate\Support\Carbon;
@@ -207,7 +208,7 @@ it('applies a sourced role only through the account linked to that person', func
         ->and(DB::table('accounts')->where('person_id', $dormant->id->value)->exists())->toBeFalse();
 });
 
-it('does not let a console-only role read the resource library, or create a relationship', function () {
+it('does not let a console-only role read the privileged resource library, or create a relationship', function () {
     $admin = Access::admin('admin@example.org');
     $account = Identity::savedActiveAccount('initiate@example.org');
     app(GrantSourcedRole::class)(
@@ -215,7 +216,7 @@ it('does not let a console-only role read the resource library, or create a rela
     );
     Access::grant($account, Role::ConsoleParticipant);
 
-    expect(fn () => app(BrowseResourceLibrary::class)(Access::actorFor($account), null, null))->toThrow(AccessDenied::class)
+    expect(fn () => app(BrowseLibrary::class)(Access::actorFor($account), new LibraryFilter))->toThrow(AccessDenied::class)
         ->and(app(Authorizer::class)->allows(Access::actorFor($account), Capability::ViewResources))->toBeFalse()
         ->and(app(Authorizer::class)->allows(Access::actorFor($account), Capability::ManageResources))->toBeFalse()
         ->and(DB::table('person_relationships')->count())->toBe(0);

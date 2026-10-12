@@ -166,7 +166,8 @@ it('documents each administration operation with the capability and the verifica
             $capability = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:') && $m !== 'can:console.access'));
 
             if ($capability === []) {
-                expect($path)->toBe('/admin/relationship-types', "{$method} {$path} has no catalog capability and is not the pinned console-only read")
+                // ADR 0038, A6: exactly four console-only reads, the types read and the three `my-resources` routes (audience reading).
+                expect(in_array($path, ['/admin/relationship-types', '/admin/my-resources', '/admin/my-resources/packs/{pack}', '/admin/my-resources/packs/{pack}/cards/{card}/file'], true))->toBeTrue("{$method} {$path} has no catalog capability and is not a pinned console-only read")
                     ->and($documented['x-required-capability'])->toBe('console.access', "{$method} {$path}")
                     ->and($documented['x-requires-recent-verification'])->toBeFalse("{$method} {$path}");
             } else {
@@ -178,8 +179,8 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, Resources (ADR 0037) twenty-eight, and Relationships (ADR 0038) nineteen: the types read, nine Guardian routes and nine Volunteer routes (the basic-detail edit is Volunteer-only, WP3).
-    expect($checked)->toBe(91);
+    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, Resources (ADR 0037) twenty-eight, the three `my-resources` reads (ADR 0038, WP4), and Relationships (ADR 0038) nineteen: the types read, nine Guardian routes and nine Volunteer routes (the basic-detail edit is Volunteer-only, WP3).
+    expect($checked)->toBe(94);
 });
 
 it('never lets an administration schema name a secret', function () {
@@ -195,6 +196,7 @@ it('never lets an administration schema name a secret', function () {
         'ManagedCardOutline', 'ManagedCard', 'ResourceContent', 'ResourceDocument', 'NewResourcePack', 'UpdateResourcePack', 'ResourcePackAudiences', 'NewResourceCard', 'UpdateResourceCard',
         'ResourceCardAudiences', 'StaleRevisionError', 'PackNotPublishableError', 'CardNotPublishableError', 'PublishedPackRequirementError', 'CardAudienceConflictError',
         'ResourcePack', 'ResourceDeliveredCard', 'ResourceLibrary', 'ResourcePackPreview',
+        'ViewerLibrary', 'ViewerListedPack', 'ViewerEditor', 'ViewerPack', 'ViewerCard', 'ViewerResourceFile',
         'ResourceFileSummary', 'ManagedResourceFile', 'DeliveredResourceFile', 'ResourceFileUpload', 'NewResourceFileCard', 'FileTooLargeError',
     ];
     $text = strtolower(json_encode(array_intersect_key($components['schemas'], array_flip($names)), JSON_THROW_ON_ERROR));

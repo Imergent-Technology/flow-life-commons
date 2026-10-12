@@ -321,7 +321,10 @@ it('has an acyclic module graph limited to the frozen edges', function () {
         // Resources -> Access, Identity, Audit (ADR 0037): Access and Identity as the others, and ONE Audit edge, for the two
         // permanent-deletion events (decision 55), through Audit\Application only. It is a deliberate, narrow edge: the use cases that
         // may call the seam are pinned in MembershipTrustBoundariesTest and ResourcesBoundariesTest.
-        'Resources' => ['Access', 'Identity', 'Audit'],
+        'Resources' => ['Access', 'Identity', 'Audit', 'Relationships', 'Membership'],
+        // Resources -> Relationships, Membership (ADR 0038, A10, R10): audience eligibility reads who is currently a Guardian, a Volunteer or a
+        // Member, through exactly `QualifyingRelationships` and `GetCurrentMembership`, only from `AudienceEligibility`. Both owners' Application
+        // reads only; neither module depends on Resources, so there is no reverse edge and no cycle (ResourcesBoundariesTest pins the two reads).
         // Relationships -> Access, Identity, Audit, Crm (ADR 0038). The Crm edge is the delegated seam (WP3, P1): only
         // `Crm\Application\Delegated`, only from named Relationships Application classes, pinned in CrmBoundariesTest and
         // RelationshipsBoundariesTest. Crm never depends on Relationships, and Access never depends on Relationships.

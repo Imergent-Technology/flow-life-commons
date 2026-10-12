@@ -4,16 +4,13 @@ declare(strict_types=1);
 
 namespace App\Modules\Resources\Http;
 
-use App\Modules\Resources\Application\BrowseResourceLibrary;
-use App\Modules\Resources\Domain\CategoryId;
+use App\Modules\Resources\Application\BrowseLibrary;
 use Illuminate\Http\JsonResponse;
 
 final readonly class BrowseLibraryController
 {
-    public function __invoke(LibraryRequest $request, BrowseResourceLibrary $use, RequestActor $actors, ResourcesPresenter $presenter): JsonResponse
+    public function __invoke(LibraryRequest $request, BrowseLibrary $use, RequestActor $actors, ViewerPresenter $presenter): JsonResponse
     {
-        $category = $request->category();
-
-        return response()->json($presenter->library($use($actors->for($request), $category === null ? null : CategoryId::fromString($category), $request->text())), 200);
+        return response()->json($presenter->library($use($actors->for($request), $request->filter())), 200);
     }
 }

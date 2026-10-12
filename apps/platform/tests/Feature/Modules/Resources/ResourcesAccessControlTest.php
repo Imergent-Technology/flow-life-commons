@@ -3,23 +3,24 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\AccessDenied;
-use App\Modules\Resources\Application\BrowseResourceLibrary;
+use App\Modules\Resources\Application\BrowseLibrary;
 use App\Modules\Resources\Application\CreateCard;
 use App\Modules\Resources\Application\CreateCategory;
 use App\Modules\Resources\Application\CreatePack;
 use App\Modules\Resources\Application\DeleteCard;
 use App\Modules\Resources\Application\DeleteCategory;
 use App\Modules\Resources\Application\DeletePack;
+use App\Modules\Resources\Application\DownloadLibraryFile;
 use App\Modules\Resources\Application\DownloadManagedFile;
-use App\Modules\Resources\Application\DownloadResourceFile;
 use App\Modules\Resources\Application\GetManagedCard;
 use App\Modules\Resources\Application\GetManagedPack;
-use App\Modules\Resources\Application\GetResourcePack;
+use App\Modules\Resources\Application\LibraryFilter;
 use App\Modules\Resources\Application\ListCategories;
 use App\Modules\Resources\Application\PageManagedPacks;
 use App\Modules\Resources\Application\PreviewPack;
 use App\Modules\Resources\Application\PublishCard;
 use App\Modules\Resources\Application\PublishPack;
+use App\Modules\Resources\Application\ReadLibraryPack;
 use App\Modules\Resources\Application\RenameCategory;
 use App\Modules\Resources\Application\ReorderCards;
 use App\Modules\Resources\Application\ReorderCategories;
@@ -50,10 +51,12 @@ use Tests\Support\Resources;
 use Tests\Support\SourceScan;
 
 /*
- * Who may use the Resources API (ADR 0037), at each layer on its own. The role catalog has no role that holds one of
+ * Who may use the Resources API (ADR 0037, ADR 0038 Part R), at each layer on its own. The role catalog has no role that holds one of
  * resources.view / resources.manage without the other (a Guardian holds both, deliberately), so, as for CRM and Discussions, ONE
  * layer is moved at a time through the platform's own seam, the Laravel Gate the route `can:` middleware asks, keeping every
- * other layer real. Runs on MariaDB and PostgreSQL.
+ * other layer real. Three policies, three needs: management asks `manage`, the privileged library asks `view`, and audience reading
+ * (`my-resources`) asks neither (`none`): only Console admission, because its authority is the Person's own relationships.
+ * Runs on MariaDB and PostgreSQL.
  */
 
 beforeEach(function () {
@@ -97,7 +100,7 @@ function resourcesFixture(Console $console): array
 }
 
 /**
- * Every operation: method, path, a body that would be valid, and which capability it asks for.
+ * Every operation: method, path, a body that would be valid, and which capability it asks for (`manage`, `view`, or `none`: Console admission only).
  *
  * @param  array{pack: string, card: string, fileCard: string, category: string, spare: string, spareCard: string}  $f
  * @return list<array{string, string, array<string, mixed>, string}>
@@ -106,6 +109,7 @@ function resourcesOperations(array $f): array
 {
     $m = '/api/v1/admin/resources';
     $l = '/api/v1/admin/resource-library';
+    $r = '/api/v1/admin/my-resources';
 
     return [
         ['GET', "{$m}/categories", [], 'manage'],
@@ -136,6 +140,9 @@ function resourcesOperations(array $f): array
         ['GET', $l, [], 'view'],
         ['GET', "{$l}/packs/{$f['pack']}", [], 'view'],
         ['GET', "{$l}/packs/{$f['pack']}/cards/{$f['fileCard']}/file", [], 'view'],
+        ['GET', $r, [], 'none'],
+        ['GET', "{$r}/packs/{$f['pack']}", [], 'none'],
+        ['GET', "{$r}/packs/{$f['pack']}/cards/{$f['fileCard']}/file", [], 'none'],
     ];
 }
 
@@ -162,7 +169,7 @@ it('covers every Resources route with the table below, so a route added later ca
     $table = array_map(fn (array $op): string => $op[0].' '.preg_replace('/[0-9a-z]{26}/', '{}', explode('?', $op[1])[0]), resourcesOperations(resourcesFixture($console)));
     $routes = [];
     foreach (app('router')->getRoutes()->getRoutes() as $route) {
-        if (str_starts_with($route->uri(), 'api/v1/admin/resource')) {
+        if (str_starts_with($route->uri(), 'api/v1/admin/resource') || str_starts_with($route->uri(), 'api/v1/admin/my-resources')) {
             foreach (array_diff(Api::strings($route->methods()), ['HEAD', 'OPTIONS']) as $method) {
                 $routes[] = $method.' '.preg_replace('/\{[^}]+\}/', '{}', '/'.$route->uri());
             }
@@ -171,17 +178,23 @@ it('covers every Resources route with the table below, so a route added later ca
     sort($table);
     sort($routes);
 
-    expect(count($routes))->toBe(28)->and($table)->toBe($routes);
+    expect(count($routes))->toBe(31)->and($table)->toBe($routes);
 });
 
-it('refuses EVERY operation to a signed-in Guardian who holds neither capability, and changes nothing', function () {
+it('refuses every management and library operation to a signed-in Guardian who holds neither capability, and changes nothing; my-resources still answers', function () {
     [$console] = Resources::signedInGuardian();
     $f = resourcesFixture($console);
     $before = array_map(fn (string $t): int => DB::table($t)->count(), Resources::tables());
     resourcesGate(false, 'resources.view', 'resources.manage');
 
-    foreach (resourcesOperations($f) as [$method, $path, $body]) {
-        expect(resourcesCall($console, $method, $path, $body)->getStatusCode())->toBe(403, "{$method} {$path}");
+    foreach (resourcesOperations($f) as [$method, $path, $body, $needs]) {
+        $status = resourcesCall($console, $method, $path, $body)->getStatusCode();
+        if ($needs === 'none') {
+            // Admission is all it asks: an answer, never a 403 (ineligibility is a 404 or an empty library).
+            expect($status)->not->toBe(403, "{$method} {$path}")->and($status)->toBeLessThan(500);
+        } else {
+            expect($status)->toBe(403, "{$method} {$path}");
+        }
     }
     expect(array_map(fn (string $t): int => DB::table($t)->count(), Resources::tables()))->toBe($before)
         ->and(DB::table('security_events')->where('type', 'like', 'resource.%')->count())->toBe(0);
@@ -202,7 +215,7 @@ it('lets resources.manage do every management operation and refuses it the libra
     }
 });
 
-it('lets resources.view read the library and refuses it every management operation, reads included: view is not manage', function () {
+it('lets resources.view read the library and refuses it every management operation, reads included: view is not manage, and my-resources is unaffected', function () {
     [$console] = Resources::signedInGuardian();
     $f = resourcesFixture($console);
     resourcesGate(false, 'resources.manage');
@@ -211,6 +224,8 @@ it('lets resources.view read the library and refuses it every management operati
         $response = resourcesCall($console, $method, $path, $body);
         if ($needs === 'view') {
             $response->assertOk();
+        } elseif ($needs === 'none') {
+            expect($response->getStatusCode())->not->toBe(403, "{$method} {$path}")->and($response->getStatusCode())->toBeLessThan(500);
         } else {
             expect($response->getStatusCode())->toBe(403, "{$method} {$path}");
         }
@@ -264,11 +279,11 @@ it('checks the capability again inside every use case, so no other caller can sk
         fn () => app(UnpublishCard::class)($outsider, $spare->pack->id, $card->card->id),
         fn () => app(ReorderCards::class)($outsider, $spare->pack->id, []),
         fn () => app(DeleteCard::class)($outsider, $spare->pack->id, $card->card->id),
-        fn () => app(BrowseResourceLibrary::class)($outsider, null, null),
-        fn () => app(GetResourcePack::class)($outsider, $live->pack->id),
+        fn () => app(BrowseLibrary::class)($outsider, new LibraryFilter),
+        fn () => app(ReadLibraryPack::class)($outsider, $live->pack->id),
         fn () => app(ReplaceCardFile::class)($outsider, $spare->pack->id, $file->card->id, ResourceFiles::incoming('b.pdf', ResourceFiles::pdf())),
         fn () => app(DownloadManagedFile::class)($outsider, $spare->pack->id, $file->card->id),
-        fn () => app(DownloadResourceFile::class)($outsider, $live->pack->id, $liveFile->card->id),
+        fn () => app(DownloadLibraryFile::class)($outsider, $live->pack->id, $liveFile->card->id),
     ];
 
     expect(count($calls))->toBe(28);
@@ -289,10 +304,15 @@ it('asks each use case for exactly the one capability its route asks for', funct
     foreach (['ListCategories', 'CreateCategory', 'RenameCategory', 'DeleteCategory', 'ReorderCategories', 'PageManagedPacks', 'GetManagedPack', 'CreatePack', 'UpdatePack', 'SetPackAudiences', 'PublishPack', 'UnpublishPack', 'ReorderPacks', 'DeletePack', 'PreviewPack', 'CreateCard', 'GetManagedCard', 'UpdateCard', 'SetCardAudiences', 'PublishCard', 'UnpublishCard', 'ReorderCards', 'DeleteCard', 'ReplaceCardFile', 'DownloadManagedFile'] as $useCase) {
         $expected[$useCase] = 'ManageResources';
     }
-    $expected['BrowseResourceLibrary'] = 'ViewResources';
-    $expected['GetResourcePack'] = 'ViewResources';
-    $expected['DownloadResourceFile'] = 'ViewResources';
+    $expected['BrowseLibrary'] = 'ViewResources';
+    $expected['ReadLibraryPack'] = 'ViewResources';
+    $expected['DownloadLibraryFile'] = 'ViewResources';
+    // Policy C asks for NO capability: it answers only about the Actor's own relationships (ADR 0038, R11). Pinned as such below.
+    $unasked = ['BrowseDeliveredResources', 'GetDeliveredPack', 'DownloadDeliveredFile', 'AudienceEligibility', 'AudienceDelivery'];
 
+    foreach ($unasked as $useCase) {
+        expect(SourceScan::code((string) file_get_contents("{$dir}/{$useCase}.php")))->not->toContain('Capability', 'AuthorizeAction');
+    }
     foreach ($expected as $useCase => $capability) {
         preg_match_all('/Capability::(\w+)/', SourceScan::code((string) file_get_contents("{$dir}/{$useCase}.php")), $matches);
         expect(array_values(array_unique($matches[1])))->toBe([$capability], $useCase);
@@ -300,7 +320,7 @@ it('asks each use case for exactly the one capability its route asks for', funct
     // Every Application class that takes an Actor is in the table: a new use case cannot skip the check.
     foreach (glob("{$dir}/*.php") ?: [] as $path) {
         if (str_contains(SourceScan::code((string) file_get_contents($path)), 'Actor $actor')) {
-            expect(array_key_exists(basename($path, '.php'), $expected))->toBeTrue(basename($path).' takes an Actor but is not in the capability table');
+            expect(array_key_exists(basename($path, '.php'), $expected) || in_array(basename($path, '.php'), $unasked, true))->toBeTrue(basename($path).' takes an Actor but is not in the capability table');
         }
     }
 });

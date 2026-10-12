@@ -25,16 +25,18 @@ function resourcesMiddleware(Route $route): array
     return Api::strings($route->gatherMiddleware());
 }
 
-it('has exactly 25 management routes under /admin/resources and 3 delivery routes under /admin/resource-library, and no other Resources route', function () {
+it('has exactly 25 management routes, 3 privileged-library routes and 3 my-resources routes, and no other Resources route', function () {
     $management = resourcesRoutes('resources');
-    $delivery = resourcesRoutes('resource-library');
+    $library = resourcesRoutes('resource-library');
+    $mine = resourcesRoutes('my-resources');
     $all = array_filter(app('router')->getRoutes()->getRoutes(), fn ($r): bool => str_contains($r->getActionName(), 'Modules\\Resources\\'));
 
-    // WP3 added three: replace a File Card's file and download it under management, and download it from the library.
-    expect($management)->toHaveCount(25)->and($delivery)->toHaveCount(3)->and(count($all))->toBe(28);
+    // WP3 added three: replace a File Card's file and download it under management, and download it from the library. G10 WP4 adds the
+    // three `my-resources` routes (ADR 0038, R14); the library keeps its three.
+    expect($management)->toHaveCount(25)->and($library)->toHaveCount(3)->and($mine)->toHaveCount(3)->and(count($all))->toBe(31);
 });
 
-it('gives every Resources route authentication, the Console boundary and exactly one capability: manage for management, view for delivery', function () {
+it('gives every Resources route authentication, the Console boundary and its policy\'s authority: manage for management, view for the library, and no capability at all beyond admission for my-resources', function () {
     foreach (resourcesRoutes('resources') as $route) {
         $middleware = resourcesMiddleware($route);
         $capabilities = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:') && $m !== 'can:console.access'));
@@ -46,14 +48,23 @@ it('gives every Resources route authentication, the Console boundary and exactly
         $capabilities = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:') && $m !== 'can:console.access'));
         expect($middleware)->toContain('stateful', 'auth:web', 'can:console.access')
             ->and($capabilities)->toBe(['can:resources.view'], $route->uri())
-            ->and(Api::strings($route->methods()))->toBe(['GET', 'HEAD'])  // delivery only ever reads
+            ->and(Api::strings($route->methods()))->toBe(['GET', 'HEAD'])  // the library only ever reads
+            ->and($middleware)->not->toContain('security.verified');
+    }
+    // Policy C (ADR 0038, A6, R14): `console.access` and NOTHING else. The one family whose authority is the Person's own relationships.
+    foreach (resourcesRoutes('my-resources') as $route) {
+        $middleware = resourcesMiddleware($route);
+        $capabilities = array_values(array_filter($middleware, fn (string $m): bool => str_starts_with($m, 'can:')));
+        expect($middleware)->toContain('stateful', 'auth:web')
+            ->and($capabilities)->toBe(['can:console.access'], $route->uri())
+            ->and(Api::strings($route->methods()))->toBe(['GET', 'HEAD'])
             ->and($middleware)->not->toContain('security.verified');
     }
 });
 
 it('requires recent verification on exactly the two permanent-deletion routes, after the capability, and on nothing else in Resources', function () {
     $verified = [];
-    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library')] as $route) {
+    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library'), ...resourcesRoutes('my-resources')] as $route) {
         $middleware = resourcesMiddleware($route);
         if (in_array('security.verified', $middleware, true)) {
             $verified[] = implode('|', Api::strings($route->methods())).' '.$route->uri();
@@ -90,7 +101,7 @@ it('exempts every OTHER Resources mutation from recent verification: routine man
 it('has no route that deletes or restores anything but the three DELETEs, none for Trash, Archive or Restore, and files only on a Card', function () {
     $deletes = [];
     $files = [];
-    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library')] as $route) {
+    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library'), ...resourcesRoutes('my-resources')] as $route) {
         if (in_array('DELETE', Api::strings($route->methods()), true)) {
             $deletes[] = $route->uri();
         }
@@ -103,6 +114,7 @@ it('has no route that deletes or restores anything but the three DELETEs, none f
 
     // A file is reached only as the file OF a Card, never by its own id or key, and is never deleted on its own: it goes with its Card.
     expect($files)->toBe([
+        'GET|HEAD api/v1/admin/my-resources/packs/{pack}/cards/{card}/file',
         'GET|HEAD api/v1/admin/resource-library/packs/{pack}/cards/{card}/file',
         'GET|HEAD api/v1/admin/resources/packs/{pack}/cards/{card}/file',
         'POST api/v1/admin/resources/packs/{pack}/cards/{card}/file',
@@ -117,7 +129,7 @@ it('has no route that deletes or restores anything but the three DELETEs, none f
 });
 
 it('keeps every id parameter to the lowercase ULID form, so a malformed id is a plain 404 before any code runs', function () {
-    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library')] as $route) {
+    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library'), ...resourcesRoutes('my-resources')] as $route) {
         foreach ($route->parameterNames() as $name) {
             assert(is_string($name));
             expect($route->wheres[$name] ?? null)->toBe('[0-7][0-9a-hjkmnp-tv-z]{25}', "{$route->uri()} {{$name}}");
@@ -125,8 +137,8 @@ it('keeps every id parameter to the lowercase ULID form, so a malformed id is a 
     }
 });
 
-it('names every route under api.v1.admin.resources.* or api.v1.admin.resource-library.*', function () {
-    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library')] as $route) {
-        expect((string) $route->getName())->toMatch('/^api\.v1\.admin\.(resources|resource-library)\./');
+it('names every route under api.v1.admin.resources.*, api.v1.admin.resource-library.* or api.v1.admin.my-resources.*', function () {
+    foreach ([...resourcesRoutes('resources'), ...resourcesRoutes('resource-library'), ...resourcesRoutes('my-resources')] as $route) {
+        expect((string) $route->getName())->toMatch('/^api\.v1\.admin\.(resources|resource-library|my-resources)\./');
     }
 });

@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Tests\Support\Api;
+use Tests\Support\Audiences;
 use Tests\Support\Console;
 use Tests\Support\ResourceFiles;
 use Tests\Support\Resources;
@@ -23,6 +24,7 @@ use Tests\Support\Resources;
 
 const FILES_MANAGE = '/api/v1/admin/resources';
 const FILES_LIBRARY = '/api/v1/admin/resource-library';
+const FILES_MINE = '/api/v1/admin/my-resources';
 
 beforeEach(function () {
     ResourceFiles::fake();
@@ -282,6 +284,7 @@ it('refuses a disposition it does not know', function () {
 
     $console->get(FILES_MANAGE."/packs/{$pack}/cards/{$card}/file?disposition=render")->assertStatus(422);
     $console->get(FILES_LIBRARY."/packs/{$pack}/cards/{$card}/file?disposition=render")->assertStatus(422);
+    Audiences::signIn(Audiences::reader(['guardian']))->get(FILES_MINE."/packs/{$pack}/cards/{$card}/file?disposition=render")->assertStatus(422);
 });
 
 it('offers a file under its sanitised name, encoded per RFC 6266, and no name can add or break a header', function (string $uploaded, string $kept) {
@@ -309,26 +312,31 @@ it('offers a file under its sanitised name, encoded per RFC 6266, and no name ca
     'percent and backslash-free' => ['100% done.pdf', '100% done.pdf'],
 ]);
 
-it('delivers a visible File Card\'s file to the library, describing it there with the library\'s own path and nothing management sees', function () {
+it('delivers a visible File Card\'s file to a reader, describing it there with the reader\'s own path and nothing management sees', function () {
     [$console] = Resources::signedInGuardian();
     [$pack, $card] = filesLive($console, 'Handbook', 'Guide.pdf');
+    $reader = Audiences::signIn(Audiences::reader(['guardian']));
 
-    $delivered = Api::rows(filesBody($console->get(FILES_LIBRARY."/packs/{$pack}")->assertOk())['cards'])[0];
-    $download = $console->get(FILES_LIBRARY."/packs/{$pack}/cards/{$card}/file")->assertOk();
+    $delivered = Api::rows(filesBody($reader->get(FILES_MINE."/packs/{$pack}")->assertOk())['cards'])[0];
+    $download = $reader->get(FILES_MINE."/packs/{$pack}/cards/{$card}/file")->assertOk();
 
     expect($delivered['file'])->toBe([
         'name' => 'Guide.pdf', 'media_type' => 'application/pdf', 'byte_size' => strlen(ResourceFiles::pdf()),
-        'download_path' => FILES_LIBRARY."/packs/{$pack}/cards/{$card}/file",
+        'download_path' => FILES_MINE."/packs/{$pack}/cards/{$card}/file",
     ])
         ->and(array_keys($delivered))->toBe(['id', 'index', 'type', 'title', 'summary', 'uri', 'file', 'content'])
         ->and(streamed($download))->toBe(ResourceFiles::pdf())
         ->and($download->headers->get('Content-Type'))->toBe('application/pdf')
-        ->and($download->headers->get('Cache-Control'))->toContain('no-store');
+        ->and($download->headers->get('Cache-Control'))->toContain('no-store')->toContain('private');
+
+    // The privileged viewer describes the same file with the LIBRARY\'s path, never delivery\'s; management with its own.
+    $viewed = Api::rows(filesBody($console->get(FILES_LIBRARY."/packs/{$pack}")->assertOk())['cards'])[0];
+    expect(Api::map($viewed['file'])['download_path'])->toBe(FILES_LIBRARY."/packs/{$pack}/cards/{$card}/file");
 });
 
-it('gives every reason a library file is not the viewer\'s the SAME answer, whatever exists', function () {
+it('gives every reason a reader\'s file is not theirs the SAME answer, whatever exists', function () {
     [$console] = Resources::signedInGuardian();
-    // A visible Pack with a visible basic Card, so the Pack itself is the viewer's, and File Cards around it that are not.
+    // A visible Pack with a visible basic Card, so the Pack itself is the reader's, and File Cards around it that are not.
     [$visible, $visibleFile] = filesLive($console, 'Visible');
     $draftFile = Api::string(filesBody(filesCreate($console, $visible, ResourceFiles::upload('draft.pdf', ResourceFiles::pdf('draft')))->assertCreated())['id']);
     $narrowed = Api::string(filesBody(filesCreate($console, $visible, ResourceFiles::upload('narrow.pdf', ResourceFiles::pdf('narrow')))->assertCreated())['id']);
@@ -344,6 +352,7 @@ it('gives every reason a library file is not the viewer\'s the SAME answer, what
     $inDraftPack = Api::string(filesBody(filesCreate($console, $draftPack, ResourceFiles::upload('d.pdf', ResourceFiles::pdf()))->assertCreated())['id']);
     $console->post(FILES_MANAGE."/packs/{$draftPack}/cards/{$inDraftPack}/publish")->assertOk();
     [$otherPack, $otherFile] = filesLive($console, 'Another');
+    $reader = Audiences::signIn(Audiences::reader(['guardian']));
 
     $cases = [
         'a Pack that does not exist' => ['01jaaaaaaaaaaaaaaaaaaaaaa0', $visibleFile],
@@ -358,20 +367,22 @@ it('gives every reason a library file is not the viewer\'s the SAME answer, what
     ];
     $bodies = [];
     foreach ($cases as $why => [$pack, $card]) {
-        $response = $console->get(FILES_LIBRARY."/packs/{$pack}/cards/{$card}/file");
+        $response = $reader->get(FILES_MINE."/packs/{$pack}/cards/{$card}/file");
         expect($response->status())->toBe(404, $why);
         $bodies[$why] = (string) $response->getContent();
     }
 
     expect(array_unique($bodies))->toHaveCount(1)
         ->and(json_decode(array_values($bodies)[0], true))->toBe(['message' => 'There is no such resource.', 'code' => 'resource_pack_not_found'])
-        // The same Cards are management's to see, Drafts and all.
+        // The same Cards are management's to see, Drafts and all, and the privileged viewer\'s too: they are only not THIS reader\'s.
         ->and($console->get(FILES_MANAGE."/packs/{$visible}/cards/{$draftFile}/file")->getStatusCode())->toBe(200)
         ->and($console->get(FILES_MANAGE."/packs/{$draftPack}/cards/{$inDraftPack}/file")->getStatusCode())->toBe(200)
-        ->and($console->get(FILES_LIBRARY."/packs/{$otherPack}/cards/{$otherFile}/file")->getStatusCode())->toBe(200);
+        ->and($console->get(FILES_LIBRARY."/packs/{$draftPack}/cards/{$inDraftPack}/file")->getStatusCode())->toBe(200)
+        ->and($console->get(FILES_LIBRARY."/packs/{$visible}/cards/{$narrowed}/file")->getStatusCode())->toBe(200)
+        ->and($reader->get(FILES_MINE."/packs/{$otherPack}/cards/{$otherFile}/file")->getStatusCode())->toBe(200);
 });
 
-it('answers asset_unavailable, never 500, for a file on record that is missing, and only once the Card is known to be the caller\'s', function () {
+it('answers asset_unavailable, never 500, for a file on record that is missing, and a reader only once the Card is known to be theirs', function () {
     [$console] = Resources::signedInGuardian();
     [$pack, $card] = filesLive($console);
     $hidden = filesPack($console, 'Hidden');
@@ -379,10 +390,14 @@ it('answers asset_unavailable, never 500, for a file on record that is missing, 
     foreach (DB::table('resource_assets')->pluck('storage_key') as $key) {
         Storage::disk('resources')->delete(Resources::str($key));
     }
+    $reader = Audiences::signIn(Audiences::reader(['guardian']));
 
-    expect(filesBody($console->get(FILES_LIBRARY."/packs/{$pack}/cards/{$card}/file")->assertNotFound())['code'])->toBe('asset_unavailable')
+    expect(filesBody($reader->get(FILES_MINE."/packs/{$pack}/cards/{$card}/file")->assertNotFound())['code'])->toBe('asset_unavailable')
+        ->and(filesBody($console->get(FILES_LIBRARY."/packs/{$pack}/cards/{$card}/file")->assertNotFound())['code'])->toBe('asset_unavailable')
         ->and(filesBody($console->get(FILES_MANAGE."/packs/{$pack}/cards/{$card}/file")->assertNotFound())['code'])->toBe('asset_unavailable')
-        ->and(filesBody($console->get(FILES_LIBRARY."/packs/{$hidden}/cards/{$hiddenCard}/file")->assertNotFound())['code'])->toBe('resource_pack_not_found')
+        // A reader learns nothing of a Card that is not theirs; the privileged viewer may know it exists.
+        ->and(filesBody($reader->get(FILES_MINE."/packs/{$hidden}/cards/{$hiddenCard}/file")->assertNotFound())['code'])->toBe('resource_pack_not_found')
+        ->and(filesBody($console->get(FILES_LIBRARY."/packs/{$hidden}/cards/{$hiddenCard}/file")->assertNotFound())['code'])->toBe('asset_unavailable')
         ->and(filesRow(filesBody($console->get(FILES_MANAGE."/packs/{$pack}/cards/{$card}")->assertOk())['file'])['available'])->toBeFalse();
 });
 
@@ -415,6 +430,7 @@ it('has no route that takes an asset id or storage key, and none that serves a d
         ->and($console->get("/storage/resources/{$key}")->getStatusCode())->toBe(404)
         ->and($console->get("/storage/app/private/resources/{$key}")->getStatusCode())->toBe(404)
         ->and($console->get(FILES_LIBRARY."/files/{$key}")->getStatusCode())->toBe(404)
+        ->and($console->get(FILES_MINE."/files/{$key}")->getStatusCode())->toBe(404)
         ->and($console->get(FILES_MANAGE."/files/{$key}")->getStatusCode())->toBe(404);
 });
 
@@ -424,6 +440,7 @@ it('refuses every file route to a session without a sign-in, and reveals nothing
     $stranger = new Console;
 
     expect($stranger->get(FILES_LIBRARY."/packs/{$pack}/cards/{$card}/file")->status())->toBe(401)
+        ->and($stranger->get(FILES_MINE."/packs/{$pack}/cards/{$card}/file")->status())->toBe(401)
         ->and($stranger->get(FILES_MANAGE."/packs/{$pack}/cards/{$card}/file")->status())->toBe(401);
 });
 

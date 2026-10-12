@@ -3,7 +3,8 @@
 declare(strict_types=1);
 
 use App\Modules\Access\Application\AccessDenied;
-use App\Modules\Resources\Application\BrowseResourceLibrary;
+use App\Modules\Resources\Application\BrowseDeliveredResources;
+use App\Modules\Resources\Application\BrowseLibrary;
 use App\Modules\Resources\Application\CardNotFound;
 use App\Modules\Resources\Application\CreateCard;
 use App\Modules\Resources\Application\CreateCategory;
@@ -12,7 +13,7 @@ use App\Modules\Resources\Application\DeleteCategory;
 use App\Modules\Resources\Application\DeletePack;
 use App\Modules\Resources\Application\GetManagedCard;
 use App\Modules\Resources\Application\GetManagedPack;
-use App\Modules\Resources\Application\GetResourcePack;
+use App\Modules\Resources\Application\LibraryFilter;
 use App\Modules\Resources\Application\ListCategories;
 use App\Modules\Resources\Application\ManagedPackView;
 use App\Modules\Resources\Application\PackNotFound;
@@ -21,6 +22,7 @@ use App\Modules\Resources\Application\PreviewPack;
 use App\Modules\Resources\Application\PublishCard;
 use App\Modules\Resources\Application\PublishedPackRequirement;
 use App\Modules\Resources\Application\PublishPack;
+use App\Modules\Resources\Application\ReadLibraryPack;
 use App\Modules\Resources\Application\RenameCategory;
 use App\Modules\Resources\Application\ReorderCards;
 use App\Modules\Resources\Application\ReorderCategories;
@@ -104,7 +106,7 @@ it('can delete a PUBLISHED Pack directly: it is the confirmation and the recent 
     app(DeletePack::class)($by, $live->pack->id);
 
     expect(DB::table('resource_packs')->count())->toBe(0)->and(DB::table('resource_cards')->count())->toBe(0)
-        ->and(app(BrowseResourceLibrary::class)($by, null, null))->toBe([]);
+        ->and(app(BrowseLibrary::class)($by, new LibraryFilter))->toBe([]);
 });
 
 it('keeps nothing of a deleted Pack: no Trash, no Restore, no Archive, no copy, anywhere in the database', function () {
@@ -286,8 +288,9 @@ it('records no security event for ANY other Resources action: create, edit, orde
     app(ReorderPacks::class)($by, $a, [$pack->pack->id]);
     app(UnpublishCard::class)($by, $pack->pack->id, $two->card->id);
     app(PreviewPack::class)($by, $pack->pack->id, Audience::Member);
-    app(GetResourcePack::class)($by, $pack->pack->id);
-    app(BrowseResourceLibrary::class)($by, null, 'Pack');
+    app(ReadLibraryPack::class)($by, $pack->pack->id);
+    app(BrowseLibrary::class)($by, new LibraryFilter(text: 'Pack'));
+    app(BrowseDeliveredResources::class)($by, null, 'Pack');
     app(PageManagedPacks::class)($by, new ManagedPackFilter, 1, 25);
     app(ListCategories::class)($by);
     app(UnpublishPack::class)($by, $pack->pack->id);
