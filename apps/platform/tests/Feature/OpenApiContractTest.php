@@ -178,8 +178,8 @@ it('documents each administration operation with the capability and the verifica
         }
     }
 
-    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, Resources (ADR 0037) twenty-eight, and Relationships (ADR 0038) eighteen: the types read, nine Guardian routes and eight Volunteer routes.
-    expect($checked)->toBe(90);
+    // 17 administration operations before the People directory (ADR 0034) added 12, the operator's password reset one more, notes (WP3) four, Guardian Discussions (ADR 0035) ten, Resources (ADR 0037) twenty-eight, and Relationships (ADR 0038) nineteen: the types read, nine Guardian routes and nine Volunteer routes (the basic-detail edit is Volunteer-only, WP3).
+    expect($checked)->toBe(91);
 });
 
 it('never lets an administration schema name a secret', function () {

@@ -51,7 +51,7 @@ final readonly class UpdateContactMethod
             throw new UnknownPerson;
         }
 
-        return $this->database->transaction(function () use ($personId, $methodId, $changes): ContactMethod {
+        return $this->database->transaction(function () use ($actor, $personId, $methodId, $changes): ContactMethod {
             $now = DateTimeImmutable::createFromInterface(now());
             $this->profiles->lock($personId, $now);
 
@@ -60,27 +60,38 @@ final readonly class UpdateContactMethod
                 throw new ContactMethodNotFound;
             }
 
+            // A field that comes out the same changes nothing and stamps nothing: only a row that really changes carries
+            // the acting Account (ADR 0038, P9).
             $changed = $method;
             if (array_key_exists('value', $changes)) {
-                $changed = $changed->withValue($changes['value'], $now);
-                if ($changed->searchValue !== $method->searchValue) {
-                    foreach ($this->methods->forPerson($personId) as $other) {
-                        if (! $other->id->equals($method->id) && $other->kind === $method->kind && $other->searchValue === $changed->searchValue) {
-                            throw new DuplicateContactMethod;
+                $candidate = $method->withValue($changes['value'], $now, $actor->accountId);
+                if ($candidate->value !== $method->value) {
+                    $changed = $candidate;
+                    if ($changed->searchValue !== $method->searchValue) {
+                        foreach ($this->methods->forPerson($personId) as $other) {
+                            if (! $other->id->equals($method->id) && $other->kind === $method->kind && $other->searchValue === $changed->searchValue) {
+                                throw new DuplicateContactMethod;
+                            }
                         }
                     }
                 }
             }
             if (array_key_exists('label', $changes)) {
-                $changed = $changed->withLabel($changes['label'], $now);
+                $candidate = $changed->withLabel($changes['label'], $now, $actor->accountId);
+                if ($candidate->label !== $changed->label) {
+                    $changed = $candidate;
+                }
             }
             if (array_key_exists('is_primary', $changes) && $changes['is_primary'] !== $method->isPrimary) {
                 if (! $changes['is_primary']) {
                     // Exactly one primary per kind while any method of the kind exists: promoting another is the only way to demote this one.
                     throw new InvalidContactInput('is_primary', 'Make another contact method primary instead.');
                 }
-                $this->methods->clearPrimary($personId, $method->kind);
-                $changed = $changed->withPrimary(true, $now);
+                $this->methods->clearPrimary($personId, $method->kind, $actor->accountId, $now);
+                $changed = $changed->withPrimary(true, $now, $actor->accountId);
+            }
+            if ($changed === $method) {
+                return $method;
             }
 
             try {

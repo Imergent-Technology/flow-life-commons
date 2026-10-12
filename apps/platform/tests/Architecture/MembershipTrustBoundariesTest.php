@@ -159,8 +159,9 @@ arch('Membership never authenticates, hashes a credential or touches a session: 
 arch('Membership creates a Person only through Identity\'s own use case', function () {
     expect(RegisterPersonWithMembershipAccess::class)->toUse(RegisterPerson::class);
     // ...and nothing but that orchestration may: RegisterPerson does not authorize its caller.
-    // CRM is the second caller (ADR 0034): RegisterContact authorizes `crm.people.manage` first, then creates the Person through it.
-    expect(RegisterPerson::class)->toOnlyBeUsedIn([RegisterPersonWithMembershipAccess::class, 'App\\Modules\\Crm\\Application\\RegisterContact', 'App\\Modules\\Identity']);
+    // CRM is the second caller (ADR 0034): RegisterContact authorizes `crm.people.manage` first, then creates the Person through
+    // CRM's one registration implementation, `PersonRegistration`, which the delegated RegisterMinimalPerson shares (ADR 0038, P1).
+    expect(RegisterPerson::class)->toOnlyBeUsedIn([RegisterPersonWithMembershipAccess::class, 'App\\Modules\\Crm\\Application\\PersonRegistration', 'App\\Modules\\Identity']);
 });
 
 it('keeps what Identity\'s public Person-creating ports RETURN inside Identity\'s Application layer, never a Domain object', function () {

@@ -7,19 +7,8 @@ namespace App\Modules\Crm\Application;
 use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Access\Application\AuthorizeAction;
 use App\Modules\Access\Application\Capability;
-use App\Modules\Crm\Domain\ContactMethodKind;
-use App\Modules\Crm\Domain\ContactMethodRepository;
-use App\Modules\Crm\Domain\ContactProfileRepository;
 use App\Modules\Crm\Domain\InvalidContactInput;
-use App\Modules\Identity\Application\FindPeopleNamed;
-use App\Modules\Identity\Application\PeopleQuery;
-use App\Modules\Identity\Application\PersonSummary;
-use App\Modules\Identity\Application\RegisterPerson;
-use App\Modules\Identity\Application\SearchPeople;
 use App\Shared\Domain\Actor;
-use DateTimeImmutable;
-use Illuminate\Database\ConnectionInterface;
-use InvalidArgumentException;
 
 /**
  * Adds a Person to the directory with their first CRM information: Identity's `RegisterPerson` creates the Person (no
@@ -40,14 +29,8 @@ final readonly class RegisterContact
 {
     public function __construct(
         private AuthorizeAction $authorize,
-        private RegisterPerson $registerPerson,
-        private SearchPeople $search,
-        private FindPeopleNamed $named,
-        private ContactProfileRepository $profiles,
-        private ContactMethodRepository $methods,
-        private ContactMethodWriter $writer,
+        private PersonRegistration $registration,
         private ReadPersonRecord $read,
-        private ConnectionInterface $database,
     ) {}
 
     /**
@@ -68,94 +51,8 @@ final readonly class RegisterContact
     ): PersonRecord {
         ($this->authorize)($actor, Capability::ManagePeople);
 
-        $this->assertValid($contactMethods);
-
-        if (! $confirmDistinct) {
-            $candidates = $this->candidates($displayName, $contactMethods);
-            if ($candidates !== []) {
-                throw new PossibleDuplicate($candidates);
-            }
-        }
-
-        $now = DateTimeImmutable::createFromInterface(now());
-
-        $personId = $this->database->transaction(function () use ($actor, $displayName, $howWeKnow, $affiliation, $contactMethods, $now) {
-            try {
-                $person = ($this->registerPerson)($displayName);
-            } catch (InvalidArgumentException) {
-                throw new InvalidContactInput('display_name', 'A name is 1 to 255 characters.');
-            }
-
-            if ($howWeKnow !== null || $affiliation !== null || $contactMethods !== []) {
-                $profile = $this->profiles->lock($person->id, $now);
-                $this->profiles->save($profile->with(['how_we_know' => $howWeKnow, 'affiliation' => $affiliation], $actor->accountId, $now));
-                foreach ($contactMethods as $new) {
-                    $this->writer->add($person->id, $new, $now);
-                }
-            }
-
-            return $person->id;
-        }, 3);
+        $personId = ($this->registration)($actor, $displayName, $howWeKnow, $affiliation, $contactMethods, $confirmDistinct);
 
         return ($this->read)($personId);
-    }
-
-    /**
-     * Rejects what would fail inside the transaction before it starts, and a repeated method, with CRM's own messages.
-     *
-     * @param  list<NewContactMethod>  $contactMethods
-     */
-    private function assertValid(array $contactMethods): void
-    {
-        $seen = [];
-        foreach ($contactMethods as $new) {
-            $display = $new->kind->display($new->value);
-            $key = $new->kind->value.'|'.$new->kind->searchValue($display);
-            if (isset($seen[$key])) {
-                throw new DuplicateContactMethod;
-            }
-            $seen[$key] = true;
-        }
-    }
-
-    /**
-     * @param  list<NewContactMethod>  $contactMethods
-     * @return list<DuplicateCandidate>
-     */
-    private function candidates(string $displayName, array $contactMethods): array
-    {
-        /** @var array<string, array{person: PersonSummary, on: array<string, true>}> $found */
-        $found = [];
-
-        $emails = [];
-        foreach ($contactMethods as $new) {
-            if ($new->kind === ContactMethodKind::Email) {
-                $emails[] = $new->kind->searchValue($new->kind->display($new->value));
-            }
-        }
-        $emailPeople = [];
-        foreach (array_unique($emails) as $searchValue) {
-            foreach ($this->methods->personIdsWithSearchValue(ContactMethodKind::Email, $searchValue) as $id) {
-                $emailPeople[$id->value] = $id;
-            }
-        }
-        if ($emailPeople !== []) {
-            $page = ($this->search)(new PeopleQuery(null, null, array_values($emailPeople), 1, PeopleQuery::MAX_PER_PAGE));
-            foreach ($page->people as $person) {
-                $found[$person->id->value] = ['person' => $person, 'on' => ['email' => true]];
-            }
-        }
-
-        // The same name, ignoring case: an exact lookup in Identity, so no result can be missed by where it sorts.
-        foreach (($this->named)($displayName) as $person) {
-            $found[$person->id->value] = ['person' => $person, 'on' => ($found[$person->id->value]['on'] ?? []) + ['display_name' => true]];
-        }
-
-        $candidates = [];
-        foreach ($found as $entry) {
-            $candidates[] = new DuplicateCandidate($entry['person'], array_keys($entry['on']));
-        }
-
-        return $candidates;
     }
 }

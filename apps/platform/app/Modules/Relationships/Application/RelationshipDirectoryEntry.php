@@ -14,5 +14,6 @@ final readonly class RelationshipDirectoryEntry
         public NamedPerson $person,
         public string $status,
         public DateTimeImmutable $statusChangedAt,
+        public ?BasicDetails $basics = null,
     ) {}
 }

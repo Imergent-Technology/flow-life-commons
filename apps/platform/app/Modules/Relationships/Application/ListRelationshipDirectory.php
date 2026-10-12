@@ -7,6 +7,7 @@ namespace App\Modules\Relationships\Application;
 use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Access\Application\AuthorizeAction;
 use App\Modules\Identity\Application\PeopleQuery;
+use App\Modules\Crm\Application\Delegated\PeopleMatchingContact;
 use App\Modules\Identity\Application\SearchPeople;
 use App\Modules\Relationships\Domain\RelationshipId;
 use App\Modules\Relationships\Domain\RelationshipRepository;
@@ -16,9 +17,13 @@ use App\Shared\Domain\PersonId;
 use DateTimeImmutable;
 
 /**
- * Pages one type's directory by name (ADR 0038, C3). The id set is this type's relationships,
- * optionally one status, and a set past {@see PeopleQuery::MAX_ID_SET} is refused rather than
- * truncated. Contact matches are not included: that is WP3.
+ * Pages one type's directory (ADR 0038, C3). The id set is this type's relationships, optionally one status, and a set
+ * past {@see PeopleQuery::MAX_ID_SET} is refused rather than truncated.
+ *
+ * Where the type reads basic details, the search also matches the PRIMARY email and PRIMARY phone of the Persons in that
+ * set, through CRM's `PeopleMatchingContact`, and each entry carries the Person's primary email and phone (P2). A
+ * non-primary method never matches and is never shown, so the directory cannot be used to probe it. Where the type does
+ * not read basic details, neither the search nor the entries touch CRM.
  */
 final readonly class ListRelationshipDirectory
 {
@@ -27,6 +32,8 @@ final readonly class ListRelationshipDirectory
         private RelationshipCatalog $catalog,
         private RelationshipRepository $relationships,
         private SearchPeople $search,
+        private PeopleMatchingContact $contacts,
+        private RelationshipPresentation $presentation,
     ) {}
 
     /**
@@ -52,15 +59,19 @@ final readonly class ListRelationshipDirectory
         if (count($ids) > PeopleQuery::MAX_ID_SET) {
             throw new RelationshipSearchTooBroad;
         }
+        $within = array_map(PersonId::fromString(...), $ids);
+        $readsBasics = $definition->hasFeature('people.read_basics');
+        $contactMatches = $readsBasics && $query !== null ? ($this->contacts)($query, $within) : [];
         $people = ($this->search)(new PeopleQuery(
             $query,
-            null,
-            array_map(PersonId::fromString(...), $ids),
+            $contactMatches === [] ? null : $contactMatches,
+            $within,
             $page,
             $perPage,
         ));
         $pageIds = array_map(fn ($person): string => $person->id->value, $people->people);
         $rows = $this->relationships->statusesFor($type->key, $pageIds);
+        $basics = $readsBasics ? $this->presentation->basicsOf(array_map(fn ($person): PersonId => $person->id, $people->people)) : [];
         $entries = [];
         foreach ($people->people as $person) {
             $row = $rows[$person->id->value] ?? null;
@@ -72,6 +83,7 @@ final readonly class ListRelationshipDirectory
                 new NamedPerson($person->id, $person->displayName),
                 $row['status'],
                 new DateTimeImmutable($row['status_changed_at'], new \DateTimeZone('UTC')),
+                $basics[$person->id->value] ?? null,
             );
         }
 

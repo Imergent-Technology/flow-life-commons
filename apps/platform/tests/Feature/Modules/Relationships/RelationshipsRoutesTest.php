@@ -27,6 +27,7 @@ const RELATIONSHIP_ROUTE_TABLE = [
     'GET api/v1/admin/relationships/volunteers/candidates' => ['volunteers.manage', false],
     'POST api/v1/admin/relationships/volunteers' => ['volunteers.manage', false],
     'PUT api/v1/admin/relationships/volunteers/{person}/status' => ['volunteers.manage', false],
+    'PATCH api/v1/admin/relationships/volunteers/{person}/basics' => ['volunteers.manage', false],
     'PATCH api/v1/admin/relationships/volunteers/{person}/fields' => ['volunteers.manage', false],
     'DELETE api/v1/admin/relationships/volunteers/{person}' => ['volunteers.manage', true],
 ];

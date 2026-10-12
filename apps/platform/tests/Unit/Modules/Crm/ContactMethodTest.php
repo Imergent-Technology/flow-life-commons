@@ -6,6 +6,7 @@ use App\Modules\Crm\Domain\ContactMethod;
 use App\Modules\Crm\Domain\ContactMethodId;
 use App\Modules\Crm\Domain\ContactMethodKind;
 use App\Modules\Crm\Domain\InvalidContactInput;
+use App\Shared\Domain\AccountId;
 use App\Shared\Domain\PersonId;
 use PHPUnit\Framework\Assert;
 use Tests\Support\Identity;
@@ -93,8 +94,9 @@ it('names the field a refusal is about, and never echoes the value', function ()
 it('changes into a new value, keeping the id, kind, person and creation time', function () {
     $method = newMethod(ContactMethodKind::Email, 'old@example.org', 'work', true);
     $later = new DateTimeImmutable('2026-10-02 08:00:00', new DateTimeZone('UTC'));
+    $by = AccountId::generate();
 
-    $changed = $method->withValue('New@Example.org', $later)->withLabel(null, $later)->withPrimary(false, $later);
+    $changed = $method->withValue('New@Example.org', $later, $by)->withLabel(null, $later, $by)->withPrimary(false, $later, $by);
 
     expect($changed->id->equals($method->id))->toBeTrue()
         ->and($changed->personId->equals($method->personId))->toBeTrue()
@@ -105,5 +107,7 @@ it('changes into a new value, keeping the id, kind, person and creation time', f
         ->and($changed->isPrimary)->toBeFalse()
         ->and($changed->createdAt)->toEqual($method->createdAt)
         ->and($changed->updatedAt)->toEqual($later)
+        ->and($changed->updatedBy)->toEqual($by)
+        ->and($method->updatedBy)->toBeNull()
         ->and($method->value)->toBe('old@example.org'); // immutable
 });

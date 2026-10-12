@@ -6,6 +6,7 @@ namespace App\Modules\Relationships\Application;
 
 use App\Modules\Access\Application\RoleGrantSource;
 use App\Modules\Access\Application\SourcedRoleGrantsOf;
+use App\Modules\Crm\Application\Delegated\ReadPersonBasics;
 use App\Modules\Identity\Application\FindPeople;
 use App\Modules\Relationships\Domain\RelationshipDefinition;
 use App\Modules\Relationships\Domain\RelationshipRecord;
@@ -17,6 +18,7 @@ final readonly class RelationshipPresentation
     public function __construct(
         private FindPeople $people,
         private SourcedRoleGrantsOf $grants,
+        private ReadPersonBasics $basics,
     ) {}
 
     public function management(RelationshipDefinition $definition, RelationshipRecord $record): RelationshipManagementView
@@ -30,6 +32,7 @@ final readonly class RelationshipPresentation
             $definition->transitions[$record->status] ?? [],
             $record->fields,
             $this->defaultRole($definition, $record),
+            $definition->hasFeature('people.edit_basics') ? $this->basicsOf([$record->personId])[$record->personId->value] ?? null : null,
         );
     }
 
@@ -67,6 +70,7 @@ final readonly class RelationshipPresentation
             $fields,
             $history,
             $this->defaultRole($definition, $record),
+            $definition->hasFeature('people.read_basics') ? $this->basicsOf([$record->personId])[$record->personId->value] ?? null : null,
         );
     }
 
@@ -101,6 +105,23 @@ final readonly class RelationshipPresentation
             $decision?->decidedAt,
             $effective,
         );
+    }
+
+    /**
+     * The three basic details of these Persons, in one CRM read. The caller has already decided that the Actor may read
+     * them (ADR 0038, P2, P3): a view asks only for a type whose definition enables the feature.
+     *
+     * @param  list<PersonId>  $ids
+     * @return array<string, BasicDetails>
+     */
+    public function basicsOf(array $ids): array
+    {
+        $details = [];
+        foreach (($this->basics)($ids) as $key => $basics) {
+            $details[$key] = new BasicDetails($basics->displayName, $basics->primaryEmail, $basics->primaryPhone);
+        }
+
+        return $details;
     }
 
     /**

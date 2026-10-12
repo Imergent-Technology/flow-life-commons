@@ -42,13 +42,22 @@ final readonly class RenamePerson
     ) {}
 
     /**
+     * `$expectedName`, when given, is compared with the stored name AFTER the row lock is held, as an exact string
+     * (case and spacing count). A different stored name changes nothing and throws {@see PersonNameChanged}: a caller
+     * that showed someone a name and is now writing a correction of it must not silently overwrite a newer one (ADR 0038,
+     * P5). Null, the default, asks no such question and the rename behaves exactly as before.
+     *
      * @throws PersonNotFound
+     * @throws PersonNameChanged the stored name is not the expected one
      * @throws \InvalidArgumentException the name is empty or too long (Person's own rule)
      */
-    public function __invoke(PersonId $personId, string $displayName, ?Actor $by = null): PersonSummary
+    public function __invoke(PersonId $personId, string $displayName, ?Actor $by = null, ?string $expectedName = null): PersonSummary
     {
-        return $this->database->transaction(function () use ($personId, $displayName, $by): PersonSummary {
+        return $this->database->transaction(function () use ($personId, $displayName, $by, $expectedName): PersonSummary {
             $current = $this->people->findForUpdate($personId) ?? throw new PersonNotFound;
+            if ($expectedName !== null && $current->displayName !== $expectedName) {
+                throw new PersonNameChanged($current->displayName);
+            }
 
             $renamed = $current->rename($displayName, DateTimeImmutable::createFromInterface(now()));
 

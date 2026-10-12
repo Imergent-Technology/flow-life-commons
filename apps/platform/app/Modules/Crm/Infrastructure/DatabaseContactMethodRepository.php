@@ -8,7 +8,9 @@ use App\Modules\Crm\Domain\ContactMethod;
 use App\Modules\Crm\Domain\ContactMethodId;
 use App\Modules\Crm\Domain\ContactMethodKind;
 use App\Modules\Crm\Domain\ContactMethodRepository;
+use App\Shared\Domain\AccountId;
 use App\Shared\Domain\PersonId;
+use DateTimeImmutable;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Database\Query\Builder;
 use stdClass;
@@ -32,6 +34,45 @@ final readonly class DatabaseContactMethodRepository implements ContactMethodRep
             ->where('person_id', $personId->value)
             ->orderBy('kind')->orderBy('created_at')->orderBy('id')
             ->get()->all()));
+    }
+
+    public function forPersonLocked(PersonId $personId): array
+    {
+        return $this->hydrate(array_values($this->database->table(self::TABLE)
+            ->where('person_id', $personId->value)
+            ->orderBy('kind')->orderBy('created_at')->orderBy('id')
+            ->lockForUpdate()
+            ->get()->all()));
+    }
+
+    public function primaryValues(array $personIds): array
+    {
+        $values = [];
+        foreach ($personIds as $personId) {
+            $values[$personId->value] = ['email' => null, 'phone' => null];
+        }
+        if ($personIds === []) {
+            return $values;
+        }
+
+        $rows = $this->database->table(self::TABLE)
+            ->whereIn('person_id', array_map(static fn (PersonId $id): string => $id->value, $personIds))
+            ->whereNotNull('primary_kind')
+            ->get(['person_id', 'kind', 'primary_kind', 'value']);
+        foreach ($rows as $row) {
+            assert(is_string($row->person_id) && is_string($row->kind) && is_string($row->primary_kind) && is_string($row->value));
+            // `primary_kind` is the kind when the row is the primary. Both are read, so a stray row can never pass for one.
+            if ($row->kind !== $row->primary_kind || ! isset($values[$row->person_id])) {
+                continue;
+            }
+            if ($row->kind === ContactMethodKind::Email->value) {
+                $values[$row->person_id]['email'] = $row->value;
+            } elseif ($row->kind === ContactMethodKind::Phone->value) {
+                $values[$row->person_id]['phone'] = $row->value;
+            }
+        }
+
+        return $values;
     }
 
     public function forPeople(array $personIds): array
@@ -65,6 +106,7 @@ final readonly class DatabaseContactMethodRepository implements ContactMethodRep
             'primary_kind' => $method->isPrimary ? $method->kind->value : null,
             'created_at' => SqlTime::to($method->createdAt),
             'updated_at' => SqlTime::to($method->updatedAt),
+            'updated_by_account_id' => $method->updatedBy?->value,
         ]);
     }
 
@@ -76,6 +118,7 @@ final readonly class DatabaseContactMethodRepository implements ContactMethodRep
             'label' => $method->label,
             'primary_kind' => $method->isPrimary ? $method->kind->value : null,
             'updated_at' => SqlTime::to($method->updatedAt),
+            'updated_by_account_id' => $method->updatedBy?->value,
         ]);
     }
 
@@ -84,18 +127,56 @@ final readonly class DatabaseContactMethodRepository implements ContactMethodRep
         $this->database->table(self::TABLE)->where('id', $id->value)->delete();
     }
 
-    public function clearPrimary(PersonId $personId, ContactMethodKind $kind): void
+    public function clearPrimary(PersonId $personId, ContactMethodKind $kind, AccountId $by, DateTimeImmutable $now): void
     {
         $this->database->table(self::TABLE)
             ->where('person_id', $personId->value)->where('primary_kind', $kind->value)
-            ->update(['primary_kind' => null]);
+            ->update([
+                'primary_kind' => null,
+                'updated_at' => SqlTime::to($now),
+                'updated_by_account_id' => $by->value,
+            ]);
     }
 
-    public function personIdsWithSearchValue(ContactMethodKind $kind, string $searchValue): array
+    public function personIdsWithSearchValue(ContactMethodKind $kind, string $searchValue, ?int $limit = null): array
     {
-        return $this->personIds($this->database->table(self::TABLE)
+        $query = $this->database->table(self::TABLE)
             ->where('kind', $kind->value)->where('search_value', $searchValue)
-            ->distinct()->orderBy('person_id')->pluck('person_id')->all());
+            ->distinct()->orderBy('person_id');
+        if ($limit !== null) {
+            $query->limit($limit);
+        }
+
+        return $this->personIds($query->pluck('person_id')->all());
+    }
+
+    public function personIdsMatchingPrimary(string $text, array $within, int $limit): array
+    {
+        if ($within === []) {
+            return [];
+        }
+        $emailLike = LikeContains::pattern($text);
+        $digits = preg_replace('/[^0-9]/', '', $text) ?? '';
+        $ids = $this->database->table(self::TABLE)
+            ->whereIn('person_id', array_map(static fn (PersonId $id): string => $id->value, $within))
+            ->where(function (Builder $match) use ($emailLike, $digits): void {
+                $match->where(function (Builder $email) use ($emailLike): void {
+                    $email->where('kind', ContactMethodKind::Email->value)
+                        ->where('primary_kind', ContactMethodKind::Email->value)
+                        ->whereRaw(LikeContains::predicate('search_value'), [$emailLike]);
+                });
+                // A phone number is found by its digits, and only when there are enough to mean something.
+                if (strlen($digits) >= 3) {
+                    $match->orWhere(function (Builder $phone) use ($digits): void {
+                        $phone->where('kind', ContactMethodKind::Phone->value)
+                            ->where('primary_kind', ContactMethodKind::Phone->value)
+                            ->whereRaw(LikeContains::predicate('search_value'), [LikeContains::pattern($digits)]);
+                    });
+                }
+            })
+            ->distinct()->orderBy('person_id')->limit($limit + 1)->pluck('person_id')->all();
+
+        return $this->personIds($ids);
     }
 
     public function personIdsMatching(string $text, int $limit): array
@@ -152,6 +233,7 @@ final readonly class DatabaseContactMethodRepository implements ContactMethodRep
         assert(is_string($row->value) && is_string($row->search_value) && is_string($row->created_at) && is_string($row->updated_at));
         assert($row->label === null || is_string($row->label));
         assert($row->primary_kind === null || is_string($row->primary_kind));
+        assert($row->updated_by_account_id === null || is_string($row->updated_by_account_id));
 
         return ContactMethod::reconstitute(
             ContactMethodId::fromString($row->id),
@@ -163,6 +245,7 @@ final readonly class DatabaseContactMethodRepository implements ContactMethodRep
             $row->primary_kind !== null,
             SqlTime::from($row->created_at),
             SqlTime::from($row->updated_at),
+            $row->updated_by_account_id === null ? null : AccountId::fromString($row->updated_by_account_id),
         );
     }
 }

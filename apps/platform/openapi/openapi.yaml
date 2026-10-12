@@ -5135,7 +5135,7 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 100, default: 25}
       responses:
         '200':
-          description: Names and status only. No contact details.
+          description: Names and status, and the Person's primary email and phone where the type reads basic details (`basics`, otherwise null). No other contact data.
           content:
             application/json:
               schema:
@@ -5160,10 +5160,11 @@ paths:
                 $ref: '#/components/schemas/CodedMessage'
     post:
       operationId: establishGuardian
-      summary: Record a Guardian relationship for an existing Person
+      summary: Record a Guardian relationship for an existing or a new Person
       description: >-
-        Needs `guardians.manage` and recent verification. `person_id` with `confirm_existing_person: true`. Creating a Person
-        is not available (`new_person_not_supported`). Active recognition requires `default_role` of `grant`, `decline` or
+        Needs `guardians.manage` and recent verification. Either `person_id` with `confirm_existing_person: true`, or `new_person`
+        (a display name and optionally one email and one phone, each primary), never both, with CRM's duplicate advice
+        (`possible_duplicate`, `confirm_distinct` to proceed). Active recognition requires `default_role` of `grant`, `decline` or
         `defer` (`default_role_decision_required`). Inactive recognition refuses that field (`default_role_not_applicable`).
         `grant` also needs `access.roles.assign`, decided inside Access (`role_provisioning_not_permitted`), and the grant's
         Person is the relationship's, never the operator's.
@@ -5198,13 +5199,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '409':
-          description: This Person already has a Guardian relationship (`relationship_exists`).
+          description: This Person already has a Guardian relationship (`relationship_exists`), or the new Person looks like someone already known (`possible_duplicate`, with candidates).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CodedMessage'
+                $ref: '#/components/schemas/RelationshipIntakeConflict'
         '422':
-          description: Confirmation, an unknown Person, a status that is not initial, a field, a missing Active decision (`default_role_decision_required`), a decision on an Inactive intake (`default_role_not_applicable`), or a present `default_role` that is not `grant`, `decline` or `defer` (`invalid_relationship_query`).
+          description: Confirmation, an unknown Person, a status that is not initial, a field, a missing Active decision (`default_role_decision_required`), a decision on an Inactive intake (`default_role_not_applicable`), a present `default_role` that is not `grant`, `decline` or `defer` (`invalid_relationship_query`), or a detail of a new Person (`invalid_person_basics`).
           content:
             application/json:
               schema:
@@ -5213,7 +5214,7 @@ paths:
   /admin/relationships/guardians/candidates:
     get:
       operationId: listGuardianCandidates
-      summary: Look up People by name while recording a Guardian
+      summary: Look up People while recording a Guardian
       tags: [Relationships]
       security:
         - sessionCookie: []
@@ -5226,7 +5227,7 @@ paths:
           schema: {type: string, minLength: 3, maxLength: 255}
       responses:
         '200':
-          description: At most ten People, by display name. No contact value. Status is the Guardian relationship only, or null.
+          description: At most ten People and a `truncated` flag. An address matches CRM contact emails exactly, a phone number of 7 or more digits matches exactly on its digits, and anything else is a display-name "contains". Status is the Guardian relationship only, or null. No contact value is returned.
           content:
             application/json:
               schema:
@@ -5565,7 +5566,7 @@ paths:
           schema: {type: integer, minimum: 1, maximum: 100, default: 25}
       responses:
         '200':
-          description: Names and status only.
+          description: Names and status, and the Person's primary email and phone where the type reads basic details (`basics`, otherwise null). The search also matches those primary values, never a non-primary method.
           content:
             application/json:
               schema:
@@ -5590,8 +5591,13 @@ paths:
                 $ref: '#/components/schemas/CodedMessage'
     post:
       operationId: establishVolunteer
-      summary: Record a Volunteer relationship for an existing Person
-      description: Needs `volunteers.manage`. Recent verification is not required. A `default_role` decision is refused.
+      summary: Record a Volunteer relationship for an existing or a new Person
+      description: >-
+        Needs `volunteers.manage`. Recent verification is not required. Either `person_id` with `confirm_existing_person: true`
+        (the Person is left exactly as they are), or `new_person` (a display name and optionally one email and one phone,
+        each primary), never both. A new Person is registered through CRM in the same transaction, with CRM's duplicate advice
+        (`possible_duplicate`, `confirm_distinct` to proceed). No Account, Membership or role is created. A `default_role`
+        decision is refused.
       tags: [Relationships]
       security:
         - sessionCookie: []
@@ -5623,13 +5629,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '409':
-          description: This Person already has a Volunteer relationship (`relationship_exists`).
+          description: This Person already has a Volunteer relationship (`relationship_exists`), or the new Person looks like someone already known (`possible_duplicate`, with candidates).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CodedMessage'
+                $ref: '#/components/schemas/RelationshipIntakeConflict'
         '422':
-          description: Confirmation, an unknown Person, a status that is not initial, a field, or a default-role decision.
+          description: Confirmation, an unknown Person, a status that is not initial, a field, a default-role decision, or a detail of a new Person (`invalid_person_basics`).
           content:
             application/json:
               schema:
@@ -5638,7 +5644,7 @@ paths:
   /admin/relationships/volunteers/candidates:
     get:
       operationId: listVolunteerCandidates
-      summary: Look up People by name while recording a Volunteer
+      summary: Look up People while recording a Volunteer
       tags: [Relationships]
       security:
         - sessionCookie: []
@@ -5651,7 +5657,7 @@ paths:
           schema: {type: string, minLength: 3, maxLength: 255}
       responses:
         '200':
-          description: At most ten People, by display name. Status is the Volunteer relationship only, or null.
+          description: At most ten People and a `truncated` flag. An address matches CRM contact emails exactly, a phone number of 7 or more digits matches exactly on its digits, and anything else is a display-name "contains". Status is the Volunteer relationship only, or null. No contact value is returned.
           content:
             application/json:
               schema:
@@ -5849,6 +5855,68 @@ paths:
               schema:
                 $ref: '#/components/schemas/CodedMessage'
 
+  /admin/relationships/volunteers/{person}/basics:
+    patch:
+      operationId: updateVolunteerPersonBasics
+      summary: Correct a Volunteer's basic details
+      description: >-
+        Needs `volunteers.manage`. Recent verification is not required: the three details carry no authority. The Person must hold a
+        Volunteer relationship, in any state, and the request names its current `relationship_id`; otherwise `relationship_not_found`,
+        whether or not the Person exists. Each of `display_name`, `primary_email` and `primary_phone` is optional (at least one),
+        sent as `{from, to}`. `from` is compared, as an exact string, with what is stored once the locks are held; any difference
+        refuses the whole request (`stale_person_basics`) with the three current values and writes nothing. `to` is validated and
+        normalised by CRM's and Identity's own rules and may not be blank. Nothing else about the Person can be changed here: not
+        a login, a role, a Guardian relationship or any other CRM data. The relationship's revision does not move.
+      tags: [Relationships]
+      security:
+        - sessionCookie: []
+      x-required-capability: volunteers.manage
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/PersonId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePersonBasicsRequest'
+      responses:
+        '200':
+          description: The management view, with the details as they now are in `basics`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RelationshipManagement'
+        '401':
+          description: Not signed in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: Signed in, but without the capability this route requires.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: The Person holds no Volunteer relationship (`relationship_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '409':
+          description: A stale instance (`stale_revision`, with `current`), or an expected value that no longer matches (`stale_person_basics`, with the three current values).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonBasicsConflict'
+        '422':
+          description: An unknown key, none of the three details, a value that is not `{from, to}`, a blank `to`, or a value CRM or Identity refuses (`invalid_person_basics`, with the field).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
   /admin/relationships/volunteers/{person}/fields:
     patch:
       operationId: updateVolunteerFields
@@ -7571,12 +7639,16 @@ components:
           type: array
           items:
             type: object
-            required: [relationship_id, person, status, status_changed_at]
+            required: [relationship_id, person, status, status_changed_at, basics]
             properties:
               relationship_id: {type: string}
               person: {$ref: '#/components/schemas/RelationshipPerson'}
               status: {type: string}
               status_changed_at: {type: string, format: date-time}
+              basics:
+                oneOf:
+                  - type: 'null'
+                  - $ref: '#/components/schemas/RelationshipBasics'
         meta:
           type: object
           required: [page, per_page, total]
@@ -7586,7 +7658,7 @@ components:
             total: {type: integer}
     RelationshipRecord:
       type: object
-      required: [relationship_id, type, definition_version, person, status, revision, created_at, created_by, fields, default_role, history]
+      required: [relationship_id, type, definition_version, person, status, revision, created_at, created_by, fields, default_role, basics, history]
       properties:
         relationship_id: {type: string}
         type: {type: string}
@@ -7609,6 +7681,10 @@ components:
           oneOf:
             - type: 'null'
             - $ref: '#/components/schemas/RelationshipDefaultRoleState'
+        basics:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/RelationshipBasics'
         history:
           type: array
           items:
@@ -7621,7 +7697,7 @@ components:
               changed_by: {$ref: '#/components/schemas/RelationshipPerson'}
     RelationshipManagement:
       type: object
-      required: [relationship_id, type, person, status, revision, transitions, fields, default_role]
+      required: [relationship_id, type, person, status, revision, transitions, fields, default_role, basics]
       properties:
         relationship_id: {type: string}
         type: {type: string}
@@ -7638,6 +7714,10 @@ components:
           oneOf:
             - type: 'null'
             - $ref: '#/components/schemas/RelationshipDefaultRoleState'
+        basics:
+          oneOf:
+            - type: 'null'
+            - $ref: '#/components/schemas/RelationshipBasics'
     RelationshipCandidateList:
       type: object
       required: [data, truncated]
@@ -7649,7 +7729,7 @@ components:
             required: [person, matched_on, status]
             properties:
               person: {$ref: '#/components/schemas/RelationshipPerson'}
-              matched_on: {type: string, enum: [display_name]}
+              matched_on: {type: string, enum: [display_name, email, phone]}
               status: {type: [string, 'null']}
         truncated: {type: boolean}
     RelationshipConflict:
@@ -7661,10 +7741,22 @@ components:
         current: {$ref: '#/components/schemas/RelationshipManagement'}
     EstablishRelationshipRequest:
       type: object
-      required: [person_id, confirm_existing_person, status]
+      required: [status]
+      description: >-
+        Name an existing Person (`person_id` with `confirm_existing_person: true`) or a new one (`new_person`), never both.
       properties:
         person_id: {type: string}
         confirm_existing_person: {type: boolean}
+        new_person:
+          type: object
+          required: [display_name]
+          additionalProperties: false
+          description: A display name and at most one email and one phone, each recorded as the Person's primary.
+          properties:
+            display_name: {type: string, minLength: 1, maxLength: 255}
+            email: {type: [string, 'null'], maxLength: 255}
+            phone: {type: [string, 'null'], maxLength: 64}
+        confirm_distinct: {type: boolean, description: 'Proceed with a new Person after `possible_duplicate` advice.'}
         status: {type: string}
         default_role: {type: string, enum: [grant, decline, defer]}
         fields:
@@ -7685,6 +7777,69 @@ components:
         relationship_id: {type: string}
         revision: {type: integer}
         default_role: {type: string, enum: [grant, decline, defer]}
+    RelationshipBasics:
+      type: object
+      required: [primary_email, primary_phone]
+      additionalProperties: false
+      description: >-
+        The Person's primary email and primary phone as CRM stores them, each null when there is none. Where the type offers them
+        (directory and record: `people.read_basics`; management: `people.edit_basics`). No other contact method, label or CRM field.
+      properties:
+        primary_email: {type: [string, 'null']}
+        primary_phone: {type: [string, 'null']}
+    RelationshipIntakeConflict:
+      type: object
+      required: [message, code]
+      properties:
+        message: {type: string}
+        code: {type: string, enum: [relationship_exists, possible_duplicate]}
+        candidates:
+          type: array
+          description: Only with `possible_duplicate`. A Person's id, display name and what matched.
+          items:
+            type: object
+            required: [id, display_name, matched_on]
+            properties:
+              id: {type: string}
+              display_name: {type: string}
+              matched_on:
+                type: array
+                items: {type: string, enum: [email, display_name]}
+    PersonBasicsChange:
+      type: object
+      required: [from, to]
+      additionalProperties: false
+      properties:
+        from: {type: [string, 'null'], description: 'What you last saw, compared as an exact string. Null when there was no primary of that kind.'}
+        to: {type: string, minLength: 1, description: 'The new value. Never null or blank.'}
+    UpdatePersonBasicsRequest:
+      type: object
+      required: [relationship_id]
+      additionalProperties: false
+      minProperties: 2
+      description: Exactly these keys, and at least one of the three details.
+      properties:
+        relationship_id: {type: string}
+        display_name: {$ref: '#/components/schemas/PersonBasicsChange'}
+        primary_email: {$ref: '#/components/schemas/PersonBasicsChange'}
+        primary_phone: {$ref: '#/components/schemas/PersonBasicsChange'}
+    PersonBasicsConflict:
+      type: object
+      required: [message, code]
+      properties:
+        message: {type: string}
+        code: {type: string, enum: [stale_revision, stale_person_basics]}
+        current:
+          description: With `stale_revision`, the management view. With `stale_person_basics`, the three current values.
+          oneOf:
+            - $ref: '#/components/schemas/RelationshipManagement'
+            - type: object
+              required: [display_name, primary_email, primary_phone]
+              additionalProperties: false
+              properties:
+                display_name: {type: string}
+                primary_email: {type: [string, 'null']}
+                primary_phone: {type: [string, 'null']}
     UpdateRelationshipFieldsRequest:
       type: object
       required: [relationship_id, revision, fields]

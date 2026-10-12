@@ -8,7 +8,8 @@ use App\Modules\Relationships\Domain\RelationshipId;
 
 /**
  * What managing one relationship needs, and nothing the manage capability is not owed (ADR 0038, F13, A4).
- * No history and no provenance. Basic details arrive with the CRM seam (WP3), and only for a type that edits them.
+ * No history and no provenance. `basics` is the Person's primary email and phone, present only for a type that edits
+ * basic details (ADR 0038, F13, P5) and null otherwise.
  */
 final readonly class RelationshipManagementView
 {
@@ -25,5 +26,6 @@ final readonly class RelationshipManagementView
         public array $transitions,
         public array $fields,
         public ?DefaultRoleState $defaultRole = null,
+        public ?BasicDetails $basics = null,
     ) {}
 }

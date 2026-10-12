@@ -25,6 +25,23 @@ final class RelationshipInput
         return $payload['fields'];
     }
 
+    /**
+     * The raw JSON body as sent, without the instance id: a scoped basic-detail edit compares `from` as an exact string,
+     * and the framework's conversion of an empty string to null would change what a value means.
+     */
+    public static function bodyWithout(Request $request, string ...$keys): mixed
+    {
+        $payload = json_decode($request->getContent(), true);
+        if (! is_array($payload)) {
+            return null;
+        }
+        foreach ($keys as $key) {
+            unset($payload[$key]);
+        }
+
+        return $payload;
+    }
+
     public static function wholeNumber(mixed $value): ?int
     {
         if (is_int($value)) {
