@@ -11,6 +11,7 @@ use App\Modules\Resources\Application\DownloadLibraryFile;
 use App\Modules\Resources\Application\GetDeliveredPack;
 use App\Modules\Resources\Application\LibraryFilter;
 use App\Modules\Resources\Application\ReadLibraryPack;
+use App\Modules\Resources\Application\ViewerLibrary;
 use App\Modules\Resources\Http\BrowseMyResourcesController;
 use App\Modules\Resources\Http\DownloadMyResourceFileController;
 use App\Modules\Resources\Http\ShowMyResourcePackController;
@@ -29,44 +30,6 @@ use Tests\Support\SourceScan;
  */
 
 const RESOURCES_ROOT = 'app/Modules/Resources';
-
-/**
- * The Resources classes a source file imports or names, as short "Layer\Class" names (comments removed).
- *
- * @return list<string>
- */
-function resourcesPolicyTypes(string $source): array
-{
-    preg_match_all('/App\\\\Modules\\\\Resources\\\\([A-Za-z\\\\]+)/', SourceScan::code($source), $matches);
-    // A bare layer name is the file's own `namespace` line, not a dependency.
-    $types = array_values(array_diff(array_unique($matches[1]), ['Http', 'Application', 'Domain', 'Infrastructure']));
-    sort($types);
-
-    return $types;
-}
-
-/** @return list<string> the Resources types a Resources file names */
-function resourcesPolicyTypesOf(string $relative): array
-{
-    return resourcesPolicyTypes(SourceScan::read(SourceScan::root().'/'.RESOURCES_ROOT.'/'.$relative.'.php'));
-}
-
-/**
- * Every Resources file (relative, without extension) whose code mentions `$needle`.
- *
- * @return list<string>
- */
-function resourcesPolicyMentions(string $needle): array
-{
-    $files = [];
-    foreach (SourceScan::phpFiles([RESOURCES_ROOT]) as $path) {
-        if (str_contains(SourceScan::code(SourceScan::read($path)), $needle)) {
-            $files[] = substr(SourceScan::relative($path), strlen(RESOURCES_ROOT) + 1, -4);
-        }
-    }
-
-    return $files;
-}
 
 // --- The projection and the eligibility seam ---------------------------------------------------------------------------------
 
@@ -123,7 +86,7 @@ it('keeps privileged viewing off the projection, eligibility, relationships, Mem
     foreach ($policyA as $class) {
         $code = SourceScan::code(SourceScan::read(SourceScan::root().'/'.RESOURCES_ROOT."/Application/{$class}.php"));
         foreach ($forbidden as $name) {
-            expect($code)->not->toContain($name, "{$class} names {$name}");
+            expect(str_contains($code, $name))->toBeFalse("{$class} names {$name}");
         }
     }
     // A planted use would be seen.
@@ -150,10 +113,22 @@ it('keeps audience reading independent of the Console, capabilities, roles and a
 
         // No capability or authorization seam, no role, no Console or HTTP class, no Console admission string.
         foreach (['Capability', 'AuthorizeAction', 'AccessDenied', 'Authorizer', 'Role', 'Console', 'console.access', 'ConsoleAccess', 'GuardianFull', 'guardian-', 'resources.view', 'resources.manage', 'ViewResources', 'ManageResources', 'Http'] as $name) {
-            expect($code)->not->toContain($name, "{$class} names {$name}");
+            expect(str_contains($code, $name))->toBeFalse("{$class} names {$name}");
         }
         expect(preg_match('/use App\\\\Modules\\\\\w+\\\\Http\\\\/', $code))->toBe(0, "{$class} imports an Http class");
     }
+});
+
+// These two read models perform no capability check of their own: the three use cases in front of each are the whole of its authority
+// (`resources.view` for ViewerLibrary, the Actor's own eligibility for AudienceDelivery). So WHO MAY CALL THEM is the boundary. Both are
+// autowired (no service-provider wiring names them), so each list is exactly the classes that approved use cases, and Pest's arch layer
+// resolves every spelling of a reference (import, grouped import, alias, namespace alias, same namespace) to the class it names.
+arch('privileged viewing\'s read model has exactly three callers, the use cases that ask for resources.view (R5, R15)', function () {
+    expect(ViewerLibrary::class)->toOnlyBeUsedIn([BrowseLibrary::class, ReadLibraryPack::class, DownloadLibraryFile::class]);
+});
+
+arch('audience delivery has exactly three callers, the policy C use cases (R11, R15)', function () {
+    expect(AudienceDelivery::class)->toOnlyBeUsedIn([BrowseDeliveredResources::class, GetDeliveredPack::class, DownloadDeliveredFile::class]);
 });
 
 arch('policy C\'s use cases are used only by the my-resources controllers, the approved adapters of G10 (R15)', function () {
@@ -169,63 +144,106 @@ arch('policy A\'s use cases are used only by the privileged-library controllers'
 });
 
 // --- The controllers of the three families cannot reach each other ---------------------------------------------------------------
+//
+// These are `arch()` rules, not text scans: Pest resolves every reference in a class (an import, a grouped import, a class alias, a
+// namespace alias, a fully qualified name, a same-namespace reference) to the class it names, so a dependency cannot be hidden by
+// how it is spelled. The reading policies are allowlists (`toOnlyUse`): a reader controller may name its own policy, the neutral HTTP
+// edge shared by all three, and the framework. Management is checked the other way round, because it legitimately names a great deal
+// of its own.
 
-/** The Resources types an HTTP adapter of one policy may name: its own, and the neutral edge shared by all three. */
-const RESOURCES_NEUTRAL_HTTP = ['Http\\DownloadFileRequest', 'Http\\FileResponse', 'Http\\RequestActor', 'Http\\BlankInput'];
+/** The neutral edge every family shares and which carries no authority of its own: the caller, the file request and the file on the wire. */
+const RESOURCES_NEUTRAL_EDGE = [
+    'App\\Modules\\Resources\\Http\\DownloadFileRequest',
+    'App\\Modules\\Resources\\Http\\FileResponse',
+    'App\\Modules\\Resources\\Http\\RequestActor',
+];
 
-it('lets a policy C controller name only policy C, the neutral HTTP edge and the identifiers it is given: nothing of policy A or B (R15)', function () {
-    $allowed = [
-        'BrowseMyResourcesController' => ['Application\\BrowseDeliveredResources', 'Domain\\CategoryId', 'Http\\DeliveryPresenter', 'Http\\MyResourcesRequest', ...RESOURCES_NEUTRAL_HTTP],
-        'ShowMyResourcePackController' => ['Application\\GetDeliveredPack', 'Domain\\PackId', 'Http\\DeliveryPresenter', ...RESOURCES_NEUTRAL_HTTP],
-        'DownloadMyResourceFileController' => ['Application\\DownloadDeliveredFile', 'Domain\\CardId', 'Domain\\PackId', ...RESOURCES_NEUTRAL_HTTP],
-        'MyResourcesRequest' => ['Domain\\CategoryId', 'Domain\\ResourceText'],
-    ];
+/**
+ * The framework classes a controller or request may name, and the `response()` helper (which the arch layer counts as a dependency). Nothing under
+ * `App\` is here, so no other module and no other Resources layer slips in.
+ */
+const RESOURCES_FRAMEWORK = [
+    'Illuminate\\Contracts\\Auth\\Authenticatable', 'Illuminate\\Foundation\\Http\\FormRequest', 'Illuminate\\Http\\JsonResponse', 'Illuminate\\Http\\Request',
+    'Illuminate\\Validation\\Rule', 'Symfony\\Component\\HttpFoundation\\StreamedResponse', 'response',
+];
 
-    foreach ($allowed as $class => $types) {
-        $named = resourcesPolicyTypesOf("Http/{$class}");
-        $outside = array_values(array_diff($named, $types));
+/** @return list<string> everything a Resources reading policy's own classes may name beyond the edge: the identifiers they are given and the framework */
+function resourcesAllowedFor(string ...$own): array
+{
+    return array_values([...$own, ...RESOURCES_NEUTRAL_EDGE, ...RESOURCES_FRAMEWORK]);
+}
 
-        expect($outside)->toBe([], "{$class} names types outside policy C: ".implode(', ', $outside));
-    }
+arch('a policy A controller names only policy A, the neutral edge and the identifiers it is given: nothing of policy B or C (R15)', function () {
+    $http = 'App\\Modules\\Resources\\Http\\';
+    $app = 'App\\Modules\\Resources\\Application\\';
+    $domain = 'App\\Modules\\Resources\\Domain\\';
+
+    expect($http.'BrowseLibraryController')->toOnlyUse(resourcesAllowedFor($app.'BrowseLibrary', $http.'LibraryRequest', $http.'ViewerPresenter'));
+    expect($http.'ShowLibraryPackController')->toOnlyUse(resourcesAllowedFor($app.'ReadLibraryPack', $domain.'PackId', $http.'ViewerPresenter'));
+    expect($http.'DownloadLibraryFileController')->toOnlyUse(resourcesAllowedFor($app.'DownloadLibraryFile', $domain.'CardId', $domain.'PackId'));
+    // The audience here is a FILTER over Packs, validated and only narrowing policy A.
+    expect($http.'LibraryRequest')->toOnlyUse(resourcesAllowedFor($app.'LibraryFilter', $domain.'Audience', $domain.'CategoryId', $domain.'PublicationFilter', $domain.'ResourceText'));
 });
 
-it('lets a policy A controller name only policy A, the neutral HTTP edge and the identifiers it is given: nothing of policy B or C (R15)', function () {
-    $allowed = [
-        'BrowseLibraryController' => ['Application\\BrowseLibrary', 'Http\\LibraryRequest', 'Http\\ViewerPresenter', ...RESOURCES_NEUTRAL_HTTP],
-        'ShowLibraryPackController' => ['Application\\ReadLibraryPack', 'Domain\\PackId', 'Http\\ViewerPresenter', ...RESOURCES_NEUTRAL_HTTP],
-        'DownloadLibraryFileController' => ['Application\\DownloadLibraryFile', 'Domain\\CardId', 'Domain\\PackId', ...RESOURCES_NEUTRAL_HTTP],
-        // The audience here is a FILTER over Packs, validated and only narrowing policy A.
-        'LibraryRequest' => ['Application\\LibraryFilter', 'Domain\\Audience', 'Domain\\CategoryId', 'Domain\\PublicationFilter', 'Domain\\ResourceText'],
-    ];
+arch('a policy C controller names only policy C, the neutral edge and the identifiers it is given: nothing of policy A or B (R15)', function () {
+    $http = 'App\\Modules\\Resources\\Http\\';
+    $app = 'App\\Modules\\Resources\\Application\\';
+    $domain = 'App\\Modules\\Resources\\Domain\\';
 
-    foreach ($allowed as $class => $types) {
-        $named = resourcesPolicyTypesOf("Http/{$class}");
-        $outside = array_values(array_diff($named, $types));
-
-        expect($outside)->toBe([], "{$class} names types outside policy A: ".implode(', ', $outside));
-    }
-    // Positive control: a policy C type in a policy A controller would be seen.
-    expect(resourcesPolicyTypes('<?php use App\\Modules\\Resources\\Application\\GetDeliveredPack; use App\\Modules\\Resources\\Http\\DeliveryPresenter;'))->toBe(['Application\\GetDeliveredPack', 'Http\\DeliveryPresenter']);
+    expect($http.'BrowseMyResourcesController')->toOnlyUse(resourcesAllowedFor($app.'BrowseDeliveredResources', $domain.'CategoryId', $http.'DeliveryPresenter', $http.'MyResourcesRequest'));
+    expect($http.'ShowMyResourcePackController')->toOnlyUse(resourcesAllowedFor($app.'GetDeliveredPack', $domain.'PackId', $http.'DeliveryPresenter'));
+    expect($http.'DownloadMyResourceFileController')->toOnlyUse(resourcesAllowedFor($app.'DownloadDeliveredFile', $domain.'CardId', $domain.'PackId'));
+    expect($http.'MyResourcesRequest')->toOnlyUse(resourcesAllowedFor($domain.'CategoryId', $domain.'ResourceText'));
 });
 
-it('keeps policy B\'s management controllers off both reading policies: none names a viewer or delivery class', function () {
-    $reading = ['ViewerLibrary', 'ViewerPresenter', 'DeliveryPresenter', 'AudienceEligibility', 'AudienceDelivery', 'BrowseLibrary', 'ReadLibraryPack', 'DownloadLibraryFile', 'BrowseDeliveredResources', 'GetDeliveredPack', 'DownloadDeliveredFile', 'MyResourcesRequest', 'LibraryRequest'];
-    $offenders = [];
-    $readers = ['BrowseLibraryController', 'ShowLibraryPackController', 'DownloadLibraryFileController', 'BrowseMyResourcesController', 'ShowMyResourcePackController', 'DownloadMyResourceFileController', 'LibraryRequest', 'MyResourcesRequest', 'ViewerPresenter', 'DeliveryPresenter'];
+/** @return list<class-string> the management controllers: every Resources controller that is not one of the six reader controllers */
+function resourcesManagementControllers(): array
+{
+    $readers = ['BrowseLibraryController', 'ShowLibraryPackController', 'DownloadLibraryFileController', 'BrowseMyResourcesController', 'ShowMyResourcePackController', 'DownloadMyResourceFileController'];
+    $controllers = [];
     foreach (SourceScan::phpFiles([RESOURCES_ROOT.'/Http']) as $path) {
         $class = basename($path, '.php');
-        // Preview is management's, and delegates to the delivery presenter for its shape alone (ResourcesPresenter).
-        if (in_array($class, $readers, true) || $class === 'ResourcesPresenter') {
-            continue;
-        }
-        foreach ($reading as $name) {
-            if (preg_match('/\b'.$name.'\b/', SourceScan::code(SourceScan::read($path))) === 1) {
-                $offenders[] = "{$class}: {$name}";
-            }
+        if (str_ends_with($class, 'Controller') && ! in_array($class, $readers, true)) {
+            /** @var class-string $name */
+            $name = 'App\\Modules\\Resources\\Http\\'.$class;
+            $controllers[] = $name;
         }
     }
 
-    expect($offenders)->toBe([]);
+    return $controllers;
+}
+
+/** @return list<string> every class of the two reading policies: their use cases, read models, requests, presenters and result types */
+function resourcesReadingClasses(): array
+{
+    $app = 'App\\Modules\\Resources\\Application\\';
+    $http = 'App\\Modules\\Resources\\Http\\';
+
+    return [
+        ...array_map(fn (string $c): string => $app.$c, [
+            'ViewerLibrary', 'BrowseLibrary', 'ReadLibraryPack', 'DownloadLibraryFile', 'ViewerCard', 'ViewerCategory', 'ViewerPack', 'ViewerPackSummary', 'LibraryFilter',
+            'AudienceEligibility', 'AudienceDelivery', 'BrowseDeliveredResources', 'GetDeliveredPack', 'DownloadDeliveredFile', 'DeliveredCard', 'DeliveredCategory', 'DeliveredPack', 'DeliveredListedPack', 'DeliveredPacks',
+        ]),
+        ...array_map(fn (string $c): string => $http.$c, ['ViewerPresenter', 'DeliveryPresenter', 'LibraryRequest', 'MyResourcesRequest']),
+    ];
+}
+
+arch('a management controller names neither reading policy: no viewer, delivery or eligibility class (R15)', function () {
+    $controllers = resourcesManagementControllers();
+
+    expect(count($controllers))->toBeGreaterThan(20);
+    // One controller per expectation, on purpose: Pest's `not->toUse` over a LIST of targets fails only when EVERY target uses the
+    // dependency, so a list would let a single offending controller through.
+    foreach ($controllers as $controller) {
+        expect($controller)->not->toUse(resourcesReadingClasses());
+    }
+});
+
+arch('the management presenter reaches delivery only for preview\'s shape, and never the privileged viewer or eligibility', function () {
+    $presenter = 'App\\Modules\\Resources\\Http\\ResourcesPresenter';
+    $app = 'App\\Modules\\Resources\\Application\\';
+
+    expect($presenter)->not->toUse(['App\\Modules\\Resources\\Http\\ViewerPresenter', $app.'ViewerLibrary', $app.'AudienceEligibility', $app.'AudienceDelivery', $app.'BrowseDeliveredResources', $app.'GetDeliveredPack', $app.'DownloadDeliveredFile']);
 });
 
 // --- Requests: no client-chosen audience, Person or mode ---------------------------------------------------------------------
@@ -249,7 +267,7 @@ it('accepts no audience set, Person, Account or mode in the library or my-resour
     foreach (['LibraryRequest', 'MyResourcesRequest', 'DownloadFileRequest'] as $request) {
         $code = SourceScan::code(SourceScan::read(SourceScan::root().'/'.RESOURCES_ROOT."/Http/{$request}.php"));
         foreach (['person', 'account', 'actor', 'viewer', 'mode', 'audiences'] as $word) {
-            expect(strtolower($code))->not->toContain($word, "{$request} names {$word}");
+            expect(str_contains(strtolower($code), $word))->toBeFalse("{$request} names {$word}");
         }
     }
     // Positive control for the key reader.

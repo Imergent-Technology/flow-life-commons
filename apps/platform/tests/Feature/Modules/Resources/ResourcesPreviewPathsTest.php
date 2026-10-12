@@ -13,14 +13,14 @@ use Tests\Support\Resources;
 
 /*
  * Preview is management's (ADR 0038, R3): it accepts every catalog audience, and a File Card it shows is opened from the MANAGEMENT file
- * route, so a `resources.manage`-only previewer can open a Draft file the preview shows without ever holding `resources.view`.
+ * route, so a `resources.manage`-only previewer can open a file the preview shows (a Published File Card of a Draft Pack; a Draft Card is never part of a preview) without ever holding `resources.view`.
  */
 
 beforeEach(function () {
     ResourceFiles::fake();
 });
 
-/** @return array{Console, string, string} a signed-in manager, the Draft Pack and its Draft File Card */
+/** @return array{Console, string, string} a signed-in manager, the Draft Pack and its Published File Card */
 function draftWithFile(): array
 {
     [$console] = Resources::signedInGuardian('mona.manager@example.org', 'Mona Manager');
@@ -32,7 +32,7 @@ function draftWithFile(): array
     return [$console, $pack->pack->id->value, $file->card->id->value];
 }
 
-it('opens a previewed Draft file from the management route for a manager who holds resources.manage and not resources.view', function () {
+it('opens a file previewed from a Draft Pack from the management route for a manager who holds resources.manage and not resources.view', function () {
     [$console, $pack, $card] = draftWithFile();
     Gate::before(fn (Authenticatable $user, string $ability): ?bool => $ability === 'resources.view' ? false : null);
 

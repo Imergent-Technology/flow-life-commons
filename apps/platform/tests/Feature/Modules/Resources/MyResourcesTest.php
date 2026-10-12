@@ -303,8 +303,12 @@ it('sends authorized content nowhere a shared cache could keep it: no-store on t
             ->and($response->headers->get('Location'))->toBeNull();
     }
     $card = Api::rows(readJson($console, MINE_ROOT."/packs/{$pack}")['cards'])[1];
-    expect(Api::map($card['file'])['download_path'])->toBe(MINE_ROOT."/packs/{$pack}/cards/".$f->guardianFile->card->id->value.'/file')
-        ->and((string) $console->get(MINE_ROOT."/packs/{$pack}")->getContent())->not->toContain('signature', 'expires', 'http');
+    expect(Api::map($card['file'])['download_path'])->toBe(MINE_ROOT."/packs/{$pack}/cards/".$f->guardianFile->card->id->value.'/file');
+    // One assertion per marker (a negated multi-value `toContain` passes when any single one is absent): no signed or absolute address.
+    $body = (string) $console->get(MINE_ROOT."/packs/{$pack}")->getContent();
+    expect($body)->not->toContain('signature')
+        ->and($body)->not->toContain('expires')
+        ->and($body)->not->toContain('http');
 });
 
 // --- Revocation between requests ---------------------------------------------------------------------------------------------------

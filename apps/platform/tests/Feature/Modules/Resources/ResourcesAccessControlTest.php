@@ -311,7 +311,11 @@ it('asks each use case for exactly the one capability its route asks for', funct
     $unasked = ['BrowseDeliveredResources', 'GetDeliveredPack', 'DownloadDeliveredFile', 'AudienceEligibility', 'AudienceDelivery'];
 
     foreach ($unasked as $useCase) {
-        expect(SourceScan::code((string) file_get_contents("{$dir}/{$useCase}.php")))->not->toContain('Capability', 'AuthorizeAction');
+        $code = SourceScan::code((string) file_get_contents("{$dir}/{$useCase}.php"));
+        // One assertion per name: a negated `toContain` over several names passes as soon as ONE of them is absent.
+        foreach (['Capability', 'AuthorizeAction'] as $name) {
+            expect(str_contains($code, $name))->toBeFalse("{$useCase} names {$name}");
+        }
     }
     foreach ($expected as $useCase => $capability) {
         preg_match_all('/Capability::(\w+)/', SourceScan::code((string) file_get_contents("{$dir}/{$useCase}.php")), $matches);
