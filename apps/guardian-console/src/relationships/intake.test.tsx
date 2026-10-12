@@ -237,6 +237,7 @@ describe('recording an existing person', () => {
   })
 
   it('opens on the confirmation when it was reached from the Person record, which still records nothing', async () => {
+    const user = userEvent.setup()
     const api = volunteerIntake()
     renderApp({
       pathname: '/relationships/volunteers/new',
@@ -245,6 +246,11 @@ describe('recording an existing person', () => {
     const confirm = await dialog('Record Ada Lovelace?')
     expect(confirm).toBeVisible()
     expect(api.calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+    // Nobody is chosen until the confirmation is given: behind it there is still the search, and no form.
+    expect(screen.queryByRole('form', { name: 'Record a Volunteer' })).not.toBeInTheDocument()
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('form', { name: 'Record a Volunteer' })).not.toBeInTheDocument()
+    expect(screen.getByRole('searchbox', { name: 'Name, email or phone' })).toBeVisible()
   })
 
   it('does not present a request that is still pending as a recording', async () => {

@@ -71,7 +71,7 @@ export function DefaultRolePanel({
   const qualifying = stateQualifies(type, status)
   const described = describeState(state, qualifying, stateLabel(type, status))
   const name = personName(management?.person ?? view?.person ?? { id: '', displayName: null })
-  const maySee = management !== null && !data.mismatch
+  const maySee = management !== null && type.actions.manage && !data.mismatch
   const mayGrant =
     maySee &&
     type.actions.provisionDefaultRole &&

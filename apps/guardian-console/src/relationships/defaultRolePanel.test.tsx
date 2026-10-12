@@ -141,11 +141,12 @@ describe('the default-role panel', () => {
     expect(within(panel()).queryByRole('button', { name: 'Grant access' })).not.toBeInTheDocument()
   })
 
-  it('shows a view-only operator the state and no control', async () => {
+  it('shows a view-only operator the state and no control, whatever a hint says', async () => {
     serveRecord({
       types: [
         wireGuardianType({
-          actions: { view: true, manage: false, delete: false, provision_default_role: false },
+          // A hint that claims provisioning cannot be true without manage; even so it opens nothing for someone who only views.
+          actions: { view: true, manage: false, delete: false, provision_default_role: true },
         }),
       ],
       slug: 'guardians',
@@ -153,7 +154,8 @@ describe('the default-role panel', () => {
         json(
           wireRecord({
             default_role: wireDefaultRole({
-              decision: 'declined',
+              decision: 'granted',
+              effective: true,
               decided_by: GWEN,
               decided_at: '2026-09-02T10:00:00Z',
             }),
@@ -162,7 +164,7 @@ describe('the default-role panel', () => {
     })
     renderApp(PAGE)
     await screen.findByRole('heading', { level: 1, name: 'Ada Lovelace' })
-    expect(within(panel()).getByText('Declined')).toBeVisible()
+    expect(within(panel()).getByText('Granted, and in effect')).toBeVisible()
     expect(within(panel()).queryByRole('button')).not.toBeInTheDocument()
   })
 
