@@ -6,6 +6,9 @@ import type { Candidate } from '../api/relationships.ts'
  * returns two or more candidates with the same name, none of them is offered for choosing; the operator searches again by
  * an exact email or phone, or adds someone new. A candidate found by an exact email or phone is chosen on that, and one who
  * already holds the type is a link to their record, never a second recording.
+ *
+ * A name search that was cut off (`truncated`) shows only some of the people who match, so a name that looks unique among
+ * those shown may be shared with someone who was not: no name-only match can be chosen from it either.
  */
 export type CandidateChoice =
   { kind: 'choose' } | { kind: 'ambiguous' } | { kind: 'already'; status: string }
@@ -21,9 +24,13 @@ export function sharedNames(candidates: readonly Candidate[]): Set<string> {
   return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name))
 }
 
-export function choiceFor(candidate: Candidate, shared: ReadonlySet<string>): CandidateChoice {
+export function choiceFor(
+  candidate: Candidate,
+  shared: ReadonlySet<string>,
+  truncated = false,
+): CandidateChoice {
   if (candidate.status !== null) return { kind: 'already', status: candidate.status }
-  if (candidate.matchedOn === 'display_name' && shared.has(nameKey(candidate))) {
+  if (candidate.matchedOn === 'display_name' && (truncated || shared.has(nameKey(candidate)))) {
     return { kind: 'ambiguous' }
   }
   return { kind: 'choose' }

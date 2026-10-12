@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -11,6 +11,7 @@ import {
   candidate,
   candidateList,
   codedInvalid,
+  operatorWith,
   PERSON,
   PERSON_2,
   refusal,
@@ -141,6 +142,31 @@ describe('finding the person', () => {
     api.on(`GET ${VOL}/candidates`, json(candidateList([candidate(PERSON, 'Ada Lovelace')], true)))
     await search(user, 'ada')
     expect(await screen.findByText(/More people match than are shown/)).toBeVisible()
+  })
+
+  it('does not let a name-only match be chosen from a cut-off result, however unique the name looks among those shown', async () => {
+    const user = userEvent.setup()
+    const api = volunteerIntake(candidateList([candidate(PERSON, 'Ada Lovelace')], true))
+    renderApp('/relationships/volunteers/new')
+    await search(user, 'ada')
+    const list = await screen.findByRole('list', { name: 'People found' })
+    // Another Ada Lovelace may be among those not shown, and the name alone cannot say.
+    expect(within(list).getByText('Ada Lovelace')).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Choose Ada Lovelace' })).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/More people match than are shown, and a name alone cannot tell them apart/),
+    ).toBeVisible()
+    expect(
+      screen.getByText(/Search again with an exact email address or phone number/),
+    ).toBeVisible()
+
+    // The exact lookup is still choosable, even when it too reports more than it shows.
+    api.on(
+      `GET ${VOL}/candidates`,
+      json(candidateList([candidate(PERSON, 'Ada Lovelace', 'email')], true)),
+    )
+    await search(user, 'ada@example.org')
+    expect(await screen.findByRole('button', { name: 'Choose Ada Lovelace' })).toBeVisible()
   })
 })
 
@@ -577,13 +603,10 @@ describe('recording someone new', () => {
     })
   })
 
-  it("gives CRM's duplicate advice, records nothing, and makes the operator decide: record anyway, choose one of them, or go back", async () => {
-    const user = userEvent.setup()
-    const api = serveRelationships([wireVolunteerType()])
-    let confirmedDistinct = false
-    api.on(`POST ${VOL}`, (call) => {
-      confirmedDistinct = (call.body as { confirm_distinct?: boolean }).confirm_distinct === true
-      return confirmedDistinct
+  const PERSON_3 = '01J0000000000000000PERSON3'
+  const advisedPost = (api: ReturnType<typeof serveRelationships>) => {
+    api.on(`POST ${VOL}`, (call) =>
+      (call.body as { confirm_distinct?: boolean }).confirm_distinct === true
         ? json(
             wireManagement({ type: 'volunteer', status: 'active', default_role: null, fields: {} }),
             201,
@@ -593,12 +616,13 @@ describe('recording someone new', () => {
               message: 'Looks known.',
               code: 'possible_duplicate',
               candidates: [
-                { id: PERSON_2, display_name: 'Zoe Zedd', matched_on: ['display_name'] },
+                { id: PERSON_2, display_name: 'Alex Smith', matched_on: ['display_name'] },
+                { id: PERSON_3, display_name: 'Alex Smith', matched_on: ['display_name'] },
               ],
             },
             409,
-          )
-    })
+          ),
+    )
     api.on(
       `GET ${VOL}/${PERSON}`,
       json(wireRecord({ type: 'volunteer', fields: {}, default_role: null })),
@@ -607,58 +631,140 @@ describe('recording someone new', () => {
       `GET ${VOL}/${PERSON}/management`,
       json(wireManagement({ type: 'volunteer', fields: {}, default_role: null })),
     )
+  }
+  async function reachAdvice(user: User, api: ReturnType<typeof serveRelationships>) {
     await toNewPerson(user, api)
-    await user.type(screen.getByRole('textbox', { name: 'Display name' }), 'Zoe Zed')
+    await user.type(screen.getByRole('textbox', { name: 'Display name' }), 'Alex Smith')
     await user.selectOptions(screen.getByRole('combobox', { name: 'Initial status' }), 'active')
     await user.click(screen.getByRole('button', { name: 'Review and record' }))
-    await user.click(within(await dialog(/Record Zoe/)).getByRole('button', { name: 'Record' }))
+    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
+    return screen.findByRole('list', { name: 'Possible duplicates' })
+  }
 
-    const advice = await screen.findByRole('list', { name: 'Possible duplicates' })
-    expect(within(advice).getByText('Zoe Zedd')).toBeVisible()
-    expect(within(advice).getByText('(same name)')).toBeVisible()
+  it("gives CRM's duplicate advice, records nothing, and offers no way to pick anyone: only record anyway, go back, or search by exact contact", async () => {
+    const user = userEvent.setup()
+    const api = serveRelationships([wireVolunteerType()])
+    advisedPost(api)
+    const advice = await reachAdvice(user, api)
+
+    // Two people with one name: both are listed, neither can be chosen, and viewing the advice recorded nothing.
+    expect(within(advice).getAllByText('Alex Smith')).toHaveLength(2)
+    expect(within(advice).getAllByText('(same name)')).toHaveLength(2)
+    expect(within(advice).queryByRole('button')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /^Record .* instead$|^Choose |^Record Alex Smith$/ }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(/A name alone cannot tell people apart/)).toBeVisible()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(location()).toBe('/relationships/volunteers/new')
+    expect(api.callsTo(`POST ${VOL}`)).toHaveLength(1)
     await expectNoAxeViolations(pageBody())
 
-    // Nobody was picked for them. "Record anyway" is a fresh, deliberate decision, confirmed once more.
+    // "Record anyway" is a fresh, deliberate decision, confirmed once more before anything is sent with it.
     await user.click(
       screen.getByRole('button', { name: 'This is a different person: record anyway' }),
     )
     expect(api.callsTo(`POST ${VOL}`)).toHaveLength(1)
-    await user.click(within(await dialog(/Record Zoe/)).getByRole('button', { name: 'Record' }))
+    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
+    await waitFor(() => {
+      expect(api.callsTo(`POST ${VOL}`)).toHaveLength(2)
+    })
+    expect(bodyOf(api, `POST ${VOL}`, 0)).not.toHaveProperty('confirm_distinct')
+    expect(bodyOf(api, `POST ${VOL}`, 1)).toMatchObject({
+      confirm_distinct: true,
+      new_person: { display_name: 'Alex Smith' },
+    })
+    expect(bodyOf(api, `POST ${VOL}`, 1)).not.toHaveProperty('person_id')
+    expect(bodyOf(api, `POST ${VOL}`, 1)).not.toHaveProperty('confirm_existing_person')
+  })
+
+  it('takes the operator back to a lookup by exact email or phone, where a person is chosen only through the existing-person confirmation', async () => {
+    const user = userEvent.setup()
+    const api = serveRelationships([wireVolunteerType()])
+    advisedPost(api)
+    await reachAdvice(user, api)
+
+    api.on(`GET ${VOL}/candidates`, json(candidateList([candidate(PERSON, 'Alex Smith', 'email')])))
+    await user.click(screen.getByRole('button', { name: 'Search by exact email or phone' }))
+    expect(screen.queryByRole('list', { name: 'Possible duplicates' })).not.toBeInTheDocument()
+    await search(user, 'alex@example.org')
+    await user.click(await screen.findByRole('button', { name: 'Choose Alex Smith' }))
+    // Choosing only opens a confirmation: nothing more was sent.
+    await dialog('Record Alex Smith?')
+    expect(api.callsTo(`POST ${VOL}`)).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Initial status' }), 'active')
+    await user.click(screen.getByRole('button', { name: 'Review and record' }))
+    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
     await waitFor(() => {
       expect(api.callsTo(`POST ${VOL}`)).toHaveLength(2)
     })
     expect(bodyOf(api, `POST ${VOL}`, 1)).toMatchObject({
-      confirm_distinct: true,
-      new_person: { display_name: 'Zoe Zed' },
+      person_id: PERSON,
+      confirm_existing_person: true,
     })
+    expect(bodyOf(api, `POST ${VOL}`, 1)).not.toHaveProperty('confirm_distinct')
   })
 
-  it('lets the operator choose a suggested person instead, through the same confirmation as any existing person', async () => {
+  it('lets the operator go back and change the details without recording or overriding anything', async () => {
     const user = userEvent.setup()
     const api = serveRelationships([wireVolunteerType()])
-    api.on(
-      `POST ${VOL}`,
-      json(
-        {
-          message: 'Looks known.',
-          code: 'possible_duplicate',
-          candidates: [{ id: PERSON_2, display_name: 'Zoe Zedd', matched_on: ['email'] }],
-        },
-        409,
-      ),
-    )
-    await toNewPerson(user, api)
-    await user.type(screen.getByRole('textbox', { name: 'Display name' }), 'Zoe Zed')
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Initial status' }), 'active')
-    await user.click(screen.getByRole('button', { name: 'Review and record' }))
-    await user.click(within(await dialog(/Record Zoe/)).getByRole('button', { name: 'Record' }))
-    await screen.findByRole('list', { name: 'Possible duplicates' })
-
-    await user.click(screen.getByRole('button', { name: 'Record Zoe Zedd instead' }))
-    await dialog('Record Zoe Zedd?')
+    advisedPost(api)
+    await reachAdvice(user, api)
+    await user.click(screen.getByRole('button', { name: 'Go back and change the details' }))
+    expect(screen.queryByRole('list', { name: 'Possible duplicates' })).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('Alex Smith')
     expect(api.callsTo(`POST ${VOL}`)).toHaveLength(1)
+  })
+
+  it('does not carry "record anyway" over to details the operator then changes', async () => {
+    const user = userEvent.setup()
+    const api = serveRelationships([wireVolunteerType()])
+    advisedPost(api)
+    await reachAdvice(user, api)
+    await user.click(
+      screen.getByRole('button', { name: 'This is a different person: record anyway' }),
+    )
+    // They think again, cancel, and change the new person's email.
+    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Cancel' }))
+    await user.type(screen.getByRole('textbox', { name: 'Email' }), 'alex@example.org')
+    await user.click(screen.getByRole('button', { name: 'Review and record' }))
+    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
+
+    // The changed details meet CRM's advice again; the earlier override did not go with them.
+    await screen.findByRole('list', { name: 'Possible duplicates' })
+    expect(api.callsTo(`POST ${VOL}`)).toHaveLength(2)
+    expect(bodyOf(api, `POST ${VOL}`, 1)).not.toHaveProperty('confirm_distinct')
+
+    // Only a new, deliberate decision overrides it.
+    await user.click(
+      screen.getByRole('button', { name: 'This is a different person: record anyway' }),
+    )
+    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
+    await waitFor(() => {
+      expect(api.callsTo(`POST ${VOL}`)).toHaveLength(3)
+    })
+    expect(bodyOf(api, `POST ${VOL}`, 2)).toMatchObject({ confirm_distinct: true })
+  })
+
+  it('links a possible duplicate to People only for an operator who may view People', async () => {
+    const user = userEvent.setup()
+    const api = serveRelationships([wireVolunteerType()])
+    advisedPost(api)
+    const advice = await reachAdvice(user, api)
+    expect(within(advice).queryByRole('link')).not.toBeInTheDocument()
+    cleanup()
+
+    const withPeople = serveRelationships([wireVolunteerType()], operatorWith('crm.people.view'))
+    advisedPost(withPeople)
+    const linked = await reachAdvice(user, withPeople)
+    const links = within(linked).getAllByRole('link')
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      `/people/${PERSON_2}`,
+      `/people/${PERSON_3}`,
+    ])
+    expect(links[0]).toHaveAttribute('target', '_blank')
+    expect(links[0]).toHaveAttribute('rel', expect.stringContaining('noopener'))
   })
 
   it('is offered only where the definition allows creating a person', async () => {

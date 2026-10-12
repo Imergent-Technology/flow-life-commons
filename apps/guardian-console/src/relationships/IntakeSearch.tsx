@@ -58,9 +58,10 @@ export function IntakeSearch({
   const [found] = useLoad(load)
 
   const shared = found.status === 'loaded' ? sharedNames(found.value.candidates) : new Set<string>()
+  const truncated = found.status === 'loaded' && found.value.truncated
   const anyAmbiguous =
     found.status === 'loaded' &&
-    found.value.candidates.some((c) => choiceFor(c, shared).kind === 'ambiguous')
+    found.value.candidates.some((c) => choiceFor(c, shared, truncated).kind === 'ambiguous')
 
   return (
     <Panel
@@ -136,7 +137,7 @@ export function IntakeSearch({
                 className="flex flex-col divide-y divide-border rounded-md border border-border"
               >
                 {found.value.candidates.map((candidate) => {
-                  const choice = choiceFor(candidate, shared)
+                  const choice = choiceFor(candidate, shared, found.value.truncated)
                   return (
                     <li
                       key={candidate.person.id}
@@ -178,12 +179,14 @@ export function IntakeSearch({
             )}
             {anyAmbiguous ? (
               <Alert tone="info">
-                More than one person has the same name, and a name alone cannot tell them apart.
+                {truncated
+                  ? 'More people match than are shown, and a name alone cannot tell them apart.'
+                  : 'More than one person has the same name, and a name alone cannot tell them apart.'}{' '}
                 Search again with an exact email address or phone number to choose the right one
                 {canAddNew ? ', or add them as someone new' : ''}.
               </Alert>
             ) : null}
-            {found.value.truncated ? (
+            {found.value.truncated && !anyAmbiguous ? (
               <p role="status" className="text-meta text-muted-foreground">
                 More people match than are shown. Add more to your search to narrow it.
               </p>

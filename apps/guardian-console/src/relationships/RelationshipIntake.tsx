@@ -11,6 +11,8 @@ import {
   type PersonRef,
   type RelationshipType,
 } from '../api/relationships.ts'
+import { useCurrentAccount } from '../auth/auth-context.ts'
+import { hasCapability, PEOPLE_VIEW } from '../auth/capabilities.ts'
 import { Alert } from '../ui/Alert.tsx'
 import { buttonVariants } from '../ui/button-variants.ts'
 import { Button } from '../ui/Button.tsx'
@@ -59,6 +61,8 @@ export function RelationshipIntake({
 }) {
   const navigate = useNavigate()
   const run = useAdminAction()
+  const current = useCurrentAccount()
+  const mayOpenPeople = hasCapability(current, PEOPLE_VIEW)
   const noun = type.labels.singular
   const canLookup = hasFeature(type, 'people.lookup')
   const canAddNew = hasFeature(type, 'people.create_person')
@@ -242,19 +246,26 @@ export function RelationshipIntake({
                   <span className="text-muted-foreground">
                     ({candidate.matchedOn.map((m) => matchLabels[m] ?? m).join(', ')})
                   </span>
-                  <Button
-                    size="sm"
-                    aria-label={`Record ${candidate.displayName} instead`}
-                    onClick={() => {
-                      setAdvice(null)
-                      setConfirming({ id: candidate.id, displayName: candidate.displayName })
-                    }}
-                  >
-                    Record this person instead
-                  </Button>
+                  {mayOpenPeople ? (
+                    <Link
+                      to={`/people/${candidate.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`Open ${candidate.displayName} in People (new tab)`}
+                      className="font-medium underline underline-offset-2"
+                    >
+                      Open in People
+                    </Link>
+                  ) : null}
                 </li>
               ))}
             </ul>
+            <p className="text-body text-muted-foreground">
+              A name alone cannot tell people apart, so none of them can be chosen from here.
+              {canLookup
+                ? ' To record someone who is already known, search for them again by their exact email address or phone number.'
+                : ''}
+            </p>
             <div className="flex flex-wrap gap-3">
               <Button
                 variant="primary"
@@ -273,6 +284,18 @@ export function RelationshipIntake({
               >
                 Go back and change the details
               </Button>
+              {canLookup ? (
+                <Button
+                  onClick={() => {
+                    setAdvice(null)
+                    setDistinct(false)
+                    setSubject(null)
+                    setErrors({})
+                  }}
+                >
+                  Search by exact email or phone
+                </Button>
+              ) : null}
             </div>
           </div>
         </Panel>
@@ -333,6 +356,7 @@ export function RelationshipIntake({
                   value={person.displayName}
                   onChange={(displayName) => {
                     setPerson({ ...person, displayName })
+                    setDistinct(false) // an override was for the details it was given on
                   }}
                   errors={errors['new_person.display_name']}
                   maxLength={255}
@@ -345,6 +369,7 @@ export function RelationshipIntake({
                   value={person.email}
                   onChange={(email) => {
                     setPerson({ ...person, email })
+                    setDistinct(false) // an override was for the details it was given on
                   }}
                   errors={errors['new_person.email']}
                   hint="Optional. Recorded as a contact method, not as a sign-in."
@@ -358,6 +383,7 @@ export function RelationshipIntake({
                   value={person.phone}
                   onChange={(phone) => {
                     setPerson({ ...person, phone })
+                    setDistinct(false) // an override was for the details it was given on
                   }}
                   errors={errors['new_person.phone']}
                   hint="Optional."

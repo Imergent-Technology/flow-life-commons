@@ -46,4 +46,21 @@ describe('which candidates may be chosen, P4', () => {
     const list = [make('a', null), make('b', null)]
     expect(choiceFor(at(list, 0), sharedNames(list)).kind).toBe('ambiguous')
   })
+
+  it('refuses to choose a name-only match from a cut-off result, even one whose name looks unique among those shown', () => {
+    const list = [make('a', 'Priya Rao'), make('b', 'Sam Lee')]
+    const shared = sharedNames(list)
+    expect(choiceFor(at(list, 0), shared, false).kind).toBe('choose')
+    expect(choiceFor(at(list, 0), shared, true).kind).toBe('ambiguous')
+    expect(choiceFor(at(list, 1), shared, true).kind).toBe('ambiguous')
+  })
+
+  it('still lets an exact email or phone match be chosen, and a holder be opened, from a cut-off result', () => {
+    const byEmail = make('a', 'Priya Rao', 'email')
+    const byPhone = make('b', 'Priya Rao', 'phone')
+    const held = make('c', 'Sam Lee', 'display_name', 'active')
+    expect(choiceFor(byEmail, new Set(), true).kind).toBe('choose')
+    expect(choiceFor(byPhone, new Set(), true).kind).toBe('choose')
+    expect(choiceFor(held, new Set(), true)).toEqual({ kind: 'already', status: 'active' })
+  })
 })
