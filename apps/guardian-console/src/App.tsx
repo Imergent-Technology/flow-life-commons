@@ -33,6 +33,10 @@ import { StartDiscussionPage } from './pages/discussions/StartDiscussionPage.tsx
 import { LibraryPackPage } from './pages/library/LibraryPackPage.tsx'
 import { LibraryPage } from './pages/library/LibraryPage.tsx'
 import { PeoplePage } from './pages/people/PeoplePage.tsx'
+import { RelationshipDirectoryPage } from './pages/relationships/RelationshipDirectoryPage.tsx'
+import { RelationshipIntakePage } from './pages/relationships/RelationshipIntakePage.tsx'
+import { RelationshipRecordPage } from './pages/relationships/RelationshipRecordPage.tsx'
+import { RelationshipTypesProvider } from './relationships/RelationshipTypesProvider.tsx'
 import { CardPage } from './pages/resources/CardPage.tsx'
 import { CategoriesPage } from './pages/resources/CategoriesPage.tsx'
 import { NewCardPage } from './pages/resources/NewCardPage.tsx'
@@ -85,178 +89,191 @@ function App() {
             </Route>
 
             <Route element={<RequireConsoleAccess />}>
-              <Route element={<ConsoleShell />}>
-                <Route index element={<OverviewPage />} />
-                <Route path="account/security" element={<AccountSecurityPage />} />
-                <Route
-                  path="people"
-                  element={
-                    <RequireCapability capability={PEOPLE_VIEW}>
-                      <PeoplePage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="people/new"
-                  element={
-                    <RequireCapability capability={PEOPLE_MANAGE}>
-                      <RegisterPersonPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="people/tags"
-                  element={
-                    <RequireCapability capability={PEOPLE_VIEW}>
-                      <TagsPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="people/:personId"
-                  element={
-                    <RequireCapability capability={PEOPLE_VIEW}>
-                      <PersonDetailPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="discussions"
-                  element={
-                    <RequireCapability capability={DISCUSSIONS_VIEW}>
-                      <DiscussionsPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="discussions/new"
-                  element={
-                    <RequireCapability capability={DISCUSSIONS_PARTICIPATE}>
-                      <StartDiscussionPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="discussions/:discussionId"
-                  element={
-                    <RequireCapability capability={DISCUSSIONS_VIEW}>
-                      <DiscussionPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="resource-library"
-                  element={
-                    <RequireCapability capability={RESOURCES_VIEW}>
-                      <LibraryPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="resource-library/:packId"
-                  element={
-                    <RequireCapability capability={RESOURCES_VIEW}>
-                      <LibraryPackPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="resources"
-                  element={
-                    <RequireCapability capability={RESOURCES_MANAGE}>
-                      <ResourcesPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="resources/new"
-                  element={
-                    <RequireCapability capability={RESOURCES_MANAGE}>
-                      <NewPackPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="resources/categories"
-                  element={
-                    <RequireCapability capability={RESOURCES_MANAGE}>
-                      <CategoriesPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="resources/packs/:packId"
-                  element={
-                    <RequireCapability capability={RESOURCES_MANAGE}>
-                      <PackPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="resources/packs/:packId/cards/new"
-                  element={
-                    <RequireCapability capability={RESOURCES_MANAGE}>
-                      <NewCardPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="resources/packs/:packId/cards/:cardId"
-                  element={
-                    <RequireCapability capability={RESOURCES_MANAGE}>
-                      <CardPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="admin/accounts"
-                  element={
-                    <RequireCapability capability={ACCOUNTS_VIEW}>
-                      <AccountsPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="admin/accounts/invite"
-                  element={
-                    <RequireCapability capability={INVITATIONS_ISSUE}>
-                      <InviteOperatorPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="admin/accounts/:id"
-                  element={
-                    <RequireCapability capability={ACCOUNTS_VIEW}>
-                      <AccountDetailPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="admin/members"
-                  element={
-                    <RequireCapability capability={MEMBERSHIP_VIEW}>
-                      <MembersPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="admin/members/new"
-                  element={
-                    <RequireCapability capability={MEMBERSHIP_MANAGE}>
-                      <RegisterMemberPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route
-                  path="admin/members/:personId"
-                  element={
-                    <RequireCapability capability={MEMBERSHIP_VIEW}>
-                      <MemberDetailPage />
-                    </RequireCapability>
-                  }
-                />
-                <Route path="*" element={<NotFoundPage />} />
+              <Route element={<RelationshipTypesProvider />}>
+                <Route element={<ConsoleShell />}>
+                  <Route index element={<OverviewPage />} />
+                  <Route path="account/security" element={<AccountSecurityPage />} />
+                  <Route
+                    path="people"
+                    element={
+                      <RequireCapability capability={PEOPLE_VIEW}>
+                        <PeoplePage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="people/new"
+                    element={
+                      <RequireCapability capability={PEOPLE_MANAGE}>
+                        <RegisterPersonPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="people/tags"
+                    element={
+                      <RequireCapability capability={PEOPLE_VIEW}>
+                        <TagsPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="people/:personId"
+                    element={
+                      <RequireCapability capability={PEOPLE_VIEW}>
+                        <PersonDetailPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="discussions"
+                    element={
+                      <RequireCapability capability={DISCUSSIONS_VIEW}>
+                        <DiscussionsPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="discussions/new"
+                    element={
+                      <RequireCapability capability={DISCUSSIONS_PARTICIPATE}>
+                        <StartDiscussionPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="discussions/:discussionId"
+                    element={
+                      <RequireCapability capability={DISCUSSIONS_VIEW}>
+                        <DiscussionPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="resource-library"
+                    element={
+                      <RequireCapability capability={RESOURCES_VIEW}>
+                        <LibraryPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="resource-library/:packId"
+                    element={
+                      <RequireCapability capability={RESOURCES_VIEW}>
+                        <LibraryPackPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="resources"
+                    element={
+                      <RequireCapability capability={RESOURCES_MANAGE}>
+                        <ResourcesPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="resources/new"
+                    element={
+                      <RequireCapability capability={RESOURCES_MANAGE}>
+                        <NewPackPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="resources/categories"
+                    element={
+                      <RequireCapability capability={RESOURCES_MANAGE}>
+                        <CategoriesPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="resources/packs/:packId"
+                    element={
+                      <RequireCapability capability={RESOURCES_MANAGE}>
+                        <PackPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="resources/packs/:packId/cards/new"
+                    element={
+                      <RequireCapability capability={RESOURCES_MANAGE}>
+                        <NewCardPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="resources/packs/:packId/cards/:cardId"
+                    element={
+                      <RequireCapability capability={RESOURCES_MANAGE}>
+                        <CardPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="admin/accounts"
+                    element={
+                      <RequireCapability capability={ACCOUNTS_VIEW}>
+                        <AccountsPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="admin/accounts/invite"
+                    element={
+                      <RequireCapability capability={INVITATIONS_ISSUE}>
+                        <InviteOperatorPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="admin/accounts/:id"
+                    element={
+                      <RequireCapability capability={ACCOUNTS_VIEW}>
+                        <AccountDetailPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="admin/members"
+                    element={
+                      <RequireCapability capability={MEMBERSHIP_VIEW}>
+                        <MembersPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="admin/members/new"
+                    element={
+                      <RequireCapability capability={MEMBERSHIP_MANAGE}>
+                        <RegisterMemberPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="admin/members/:personId"
+                    element={
+                      <RequireCapability capability={MEMBERSHIP_VIEW}>
+                        <MemberDetailPage />
+                      </RequireCapability>
+                    }
+                  />
+                  {/*
+                   * Relationships (ADR 0038): the types, their labels and what each operator may do arrive as served
+                   * definitions. No route here names a type. `new` is a literal segment, so it can never be read as a
+                   * Person id; each page checks the type's own actions, and the server decides every request.
+                   */}
+                  <Route path="relationships/:slug" element={<RelationshipDirectoryPage />} />
+                  <Route path="relationships/:slug/new" element={<RelationshipIntakePage />} />
+                  <Route
+                    path="relationships/:slug/:personId"
+                    element={<RelationshipRecordPage />}
+                  />
+                  <Route path="*" element={<NotFoundPage />} />
+                </Route>
               </Route>
             </Route>
           </Route>

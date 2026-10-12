@@ -56,7 +56,9 @@ export function AccessRolesSection({
         ) : null}
         {account.assignments.length === 0 ? (
           <p className="text-body text-muted-foreground">
-            They hold no access. They cannot use the Console.
+            {account.sourcedGrants.length === 0
+              ? 'They hold no access. They cannot use the Console.'
+              : 'No access is assigned to them directly. What they hold through a source is listed below.'}
           </p>
         ) : (
           <ul className="flex flex-col divide-y divide-border rounded-md border border-border">

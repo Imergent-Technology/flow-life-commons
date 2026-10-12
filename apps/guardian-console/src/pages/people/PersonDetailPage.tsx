@@ -15,6 +15,7 @@ import { useLoad } from '../../ui/useLoad.ts'
 import { ContactMethodsSection } from './ContactMethodsSection.tsx'
 import { InteractionsSection } from './InteractionsSection.tsx'
 import { ProfileSection } from './ProfileSection.tsx'
+import { RelationshipsSection } from './RelationshipsSection.tsx'
 import { TagsSection } from './TagsSection.tsx'
 
 /**
@@ -66,6 +67,10 @@ export function PersonDetailPage() {
       <ProfileSection record={record} mayManage={mayManage} refresh={refresh} />
       <ContactMethodsSection record={record} mayManage={mayManage} refresh={refresh} />
       <TagsSection record={record} mayManage={mayManage} refresh={refresh} />
+      <RelationshipsSection
+        personId={record.person.id}
+        personDisplayName={record.person.displayName}
+      />
       <InteractionsSection
         personId={record.person.id}
         personName={record.person.displayName}

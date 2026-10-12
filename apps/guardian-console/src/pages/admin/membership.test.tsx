@@ -652,6 +652,7 @@ const TARGET_ACCOUNT_WIRE = {
   mfa: { enrolled: false, recovery_codes_remaining: 0 },
   invitation: null,
   assignments: [],
+  sourced_grants: [],
 }
 
 describe('existing-Person grant entry point (from an Account)', () => {

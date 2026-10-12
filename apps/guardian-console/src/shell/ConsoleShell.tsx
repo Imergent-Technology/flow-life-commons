@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router'
 
 import { useCurrentAccount } from '../auth/auth-context.ts'
 import { hasCapability } from '../auth/capabilities.ts'
+import { useKnownRelationshipTypes } from '../relationships/relationship-types-context.ts'
 import { StepUpProvider } from '../auth/StepUpProvider.tsx'
 import { AccountMenu } from '../ui/AccountMenu.tsx'
 import { Alert } from '../ui/Alert.tsx'
@@ -19,6 +20,7 @@ import { NavSheet } from './NavSheet.tsx'
 import { breadcrumbs, locate, navigation, visibleNavigation } from './navigation.ts'
 import { OverlayDrawer } from './OverlayDrawer.tsx'
 import { Rail } from './Rail.tsx'
+import { withRelationshipNavigation } from './relationshipNavigation.ts'
 
 const gutter = 'px-[clamp(1rem,2.5vw,2rem)]'
 const MAIN_ID = 'main-content'
@@ -42,9 +44,15 @@ export function ConsoleShell() {
   const { setPinned, setOverlay } = useNavPreference()
   const signOut = useSignOut()
 
+  // The Relationships group comes from the served definitions. The shell never waits for them: until they arrive (or if
+  // they cannot be read) the rest of the navigation is exactly what it was.
+  const relationshipTypes = useKnownRelationshipTypes()
   const sections = useMemo(
-    () => visibleNavigation(navigation, (capability) => hasCapability(current, capability)),
-    [current],
+    () =>
+      visibleNavigation(withRelationshipNavigation(navigation, relationshipTypes), (capability) =>
+        hasCapability(current, capability),
+      ),
+    [current, relationshipTypes],
   )
   const where = locate(sections, pathname)
   const [leaf, setLeaf] = useState<string | undefined>(undefined)

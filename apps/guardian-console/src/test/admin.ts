@@ -40,6 +40,7 @@ export function wire(overrides: Record<string, unknown> = {}): Record<string, un
         granted_at: '2026-09-19T09:05:00Z',
       },
     ],
+    sourced_grants: [],
     ...overrides,
   }
 }
@@ -75,6 +76,8 @@ export function serveOperator(account: CurrentAccount = operator()): FakeApi {
   api.on('GET /api/v1/me', () => json(account))
   api.on('GET /api/v1/health', json({ status: 'ok', service: 's', api_version: 'v1', checks: {} }))
   api.on('GET /api/v1/admin/roles', json(CATALOG))
+  // The relationship definitions the shell reads for its navigation: none, unless a test serves some.
+  api.on('GET /api/v1/admin/relationship-types', json({ data: [] }))
   api.install()
   return api
 }
