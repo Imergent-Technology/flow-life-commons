@@ -63,6 +63,9 @@ function resourcesErrorContract(): array
         'GET /admin/resource-library' => [],
         'GET /admin/resource-library/packs/{pack}' => [404 => ['resource_pack_not_found']],
         'GET /admin/resource-library/packs/{pack}/cards/{card}/file' => [404 => ['resource_pack_not_found', 'asset_unavailable']],
+        'GET /admin/my-resources' => [],
+        'GET /admin/my-resources/packs/{pack}' => [404 => ['resource_pack_not_found']],
+        'GET /admin/my-resources/packs/{pack}/cards/{card}/file' => [404 => ['resource_pack_not_found', 'asset_unavailable']],
     ];
 }
 
@@ -79,7 +82,7 @@ function resourcesDocumentedErrors(): array
 
     foreach ($spec['paths'] as $path => $item) {
         assert(is_string($path) && is_array($item));
-        if (! str_starts_with($path, '/admin/resources') && ! str_starts_with($path, '/admin/resource-library')) {
+        if (! str_starts_with($path, '/admin/resources') && ! str_starts_with($path, '/admin/resource-library') && ! str_starts_with($path, '/admin/my-resources')) {
             continue;
         }
         foreach ($item as $method => $operation) {
@@ -101,7 +104,7 @@ function resourcesDocumentedErrors(): array
 
 it('documents exactly the Resources operations the contract table lists', function () {
     expect(array_keys(resourcesDocumentedErrors()))->toEqualCanonicalizing(array_keys(resourcesErrorContract()))
-        ->and(count(resourcesErrorContract()))->toBe(28);
+        ->and(count(resourcesErrorContract()))->toBe(31);
 });
 
 it('names exactly the contract\'s codes on every 404 and 409, and has those statuses only where the contract does', function () {
@@ -146,14 +149,17 @@ it('pins the two drifts this table was added for: a Card 404 names card_not_foun
         ->and($documented['PATCH /admin/resources/packs/{pack}'][422] ?? [])->toContain('unknown_category');
 });
 
-it('never lets the delivery 404 name a management code: a viewer cannot tell why a Pack is not theirs', function () {
-    $delivery = resourcesDocumentedErrors()['GET /admin/resource-library/packs/{pack}'][404] ?? [];
-    $file = resourcesDocumentedErrors()['GET /admin/resource-library/packs/{pack}/cards/{card}/file'][404] ?? [];
+it('never lets a reader\'s 404 name a management code: a reader cannot tell why a Pack is not theirs', function () {
+    $documented = resourcesDocumentedErrors();
+    $pack = $documented['GET /admin/my-resources/packs/{pack}'][404] ?? [];
+    $file = $documented['GET /admin/my-resources/packs/{pack}/cards/{card}/file'][404] ?? [];
     sort($file);
 
-    // The file route adds only `asset_unavailable`, which it answers solely for a Card the viewer can already see.
-    expect($delivery)->toBe(['resource_pack_not_found'])
-        ->and($file)->toBe(['asset_unavailable', 'resource_pack_not_found']);
+    // The file route adds only `asset_unavailable`, which it answers solely for a Card the reader can already see.
+    expect($pack)->toBe(['resource_pack_not_found'])
+        ->and($file)->toBe(['asset_unavailable', 'resource_pack_not_found'])
+        // The privileged library names the same two codes, but there `resource_pack_not_found` means only that the Pack or Card is not there.
+        ->and($documented['GET /admin/resource-library/packs/{pack}'][404] ?? [])->toBe(['resource_pack_not_found']);
 });
 
 it('lists only codes the application really produces, so the table cannot drift from the code either', function () {

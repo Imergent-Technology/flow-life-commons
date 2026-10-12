@@ -2,11 +2,14 @@
 
 declare(strict_types=1);
 
+use App\Modules\Access\Application\Role;
 use App\Modules\Relationships\Application\QualifyingRelationships;
 use App\Modules\Relationships\Application\RelationshipCatalog;
+use App\Modules\Resources\Application\AudienceEligibility;
 use App\Shared\Domain\PersonId;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\DB;
+use Tests\Support\Access;
 use Tests\Support\Identity;
 use Tests\Support\Mfa;
 use Tests\Support\Resources;
@@ -107,4 +110,20 @@ it('offers a type with neither People feature nothing of the scoped People acces
     ])->assertStatus(422)->assertJson(['code' => 'new_person_not_supported']);
     expect(DB::table('people')->count())->toBe($people);
     $console->get('/api/v1/admin/relationships/apprentices/candidates?q=Plain')->assertOk()->assertJsonPath('data.0.person.display_name', 'Plain Apprentice');
+});
+
+it('lists a qualifying apprentice relationship yet gives it no audience: a type with no audience row confers no eligibility (fail closed)', function () {
+    [$console] = Mfa::signedInAdmin();
+    $account = Identity::savedActiveAccount('addie.apprentice@example.org', name: 'Addie Apprentice');
+    Access::grant($account, Role::ConsoleParticipant);
+    $created = $console->post('/api/v1/admin/relationships/apprentices', [
+        'person_id' => $account->personId->value, 'confirm_existing_person' => true, 'status' => 'prospective',
+    ])->assertCreated();
+    $console->put('/api/v1/admin/relationships/apprentices/'.$account->personId->value.'/status', [
+        'relationship_id' => $created->json('relationship_id'), 'revision' => 1, 'status' => 'placed',
+    ])->assertOk();
+
+    // The catalog says the Person qualifies as an apprentice; Resources maps no audience to that type, so eligibility is empty.
+    expect(array_map(fn ($type) => $type->key, app(QualifyingRelationships::class)($account->personId)))->toBe(['apprentice'])
+        ->and(app(AudienceEligibility::class)(Access::actorFor($account))->values())->toBe([]);
 });

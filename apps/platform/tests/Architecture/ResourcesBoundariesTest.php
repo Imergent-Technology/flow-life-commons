@@ -18,9 +18,12 @@ use Tests\Support\SourceScan;
  *
  * Resources owns Resource business state. It may use Identity's and Access's Application layers, ONE Audit Application type for the two
  * permanent-deletion events, Shared primitives and its own persistence, including its own managed files (WP3), which only its
- * Infrastructure touches. It may not reach Identity's tables or Domain, Membership, CRM, Discussions or WordPress; it invents no
- * relationship (ADR 0036); it handles no HTML, network or Node; and nothing else may depend on it or on its assets. The generic rules in ModuleBoundariesTest and the module graph in AccessBoundariesTest already cover the module because
- * modules are discovered from disk; these are the Resources-specific, positive statements.
+ * Infrastructure touches. For audience eligibility (ADR 0038, R10) it asks exactly two owners, and only from `AudienceEligibility`:
+ * Relationships' `QualifyingRelationships` and Membership's `GetCurrentMembership`. It may not reach Identity's tables or Domain, CRM,
+ * Discussions or WordPress; it invents no relationship (ADR 0036) beyond the Volunteer audience; it handles no HTML, network or Node; and
+ * nothing else may depend on it or on its assets. The generic rules in ModuleBoundariesTest and the module graph in AccessBoundariesTest
+ * already cover the module because modules are discovered from disk; these are the Resources-specific, positive statements. The
+ * separation of the three access policies (ADR 0038, R15) is pinned in ResourcesPoliciesBoundariesTest.
  *
  * One subject per arch expectation (README.md). Every source scan has a positive control.
  */
@@ -41,8 +44,69 @@ arch('Resources uses Audit only through its Application layer, never its Domain,
     expect($resources)->not->toUse(['App\\Modules\\Audit\\Domain', 'App\\Modules\\Audit\\Infrastructure', 'App\\Modules\\Audit\\Http']);
 });
 
-arch('Resources does not depend on Membership in this package: no surface delivers to Members yet, so nothing asks Membership (ADR 0037, decision 42)', function () use ($resources) {
-    expect($resources)->not->toUse('App\\Modules\\Membership');
+/**
+ * The other modules' types this Resources source names, as "Module\\Layer\\Class" (comments removed), however they are reached: a `use`, a
+ * fully qualified name or an alias.
+ *
+ * @return list<string>
+ */
+function resourcesForeignModuleTypes(string $source, string $module): array
+{
+    preg_match_all('/App\\\\Modules\\\\'.$module.'\\\\([A-Za-z\\\\]+)/', SourceScan::code($source), $matches);
+
+    return array_values(array_unique($matches[1]));
+}
+
+it('reaches Membership only through GetCurrentMembership and Relationships only through QualifyingRelationships, and only AudienceEligibility does either (ADR 0038, R10)', function () {
+    $membership = [];
+    $relationships = [];
+    foreach (SourceScan::phpFiles(['app/Modules/Resources']) as $path) {
+        $source = SourceScan::read($path);
+        foreach (resourcesForeignModuleTypes($source, 'Membership') as $type) {
+            $membership[$type][] = basename($path, '.php');
+        }
+        foreach (resourcesForeignModuleTypes($source, 'Relationships') as $type) {
+            $relationships[$type][] = basename($path, '.php');
+        }
+    }
+
+    expect($membership)->toBe(['Application\\GetCurrentMembership' => ['AudienceEligibility']])
+        ->and($relationships)->toBe(['Application\\QualifyingRelationships' => ['AudienceEligibility']])
+        // Positive controls: a `use`, a fully qualified name and a second type are each seen.
+        ->and(resourcesForeignModuleTypes('<?php use App\\Modules\\Membership\\Application\\GetCurrentMembership;', 'Membership'))->toBe(['Application\\GetCurrentMembership'])
+        ->and(resourcesForeignModuleTypes('<?php $x = \\App\\Modules\\Relationships\\Domain\\RelationshipRepository::class;', 'Relationships'))->toBe(['Domain\\RelationshipRepository'])
+        ->and(resourcesForeignModuleTypes("<?php // App\\Modules\\Membership\\Domain\\MembershipGrant\n/** App\\Modules\\Membership\\Http\\X */ class Y {}", 'Membership'))->toBe([]);
+});
+
+arch('only Resources audience eligibility uses Membership\'s current-membership read and Relationships\' eligibility read, and nothing else of either (ADR 0038, F14)', function () {
+    expect('App\\Modules\\Membership\\Application\\GetCurrentMembership')->toOnlyBeUsedIn(['App\\Modules\\Membership', 'App\\Modules\\Resources\\Application\\AudienceEligibility']);
+    expect('App\\Modules\\Relationships\\Application\\QualifyingRelationships')->toOnlyBeUsedIn(['App\\Modules\\Relationships', 'App\\Modules\\Resources\\Application\\AudienceEligibility']);
+});
+
+it('uses Access only for AuthorizeAction, Capability and AccessDenied, and Identity only for ResolveActor, FindPeople and NoLongerAuthenticated, ResolveActor in exactly two places (ADR 0038, A10, R10)', function () {
+    $access = [];
+    $identity = [];
+    $resolvers = [];
+    foreach (SourceScan::phpFiles(['app/Modules/Resources']) as $path) {
+        $source = SourceScan::read($path);
+        array_push($access, ...resourcesForeignModuleTypes($source, 'Access'));
+        foreach (resourcesForeignModuleTypes($source, 'Identity') as $type) {
+            $identity[] = $type;
+            if ($type === 'Application\\ResolveActor') {
+                $resolvers[] = basename($path, '.php');
+            }
+        }
+    }
+    $access = array_values(array_unique($access));
+    $identity = array_values(array_unique($identity));
+    sort($access);
+    sort($identity);
+
+    // ResolveActor is how Resources learns WHO is asking: the HTTP edge once per request, and audience eligibility again, so a captured or
+    // stale Actor can never carry eligibility on any surface.
+    expect($access)->toBe(['Application\\AccessDenied', 'Application\\AuthorizeAction', 'Application\\Capability'])
+        ->and($identity)->toBe(['Application\\FindPeople', 'Application\\NoLongerAuthenticated', 'Application\\ResolveActor'])
+        ->and($resolvers)->toEqualCanonicalizing(['AudienceEligibility', 'RequestActor']);
 });
 
 arch('Resources does not depend on CRM: a Person record is not a Resource', function () use ($resources) {
@@ -366,10 +430,11 @@ it('puts no Resources, Card, Pack or content type in Shared', function () {
     expect($offenders)->toBe([]);
 });
 
-// --- No relationship is invented here (ADR 0036) ---------------------------------------------------------------------------
+// --- No relationship is invented here (ADR 0036, ADR 0038 R1) -------------------------------------------------------------
 
 /**
- * The identifiers and string literals in Resources code that name a business relationship other than the two audiences it implements.
+ * The identifiers and string literals in Resources code that name a business relationship other than the three audiences it implements:
+ * Partner, Vendor and Artist stay forbidden, and so does anything beyond the Volunteer audience and its eligibility mapping.
  *
  * @return list<string>
  */
@@ -377,14 +442,31 @@ function resourcesInventedRelationships(string $source): array
 {
     $found = [];
     $code = SourceScan::code($source);
-    if (preg_match_all('/\b\w*(?:volunteer|partner|vendor|artist)\w*\b/i', $code, $matches) > 0) {
+    if (preg_match_all('/\b\w*(?:partner|vendor|artist)\w*\b/i', $code, $matches) > 0) {
         array_push($found, ...$matches[0]);
     }
 
     return $found;
 }
 
-it('invents no Volunteer, Partner, Vendor or Artist relationship, audience, flag or eligibility: those wait for their owning domains', function () {
+/**
+ * The Resources files whose code names a Volunteer at all.
+ *
+ * @return list<string>
+ */
+function resourcesVolunteerFiles(): array
+{
+    $files = [];
+    foreach (SourceScan::phpFiles(['app/Modules/Resources']) as $path) {
+        if (preg_match('/volunteer/i', SourceScan::code(SourceScan::read($path))) === 1) {
+            $files[] = SourceScan::relative($path);
+        }
+    }
+
+    return $files;
+}
+
+it('invents no Partner, Vendor or Artist relationship, audience, flag or eligibility: those wait for their owning domains', function () {
     $offenders = [];
     foreach (SourceScan::phpFiles(['app/Modules/Resources', 'database/migrations/2026_10_04_000001_create_resource_categories_table.php', 'database/migrations/2026_10_04_000002_create_resource_packs_tables.php', 'database/migrations/2026_10_04_000003_create_resource_cards_tables.php', 'database/migrations/2026_10_04_000004_create_resource_assets_table.php']) as $path) {
         foreach (resourcesInventedRelationships(SourceScan::read($path)) as $word) {
@@ -393,11 +475,17 @@ it('invents no Volunteer, Partner, Vendor or Artist relationship, audience, flag
     }
 
     expect($offenders)->toBe([])
-        ->and(array_map(fn (Audience $a): string => $a->value, Audience::cases()))->toBe(['guardian', 'member'])
+        // The catalog is exactly the three audiences of ADR 0038, R1, in catalog order.
+        ->and(array_map(fn (Audience $a): string => $a->value, Audience::cases()))->toBe(['guardian', 'member', 'volunteer'])
         // Positive controls: an identifier, a literal and a method name are all seen; a comment that explains the absence is not.
-        ->and(resourcesInventedRelationships("<?php case Volunteer = 'volunteer';"))->not->toBe([])
-        ->and(resourcesInventedRelationships('<?php $isVolunteer = $this->volunteering->isVolunteer($p);'))->not->toBe([])
-        ->and(resourcesInventedRelationships("<?php // Volunteer is deferred (ADR 0036)\n/** a partner, a vendor or an artist */ class X {}"))->toBe([]);
+        ->and(resourcesInventedRelationships("<?php case Partner = 'partner';"))->not->toBe([])
+        ->and(resourcesInventedRelationships('<?php $isVendor = $this->vendors->isVendor($p);'))->not->toBe([])
+        ->and(resourcesInventedRelationships("<?php \$a = 'artist';"))->not->toBe([])
+        ->and(resourcesInventedRelationships("<?php // Partner is deferred (ADR 0036)\n/** a partner, a vendor or an artist */ class X {}"))->toBe([]);
+});
+
+it('names a Volunteer in exactly two places: the audience catalog case and the eligibility mapping', function () {
+    expect(resourcesVolunteerFiles())->toBe(['app/Modules/Resources/Application/AudienceEligibility.php', 'app/Modules/Resources/Domain/Audience.php']);
 });
 
 /**

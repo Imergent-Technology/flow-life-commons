@@ -39,3 +39,8 @@ confirm the test goes red, then delete it.
 Known Pest quirk: an **array of subject namespaces** in `expect([...])->not->toUse(...)`
 or `->not->toBeUsedIn(...)` passes vacuously. Use one subject per expectation (loop over
 them) as the existing tests do. Arrays of *targets* are fine.
+
+Second Pest quirk, in source scans: `expect($code)->not->toContain($a, $b)` passes as soon as
+**any one** of its values is absent, and a message passed as a second argument is just another value, so
+`->not->toContain($name, "X names $name")` can never fail. Assert one value per expectation, with the
+message on a boolean: `expect(str_contains($code, $name))->toBeFalse("X names {$name}")`.

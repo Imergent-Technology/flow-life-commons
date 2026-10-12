@@ -3806,7 +3806,7 @@ paths:
           schema: {type: string}
         - name: audience
           in: query
-          schema: {type: string, enum: [guardian, member]}
+          schema: {$ref: '#/components/schemas/ResourceAudience'}
         - name: state
           in: query
           schema: {type: string, enum: [draft, published]}
@@ -4231,7 +4231,8 @@ paths:
         Needs `resources.manage`: it may show Drafts. Returns what `audience` would receive if the Pack were Published as it
         stands, through the SAME projection delivery uses (Card publication, audiences, narrowing and non-disclosure included;
         only the Pack's own publication is set aside). It changes nothing and publishes nothing. `audience` must be a
-        supported audience. An audience that would see nothing gets `visible: false` and `pack: null`, not a 404, because the
+        catalog audience, `volunteer` included. A File Card's `download_path` is the MANAGEMENT file route (downloadManagedResourceFile),
+        so a manager who holds `resources.manage` and not `resources.view` can open what preview shows, Drafts included. An audience that would see nothing gets `visible: false` and `pack: null`, not a 404, because the
         caller may see everything.
       tags: [Resources]
       security:
@@ -4243,7 +4244,7 @@ paths:
         - name: audience
           in: query
           required: true
-          schema: {type: string, enum: [guardian, member]}
+          schema: {$ref: '#/components/schemas/ResourceAudience'}
       responses:
         '200':
           description: 'The preview.'
@@ -4915,14 +4916,20 @@ paths:
   /admin/resource-library:
     get:
       operationId: browseResourceLibrary
-      summary: Browse the Guardian resource library
+      summary: Browse every Resource (privileged viewing)
       description: >-
-        Needs `resources.view`. Categories in order, each with the Packs THIS viewer may see in it, through the one projection
-        rule: a Pack is shown only when it is Published and has a Published Card whose audience includes `guardian`. A
-        Category with no visible Pack is not listed; each Pack's `card_count` is the number of Cards this viewer can see.
-        Optionally one `category`, and `q`: a case-insensitive match on a Pack's title and summary and its VISIBLE Cards'
-        titles and summaries (never rich content, never a Draft or unauthorized Card). Audience is not a parameter: a viewer
-        receives their own projection. Not paged.
+        Policy A (ADR 0038, R5-R9). Needs `resources.view` and nothing else: not `resources.manage`, not an audience, not a
+        relationship. Every Category that holds a Pack, each with every Pack in it at its latest saved content, in any
+        publication state and for every audience, in `(position, id)` order; Packs with no Category form a final group whose
+        `category` is null. Empty Packs are listed. Publication and audiences are data here: `state`, `audiences`,
+        `card_count` (all Cards), `draft_card_count`, `updated_at` and the last editor's `display_name`. It carries no
+        revision, stored position or creator, and offers no action: it is a read model, not the management API. It is not
+        delivery and never calls the delivery projection.
+        Filters only narrow what `resources.view` already reads, and an unknown value is `422`: `category`; `q`, a
+        case-insensitive match on a Pack's title and summary and the titles and summaries of ALL its Cards, Drafts included
+        (never rich content); `publication`, where `published` returns Published Packs and `draft` returns Draft Packs and
+        Published Packs that hold a Draft Card; and `audience`, the Packs targeted at that audience. `audience` here is a
+        FILTER and never the set a reader is served as. Not paged.
       tags: [Resources]
       security:
         - sessionCookie: []
@@ -4935,13 +4942,19 @@ paths:
         - name: q
           in: query
           schema: {type: string, maxLength: 200}
+        - name: publication
+          in: query
+          schema: {type: string, enum: [published, draft]}
+        - name: audience
+          in: query
+          schema: {$ref: '#/components/schemas/ResourceAudience'}
       responses:
         '200':
           description: 'The library.'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResourceLibrary'
+                $ref: '#/components/schemas/ViewerLibrary'
         '401':
           description: 'Not signed in, the session has expired, or the account can no longer sign in.'
           content:
@@ -4949,28 +4962,25 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '403':
-          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          description: 'Signed in, but the account does not hold `resources.view` (or cannot use the Console). A holder of `resources.manage` alone is refused: managing is not viewing.'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
         '422':
-          description: 'A malformed request (per-field messages under `errors`), or a Resources rule: a coded `invalid_resource_input`, `invalid_uri`, `invalid_content` or `card_audience_not_subset`.'
+          description: 'A malformed request or an unknown filter value (per-field messages under `errors`).'
           content:
             application/json:
               schema:
-                oneOf:
-                  - $ref: '#/components/schemas/ValidationError'
-                  - $ref: '#/components/schemas/CodedValidationError'
+                $ref: '#/components/schemas/ValidationError'
   /admin/resource-library/packs/{pack}:
     get:
       operationId: getResourcePack
-      summary: Show a Pack as a Guardian may have it
+      summary: Show a Pack with every Card (privileged viewing)
       description: >-
-        Needs `resources.view`. The Pack with only the Cards this viewer may see, numbered 1..n among themselves (`index`),
-        with their content. A Pack that does not exist, is a Draft, is not Published to this audience or has no Card this
-        viewer may see is the SAME `resource_pack_not_found`, with nothing to say which. No management or provenance data, and
-        no hidden Card's id, title, summary, position or count.
+        Policy A (ADR 0038, R6-R9). Needs `resources.view` and nothing else. The Pack at its latest saved content with EVERY Card, Drafts
+        included, numbered `index` 1..n across all of them, each with its content, `state`, `audience_mode`, effective `audiences`,
+        `updated_at` and last editor. A Draft Pack is read. A Pack that does not exist is `resource_pack_not_found`.
       tags: [Resources]
       security:
         - sessionCookie: []
@@ -4984,7 +4994,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ResourcePack'
+                $ref: '#/components/schemas/ViewerPack'
         '401':
           description: 'Not signed in, the session has expired, or the account can no longer sign in.'
           content:
@@ -4992,13 +5002,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '403':
-          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          description: 'Signed in, but the account does not hold `resources.view` (or cannot use the Console). A holder of `resources.manage` alone is refused: managing is not viewing.'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
-          description: 'No such resource (`resource_pack_not_found`).'
+          description: 'No such Pack (`resource_pack_not_found`).'
           content:
             application/json:
               schema:
@@ -5007,13 +5017,12 @@ paths:
   /admin/resource-library/packs/{pack}/cards/{card}/file:
     get:
       operationId: downloadResourceFile
-      summary: Download a File Card's file from the library
+      summary: Download any File Card's file (privileged viewing)
       description: >-
-        Needs `resources.view`, and the Card must be VISIBLE to this viewer in the Guardian projection: the same rule a delivered
-        Pack follows, so a file can be had exactly when its Card can be seen. Nothing else authorizes it, and no request names an asset
-        or a storage key. Every reason the file is not the viewer's (a missing, Draft or unpublished Pack; a Draft, hidden, narrowed-away
-        or missing Card; a Card in another Pack; a Card with no file) is the SAME `resource_pack_not_found`. Only for a Card the viewer
-        can see may the answer be `asset_unavailable` (its file is on record but missing from the store).
+        Policy A (ADR 0038, R9). Needs `resources.view` and nothing else: it serves the file of any File Card of an existing Pack, Draft
+        or not, whatever its audiences. A Pack that does not exist, or a Card that is not in it, is `resource_pack_not_found`; a Card in
+        the Pack with no file, or a file on record that is missing from the store, is `asset_unavailable`. No request names an asset or a
+        storage key. Never a signed or long-lived address.
       tags: [Resources]
       security:
         - sessionCookie: []
@@ -5059,13 +5068,182 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '403':
-          description: 'Signed in, but the account does not hold the required capability (or cannot use the Console).'
+          description: 'Signed in, but the account does not hold `resources.view` (or cannot use the Console). A holder of `resources.manage` alone is refused: managing is not viewing.'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
         '404':
-          description: 'No such resource (`resource_pack_not_found`), or, for a Card the viewer can see, its file is missing from the store (`asset_unavailable`).'
+          description: 'No such Pack or no such Card in it (`resource_pack_not_found`), or no file to give (`asset_unavailable`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+        '422':
+          description: 'An unknown `disposition`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+
+  /admin/my-resources:
+    get:
+      operationId: browseMyResources
+      summary: Browse the Resources this Person may read (audience reading)
+      description: >-
+        Policy C (ADR 0038, R10-R14). Needs Console admission (`console.access`) and NO other capability: not `resources.view`, not
+        `resources.manage`. Its authority is the signed-in Person's own current relationships and Membership, read on every request:
+        an Active Guardian is eligible for `guardian`, an Active Volunteer for `volunteer`, an active Membership for `member`, combined
+        by OR, and nothing else makes a Person eligible (never a role, a capability or Console admission). Categories in order, each
+        with the Packs this Person may see, through the one projection rule: the Pack and the Card must be Published and a Card's
+        effective audiences must include one of theirs. A Category with no visible Pack is not listed, and each Pack's `card_count`
+        is the number of Cards this Person can see. A Person eligible for nothing receives an empty `data`. Optionally one
+        `category`, and `q`: a case-insensitive match on a Pack's title and summary and its VISIBLE Cards' titles and summaries (never
+        rich content, never a Draft or hidden Card). The route accepts no audience, mode or Person: no client value widens it.
+        Not paged.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: console.access
+      x-requires-recent-verification: false
+      parameters:
+        - name: category
+          in: query
+          schema: {type: string}
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 200}
+      responses:
+        '200':
+          description: 'The library.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourceLibrary'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account cannot use the Console (it lacks `console.access`). Eligibility for an audience never admits to the Console, and this route never answers 403 for ineligibility.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '422':
+          description: 'A malformed `category` or `q` (per-field messages under `errors`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+  /admin/my-resources/packs/{pack}:
+    get:
+      operationId: getMyResourcePack
+      summary: Show a Pack as this Person may have it (audience reading)
+      description: >-
+        Policy C (ADR 0038, R11, R14). Needs Console admission only. The Pack with only the Cards this Person may see, numbered 1..n
+        among themselves (`index`), with their content. A Pack that does not exist, is a Draft, is not Published to this Person's
+        audiences or has no Card this Person may see is the SAME `resource_pack_not_found`, with nothing to say which. Never a 403 for
+        ineligibility. No state, publication, audience, revision or provenance data, and no hidden Card's id, title, summary,
+        position or count.
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: console.access
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+      responses:
+        '200':
+          description: 'The Pack.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResourcePack'
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account cannot use the Console (it lacks `console.access`). Eligibility for an audience never admits to the Console, and this route never answers 403 for ineligibility.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such resource (`resource_pack_not_found`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CodedMessage'
+
+  /admin/my-resources/packs/{pack}/cards/{card}/file:
+    get:
+      operationId: downloadMyResourceFile
+      summary: Download a visible File Card's file (audience reading)
+      description: >-
+        Policy C (ADR 0038, R13, R14). Needs Console admission only, and the Card must be VISIBLE to this Person in the projection for
+        the audiences they are eligible for now: the same rule a delivered Pack follows, so a file can be had exactly when its Card
+        can be seen, and a relationship that has ended stops it on the next request. Nothing else authorizes it, and no request names
+        an asset or a storage key. Every reason the file is not this Person's (a missing, Draft or unpublished Pack; a Draft, hidden,
+        narrowed-away, ineligible or missing Card; a Card in another Pack; a Card with no file) is the SAME `resource_pack_not_found`.
+        Only for a Card this Person can see may the answer be `asset_unavailable` (its file is on record but missing from the store).
+      tags: [Resources]
+      security:
+        - sessionCookie: []
+      x-required-capability: console.access
+      x-requires-recent-verification: false
+      parameters:
+        - $ref: '#/components/parameters/ResourcePackId'
+        - $ref: '#/components/parameters/ResourceCardId'
+        - name: disposition
+          in: query
+          required: false
+          description: '`attachment` (the default) or `inline`. Inline is honoured only for a PDF or a raster image; any other file is still an attachment.'
+          schema: {type: string, enum: [attachment, inline]}
+      responses:
+        '200':
+          description: >-
+            The file's bytes, streamed. `Content-Type` is the stored, allowlisted type; `Content-Disposition` is `attachment` (or
+            `inline`, only when asked for and the file is a PDF or a raster image) with the sanitised original name, encoded per
+            RFC 6266 (`filename`, and `filename*` when the name is not plain ASCII); `Cache-Control: private, no-store`;
+            `X-Content-Type-Options: nosniff`; and the platform's security headers, including the production CSP.
+          headers:
+            Content-Disposition:
+              schema: {type: string}
+            Content-Length:
+              schema: {type: integer}
+            Cache-Control:
+              schema: {type: string, enum: ['no-store, private']}
+          content:
+            application/pdf: {schema: {type: string, format: binary}}
+            image/png: {schema: {type: string, format: binary}}
+            image/jpeg: {schema: {type: string, format: binary}}
+            image/webp: {schema: {type: string, format: binary}}
+            image/gif: {schema: {type: string, format: binary}}
+            text/plain: {schema: {type: string, format: binary}}
+            text/csv: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}
+            application/vnd.openxmlformats-officedocument.presentationml.presentation: {schema: {type: string, format: binary}}
+        '401':
+          description: 'Not signed in, the session has expired, or the account can no longer sign in.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '403':
+          description: 'Signed in, but the account cannot use the Console (it lacks `console.access`). Eligibility for an audience never admits to the Console, and this route never answers 403 for ineligibility.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '404':
+          description: 'No such resource (`resource_pack_not_found`), or, for a Card this Person can see, its file is missing from the store (`asset_unavailable`).'
           content:
             application/json:
               schema:
@@ -7175,8 +7353,11 @@ components:
           items: {type: string}
     ResourceAudience:
       type: string
-      description: 'A code-owned audience. Resources owns which audiences content targets, never who belongs to them.'
-      enum: [guardian, member]
+      description: >-
+        A code-owned audience (ADR 0038, R1). Resources owns which audiences content targets, never who belongs to them: an Active
+        Guardian relationship, an Active Volunteer relationship and an active Membership make a Person eligible, and nothing else does.
+        A stored key outside this catalog confers no eligibility and is dropped on read; naming one in a write or a filter is a `422`.
+      enum: [guardian, member, volunteer]
     ManagedPack:
       type: object
       description: >-
@@ -7300,7 +7481,18 @@ components:
             available: {type: boolean}
             download_path: {type: string, description: 'The API path (no host) of downloadManagedResourceFile for this Card.'}
     DeliveredResourceFile:
-      description: 'A visible File Card''s file as a viewer receives it, with the library path that serves it to them. Nothing management sees.'
+      description: >-
+        A visible File Card's file as a reader receives it, with the path that serves it to them: the `my-resources` file route
+        (downloadMyResourceFile) for audience reading, or, in a management preview, the MANAGEMENT file route
+        (downloadManagedResourceFile), so a manager without `resources.view` can open what preview shows. Nothing management sees.
+      allOf:
+        - $ref: '#/components/schemas/ResourceFileSummary'
+        - type: object
+          required: [download_path]
+          properties:
+            download_path: {type: string, description: 'The API path (no host) of downloadMyResourceFile for this Card, or, in a preview, of downloadManagedResourceFile.'}
+    ViewerResourceFile:
+      description: 'A File Card''s file as the privileged viewer reads it, with the library path that serves it to them (downloadResourceFile). Nothing management sees.'
       allOf:
         - $ref: '#/components/schemas/ResourceFileSummary'
         - type: object
@@ -7455,10 +7647,12 @@ components:
           items: {type: string}
     ResourcePack:
       type: object
+      additionalProperties: false
       description: >-
-        A Pack as a viewer receives it. Only the Cards this viewer may see are present, numbered `index` 1..`card_count` among
-        themselves: a stored position, a hidden Card's id, title, summary, count or navigation slot never appears. One visible Card or several is the viewer's,
-        not stored. No state, revision, audience or provenance.
+        POLICY C's Pack (and a management preview's): a Pack as a reader receives it. Only the Cards this reader may see are present,
+        numbered `index` 1..`card_count` among themselves: a stored position, a hidden Card's id, title, summary, count or navigation slot
+        never appears. One visible Card or several is the reader's, not stored. No state, revision, audience or provenance, which is what
+        tells it from ViewerPack (policy A): the two cannot be interchanged, because this schema admits no other property.
       required: [id, title, summary, is_series, category, card_count, cards]
       properties:
         id: {type: string}
@@ -7473,6 +7667,7 @@ components:
           items: {$ref: '#/components/schemas/ResourceDeliveredCard'}
     ResourceDeliveredCard:
       type: object
+      additionalProperties: false
       description: 'A visible Card: its link (`uri`) or its file (`file`), whatever the Type, so a consumer can always offer its safe action.'
       required: [id, index, type, title, summary, uri, file, content]
       properties:
@@ -7489,12 +7684,17 @@ components:
         content: {$ref: '#/components/schemas/ResourceContent'}
     ResourceLibrary:
       type: object
+      additionalProperties: false
+      description: >-
+        POLICY C's library: Categories with the Packs this reader may see, counting only the Cards they can see. No state, audience or
+        provenance, which is what tells it from ViewerLibrary (policy A).
       required: [data]
       properties:
         data:
           type: array
           items:
             type: object
+            additionalProperties: false
             required: [category, packs]
             properties:
               category: {$ref: '#/components/schemas/ResourceCategoryRef'}
@@ -7503,6 +7703,7 @@ components:
                 minItems: 1
                 items:
                   type: object
+                  additionalProperties: false
                   required: [id, title, summary, is_series, card_count]
                   properties:
                     id: {type: string}
@@ -7510,6 +7711,100 @@ components:
                     summary: {type: [string, 'null']}
                     is_series: {type: boolean}
                     card_count: {type: integer, minimum: 1}
+    ViewerLibrary:
+      type: object
+      additionalProperties: false
+      description: >-
+        POLICY A's library: every Category that holds a Pack, then the Packs with no Category as a final group (`category` null), each
+        Pack at its latest saved content in any state and for every audience. It carries the facts `resources.view` may know and no
+        revision, stored position, creator or action. It is not the shape of ResourceLibrary (policy C): that one has no state or audience.
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [category, packs]
+            properties:
+              category:
+                oneOf:
+                  - $ref: '#/components/schemas/ResourceCategoryRef'
+                  - {type: 'null'}
+              packs:
+                type: array
+                minItems: 1
+                items: {$ref: '#/components/schemas/ViewerListedPack'}
+    ViewerListedPack:
+      type: object
+      additionalProperties: false
+      required: [id, title, summary, is_series, state, audiences, card_count, draft_card_count, updated_at, updated_by]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        summary: {type: [string, 'null']}
+        is_series: {type: boolean}
+        state: {type: string, enum: [draft, published]}
+        audiences: {type: array, items: {$ref: '#/components/schemas/ResourceAudience'}}
+        card_count: {type: integer, minimum: 0, description: 'Every Card of the Pack, Drafts included.'}
+        draft_card_count: {type: integer, minimum: 0}
+        updated_at: {type: string, format: date-time}
+        updated_by: {$ref: '#/components/schemas/ViewerEditor'}
+    ViewerEditor:
+      type: object
+      additionalProperties: false
+      description: 'The last editor, by current display name only (null if Identity no longer holds the Person). Never an id, Account or contact detail.'
+      required: [display_name]
+      properties:
+        display_name: {type: [string, 'null']}
+    ViewerPack:
+      type: object
+      additionalProperties: false
+      description: >-
+        POLICY A's Pack: a Pack at its latest saved content with EVERY Card, Drafts included, numbered `index` 1..`card_count` across all of
+        them. `state` and `audiences` are data it reports, never a rule it applies. No revision, stored position or creator, and no action.
+        It is not the shape of ResourcePack (policy C).
+      required: [id, title, summary, is_series, category, state, audiences, card_count, draft_card_count, updated_at, updated_by, cards]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        summary: {type: [string, 'null']}
+        is_series: {type: boolean}
+        category:
+          oneOf:
+            - $ref: '#/components/schemas/ResourceCategoryRef'
+            - {type: 'null'}
+        state: {type: string, enum: [draft, published]}
+        audiences: {type: array, items: {$ref: '#/components/schemas/ResourceAudience'}}
+        card_count: {type: integer, minimum: 0}
+        draft_card_count: {type: integer, minimum: 0}
+        updated_at: {type: string, format: date-time}
+        updated_by: {$ref: '#/components/schemas/ViewerEditor'}
+        cards:
+          type: array
+          items: {$ref: '#/components/schemas/ViewerCard'}
+    ViewerCard:
+      type: object
+      additionalProperties: false
+      description: 'A Card as the privileged viewer reads it: delivery''s fields, plus its `state`, `audience_mode`, its effective `audiences` and its last edit.'
+      required: [id, index, type, title, summary, uri, file, content, state, audience_mode, audiences, updated_at, updated_by]
+      properties:
+        id: {type: string}
+        index: {type: integer, minimum: 1}
+        type: {type: string, enum: [basic, external_link, file]}
+        title: {type: string}
+        summary: {type: string}
+        uri: {type: [string, 'null']}
+        file:
+          oneOf:
+            - $ref: '#/components/schemas/ViewerResourceFile'
+            - {type: 'null'}
+        content: {$ref: '#/components/schemas/ResourceContent'}
+        state: {type: string, enum: [draft, published]}
+        audience_mode: {type: string, enum: [inherit, narrowed]}
+        audiences: {type: array, items: {$ref: '#/components/schemas/ResourceAudience'}, description: 'Who the Card effectively targets: its Pack''s audiences, or its own within them.'}
+        updated_at: {type: string, format: date-time}
+        updated_by: {$ref: '#/components/schemas/ViewerEditor'}
     ResourcePackPreview:
       type: object
       description: >-

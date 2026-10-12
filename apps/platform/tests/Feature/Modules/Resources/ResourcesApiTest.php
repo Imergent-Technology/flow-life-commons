@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Tests\Support\Api;
+use Tests\Support\Audiences;
 use Tests\Support\Console;
 use Tests\Support\Identity;
 use Tests\Support\Resources;
@@ -24,6 +25,13 @@ use function Pest\Laravel\postJson;
 
 const MANAGE = '/api/v1/admin/resources';
 const LIBRARY = '/api/v1/admin/resource-library';
+const MINE = '/api/v1/admin/my-resources';
+
+/** A Console signed in as a real Account holding only `console.access` whose Person has the given relationships (default: an Active Guardian). */
+function readerConsole(string ...$relations): Console
+{
+    return Audiences::signIn(Audiences::reader($relations === [] ? ['guardian'] : array_values($relations)));
+}
 
 /**
  * @param  TestResponse<Response>  $response
@@ -141,7 +149,9 @@ it('gives each response exactly its documented keys, management and delivery dif
         ->and($card['file'])->toBeNull() // a basic Card has no file; a File Card's is pinned in ResourcesFilesApiTest
         ->and(array_keys(ofKey($card['content'])))->toBe(['format', 'version', 'document'])
         ->and(array_keys(ofKey($managed['created_by'])))->toBe(['id', 'display_name'])
-        ->and(array_keys(body($console->get(LIBRARY."/packs/{$pack}")->assertOk())))->toBe(['id', 'title', 'summary', 'is_series', 'category', 'card_count', 'cards'])
+        // Policy A (the privileged viewer) adds state, audiences, draft count and last edit; policy C (a reader) is delivery's shape alone.
+        ->and(array_keys(body($console->get(LIBRARY."/packs/{$pack}")->assertOk())))->toBe(['id', 'title', 'summary', 'is_series', 'category', 'state', 'audiences', 'card_count', 'draft_card_count', 'updated_at', 'updated_by', 'cards'])
+        ->and(array_keys(body(readerConsole()->get(MINE."/packs/{$pack}")->assertOk())))->toBe(['id', 'title', 'summary', 'is_series', 'category', 'card_count', 'cards'])
         ->and(array_keys(body($console->get(MANAGE."/packs/{$pack}/preview?audience=member")->assertOk())))->toBe(['audience', 'pack_state', 'audience_targeted', 'visible', 'pack']);
 });
 
@@ -153,6 +163,7 @@ it('puts no Account, login, role, capability, MFA or Membership data in any Reso
         $console->get(MANAGE.'/categories'), $console->get(MANAGE.'/packs'), $console->get(MANAGE."/packs/{$pack}"),
         $console->get(MANAGE."/packs/{$pack}/cards/".Api::string(Api::rows($managed['cards'])[0]['id'])),
         $console->get(MANAGE."/packs/{$pack}/preview?audience=guardian"), $console->get(LIBRARY), $console->get(LIBRARY."/packs/{$pack}"),
+        readerConsole()->get(MINE), readerConsole()->get(MINE."/packs/{$pack}"),
     ];
 
     /** @var Closure(mixed): list<string> $keys */
@@ -427,19 +438,21 @@ it('refuses invalid content with invalid_content naming where, and an unsafe add
     expect(DB::table('resource_cards')->count())->toBe(0);
 });
 
-it('refuses what the closed vocabularies do not contain: no other Type, no volunteer audience, no free-form preview audience', function () {
+it('refuses what the closed vocabularies do not contain: no other Type, no audience outside the catalog, no free-form preview audience', function () {
     [$console] = Resources::signedInGuardian();
     $pack = Api::string(apiPack($console)['id']);
 
     // `file` is a Type now (WP3), and one that cannot be created without its file.
     $console->post(MANAGE."/packs/{$pack}/cards", ['type' => 'file', 'title' => 'A file'])->assertStatus(422)->assertJsonValidationErrors('file');
     $console->post(MANAGE."/packs/{$pack}/cards", ['type' => 'youtube', 'title' => 'Video', 'uri' => 'https://youtu.be/x'])->assertStatus(422)->assertJsonValidationErrors('type');
-    $console->put(MANAGE."/packs/{$pack}/audiences", ['audiences' => ['volunteer']])->assertStatus(422)->assertJsonValidationErrors('audiences.0');
+    $console->put(MANAGE."/packs/{$pack}/audiences", ['audiences' => ['partner']])->assertStatus(422)->assertJsonValidationErrors('audiences.0');
     $console->put(MANAGE."/packs/{$pack}/audiences", ['audiences' => ['guardian', 'partner']])->assertStatus(422);
-    $console->get(MANAGE."/packs/{$pack}/preview?audience=volunteer")->assertStatus(422)->assertJsonValidationErrors('audience');
+    $console->get(MANAGE."/packs/{$pack}/preview?audience=partner")->assertStatus(422)->assertJsonValidationErrors('audience');
+    $console->get(MANAGE."/packs/{$pack}/preview?audience=volunteer")->assertOk();
     $console->get(MANAGE."/packs/{$pack}/preview")->assertStatus(422)->assertJsonValidationErrors('audience');
     $console->get(MANAGE."/packs/{$pack}/preview?audience=Guardian")->assertStatus(422);
     $console->get(MANAGE.'/packs?audience=everyone')->assertStatus(422);
+    $console->get(MANAGE.'/packs?audience=volunteer')->assertOk();
     $console->get(MANAGE.'/packs?card_type=video')->assertStatus(422);
     $console->get(MANAGE.'/packs?card_type=file')->assertOk();
 });
@@ -454,10 +467,11 @@ it('gives every delivery refusal the SAME body: missing, Draft, unpublished, not
     $narrowedAway = apiPublished($console, 'Narrowed away', 1, ['guardian', 'member']);
     $card = Api::string(Api::rows(body($console->get(MANAGE."/packs/{$narrowedAway}")->assertOk())['cards'])[0]['id']);
     $console->put(MANAGE."/packs/{$narrowedAway}/cards/{$card}/audiences", ['mode' => 'narrowed', 'audiences' => ['member']])->assertOk();
+    $reader = readerConsole('guardian');
 
     $bodies = [];
     foreach (['01jaaaaaaaaaaaaaaaaaaaaaa0', $draft, $unpublished, $memberOnly, $narrowedAway] as $id) {
-        $response = $console->get(LIBRARY."/packs/{$id}")->assertStatus(404);
+        $response = $reader->get(MINE."/packs/{$id}")->assertStatus(404);
         $bodies[] = $response->getContent();
     }
 
@@ -465,7 +479,7 @@ it('gives every delivery refusal the SAME body: missing, Draft, unpublished, not
         ->and(json_decode((string) $bodies[0], true))->toBe(['message' => 'There is no such resource.', 'code' => 'resource_pack_not_found']);
 });
 
-it('previews a Draft as an audience for a manager, and delivers nothing of it through the library', function () {
+it('previews a Draft as an audience for a manager, and delivers nothing of it to a reader', function () {
     [$console] = Resources::signedInGuardian();
     $pack = apiPack($console, 'Not live', apiCategory($console, 'Guides'));
     $packId = Api::string($pack['id']);
@@ -478,25 +492,30 @@ it('previews a Draft as an audience for a manager, and delivers nothing of it th
     $guardian = body($console->get(MANAGE."/packs/{$packId}/preview?audience=guardian")->assertOk());
     expect($guardian['visible'])->toBeFalse()->and($guardian['pack'])->toBeNull()->and($guardian['audience_targeted'])->toBeFalse();
 
-    $console->get(LIBRARY."/packs/{$packId}")->assertNotFound();
-    expect(body($console->get(LIBRARY)->assertOk())['data'])->toBe([])
+    // A reader who is eligible for every audience is still shown nothing of a Draft; the privileged viewer reads it, marked as one.
+    $reader = readerConsole('guardian', 'member');
+    $reader->get(MINE."/packs/{$packId}")->assertNotFound();
+    expect(body($reader->get(MINE)->assertOk())['data'])->toBe([])
+        ->and(Api::rows(Api::rows(body($console->get(LIBRARY)->assertOk())['data'])[0]['packs'])[0]['state'])->toBe('draft')
         ->and(DB::table('resource_packs')->where('id', $packId)->value('state'))->toBe('draft');
 });
 
-it('searches and filters the library by query string, and validates what it is given', function () {
+it('searches and filters a reader\'s library by query string, validates what it is given, and takes no audience from the client', function () {
     [$console] = Resources::signedInGuardian();
     $a = apiPublished($console, 'Opening checklist');
     apiPublished($console, 'Closing checklist');
+    $reader = readerConsole('guardian');
 
-    expect(array_column(Api::rows(Api::rows(body($console->get(LIBRARY.'?q=opening')->assertOk())['data'])[0]['packs']), 'title'))->toBe(['Opening checklist'])
-        ->and(body($console->get(LIBRARY.'?q=nothing')->assertOk())['data'])->toBe([])
-        ->and(body($console->get(LIBRARY.'?category=01jaaaaaaaaaaaaaaaaaaaaaa0')->assertOk())['data'])->toBe([])
+    expect(array_column(Api::rows(Api::rows(body($reader->get(MINE.'?q=opening')->assertOk())['data'])[0]['packs']), 'title'))->toBe(['Opening checklist'])
+        ->and(body($reader->get(MINE.'?q=nothing')->assertOk())['data'])->toBe([])
+        ->and(body($reader->get(MINE.'?category=01jaaaaaaaaaaaaaaaaaaaaaa0')->assertOk())['data'])->toBe([])
         ->and($a)->not->toBe('');
-    $console->get(LIBRARY.'?category=not-a-ulid')->assertStatus(422);
-    $console->get(LIBRARY.'?q='.str_repeat('a', 201))->assertStatus(422);
+    $reader->get(MINE.'?category=not-a-ulid')->assertStatus(422);
+    $reader->get(MINE.'?q='.str_repeat('a', 201))->assertStatus(422);
     // Audience is not a parameter: it is ignored, never a way to see another audience's content.
     apiPublished($console, 'Members only', 1, ['member']);
-    expect(array_column(Api::rows(body($console->get(LIBRARY.'?audience=member')->assertOk())['data']), 'category'))->toHaveCount(2);
+    expect(array_column(Api::rows(body($reader->get(MINE.'?audience=member')->assertOk())['data']), 'category'))->toHaveCount(2)
+        ->and(array_column(Api::rows(body($reader->get(MINE.'?audience=member&mode=viewer&publication=draft')->assertOk())['data']), 'category'))->toHaveCount(2);
 });
 
 it('pages the management list and reports the totals', function () {
@@ -535,7 +554,7 @@ it('reorders over HTTP from the complete list, returning the new order', functio
 it('refuses a request with no session with 401, and never reveals what exists', function () {
     $console = new Console;
 
-    foreach ([MANAGE.'/categories', MANAGE.'/packs', LIBRARY, LIBRARY.'/packs/01jaaaaaaaaaaaaaaaaaaaaaa0'] as $path) {
+    foreach ([MANAGE.'/categories', MANAGE.'/packs', LIBRARY, LIBRARY.'/packs/01jaaaaaaaaaaaaaaaaaaaaaa0', MINE, MINE.'/packs/01jaaaaaaaaaaaaaaaaaaaaaa0'] as $path) {
         $console->get($path)->assertUnauthorized();
     }
 });
@@ -591,6 +610,7 @@ it('answers 204 with no body for a deletion, and the deleted Pack then 404s ever
     expect($deleted->getContent())->toBe('');
     $console->get(MANAGE."/packs/{$pack}")->assertNotFound();
     $console->get(LIBRARY."/packs/{$pack}")->assertNotFound();
+    readerConsole()->get(MINE."/packs/{$pack}")->assertNotFound();
     $console->delete(MANAGE."/packs/{$pack}")->assertNotFound();
     $console->get(MANAGE."/packs/{$pack}/preview?audience=guardian")->assertNotFound();
 });

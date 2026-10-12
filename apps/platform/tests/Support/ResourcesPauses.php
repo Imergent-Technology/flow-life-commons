@@ -273,6 +273,11 @@ final class PausingPackRepository implements PackRepository
         return $this->inner->published($category);
     }
 
+    public function every(?CategoryId $category): array
+    {
+        return $this->inner->every($category);
+    }
+
     public function countsByCategory(array $categories): array
     {
         return $this->inner->countsByCategory($categories);

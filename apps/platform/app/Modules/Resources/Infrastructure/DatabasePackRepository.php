@@ -169,6 +169,21 @@ final readonly class DatabasePackRepository implements PackRepository
         return $this->hydrate(array_values($rows));
     }
 
+    public function every(?CategoryId $category): array
+    {
+        $query = $this->database->table(self::TABLE.' as p')->leftJoin('resource_categories as c', 'c.id', '=', 'p.category_id');
+        if ($category !== null) {
+            $query->where('p.category_id', $category->value);
+        }
+        $rows = $query->select('p.*')
+            // Packs with no Category last, portably: both engines order NULLs differently by default.
+            ->orderByRaw('case when c.position is null then 1 else 0 end')
+            ->orderBy('c.position')->orderBy('p.position')->orderBy('p.id')
+            ->get()->all();
+
+        return $this->hydrate(array_values($rows));
+    }
+
     public function countsByCategory(array $categories): array
     {
         if ($categories === []) {

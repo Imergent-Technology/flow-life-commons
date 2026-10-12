@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Modules\Resources\Http\BrowseLibraryController;
+use App\Modules\Resources\Http\BrowseMyResourcesController;
 use App\Modules\Resources\Http\CreateCardController;
 use App\Modules\Resources\Http\CreateCategoryController;
 use App\Modules\Resources\Http\CreatePackController;
@@ -11,6 +12,7 @@ use App\Modules\Resources\Http\DeleteCategoryController;
 use App\Modules\Resources\Http\DeletePackController;
 use App\Modules\Resources\Http\DownloadLibraryFileController;
 use App\Modules\Resources\Http\DownloadManagedFileController;
+use App\Modules\Resources\Http\DownloadMyResourceFileController;
 use App\Modules\Resources\Http\ListCategoriesController;
 use App\Modules\Resources\Http\ListManagedPacksController;
 use App\Modules\Resources\Http\PreviewPackController;
@@ -26,6 +28,7 @@ use App\Modules\Resources\Http\SetPackAudiencesController;
 use App\Modules\Resources\Http\ShowLibraryPackController;
 use App\Modules\Resources\Http\ShowManagedCardController;
 use App\Modules\Resources\Http\ShowManagedPackController;
+use App\Modules\Resources\Http\ShowMyResourcePackController;
 use App\Modules\Resources\Http\UnpublishCardController;
 use App\Modules\Resources\Http\UnpublishPackController;
 use App\Modules\Resources\Http\UpdateCardController;
@@ -33,16 +36,22 @@ use App\Modules\Resources\Http\UpdatePackController;
 use Illuminate\Support\Facades\Route;
 
 /*
- * Resources (ADR 0037), under /api/v1/admin. Management and delivery are separate prefixes with separate capabilities and
- * separate projections, so each can be pinned to its capability by a route-table test:
+ * Resources (ADR 0037, ADR 0038 Part R), under /api/v1/admin. Three access policies, each its own route family with its own use cases, so
+ * each can be pinned to its authority by a route-table test:
  *
- * - /admin/resources/*          MANAGEMENT. `resources.manage`. Drafts, revisions, audiences, order, provenance.
- * - /admin/resource-library/*   DELIVERY to the Guardian Console. `resources.view`. Only what the viewer may have.
+ * - /admin/resources/*          POLICY B, MANAGEMENT. `resources.manage`. Drafts, revisions, audiences, order, provenance, preview.
+ * - /admin/resource-library/*   POLICY A, PRIVILEGED VIEWING. `resources.view`. Read-only: every Pack and Card, Drafts and every audience.
+ * - /admin/my-resources/*       POLICY C, AUDIENCE-BASED READING. `console.access` ONLY (A6): the one family with no capability beyond
+ *                               admission, because its authority is the signed-in Person's own current relationships, which no
+ *                               capability expresses. Published Resources for the audiences they are eligible for, and nothing else.
+ *
+ * None of the three implies another: `resources.manage` does not read the library, `resources.view` changes what `my-resources` serves
+ * not at all, and no request parameter selects a policy, an audience or a Person.
  *
  * Three independent layers, as in Crm, Discussions and Membership:
  *
  * - `stateful`, `auth:web` and `can:console.access` for the whole surface.
- * - `can:<capability>` per operation, and the use case checks it again.
+ * - `can:<capability>` per operation (none for `my-resources`, whose use cases ask for none), and the use case checks it again.
  * - Routine management asks for NO recent verification (the administration route-table test names `resources.manage`, pinned
  *   to this module, beside Crm's and Discussions' capabilities). The ONE exception is permanent deletion: the two DELETE routes
  *   for a Pack and a Card also carry `security.verified`, after the capability, so a caller without the capability is never asked
@@ -50,11 +59,12 @@ use Illuminate\Support\Facades\Route;
  *   exemption is NOT generic: it covers this module's `resources.manage` routes only, and deleting an EMPTY Category (it loses a
  *   name, not content) is routine.
  *
- * The actor is always the signed-in caller: no request field names a creator, an editor or an uploader.
+ * The actor is always the signed-in caller: no request field names a creator, an editor, an uploader or a reader.
  *
- * Files (WP3) follow the same split. A File Card's file is replaced and downloaded (Drafts included) under management, and downloaded
- * by a viewer under delivery only for a Card the projection shows them. Both are routes on a Card: no route takes an asset id or a
- * storage key, and nothing of the store is reachable any other way. Replacing a file is routine (no recent verification).
+ * Files (WP3) follow the same split. A File Card's file is replaced and downloaded (Drafts included) under management, downloaded by
+ * a privileged viewer from the library, and downloaded by a reader under `my-resources` only for a Card the projection shows them.
+ * All are routes on a Card: no route takes an asset id or a storage key, and nothing of the store is reachable any other way.
+ * Replacing a file is routine (no recent verification).
  */
 Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin')->group(function (): void {
     // Exactly what `Str::isUlid` accepts, in the lowercase form ids are held in (see Membership's routes).
@@ -95,5 +105,12 @@ Route::middleware(['stateful', 'auth:web', 'can:console.access'])->prefix('admin
         Route::get('/', BrowseLibraryController::class)->name('api.v1.admin.resource-library.index');
         Route::get('packs/{pack}', ShowLibraryPackController::class)->where('pack', $id)->name('api.v1.admin.resource-library.show');
         Route::get('packs/{pack}/cards/{card}/file', DownloadLibraryFileController::class)->where('pack', $id)->where('card', $id)->name('api.v1.admin.resource-library.cards.file');
+    });
+
+    // Policy C (ADR 0038, R14, A6): no `can:` beyond the group's `console.access`. Ineligibility is a 404, never a 403.
+    Route::prefix('my-resources')->group(function () use ($id): void {
+        Route::get('/', BrowseMyResourcesController::class)->name('api.v1.admin.my-resources.index');
+        Route::get('packs/{pack}', ShowMyResourcePackController::class)->where('pack', $id)->name('api.v1.admin.my-resources.show');
+        Route::get('packs/{pack}/cards/{card}/file', DownloadMyResourceFileController::class)->where('pack', $id)->where('card', $id)->name('api.v1.admin.my-resources.cards.file');
     });
 });

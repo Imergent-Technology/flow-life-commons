@@ -13,11 +13,24 @@ use Tests\Support\Resources;
  * Audiences (ADR 0037, decisions 38-41): a code-owned catalog, positive OR sets, and a Card that is never broader than its Pack.
  */
 
-it('has exactly two audiences in Phase 1, guardian and member, and no volunteer, partner, vendor or artist', function () {
-    expect(array_map(fn (Audience $a): string => $a->value, Audience::cases()))->toBe(['guardian', 'member'])
-        ->and(Audience::tryFrom('volunteer'))->toBeNull()
+it('has exactly three audiences, guardian, member and volunteer (ADR 0038, R1), and no partner, vendor or artist', function () {
+    expect(array_map(fn (Audience $a): string => $a->value, Audience::cases()))->toBe(['guardian', 'member', 'volunteer'])
+        ->and(Audience::tryFrom('volunteer'))->toBe(Audience::Volunteer)
         ->and(Audience::tryFrom('partner'))->toBeNull()
+        ->and(Audience::tryFrom('vendor'))->toBeNull()
+        ->and(Audience::tryFrom('artist'))->toBeNull()
+        ->and(Audience::tryFrom('apprentice'))->toBeNull()
+        ->and(Audience::tryFrom('Volunteer'))->toBeNull()
         ->and(Audience::tryFrom('Guardian'))->toBeNull(); // case-exact: nothing near-matches
+});
+
+it('keeps catalog order for the new audience too, and no audience implies another', function () {
+    $set = AudienceSet::of(Audience::Volunteer, Audience::Guardian, Audience::Member);
+
+    expect($set->values())->toBe(['guardian', 'member', 'volunteer'])
+        ->and(AudienceSet::of(Audience::Volunteer)->intersects(AudienceSet::of(Audience::Member, Audience::Guardian)))->toBeFalse()
+        ->and(AudienceSet::of(Audience::Volunteer)->intersects(AudienceSet::of(Audience::Volunteer)))->toBeTrue()
+        ->and(AudienceSet::of(Audience::Volunteer)->contains(Audience::Member))->toBeFalse();
 });
 
 it('treats a set as a set: duplicates collapse and the order is the catalog\'s, however it was built', function () {

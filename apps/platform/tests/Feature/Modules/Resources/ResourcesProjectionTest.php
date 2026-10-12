@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 use App\Modules\Access\Application\AccessDenied;
 use App\Modules\Access\Application\Authorizer;
-use App\Modules\Resources\Application\BrowseResourceLibrary;
+use App\Modules\Identity\Application\DisableAccount;
+use App\Modules\Resources\Application\BrowseDeliveredResources;
 use App\Modules\Resources\Application\CreateCard;
+use App\Modules\Resources\Application\DeliveredCategory;
 use App\Modules\Resources\Application\DeliveredPack;
-use App\Modules\Resources\Application\GetResourcePack;
-use App\Modules\Resources\Application\LibraryCategory;
+use App\Modules\Resources\Application\DownloadDeliveredFile;
+use App\Modules\Resources\Application\GetDeliveredPack;
 use App\Modules\Resources\Application\PackPreview;
 use App\Modules\Resources\Application\PreviewPack;
 use App\Modules\Resources\Application\PublishCard;
@@ -26,12 +28,15 @@ use App\Modules\Resources\Domain\AudienceMode;
 use App\Modules\Resources\Domain\CardType;
 use App\Modules\Resources\Domain\CategoryId;
 use App\Modules\Resources\Domain\PackId;
-use App\Modules\Resources\Http\ResourcesPresenter;
+use App\Modules\Resources\Http\DeliveryPresenter;
+use App\Shared\Domain\Actor;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Tests\Support\Access;
 use Tests\Support\Api;
-use Tests\Support\Membership;
+use Tests\Support\Audiences;
+use Tests\Support\ResourceFiles;
 use Tests\Support\Resources;
 
 /*
@@ -40,17 +45,34 @@ use Tests\Support\Resources;
  * invisible Pack answers exactly what a missing one does. Runs on MariaDB and PostgreSQL.
  */
 
+beforeEach(function () {
+    ResourceFiles::fake();
+});
+
+/** A signed-in Person eligible for what `$relations` say (default: an Active Guardian), through real relationships. */
+/** @param  list<string>  $relations */
+function reader(array $relations = ['guardian']): Actor
+{
+    return Access::actorFor(Audiences::reader($relations));
+}
+
 /** @return list<string> Pack titles in a library, in library order */
 function libraryTitles(?string $search = null, ?CategoryId $category = null): array
 {
     $titles = [];
-    foreach (app(BrowseResourceLibrary::class)(Resources::editor('viewer.guardian@example.org', 'Viewer Guardian'), $category, $search) as $entry) {
+    foreach (app(BrowseDeliveredResources::class)(reader(), $category, $search) as $entry) {
         foreach ($entry->packs as $listed) {
             $titles[] = $listed->pack->title;
         }
     }
 
     return $titles;
+}
+
+/** @return array<string, mixed> a delivered Pack as a reader receives it */
+function delivery(DeliveredPack $pack, string $route = 'api.v1.admin.my-resources.cards.file'): array
+{
+    return (new DeliveryPresenter)->pack($pack, $route);
 }
 
 /** @return list<string> the Card titles of a delivered Pack, in order */
@@ -62,7 +84,7 @@ function deliveredTitles(DeliveredPack $pack): array
 /** Everything a delivered Pack would put on the wire, as one string, for asserting what must NOT be in it. */
 function deliveredText(DeliveredPack $pack): string
 {
-    return json_encode((new ResourcesPresenter)->delivered($pack), JSON_THROW_ON_ERROR);
+    return json_encode(delivery($pack), JSON_THROW_ON_ERROR);
 }
 
 it('shows a Guardian a Published Pack with a Published Card whose audience includes guardian, and nothing else', function () {
@@ -81,14 +103,14 @@ it('never shows a Draft Pack, whatever its Cards say', function () {
     app(UnpublishPack::class)($by, $live->pack->id);
 
     expect(libraryTitles())->toBe([])
-        ->and(fn () => app(GetResourcePack::class)($by, $live->pack->id))->toThrow(ResourcePackNotFound::class);
+        ->and(fn () => app(GetDeliveredPack::class)(reader(), $live->pack->id))->toThrow(ResourcePackNotFound::class);
 });
 
 it('treats Pack audiences as positive OR: a viewer who satisfies any one qualifies', function () {
     $by = Resources::editor();
     $both = Resources::published($by, [Audience::Member, Audience::Guardian], 1, 'Both');
 
-    expect(deliveredTitles(app(GetResourcePack::class)($by, $both->pack->id)))->toBe(['Both card 1']);
+    expect(deliveredTitles(app(GetDeliveredPack::class)(reader(), $both->pack->id)))->toBe(['Both card 1']);
 });
 
 it('leaves an unpublished Card out of everything: delivery, counts, numbering and search', function () {
@@ -96,12 +118,12 @@ it('leaves an unpublished Card out of everything: delivery, counts, numbering an
     $live = Resources::published($by, [Audience::Guardian], 3, 'Trio');
     app(UnpublishCard::class)($by, $live->pack->id, Resources::outline($live, 1)->card->id);
 
-    $delivered = app(GetResourcePack::class)($by, $live->pack->id);
+    $delivered = app(GetDeliveredPack::class)(reader(), $live->pack->id);
 
     expect(deliveredTitles($delivered))->toBe(['Trio card 1', 'Trio card 3'])
         ->and(array_map(fn ($c): int => $c->index, $delivered->cards))->toBe([1, 2])
         ->and(deliveredText($delivered))->not->toContain('Trio card 2')->and(deliveredText($delivered))->not->toContain(Resources::outline($live, 1)->card->id->value)
-        ->and(app(BrowseResourceLibrary::class)($by, null, null)[0]->packs[0]->visibleCardCount)->toBe(2)
+        ->and(app(BrowseDeliveredResources::class)(reader(), null, null)[0]->packs[0]->visibleCardCount)->toBe(2)
         ->and(libraryTitles('card 2'))->toBe([]);
 });
 
@@ -117,13 +139,13 @@ it('hides a Card the viewer\'s audience is not in, as if it did not exist: a fiv
     app(SetCardAudiences::class)($by, $pack->pack->id, $cards['Secret Charlie']->id, AudienceMode::Narrowed, [Audience::Member]);
     app(PublishPack::class)($by, $pack->pack->id);
 
-    $guardian = app(GetResourcePack::class)($by, $pack->pack->id);
+    $guardian = app(GetDeliveredPack::class)(reader(), $pack->pack->id);
 
     expect($guardian->cards)->toHaveCount(4)
         ->and(deliveredTitles($guardian))->toBe(['Alpha', 'Bravo', 'Delta', 'Echo'])
         // Numbered 1..4 among themselves: there is no gap where the hidden Card was, and no sign it exists.
         ->and(array_map(fn ($c): int => $c->index, $guardian->cards))->toBe([1, 2, 3, 4])
-        ->and(app(BrowseResourceLibrary::class)($by, null, null)[0]->packs[0]->visibleCardCount)->toBe(4);
+        ->and(app(BrowseDeliveredResources::class)(reader(), null, null)[0]->packs[0]->visibleCardCount)->toBe(4);
 
     $text = deliveredText($guardian);
     foreach (['Secret Charlie', 'Words of Secret Charlie', $cards['Secret Charlie']->id->value] as $leak) {
@@ -164,8 +186,8 @@ it('omits a Pack entirely when no Card remains visible to the viewer, and answer
 
     // The Pack qualifies for a Guardian by its own audiences, but every Card is for Members: nothing remains.
     expect(libraryTitles())->toBe([])
-        ->and(app(BrowseResourceLibrary::class)($by, null, null))->toBe([])
-        ->and(fn () => app(GetResourcePack::class)($by, $pack->pack->id))->toThrow(ResourcePackNotFound::class);
+        ->and(app(BrowseDeliveredResources::class)(reader(), null, null))->toBe([])
+        ->and(fn () => app(GetDeliveredPack::class)(reader(), $pack->pack->id))->toThrow(ResourcePackNotFound::class);
 });
 
 it('answers every reason a Pack is not delivered with the SAME refusal: nothing says missing, draft, unpublished, not for you or empty', function () {
@@ -186,7 +208,7 @@ it('answers every reason a Pack is not delivered with the SAME refusal: nothing 
     $refusals = [];
     foreach ([PackId::generate(), $draft->pack->id, $unpublished->pack->id, $memberOnly->pack->id, $emptyAfterProjection->pack->id, $allCardsDraft->pack->id] as $id) {
         try {
-            app(GetResourcePack::class)($by, $id);
+            app(GetDeliveredPack::class)(reader(), $id);
             $refusals[] = null;
         } catch (ResourcePackNotFound $e) {
             $refusals[] = [$e::class, $e->getMessage(), $e->getCode()];
@@ -206,9 +228,9 @@ it('lists Categories in order with only the Packs the viewer may see, and omits 
     Resources::published($by, [Audience::Guardian], 1, 'First pack', $first);
     Resources::published($by, [Audience::Member], 1, 'Members only pack', $third);
 
-    $library = app(BrowseResourceLibrary::class)($by, null, null);
+    $library = app(BrowseDeliveredResources::class)(reader(), null, null);
 
-    expect(array_map(fn (LibraryCategory $c): string => $c->category->name, $library))->toBe(['First', 'Second'])
+    expect(array_map(fn (DeliveredCategory $c): string => $c->category->name, $library))->toBe(['First', 'Second'])
         ->and(libraryTitles(category: $second))->toBe(['Second pack'])
         ->and(libraryTitles(category: $third))->toBe([])        // a Category with nothing visible is simply empty
         ->and(libraryTitles(category: CategoryId::generate()))->toBe([]);
@@ -310,9 +332,9 @@ it('derives one Card or several from what the viewer can see, and stores no such
     $by = Resources::editor();
     $live = Resources::published($by, [Audience::Guardian], 2, 'Deck');
 
-    expect(app(GetResourcePack::class)($by, $live->pack->id)->cards)->toHaveCount(2);
+    expect(app(GetDeliveredPack::class)(reader(), $live->pack->id)->cards)->toHaveCount(2);
     app(UnpublishCard::class)($by, $live->pack->id, Resources::outline($live, 1)->card->id);
-    expect(app(GetResourcePack::class)($by, $live->pack->id)->cards)->toHaveCount(1);
+    expect(app(GetDeliveredPack::class)(reader(), $live->pack->id)->cards)->toHaveCount(1);
 
     expect(Schema::getColumnListing('resource_packs'))->not->toContain('mode', 'layout', 'single_card')
         ->and(Schema::getColumnListing('resource_cards'))->not->toContain('mode', 'layout', 'single_card', 'navigation');
@@ -327,7 +349,7 @@ it('delivers the Series flag as presentation only, with no completion, progress 
     app(SetPackAudiences::class)($by, $series->pack->id, [Audience::Guardian]);
     app(PublishPack::class)($by, $series->pack->id);
 
-    $delivered = (new ResourcesPresenter)->delivered(app(GetResourcePack::class)($by, $series->pack->id));
+    $delivered = delivery(app(GetDeliveredPack::class)(reader(), $series->pack->id));
 
     $cards = Api::rows($delivered['cards']);
 
@@ -344,15 +366,15 @@ it('numbers the visible Cards by the stored order, which only a manager sets', f
     $ids = array_map(fn ($c) => $c->card->id, Resources::outlines($live));
     app(ReorderCards::class)($by, $live->pack->id, [$ids[2], $ids[0], $ids[1]]);
 
-    expect(deliveredTitles(app(GetResourcePack::class)($by, $live->pack->id)))->toBe(['Deck card 3', 'Deck card 1', 'Deck card 2']);
+    expect(deliveredTitles(app(GetDeliveredPack::class)(reader(), $live->pack->id)))->toBe(['Deck card 3', 'Deck card 1', 'Deck card 2']);
 });
 
 it('delivers no management or provenance data: no state, revision, audience, stored position or Person', function () {
     $by = Resources::editor();
     $live = Resources::published($by, [Audience::Guardian, Audience::Member], 1, 'Deck');
 
-    $text = json_encode((new ResourcesPresenter)->delivered(app(GetResourcePack::class)($by, $live->pack->id)), JSON_THROW_ON_ERROR);
-    $library = json_encode((new ResourcesPresenter)->library(app(BrowseResourceLibrary::class)($by, null, null)), JSON_THROW_ON_ERROR);
+    $text = json_encode(delivery(app(GetDeliveredPack::class)(reader(), $live->pack->id)), JSON_THROW_ON_ERROR);
+    $library = json_encode((new DeliveryPresenter)->library(app(BrowseDeliveredResources::class)(reader(), null, null)), JSON_THROW_ON_ERROR);
 
     foreach (['"state"', 'revision', 'audience', 'position', 'created_by', 'updated_by', 'created_at', 'updated_at', 'display_name', 'person', $by->personId->value, $by->accountId->value, 'Ed Editor', 'guardian', 'member'] as $management) {
         expect($text)->not->toContain($management)->and($library)->not->toContain($management);
@@ -391,8 +413,8 @@ it('previews exactly what delivery would deliver once the Pack is published, for
     $live = Resources::published($by, [Audience::Guardian, Audience::Member], 3, 'Deck');
     app(UnpublishCard::class)($by, $live->pack->id, Resources::outline($live, 2)->card->id);
 
-    $delivered = (new ResourcesPresenter)->delivered(app(GetResourcePack::class)($by, $live->pack->id));
-    $previewed = (new ResourcesPresenter)->delivered(app(PreviewPack::class)($by, $live->pack->id, Audience::Guardian)->pack ?? throw new LogicException);
+    $delivered = delivery(app(GetDeliveredPack::class)(reader(), $live->pack->id));
+    $previewed = delivery(app(PreviewPack::class)($by, $live->pack->id, Audience::Guardian)->pack ?? throw new LogicException);
 
     // Compared as the JSON a client receives: the same bytes, not merely equal-looking objects.
     expect(json_encode($previewed, JSON_THROW_ON_ERROR))->toBe(json_encode($delivered, JSON_THROW_ON_ERROR));
@@ -409,38 +431,43 @@ it('reports a preview that would show nothing as such, not as a missing Pack, wi
         ->and($preview->packState->value)->toBe('published');
 });
 
-it('needs resources.manage to preview and resources.view to deliver, each asked inside the use case', function () {
+it('needs resources.manage to preview, and asks delivery for NO capability: it answers only about the reader\'s own relationships', function () {
     $by = Resources::editor();
     $live = Resources::published($by, [Audience::Guardian], 1, 'Deck');
     $outsider = Resources::outsider();
 
-    foreach ([
-        fn () => app(PreviewPack::class)($outsider, $live->pack->id, Audience::Guardian),
-        fn () => app(GetResourcePack::class)($outsider, $live->pack->id),
-        fn () => app(BrowseResourceLibrary::class)($outsider, null, null),
-    ] as $operation) {
-        expect($operation)->toThrow(AccessDenied::class);
-    }
+    // Preview is management's, asked inside the use case.
+    expect(fn () => app(PreviewPack::class)($outsider, $live->pack->id, Audience::Guardian))->toThrow(AccessDenied::class);
+
+    // Delivery asks no capability: an Account with no role at all is simply eligible for nothing, and is shown nothing.
+    expect(app(BrowseDeliveredResources::class)($outsider, null, null))->toBe([])
+        ->and(fn () => app(GetDeliveredPack::class)($outsider, $live->pack->id))->toThrow(ResourcePackNotFound::class);
 });
 
-it('does not let being a Member satisfy anything: an active Membership grants no Resources capability, role or audience of its own', function () {
+it('lets an active Membership make a Person eligible for the member audience and for nothing else: no capability, role or other audience', function () {
     $by = Resources::editor();
     Resources::published($by, [Audience::Member], 1, 'For members');
-    $member = Resources::outsider('mia.member@example.org', 'Mia Member');
-    Membership::savedGrant($member->personId);
+    Resources::published($by, [Audience::Guardian], 1, 'For guardians');
+    $member = reader(['member']);
 
-    expect(app(Authorizer::class)->capabilitiesOf($member))->toBe([])
-        ->and(fn () => app(BrowseResourceLibrary::class)($member, null, null))->toThrow(AccessDenied::class);
+    expect(array_map(fn ($c): string => $c->value, app(Authorizer::class)->capabilitiesOf($member)))->toBe(['console.access'])
+        ->and(array_map(fn (DeliveredCategory $c): string => $c->packs[0]->pack->title, app(BrowseDeliveredResources::class)($member, null, null)))->toBe(['For members']);
 });
 
-it('serves the Guardian library only the guardian audience, never member content, even to a Guardian who is also a Member', function () {
+it('serves a reader every audience they are eligible for, combined by OR, and never one they are not, even to a Guardian who is also a Member', function () {
     $by = Resources::editor();
     Resources::published($by, [Audience::Member], 1, 'Members only');
-    Membership::savedGrant($by->personId); // the viewer is a Guardian AND an active Member
+    Resources::published($by, [Audience::Guardian], 1, 'Guardians only');
+    $guardianMember = reader(['guardian', 'member']);
 
-    expect(libraryTitles())->toBe([])
-        ->and(Resources::published($by, [Audience::Guardian], 1, 'Guardian pack')->pack->title)->toBe('Guardian pack')
-        ->and(libraryTitles())->toBe(['Guardian pack']);
+    $titles = fn (Actor $a): array => array_merge(...array_map(
+        fn (DeliveredCategory $c): array => array_map(fn ($p): string => $p->pack->title, $c->packs),
+        app(BrowseDeliveredResources::class)($a, null, null),
+    ));
+
+    expect($titles($guardianMember))->toBe(['Members only', 'Guardians only'])
+        ->and($titles(reader(['guardian'])))->toBe(['Guardians only'])
+        ->and($titles(reader(['member'])))->toBe(['Members only']);
 });
 
 it('reads a Card\'s content only when the Card is visible: a hidden Card\'s document is never loaded for delivery', function () {
@@ -455,7 +482,7 @@ it('reads a Card\'s content only when the Card is visible: a hidden Card\'s docu
         }
     });
 
-    app(GetResourcePack::class)($by, $live->pack->id);
+    app(GetDeliveredPack::class)(reader(), $live->pack->id);
 
     $hidden = Resources::outline($live, 1)->card->id->value;
     expect(collect($reads)->flatten()->contains($hidden))->toBeFalse()
@@ -468,5 +495,24 @@ it('keeps a Card\'s edit and publication state from affecting other Cards\' numb
     $draft = Resources::card($by, $live, 'Draft between');
     app(UpdateCard::class)($by, $live->pack->id, $draft->card->id, 1, ['title' => 'Still draft']);
 
-    expect(array_map(fn ($c): int => $c->index, app(GetResourcePack::class)($by, $live->pack->id)->cards))->toBe([1, 2]);
+    expect(array_map(fn ($c): int => $c->index, app(GetDeliveredPack::class)(reader(), $live->pack->id)->cards))->toBe([1, 2]);
+});
+
+it('serves a captured Actor nothing once its Account can no longer authenticate, at the use-case level, whatever the HTTP edge does (ADR 0038, R10)', function () {
+    $by = Resources::editor();
+    $live = Resources::published($by, [Audience::Guardian], 1, 'Deck');
+    $file = ResourceFiles::publishedCard($by, $live, 'Plan', 'plan.pdf');
+    $account = Audiences::reader(['guardian']);
+    $captured = Access::actorFor($account);
+
+    expect(app(BrowseDeliveredResources::class)($captured, null, null))->not->toBe([])
+        ->and(app(GetDeliveredPack::class)($captured, $live->pack->id)->cards)->toHaveCount(2);
+    $opened = app(DownloadDeliveredFile::class)($captured, $live->pack->id, $file->card->id);
+    fclose($opened->stream);
+
+    app(DisableAccount::class)($account->id);
+
+    expect(app(BrowseDeliveredResources::class)($captured, null, null))->toBe([])
+        ->and(fn () => app(GetDeliveredPack::class)($captured, $live->pack->id))->toThrow(ResourcePackNotFound::class)
+        ->and(fn () => app(DownloadDeliveredFile::class)($captured, $live->pack->id, $file->card->id))->toThrow(ResourcePackNotFound::class);
 });

@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace App\Modules\Resources\Domain;
 
 /**
- * The audiences Resources can target (ADR 0037, decision 38): a code-owned catalog, stored as these strings. Resources owns
- * WHICH audiences a Pack or Card targets and never the facts that put a Person in one (ADR 0036): Guardian eligibility is, for
- * now, the Console's `resources.view`; Member eligibility belongs to Membership; neither is stored or derived here.
- *
- * Volunteer is deliberately absent: it is added, as one case here and one eligibility source, only once a Volunteering domain
- * can say who is a Volunteer now. Declaration order is the catalog order the audience sets keep.
+ * The audiences Resources can target (ADR 0037, decision 38; ADR 0038, R1): a code-owned catalog, stored as these strings.
+ * Resources owns WHICH audiences a Pack or Card targets and never the facts that put a Person in one (ADR 0036): Guardian and
+ * Volunteer eligibility is the Person's Active relationship (Relationships), Member eligibility is Membership's; none of it is
+ * stored or derived here, and `AudienceEligibility` is the one place that asks. A key outside this catalog confers nothing
+ * anywhere. Declaration order is the catalog order the audience sets keep.
  */
 enum Audience: string
 {
     case Guardian = 'guardian';
     case Member = 'member';
+    case Volunteer = 'volunteer';
 }

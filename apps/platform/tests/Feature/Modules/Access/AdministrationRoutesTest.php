@@ -30,13 +30,17 @@ const STEP_UP_EXEMPT = [
 ];
 
 /**
- * GET routes that carry Console admission and no other capability (ADR 0038, A6). WP1 pins the relationship-types
- * route. The three audience-library routes are WP4.
+ * GET routes that carry Console admission and no other capability: EXACTLY the four exceptions ADR 0038 A6 authorizes. The types
+ * read describes several types to one Actor; the three `my-resources` routes serve audience-based reading in the Console, whose
+ * authority is the signed-in Person's own relationships, which no capability expresses (R14). Every other admin route keeps the rule.
  *
  * @var list<string>
  */
 const CONSOLE_ONLY_ADMIN_ROUTES = [
     'api/v1/admin/relationship-types',
+    'api/v1/admin/my-resources',
+    'api/v1/admin/my-resources/packs/{pack}',
+    'api/v1/admin/my-resources/packs/{pack}/cards/{card}/file',
 ];
 
 /**
@@ -118,7 +122,15 @@ it('gives every administration route authentication, the Console boundary, exact
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:volunteers.manage'], ['POST']))->toBe([])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:guardians.view'], ['POST']))->toBe(['changes something without security.verified'])
         ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access'], ['GET'], 'api/v1/admin/relationship-types'))->toBe([])
-        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:guardians.view'], ['GET'], 'api/v1/admin/relationship-types'))->toBe(['a console-only read names another capability']);
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:guardians.view'], ['GET'], 'api/v1/admin/relationship-types'))->toBe(['a console-only read names another capability'])
+        // The three my-resources routes (A6): the same exemption, only as reads, and a capability or a mutation there is refused.
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access'], ['GET', 'HEAD'], 'api/v1/admin/my-resources'))->toBe([])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access'], ['GET', 'HEAD'], 'api/v1/admin/my-resources/packs/{pack}/cards/{card}/file'))->toBe([])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access', 'can:resources.view'], ['GET'], 'api/v1/admin/my-resources/packs/{pack}'))->toBe(['a console-only read names another capability'])
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access'], ['POST'], 'api/v1/admin/my-resources'))->toBe(['a console-only exception is not a read'])
+        ->and(adminRouteProblems(['stateful', 'auth:web'], ['GET'], 'api/v1/admin/my-resources'))->toBe(['lacks can:console.access'])
+        // Any OTHER route with no capability is still refused: only the four pinned URIs are exempt.
+        ->and(adminRouteProblems(['stateful', 'auth:web', 'can:console.access'], ['GET'], 'api/v1/admin/my-resources-other'))->toBe(['does not name exactly one capability from the catalog']);
 });
 
 it('exempts exactly the CRM, Discussions and Resources mutations from recent verification, each only on its own module\'s routes, and no other administration mutation', function () {

@@ -10,7 +10,7 @@ use Tests\Support\SourceScan;
  *
  * Relationships may use Access, Identity and Audit through their Application layers, and CRM only through
  * `Crm\Application\Delegated` (WP3, P1): which Relationships class may call which delegated service is pinned in
- * CrmBoundariesTest. QualifyingRelationships has no caller outside the module until Resources' audience eligibility (WP4).
+ * CrmBoundariesTest. QualifyingRelationships has exactly one caller outside the module, Resources' audience eligibility (WP4, F14).
  */
 
 $relationships = 'App\\Modules\\Relationships';
@@ -80,12 +80,12 @@ arch('view use cases ask for the definition view capability and manage use cases
         ->and(SourceScan::code(SourceScan::read($root.'/ListRelationshipCandidates.php')))->toContain('manageCapability');
 });
 
-arch('QualifyingRelationships is used only inside Relationships until audience eligibility exists', function () {
-    expect('App\\Modules\\Relationships\\Application\\QualifyingRelationships')->toOnlyBeUsedIn('App\\Modules\\Relationships');
+arch('QualifyingRelationships is used only inside Relationships and by Resources\' audience eligibility (F14, A10)', function () {
+    expect('App\\Modules\\Relationships\\Application\\QualifyingRelationships')->toOnlyBeUsedIn(['App\\Modules\\Relationships', 'App\\Modules\\Resources\\Application\\AudienceEligibility']);
 });
 
-arch('nothing outside Relationships uses Relationships', function () use ($relationships) {
-    expect($relationships)->toOnlyBeUsedIn([$relationships, 'Database\\Seeders']);
+arch('nothing outside Relationships uses Relationships, but the development seeders and Resources\' audience eligibility, which takes only QualifyingRelationships (pinned in ResourcesBoundariesTest)', function () use ($relationships) {
+    expect($relationships)->toOnlyBeUsedIn([$relationships, 'Database\\Seeders', 'App\\Modules\\Resources\\Application\\AudienceEligibility']);
 });
 
 it('names no other module\'s table', function () {
