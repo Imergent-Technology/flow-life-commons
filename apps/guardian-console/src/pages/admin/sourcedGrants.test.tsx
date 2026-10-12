@@ -85,6 +85,15 @@ describe('access an Account holds through a source', () => {
       expect(removal.queryByText(/also holds this access through a source/)).not.toBeInTheDocument()
     })
 
+    it('goes by the role key, not its name: a sourced grant that only shares the name is a different role', async () => {
+      const removal = await openRemoval(
+        wire({ sourced_grants: [grant({ key: 'another_key', name: 'Sample Access One' })] }),
+      )
+      expect(removal.getByText(/It stops applying on their very next request/)).toBeVisible()
+      expect(removal.queryByText(/also holds this access through a source/)).not.toBeInTheDocument()
+      expect(removal.queryByText(/removes the independent assignment/)).not.toBeInTheDocument()
+    })
+
     it('says the access may continue when the same role is also held through a source, and offers no way to remove that', async () => {
       const removal = await openRemoval(
         wire({ sourced_grants: [grant({ key: 'custom_key_one', name: 'Sample Access One' })] }),

@@ -12,6 +12,11 @@ interface Rule {
   appliesTo: RegExp
   /** The files that may legitimately contain it. */
   allowedIn?: RegExp
+  /**
+   * Exact forms a named file may contain, removed from its source before `pattern` is tested. Unlike `allowedIn` this
+   * exempts the forms and not the file: anything else in the file that the pattern matches is still a violation.
+   */
+  approved?: { files: RegExp; forms: RegExp[] }
   /** What it forbids, tested on a line of source. */
   pattern: RegExp
   offends: string[]
@@ -97,7 +102,15 @@ const rules: Rule[] = [
     because:
       'what the operator may do comes from the served `actions`, and the server decides every request (ADR 0038, A2, A9). The one capability a screen may ask about is People view, for a link to the full record; a capability read any other way (a helper, a method on the list, or a destructured `capabilities`) is the Console deciding from a hint, or from another capability, what only the server decides',
     appliesTo: relationshipScreens,
-    allowedIn: /^\.\/relationships\/(?:RelationshipRecord|RelationshipIntake)\.tsx$/,
+    // Two screens link to the full Person record, and only for an operator who may view People. That one check, written in
+    // exactly these two forms, is approved in exactly those two files; any other capability check anywhere is not.
+    approved: {
+      files: /^\.\/relationships\/(?:RelationshipRecord|RelationshipIntake)\.tsx$/,
+      forms: [
+        /import\s*\{\s*hasCapability\s*,\s*PEOPLE_VIEW\s*\}\s*from\s*'\.\.\/auth\/capabilities\.ts'/g,
+        /\bhasCapability\(\s*current\s*,\s*PEOPLE_VIEW\s*\)/g,
+      ],
+    },
     pattern:
       /auth\/capabilities|hasCapability|\bcapabilities\s*\??\.\s*(?:includes|some|find|findIndex|has|indexOf|every|filter)\b|\{[^}]*\bcapabilities\b[^}]*\}\s*=\s*use/,
     offends: [
@@ -177,7 +190,10 @@ function scan(files: Record<string, string>): Violation[] {
     for (const rule of rules) {
       if (!rule.appliesTo.test(file)) continue
       if (rule.allowedIn?.test(file)) continue
-      if (rule.pattern.test(source)) found.push({ file, rule: rule.name })
+      const judged = rule.approved?.files.test(file)
+        ? rule.approved.forms.reduce((text, form) => text.replace(form, ''), source)
+        : source
+      if (rule.pattern.test(judged)) found.push({ file, rule: rule.name })
     }
   }
   return found
@@ -253,6 +269,75 @@ describe('relationship source rules', () => {
           expect(scan({ [elsewhere]: line }).map((v) => v.rule)).toContain(rule.name)
         }
       }
+    })
+  })
+
+  describe('the one approved capability check: People view, for the link to the full record', () => {
+    const rule = 'a relationship screen deciding from a capability'
+    const approvedImport = "import { hasCapability, PEOPLE_VIEW } from '../auth/capabilities.ts'"
+    const approvedCall = 'const mayOpenPeople = hasCapability(current, PEOPLE_VIEW)'
+    const flagged = (file: string, source: string) =>
+      scan({ [file]: source }).map((violation) => violation.rule)
+
+    it('accepts exactly that import and that call in the two screens that link to the full record', () => {
+      for (const file of [
+        './relationships/RelationshipRecord.tsx',
+        './relationships/RelationshipIntake.tsx',
+      ]) {
+        expect(flagged(file, `${approvedImport}\n${approvedCall}`)).not.toContain(rule)
+      }
+    })
+
+    it.each([
+      [
+        'a hardcoded capability string',
+        "const may = hasCapability(current, 'access.roles.assign')",
+      ],
+      ['another capability constant', 'const may = hasCapability(current, ROLES_ASSIGN)'],
+      [
+        'another capability imported next to the approved one',
+        "import { hasCapability, PEOPLE_VIEW, ROLES_ASSIGN } from '../auth/capabilities.ts'",
+      ],
+      [
+        'an unrelated check beside the approved one',
+        `${approvedCall}\nconst also = hasCapability(current, 'guardians.manage')`,
+      ],
+      [
+        'the approved check with a different subject',
+        'const may = hasCapability(other, PEOPLE_VIEW)',
+      ],
+      [
+        'a capability read from the list, in an approving file',
+        "const may = current.capabilities.includes('crm.people.view')",
+      ],
+    ])('rejects %s, even in a file that is approved for the one check', (_name, line) => {
+      for (const file of [
+        './relationships/RelationshipRecord.tsx',
+        './relationships/RelationshipIntake.tsx',
+      ]) {
+        expect(flagged(file, `${approvedImport}\n${approvedCall}\n${line}`)).toContain(rule)
+      }
+    })
+
+    it('does not approve even the one check in any other relationship screen', () => {
+      for (const file of [
+        './relationships/StatusChange.tsx',
+        './relationships/RelationshipPanel.tsx',
+        './pages/people/RelationshipsSection.tsx',
+        './pages/relationships/RelationshipRoute.tsx',
+      ]) {
+        expect(flagged(file, approvedCall)).toContain(rule)
+        expect(flagged(file, approvedImport)).toContain(rule)
+      }
+    })
+
+    it('leaves the definition-driven checks alone', () => {
+      expect(
+        flagged(
+          './relationships/RelationshipIntake.tsx',
+          'const ok = type.actions.manage && type.actions.view',
+        ),
+      ).not.toContain(rule)
     })
   })
 

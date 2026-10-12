@@ -717,35 +717,43 @@ describe('recording someone new', () => {
     expect(api.callsTo(`POST ${VOL}`)).toHaveLength(1)
   })
 
-  it('does not carry "record anyway" over to details the operator then changes', async () => {
-    const user = userEvent.setup()
-    const api = serveRelationships([wireVolunteerType()])
-    advisedPost(api)
-    await reachAdvice(user, api)
-    await user.click(
-      screen.getByRole('button', { name: 'This is a different person: record anyway' }),
-    )
-    // They think again, cancel, and change the new person's email.
-    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Cancel' }))
-    await user.type(screen.getByRole('textbox', { name: 'Email' }), 'alex@example.org')
-    await user.click(screen.getByRole('button', { name: 'Review and record' }))
-    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
+  // Each detail of the new person has its own reset: the override was for the details it was given on, whichever one changes.
+  it.each([
+    { field: 'Display name', typed: ' Jr' },
+    { field: 'Email', typed: 'alex@example.org' },
+    { field: 'Phone', typed: '+1 555 010 0100' },
+  ])(
+    'does not carry "record anyway" over when the $field is then changed',
+    async ({ field, typed }) => {
+      const user = userEvent.setup()
+      const api = serveRelationships([wireVolunteerType()])
+      advisedPost(api)
+      await reachAdvice(user, api)
+      await user.click(
+        screen.getByRole('button', { name: 'This is a different person: record anyway' }),
+      )
+      // They think again, cancel, and change one detail of the new person.
+      await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Cancel' }))
+      await user.type(screen.getByRole('textbox', { name: field }), typed)
+      await user.click(screen.getByRole('button', { name: 'Review and record' }))
+      await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
 
-    // The changed details meet CRM's advice again; the earlier override did not go with them.
-    await screen.findByRole('list', { name: 'Possible duplicates' })
-    expect(api.callsTo(`POST ${VOL}`)).toHaveLength(2)
-    expect(bodyOf(api, `POST ${VOL}`, 1)).not.toHaveProperty('confirm_distinct')
+      // The changed details meet CRM's advice again; the earlier override did not go with them.
+      await screen.findByRole('list', { name: 'Possible duplicates' })
+      expect(api.callsTo(`POST ${VOL}`)).toHaveLength(2)
+      expect(bodyOf(api, `POST ${VOL}`, 1)).not.toHaveProperty('confirm_distinct')
 
-    // Only a new, deliberate decision overrides it.
-    await user.click(
-      screen.getByRole('button', { name: 'This is a different person: record anyway' }),
-    )
-    await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
-    await waitFor(() => {
-      expect(api.callsTo(`POST ${VOL}`)).toHaveLength(3)
-    })
-    expect(bodyOf(api, `POST ${VOL}`, 2)).toMatchObject({ confirm_distinct: true })
-  })
+      // Only a new, deliberate decision overrides it.
+      await user.click(
+        screen.getByRole('button', { name: 'This is a different person: record anyway' }),
+      )
+      await user.click(within(await dialog(/Record Alex/)).getByRole('button', { name: 'Record' }))
+      await waitFor(() => {
+        expect(api.callsTo(`POST ${VOL}`)).toHaveLength(3)
+      })
+      expect(bodyOf(api, `POST ${VOL}`, 2)).toMatchObject({ confirm_distinct: true })
+    },
+  )
 
   it('links a possible duplicate to People only for an operator who may view People', async () => {
     const user = userEvent.setup()
