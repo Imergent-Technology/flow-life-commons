@@ -55,7 +55,7 @@ export function ConfirmDialog({
         if (!pending) onCancel()
       }}
     >
-      <div className="flex flex-col gap-3 text-body text-foreground">{children}</div>
+      <div className="flex flex-col gap-3 text-body wrap-anywhere text-foreground">{children}</div>
       {message ? (
         <Alert key={message.attempt} tone={message.tone} focusOnMount>
           {message.text}

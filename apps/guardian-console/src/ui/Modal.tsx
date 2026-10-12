@@ -38,7 +38,7 @@ export function Modal({
         <h2
           id={titleId}
           tabIndex={-1}
-          className="font-display text-dialog-title font-medium text-foreground outline-none"
+          className="font-display text-dialog-title font-medium wrap-anywhere text-foreground outline-none"
         >
           {title}
         </h2>

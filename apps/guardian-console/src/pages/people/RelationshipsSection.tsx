@@ -117,7 +117,7 @@ function RelationshipTab({
             {`${personName({ id: personId, displayName: personDisplayName })}'s ${type.labels.singular.toLowerCase()} was deleted permanently.`}
           </Alert>
         ) : null}
-        <p className="text-body text-muted-foreground">
+        <p className="text-body wrap-anywhere text-muted-foreground">
           {personDisplayName} is not recorded as {withArticle(type.labels.singular)}.
         </p>
         {type.actions.manage ? (

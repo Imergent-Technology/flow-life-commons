@@ -102,7 +102,7 @@ function serveAll() {
     ['guardians', 'guardian'],
     ['volunteers', 'volunteer'],
   ] as const) {
-    const base = `/api/v1/admin/relationships/${slug}`
+    const base = `/api/v1/admin/relationships/${slug}` as const
     api.on(`GET ${base}`, json(directoryPage([wireEntry()])))
     api.on(`GET ${base}/candidates`, json(candidateList([candidate(REL_PERSON, 'Ada Lovelace')])))
     api.on(`GET ${base}/${REL_PERSON}`, json(wireRecord({ type })))

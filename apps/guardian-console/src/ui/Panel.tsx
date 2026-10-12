@@ -55,7 +55,7 @@ export function Panel({
               </Heading>
             )}
             {description === undefined ? null : (
-              <p className="text-body text-muted-foreground">{description}</p>
+              <p className="text-body wrap-anywhere text-muted-foreground">{description}</p>
             )}
           </div>
           {actions === undefined ? null : (

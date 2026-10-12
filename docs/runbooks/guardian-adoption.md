@@ -3,7 +3,7 @@
 - **Purpose:** record who the Guardians are, one Person at a time, after the release that carries the Guardian relationship ([ADR 0038](../adr/0038-organizational-relationships-and-resource-viewing-authority.md), Part M).
 - **Owner:** a Platform Administrator. Adoption needs `guardians.manage` and, to offer Guardian Initiate access, `access.roles.assign`; in G10 only that role holds either.
 - **Last tested:** by the automated tests only (`GuardianProvisioningTest`, `RelationshipsRaceTest`) on MariaDB and PostgreSQL. It has **not** been carried out on a real host.
-- **Status:** the Relationships Console (WP5) is not built, so the steps below name the API operations. They are the same operations the Console will use.
+- **Status:** the Relationships Console (G10 WP5) now offers every step below under People > Relationships: "Record a Guardian" for the lookup, the existing-Person confirmation and the Initiate choice, and the record page for status changes, the default-role decisions and deletion. The steps name the API operations underneath them, which are the same ones the Console sends. The Console has not been used for adoption on a real host.
 
 ## Adoption is not the role-key migration
 
