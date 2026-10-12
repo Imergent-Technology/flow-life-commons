@@ -2051,6 +2051,7 @@ These are the known WP6 incompatibilities, deliberately not repaired in WP4. **T
 - `ViewerLibrary` and `AudienceDelivery`, which perform no capability check themselves, now have exact caller pins (`ViewerLibrary`: `BrowseLibrary`, `ReadLibraryPack`, `DownloadLibraryFile`; `AudienceDelivery`: `BrowseDeliveredResources`, `GetDeliveredPack`, `DownloadDeliveredFile`).
 - The controller-family rules are `arch()` rules, so an import, grouped import, alias, namespace alias or same-namespace reference cannot hide a dependency. Reader controllers are allowlists (`toOnlyUse`); management controllers are checked one at a time, because Pest's `not->toUse` over a list fails only when every listed class uses the dependency.
 - Negated multi-value `toContain` assertions passed whenever any one value was absent, and a message passed as a second argument counted as such a value. The WP4 assertions that used either form were rewritten as one assertion per value.
+- A focused independent verification of that remediation confirmed it and found two low gaps, closed by tests alone: Pest's `toOnlyBeUsedIn` excuses the allowed callers by name **prefix**, so a guard now rejects any Resources class or directory that begins with an allowed caller's name without being that caller; and the G5 deletion test's scan of other modules' tables passed its message as a needle, so it now asserts one value per expectation. Three older G5 negations of the same form are recorded as test-maintenance debt (two harmless, one covered by exact event pins).
 
 ## Consequences
 
