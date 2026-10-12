@@ -167,7 +167,21 @@ export function AccessRolesSection({
             })
           }
         >
-          <p>It stops applying on their very next request. Their sessions are not ended.</p>
+          {account.sourcedGrants.some((grant) => grant.key === pending.key) ? (
+            <>
+              <p>
+                This removes the independent assignment on their very next request. Their sessions
+                are not ended.
+              </p>
+              <p>
+                {account.displayName} also holds this access through a source, listed under
+                &ldquo;Access through a source&rdquo;. That is not removed here, so the access may
+                continue to apply.
+              </p>
+            </>
+          ) : (
+            <p>It stops applying on their very next request. Their sessions are not ended.</p>
+          )}
         </ConfirmDialog>
       ) : null}
     </Panel>
