@@ -36,7 +36,7 @@ export function serveRecord(options: {
   account?: CurrentAccount
 }): Served {
   const api = serveRelationships(options.types, options.account ?? operatorWith())
-  const path = `/api/v1/admin/relationships/${options.slug}/${PERSON}`
+  const path = `/api/v1/admin/relationships/${options.slug}/${PERSON}` as const
   if (options.view) api.on(`GET ${path}`, options.view)
   if (options.management) api.on(`GET ${path}/management`, options.management)
   return { api, slug: options.slug, path }

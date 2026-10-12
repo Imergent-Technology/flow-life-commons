@@ -24,6 +24,18 @@ import {
 import { libraryOf, TWO_GROUPS, wireLibraryPack } from '../test/library.ts'
 import { renderApp } from '../test/renderApp.tsx'
 import {
+  candidate,
+  candidateList,
+  directoryPage,
+  PERSON as REL_PERSON,
+  typesOf,
+  wireEntry,
+  wireGuardianType,
+  wireManagement,
+  wireRecord,
+  wireVolunteerType,
+} from '../test/relationships.ts'
+import {
   CARD_ID,
   categoryList,
   PACK_ID,
@@ -81,6 +93,21 @@ function serveAll() {
   api.on(`GET /api/v1/admin/resources/packs/${PACK_ID}/cards/${CARD_ID}`, json(wireCard()))
   api.on('GET /api/v1/admin/resource-library', libraryOf(...TWO_GROUPS))
   api.on(`GET /api/v1/admin/resource-library/packs/${PACK_ID}`, json(wireLibraryPack()))
+  // Relationships (ADR 0038): the definitions, then one directory, one record and one lookup for each served type.
+  api.on(
+    'GET /api/v1/admin/relationship-types',
+    json(typesOf(wireGuardianType(), wireVolunteerType())),
+  )
+  for (const [slug, type] of [
+    ['guardians', 'guardian'],
+    ['volunteers', 'volunteer'],
+  ] as const) {
+    const base = `/api/v1/admin/relationships/${slug}`
+    api.on(`GET ${base}`, json(directoryPage([wireEntry()])))
+    api.on(`GET ${base}/candidates`, json(candidateList([candidate(REL_PERSON, 'Ada Lovelace')])))
+    api.on(`GET ${base}/${REL_PERSON}`, json(wireRecord({ type })))
+    api.on(`GET ${base}/${REL_PERSON}/management`, json(wireManagement({ type })))
+  }
   return api
 }
 
@@ -97,6 +124,12 @@ const consoleRoutes: { path: string; h1: string; width: PageWidth }[] = [
   { path: '/people/new', h1: 'Add a person', width: 'form' },
   { path: '/people/tags', h1: 'Tags', width: 'detail' },
   { path: `/people/${CRM_PERSON}`, h1: 'Ada Lovelace', width: 'detail' },
+  { path: '/relationships/guardians', h1: 'Guardians', width: 'wide' },
+  { path: '/relationships/volunteers', h1: 'Volunteers', width: 'wide' },
+  { path: '/relationships/volunteers/new', h1: 'Record a Volunteer', width: 'form' },
+  { path: '/relationships/guardians/new', h1: 'Record a Guardian', width: 'form' },
+  { path: `/relationships/guardians/${REL_PERSON}`, h1: 'Ada Lovelace', width: 'detail' },
+  { path: `/relationships/volunteers/${REL_PERSON}`, h1: 'Ada Lovelace', width: 'detail' },
   { path: '/discussions', h1: 'Discussions', width: 'wide' },
   { path: '/discussions/new', h1: 'Start a discussion', width: 'form' },
   { path: `/discussions/${DISCUSSION_ID}`, h1: 'Where do we meet?', width: 'detail' },

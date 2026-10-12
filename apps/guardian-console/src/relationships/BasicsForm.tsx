@@ -178,6 +178,7 @@ export function BasicsForm({
       {editing ? (
         <form
           aria-label="Edit contact details"
+          noValidate
           onSubmit={(event: SyntheticEvent) => {
             event.preventDefault()
             void save()

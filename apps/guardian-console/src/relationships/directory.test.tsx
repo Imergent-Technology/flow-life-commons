@@ -65,7 +65,7 @@ describe('a relationship directory', () => {
     )
     expect(within(table).getAllByText('—').length).toBeGreaterThanOrEqual(2)
     expect(within(table).getByRole('columnheader', { name: 'Status since' })).toBeInTheDocument()
-    await expectNoAxeViolations()
+    await expectNoAxeViolations(pageBody())
   })
 
   it('asks the relationship API for one page of 25 and never for the broader People directory', async () => {

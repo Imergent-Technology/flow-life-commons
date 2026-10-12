@@ -219,6 +219,18 @@ final class E2eAccountSeeder extends Seeder
 
     public const string CSP_CODES_SECRET = 'GIYDCMBSGE3TQMRSGE3DAOBSGIYDCMBS';
 
+    /**
+     * A Console administrator of its own for the Relationships journeys (e2e/relationships.spec.ts). Guardian recognition, status
+     * changes, default-role decisions and deletion need `guardians.manage` and recent verification, which only an administrator holds
+     * today, and each journey records and deletes its own relationships. It has its own account so that no other journey shares
+     * its sessions, its recovery codes or its time steps.
+     */
+    public const string RELATIONSHIPS_ADMIN_EMAIL = 'e2e.relationships.admin@example.org';
+
+    public const string RELATIONSHIPS_ADMIN_PASSWORD = 'e2e-relationships-admin-password-not-a-secret';
+
+    public const string RELATIONSHIPS_ADMIN_SECRET = 'KRUGKIDROVUWG2ZAMJZG653OEBTYPHLI';
+
     /** An ordinary active Account the step-up journey disables. It holds no access. */
     public const string STALE_TARGET_EMAIL = 'e2e.admin.target@example.org';
 
@@ -354,6 +366,7 @@ final class E2eAccountSeeder extends Seeder
             [self::ADMIN_RECOVER_EMAIL, 'E2E Admin Recover', self::ADMIN_RECOVER_PASSWORD, self::ADMIN_RECOVER_SECRET, 'Q'],
             [self::CSP_ADMIN_EMAIL, 'E2E Security Admin', self::CSP_ADMIN_PASSWORD, self::CSP_ADMIN_SECRET, 'W'],
             [self::CSP_CODES_EMAIL, 'E2E Security Codes', self::CSP_CODES_PASSWORD, self::CSP_CODES_SECRET, 'X'],
+            [self::RELATIONSHIPS_ADMIN_EMAIL, 'E2E Relationships Admin', self::RELATIONSHIPS_ADMIN_PASSWORD, self::RELATIONSHIPS_ADMIN_SECRET, 'Y'],
         ] as [$email, $name, $password, $secret, $tag]) {
             $account = $this->activeAccount($accounts, $people, $hasher, $now, $email, $name, $password);
             $consoleUser->administrator($account->personId);

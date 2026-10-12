@@ -114,8 +114,7 @@ function RelationshipTab({
       <div className="flex flex-col items-start gap-3">
         {deleted ? (
           <Alert tone="success">
-            {personName({ id: personId, displayName: personDisplayName })}&rsquo;s{' '}
-            {type.labels.singular.toLowerCase()} was deleted permanently.
+            {`${personName({ id: personId, displayName: personDisplayName })}'s ${type.labels.singular.toLowerCase()} was deleted permanently.`}
           </Alert>
         ) : null}
         <p className="text-body text-muted-foreground">

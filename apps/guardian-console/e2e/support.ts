@@ -250,6 +250,8 @@ export type FixtureSession =
   | 'resources-stale-card'
   | 'resources-stale-pack'
   | 'resources-stale-library'
+  | 'relationships-admin'
+  | 'relationships-admin-stale'
 
 interface MintedSession {
   session: string

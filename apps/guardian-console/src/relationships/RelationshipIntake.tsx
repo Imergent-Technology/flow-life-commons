@@ -66,7 +66,10 @@ export function RelationshipIntake({
   const [subject, setSubject] = useState<Subject | null>(null)
   const [confirming, setConfirming] = useState<PersonRef | null>(preselected)
   const [person, setPerson] = useState(blankPerson)
-  const [status, setStatus] = useState('')
+  // Only when the definition allows a single way to start is there nothing for the operator to decide.
+  const [status, setStatus] = useState(
+    type.initialStates.length === 1 ? (type.initialStates[0] ?? '') : '',
+  )
   const [draft, setDraft] = useState<Draft>(() => draftFrom(type.fields, {}))
   const [touched, setTouched] = useState<boolean | null>(null)
   const [review, setReview] = useState(false)

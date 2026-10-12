@@ -5,6 +5,7 @@ import { ADMIN_CAPABILITIES, page, serveOperator, wire } from '../test/admin.ts'
 import { accountFor, json } from '../test/fakeApi.ts'
 import { membersPage, wireMember } from '../test/membership.ts'
 import { renderApp } from '../test/renderApp.tsx'
+import { directoryPage, typesOf, wireEntry, wireVolunteerType } from '../test/relationships.ts'
 import { categoryList, packsPage, wireCategory, wireListedPack } from '../test/resources.ts'
 
 // Below 768px a table becomes stacked records, and CSS reads each value's name from its `data-label`. jsdom
@@ -23,6 +24,8 @@ function serve() {
   )
   api.on('GET /api/v1/admin/accounts', json(page([wire(), wire({ id: 'B', display_name: 'Bo' })])))
   api.on('GET /api/v1/admin/members', json(membersPage([wireMember()])))
+  api.on('GET /api/v1/admin/relationship-types', json(typesOf(wireVolunteerType())))
+  api.on('GET /api/v1/admin/relationships/volunteers', json(directoryPage([wireEntry()])))
   api.on('GET /api/v1/admin/resources/categories', json(categoryList([wireCategory()])))
   api.on(
     'GET /api/v1/admin/resources/packs',
@@ -45,6 +48,7 @@ async function labelsAgainstHeaders(name: string) {
 describe.each([
   { path: '/admin/accounts', caption: 'Accounts', columns: 5 },
   { path: '/admin/members', caption: 'Members', columns: 3 },
+  { path: '/relationships/volunteers', caption: 'Volunteers', columns: 5 },
   { path: '/resources', caption: 'Resource Packs', columns: 6 },
 ])('the $caption table on a narrow screen', ({ path, caption, columns }) => {
   it('gives every value the name of its column, so a stacked record never shows a bare value', async () => {

@@ -107,6 +107,7 @@ export function FieldsForm({
       {editing ? (
         <form
           aria-label={`Edit ${type.labels.singular} details`}
+          noValidate
           onSubmit={(event: SyntheticEvent) => {
             event.preventDefault()
             void save()

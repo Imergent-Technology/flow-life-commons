@@ -8,11 +8,12 @@ import { withArticle } from './definitions.ts'
 
 export function describeRelationshipFailure(failure: Failure, type?: RelationshipType): Problem {
   const singular = type?.labels.singular ?? 'relationship'
+  const noun = singular.toLowerCase()
   const role = type?.defaultRole?.displayName ?? 'that'
 
   if (failure.kind === 'not-found') {
     return {
-      message: `That ${singular} could not be found. It may have been deleted.`,
+      message: `That ${noun} could not be found. It may have been deleted.`,
       fields: {},
     }
   }
@@ -23,28 +24,33 @@ export function describeRelationshipFailure(failure: Failure, type?: Relationshi
     }
   }
   if (failure.kind === 'conflict') {
-    const message = conflictMessage(failure.code, singular, role)
+    const message = conflictMessage(failure.code, singular, noun, role)
     if (message !== undefined) return { message, fields: {} }
   }
   if (failure.kind === 'invalid' && failure.code !== undefined) {
-    const message = invalidMessage(failure.code, singular, role)
+    const message = invalidMessage(failure.code, noun, role)
     if (message !== undefined) return { message, fields: failure.errors }
   }
   return describeFailure(failure)
 }
 
-function conflictMessage(code: string, singular: string, role: string): string | undefined {
+function conflictMessage(
+  code: string,
+  singular: string,
+  noun: string,
+  role: string,
+): string | undefined {
   switch (code) {
     case 'stale_revision':
-      return `This ${singular} changed while you were working. Reload to see its current state; nothing was changed.`
+      return `This ${noun} changed while you were working. Reload to see its current state; nothing was changed.`
     case 'stale_person_basics':
       return 'These details changed while you were working. Nothing was changed.'
     case 'relationship_exists':
       return `This person is already recorded as ${withArticle(singular)}.`
     case 'relationship_in_use':
-      return `This ${singular} is still in use by other records, so it was not deleted.`
+      return `This ${noun} is still in use by other records, so it was not deleted.`
     case 'relationship_not_active':
-      return `${role} access can only be granted while the ${singular} is active. Nothing was changed.`
+      return `${role} access can only be granted while the ${noun} is active. Nothing was changed.`
     case 'possible_duplicate':
       return 'This person may already be known.'
     default:
@@ -52,10 +58,10 @@ function conflictMessage(code: string, singular: string, role: string): string |
   }
 }
 
-function invalidMessage(code: string, singular: string, role: string): string | undefined {
+function invalidMessage(code: string, noun: string, role: string): string | undefined {
   switch (code) {
     case 'transition_not_allowed':
-      return `That is not a change this ${singular} can make from its current status. Reload to see what is allowed.`
+      return `That is not a change this ${noun} can make from its current status. Reload to see what is allowed.`
     case 'confirmation_required':
       return 'Confirm that you mean to record this existing person, then try again.'
     case 'default_role_decision_required':

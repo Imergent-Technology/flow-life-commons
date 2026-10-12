@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { expectNoAxeViolations } from '../test/a11y.ts'
 import { json } from '../test/fakeApi.ts'
 import { renderApp } from '../test/renderApp.tsx'
-import { guardianBoth, serveRecord, volunteerBoth } from '../test/relationshipPages.ts'
+import { guardianBoth, serveRecord } from '../test/relationshipPages.ts'
 import {
   GWEN,
   notFound,
@@ -70,7 +70,7 @@ describe('a relationship record, by the capabilities the operator holds', () => 
     expect(within(history).getByText('Recorded as')).toBeVisible()
     expect(within(body).getAllByText(/Gwen Operator/).length).toBeGreaterThan(0)
     noControls()
-    await expectNoAxeViolations()
+    await expectNoAxeViolations(pageBody())
   })
 
   it('manage only: reads the management view and never the record, so it shows no history or provenance', async () => {
@@ -99,7 +99,7 @@ describe('a relationship record, by the capabilities the operator holds', () => 
     expect(screen.getByRole('button', { name: 'Change to Inactive' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Edit details' })).toBeVisible()
     expect(screen.getByRole('button', { name: /Delete this guardian/ })).toBeVisible()
-    await expectNoAxeViolations()
+    await expectNoAxeViolations(pageBody())
   })
 
   it('both capabilities: one record, combined once, with no panel shown twice', async () => {
@@ -251,14 +251,14 @@ describe('a relationship record, by the capabilities the operator holds', () => 
     expect(
       api.callsTo(`PATCH /api/v1/admin/relationships/apprentices/${PERSON}/fields`),
     ).toHaveLength(0)
-    await expectNoAxeViolations()
+    await expectNoAxeViolations(pageBody())
   })
 
   it('shows nothing from the Person record: no account, role, membership or security data', async () => {
     guardianBoth({ account: operatorWith('crm.people.view') })
     renderApp(GUARDIAN_PAGE)
     await screen.findByRole('heading', { level: 2, name: 'History' })
-    const text = pageBody().textContent ?? ''
+    const text = pageBody().textContent
     expect(text).not.toMatch(/membership|password|two-step|login|sign-in email|\brole\b/i)
   })
 })
