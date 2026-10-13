@@ -10,7 +10,6 @@ import {
   PEOPLE_MANAGE,
   PEOPLE_VIEW,
   RESOURCES_MANAGE,
-  RESOURCES_VIEW,
 } from '../auth/capabilities.ts'
 
 /**
@@ -103,7 +102,7 @@ export const navigation: readonly NavSection[] = [
           {
             label: 'Resource Library',
             to: '/resource-library',
-            capability: RESOURCES_VIEW,
+            // No capability: everyone the Console admits reads a library (ADR 0038, C1). Which one is the library's own decision.
             // A Resource (a Pack), read with the Cards the person may see (`?card=` chooses one).
             detail: { pattern: '/resource-library/:packId', label: 'Resource' },
           },

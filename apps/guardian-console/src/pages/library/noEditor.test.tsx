@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { operator, serveOperator } from '../../test/admin.ts'
 import { json } from '../../test/fakeApi.ts'
 import {
-  LIBRARY,
-  LIBRARY_PACK,
+  MY_RESOURCES,
+  MY_RESOURCES_PACK,
   libraryOf,
   numbered,
   READER,
@@ -63,8 +63,8 @@ describe('the editor and the library', () => {
     ],
   ] as const)('is not requested by %s', async (_name, path, ready) => {
     const api = serveOperator(operator(READER))
-    api.on(`GET ${LIBRARY}`, () => libraryOf(...TWO_GROUPS))
-    api.on(`GET ${LIBRARY_PACK}`, () =>
+    api.on(`GET ${MY_RESOURCES}`, () => libraryOf(...TWO_GROUPS))
+    api.on(`GET ${MY_RESOURCES_PACK}`, () =>
       json(wireLibraryPack({ title: 'The course', is_series: true, cards: SERIES })),
     )
     renderApp(path)

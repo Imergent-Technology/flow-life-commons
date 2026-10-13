@@ -1,15 +1,15 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
-import type { DeliveredCard } from '../../api/resourceLibrary.ts'
-import { invalidFixtures, validFixtures } from '../../test/resourceFixtures.ts'
+import type { ReadingCard } from '../../../api/resourceLibrary.ts'
+import { invalidFixtures, validFixtures } from '../../../test/resourceFixtures.ts'
 import { LibraryCardBody } from './LibraryCardBody.tsx'
 
 // The library is the first screen that READS Resource content for its own sake, so it is held to the same corpus the platform and the
 // editor are (apps/platform/tests/Fixtures/resource-content): every document the platform accepts is drawn in full, and every one it
 // refuses is withheld whole, with nothing of it on screen and nothing in it active.
 
-const card = (document: unknown): DeliveredCard => ({
+const card = (document: unknown): ReadingCard => ({
   id: '01J00000000000000000CARD001',
   index: 1,
   type: 'basic',

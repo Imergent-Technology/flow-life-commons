@@ -6,10 +6,12 @@
 // A file is never located here: the API describes it (name, type, size) and names the management path that serves it. No
 // storage key, disk or filesystem path exists in any response, so none exists in these types.
 
+import { AUDIENCES, isAudience, isAudienceList, type Audience } from './audiences.ts'
 import { requestJson, requestVoid, type Result } from './http.ts'
 
-export type Audience = 'guardian' | 'member'
-export const AUDIENCES: readonly Audience[] = ['guardian', 'member']
+// The catalog is shared with the library client (api/audiences.ts), which must not depend on this one. Re-exported so that the
+// management screens keep importing it from here.
+export { AUDIENCES, type Audience }
 
 /** The audience a preview starts on: the one the Console itself delivers to. */
 export const DEFAULT_PREVIEW_AUDIENCE: Audience = 'guardian'
@@ -127,10 +129,6 @@ const isNullableString = (value: unknown): value is string | null =>
 
 const STATES: readonly unknown[] = ['draft', 'published']
 const TYPES: readonly unknown[] = ['basic', 'external_link', 'file']
-
-const isAudience = (value: unknown): value is Audience => value === 'guardian' || value === 'member'
-const isAudienceList = (value: unknown): value is Audience[] =>
-  Array.isArray(value) && value.every(isAudience)
 
 interface WirePerson {
   id: string

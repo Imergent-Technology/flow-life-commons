@@ -128,8 +128,9 @@ const rules: Rule[] = [
       /platform_administrator|['"`]guardian-initiate['"`]|['"`]guardian-full['"`]|['"`]guardian-senior['"`]|['"`]console-participant['"`]|['"`]guardian['"`]|\bis(?:Guardian|Admin|Administrator)\b|(?<!access)\.roles?\b|\broles\s*:/,
     // The Resources API's audience catalog: `guardian` there is an AUDIENCE KEY stored with a Pack (ADR 0037, decision 38; an audience
     // is not a role, ADR 0036), not a question about who the signed-in person is. The same word is exempted on the platform's side
-    // (`Resources\Domain\Audience`). It lives in this one file, and no screen compares with it.
-    allowedIn: /(^|\/)api\/resources\.ts$/,
+    // (`Resources\Domain\Audience`). The catalog lives in `api/audiences.ts` (shared by the management and library clients, which
+    // must not import each other); `api/resources.ts` names the one default preview audience. No screen compares with it.
+    allowedIn: /(^|\/)api\/(?:audiences|resources)\.ts$/,
     offends: "if (account.roles.includes('platform_administrator')) show()",
     fine: "<div role=\"alert\">Flow Life Commons</div> hasCapability(current, 'console.access') const ROLES_ASSIGN = 'access.roles.assign'",
   },
@@ -299,7 +300,7 @@ describe('Console source rules', () => {
     expect(scan(production)).toEqual([])
   })
 
-  it('flags every role key, and allows the audience word only in the resources client', () => {
+  it('flags every role key, and allows the audience word only in the audience catalog and the management client', () => {
     const rule = 'system role names'
     for (const line of [
       "const key = 'platform_administrator'",
@@ -316,6 +317,15 @@ describe('Console source rules', () => {
         (v) => v.rule,
       ),
     ).not.toContain(rule)
+    expect(
+      scan({
+        './api/audiences.ts': "export type Audience = 'guardian' | 'member' | 'volunteer'",
+      }).map((v) => v.rule),
+    ).not.toContain(rule)
+    // The library client takes the catalog from there; it names no audience of its own.
+    expect(
+      scan({ './api/resourceLibrary.ts': "const only = 'guardian'" }).map((v) => v.rule),
+    ).toContain(rule)
     expect(
       scan({ './pages/Relationship.tsx': "const type = 'guardian'" }).map((v) => v.rule),
     ).toContain(rule)

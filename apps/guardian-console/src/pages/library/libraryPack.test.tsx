@@ -11,8 +11,8 @@ import { json } from '../../test/fakeApi.ts'
 import { LocationProbe } from '../../test/LocationProbe.tsx'
 import {
   filePath,
-  LIBRARY,
-  LIBRARY_PACK,
+  MY_RESOURCES,
+  MY_RESOURCES_PACK,
   numbered,
   READER,
   resourceNotFound,
@@ -35,7 +35,7 @@ const PATH = `/resource-library/${PACK_ID}`
 
 function servePack(pack: Record<string, unknown>) {
   const api = serveOperator(operator(READER))
-  api.on(`GET ${LIBRARY_PACK}`, () => json(pack))
+  api.on(`GET ${MY_RESOURCES_PACK}`, () => json(pack))
   return api
 }
 
@@ -188,7 +188,7 @@ describe('a Pack with several visible Cards', () => {
     expect(linkIn(cardNav(), 'On the day')).toHaveAttribute('aria-current', 'true')
     expect(location()).toBe(`${PATH}?card=${CARD2_ID}`)
     // Nothing was asked for to show it.
-    expect(api.callsTo(`GET ${LIBRARY_PACK}`)).toHaveLength(1)
+    expect(api.callsTo(`GET ${MY_RESOURCES_PACK}`)).toHaveLength(1)
   })
 
   it('opens at the Card in the address, so a refresh or a shared link keeps the place', async () => {
@@ -448,7 +448,7 @@ describe('a Card’s summary in the navigation', () => {
 describe('a Resource that is not available', () => {
   async function missing(response: () => Response) {
     const api = serveOperator(operator(READER))
-    api.on(`GET ${LIBRARY_PACK}`, response)
+    api.on(`GET ${MY_RESOURCES_PACK}`, response)
     renderApp(PATH)
     await screen.findByRole('heading', { level: 1, name: 'Resource not found' })
     return api
@@ -486,13 +486,13 @@ describe('a Resource that is not available', () => {
   it('says a failure is a failure and offers to try again', async () => {
     const user = userEvent.setup()
     const api = serveOperator(operator(READER))
-    api.on(`GET ${LIBRARY_PACK}`, () => json({ message: 'x' }, 503))
+    api.on(`GET ${MY_RESOURCES_PACK}`, () => json({ message: 'x' }, 503))
     renderApp(PATH)
 
     expect(
       await screen.findByText('The service is temporarily unavailable. Try again in a moment.'),
     ).toBeInTheDocument()
-    api.on(`GET ${LIBRARY_PACK}`, () => json(wireLibraryPack()))
+    api.on(`GET ${MY_RESOURCES_PACK}`, () => json(wireLibraryPack()))
     await user.click(screen.getByRole('button', { name: 'Try again' }))
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Welcome pack' }),
@@ -505,8 +505,8 @@ describe('a Resource that is not available', () => {
     await screen.findByText('Arrive by nine.')
 
     expect(api.calls.filter((c) => c.path.includes('/admin/resources'))).toEqual([])
-    expect(api.calls.filter((c) => c.path.startsWith(LIBRARY)).map((c) => c.path)).toEqual([
-      LIBRARY_PACK,
+    expect(api.calls.filter((c) => c.path.startsWith(MY_RESOURCES)).map((c) => c.path)).toEqual([
+      MY_RESOURCES_PACK,
     ])
   })
 })
@@ -734,15 +734,16 @@ describe('a File Card', () => {
 
 // --- Capabilities -----------------------------------------------------------------------------------------------------------
 
-describe('the Pack page is behind resources.view', () => {
-  it('asks for nothing from someone who lacks it', async () => {
+describe('the Pack page needs only Console admission', () => {
+  it('reads through the audience routes for someone who can only manage, and never asks the privileged viewer', async () => {
     const api = serveOperator(operator(['console.access', 'resources.manage']))
-    api.on(`GET ${LIBRARY_PACK}`, () => json(wireLibraryPack()))
+    api.on(`GET ${MY_RESOURCES_PACK}`, () => json(wireLibraryPack()))
     renderApp(PATH)
 
     expect(
-      await screen.findByRole('heading', { level: 1, name: 'Not permitted' }),
+      await screen.findByRole('heading', { level: 1, name: 'Welcome pack' }),
     ).toBeInTheDocument()
-    expect(api.calls.filter((c) => c.path.startsWith(LIBRARY))).toEqual([])
+    expect(api.callsTo(`GET ${MY_RESOURCES_PACK}`)).toHaveLength(1)
+    expect(api.calls.filter((c) => c.path.startsWith('/api/v1/admin/resource-library'))).toEqual([])
   })
 })

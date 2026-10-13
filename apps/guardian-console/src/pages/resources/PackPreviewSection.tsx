@@ -3,7 +3,7 @@ import { useState, type SyntheticEvent } from 'react'
 import {
   audienceLabel,
   describeResourcesFailure,
-  MEMBER_DELIVERY_NOTE,
+  AUDIENCE_DELIVERY_NOTE,
 } from '../../admin/resourcesWording.ts'
 import {
   AUDIENCES,
@@ -85,9 +85,7 @@ export function PackPreviewSection({ packId }: { packId: string }) {
             Preview
           </Button>
         </div>
-        {audience === 'member' ? (
-          <p className="text-meta text-muted-foreground">{MEMBER_DELIVERY_NOTE}</p>
-        ) : null}
+        <p className="text-meta text-muted-foreground">{AUDIENCE_DELIVERY_NOTE}</p>
       </form>
 
       <div aria-live="polite" className="mt-3 flex flex-col gap-2">

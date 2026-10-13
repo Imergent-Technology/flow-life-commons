@@ -7,7 +7,7 @@ import { operator, serveOperator } from '../../test/admin.ts'
 import { deferred, nth, pageBody } from '../../test/deferred.ts'
 import { json } from '../../test/fakeApi.ts'
 import {
-  LIBRARY,
+  MY_RESOURCES,
   libraryOf,
   READER,
   TWO_GROUPS,
@@ -24,7 +24,7 @@ afterEach(() => {
 
 function serve(groups: unknown[] = TWO_GROUPS) {
   const api = serveOperator(operator(READER))
-  api.on(`GET ${LIBRARY}`, () => libraryOf(...groups))
+  api.on(`GET ${MY_RESOURCES}`, () => libraryOf(...groups))
   return api
 }
 
@@ -38,7 +38,7 @@ async function openLibrary(groups?: unknown[]) {
 }
 
 const libraryRequests = (api: ReturnType<typeof serve>) =>
-  api.calls.filter((call) => call.method === 'GET' && call.path.startsWith(LIBRARY))
+  api.calls.filter((call) => call.method === 'GET' && call.path.startsWith(MY_RESOURCES))
 
 const lastQuery = (api: ReturnType<typeof serve>) =>
   new URL(nth(libraryRequests(api), libraryRequests(api).length - 1).path, 'http://x').searchParams
@@ -127,12 +127,12 @@ describe('the Resource Library home', () => {
 
     expect(api.calls.filter((call) => call.path.includes('/admin/resources'))).toEqual([])
     expect(libraryRequests(api)).toHaveLength(1)
-    expect(nth(libraryRequests(api), 0).path).toBe(LIBRARY)
+    expect(nth(libraryRequests(api), 0).path).toBe(MY_RESOURCES)
   })
 
   it('lets the server search: the words are sent, and nothing is filtered here', async () => {
     const { user, api } = await openLibrary()
-    api.on(`GET ${LIBRARY}?q=zebra`, () =>
+    api.on(`GET ${MY_RESOURCES}?q=zebra`, () =>
       libraryOf(wireGroup([wireListedEntry({ id: PACK_ID, title: 'Zebra rules' })])),
     )
 
@@ -148,7 +148,7 @@ describe('the Resource Library home', () => {
 
   it('filters by Category through the server, offering the Categories the whole library listed', async () => {
     const { user, api } = await openLibrary()
-    api.on(`GET ${LIBRARY}?category=${CATEGORY2_ID}`, () =>
+    api.on(`GET ${MY_RESOURCES}?category=${CATEGORY2_ID}`, () =>
       libraryOf(
         wireGroup([wireListedEntry({ id: '01J00000000000000000PACK003', title: 'Soup' })], {
           id: CATEGORY2_ID,
@@ -184,7 +184,7 @@ describe('the Resource Library home', () => {
 
   it('says nothing matches, and clears the search and the filter, when a search finds nothing', async () => {
     const { user, api } = await openLibrary()
-    api.on(`GET ${LIBRARY}?q=nothing`, () => libraryOf())
+    api.on(`GET ${MY_RESOURCES}?q=nothing`, () => libraryOf())
 
     await user.type(screen.getByLabelText('Search Resources'), 'nothing')
     await user.click(screen.getByRole('button', { name: 'Search' }))
@@ -201,7 +201,7 @@ describe('the Resource Library home', () => {
   it('says it could not load, and asks again on request', async () => {
     const user = userEvent.setup()
     const api = serveOperator(operator(READER))
-    api.on(`GET ${LIBRARY}`, () => json({ message: 'x' }, 503))
+    api.on(`GET ${MY_RESOURCES}`, () => json({ message: 'x' }, 503))
     renderApp('/resource-library')
 
     expect(
@@ -209,7 +209,7 @@ describe('the Resource Library home', () => {
     ).toBeInTheDocument()
     expect(within(pageBody()).queryByRole('heading', { level: 2 })).not.toBeInTheDocument()
 
-    api.on(`GET ${LIBRARY}`, () => libraryOf(...TWO_GROUPS))
+    api.on(`GET ${MY_RESOURCES}`, () => libraryOf(...TWO_GROUPS))
     await user.click(screen.getByRole('button', { name: 'Try again' }))
     expect(
       await screen.findByRole('heading', { level: 2, name: 'Training guides' }),
@@ -219,8 +219,8 @@ describe('the Resource Library home', () => {
   it('never lets an older answer replace a newer search', async () => {
     const { user, api } = await openLibrary()
     const slow = deferred<Response>()
-    api.on(`GET ${LIBRARY}?q=old`, () => slow.promise)
-    api.on(`GET ${LIBRARY}?q=new`, () =>
+    api.on(`GET ${MY_RESOURCES}?q=old`, () => slow.promise)
+    api.on(`GET ${MY_RESOURCES}?q=new`, () =>
       libraryOf(wireGroup([wireListedEntry({ id: PACK_ID, title: 'The new answer' })])),
     )
 

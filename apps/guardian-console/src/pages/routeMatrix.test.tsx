@@ -21,7 +21,7 @@ import {
   wireDiscussion,
   wireMessage,
 } from '../test/discussions.ts'
-import { libraryOf, TWO_GROUPS, wireLibraryPack } from '../test/library.ts'
+import { viewerLibraryOf, VIEWER_GROUPS, wireViewerPack } from '../test/viewerLibrary.ts'
 import { renderApp } from '../test/renderApp.tsx'
 import {
   candidate,
@@ -91,8 +91,8 @@ function serveAll() {
   api.on('GET /api/v1/admin/resources/packs', json(packsPage([wireListedPack()])))
   api.on(`GET /api/v1/admin/resources/packs/${PACK_ID}`, json(wirePack()))
   api.on(`GET /api/v1/admin/resources/packs/${PACK_ID}/cards/${CARD_ID}`, json(wireCard()))
-  api.on('GET /api/v1/admin/resource-library', libraryOf(...TWO_GROUPS))
-  api.on(`GET /api/v1/admin/resource-library/packs/${PACK_ID}`, json(wireLibraryPack()))
+  api.on('GET /api/v1/admin/resource-library', viewerLibraryOf(...VIEWER_GROUPS))
+  api.on(`GET /api/v1/admin/resource-library/packs/${PACK_ID}`, json(wireViewerPack()))
   // Relationships (ADR 0038): the definitions, then one directory, one record and one lookup for each served type.
   api.on(
     'GET /api/v1/admin/relationship-types',
