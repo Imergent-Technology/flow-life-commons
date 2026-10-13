@@ -56,7 +56,9 @@ export function AccessRolesSection({
         ) : null}
         {account.assignments.length === 0 ? (
           <p className="text-body text-muted-foreground">
-            They hold no access. They cannot use the Console.
+            {account.sourcedGrants.length === 0
+              ? 'They hold no access. They cannot use the Console.'
+              : 'No access is assigned to them directly. What they hold through a source is listed below.'}
           </p>
         ) : (
           <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
@@ -165,7 +167,21 @@ export function AccessRolesSection({
             })
           }
         >
-          <p>It stops applying on their very next request. Their sessions are not ended.</p>
+          {account.sourcedGrants.some((grant) => grant.key === pending.key) ? (
+            <>
+              <p>
+                This removes the independent assignment on their very next request. Their sessions
+                are not ended.
+              </p>
+              <p>
+                {account.displayName} also holds this access through a source, listed under
+                &ldquo;Access through a source&rdquo;. That is not removed here, so the access may
+                continue to apply.
+              </p>
+            </>
+          ) : (
+            <p>It stops applying on their very next request. Their sessions are not ended.</p>
+          )}
         </ConfirmDialog>
       ) : null}
     </Panel>

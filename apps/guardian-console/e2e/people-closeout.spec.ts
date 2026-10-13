@@ -88,7 +88,9 @@ test.describe('the demo data, read as a Guardian reads it', () => {
     await expect(guardian.getByText('No contact methods recorded.')).toBeVisible()
     await expect(guardian.getByText('No tags.')).toBeVisible()
     await expect(guardian.getByText('No notes or interactions yet.')).toBeVisible()
-    await expect(guardian.getByText('Not recorded')).toHaveCount(2)
+    // Exactly the two placeholders in the profile. A substring match would also count the Relationships section's own
+    // "… is not recorded as a Guardian" (ADR 0038, C5), which appears once its tabs have loaded.
+    await expect(guardian.getByText('Not recorded', { exact: true })).toHaveCount(2)
   })
 
   test('a Person with more notes than a page holds is paged by the server, newest first, by keyboard', async ({

@@ -47,7 +47,17 @@ export type Failure =
    * names (which requirement a Published Pack would lose, what a Pack or Card still lacks, which Cards a narrowing
    * conflicts with), each kept only when it has the shape documented.
    */
-  | { kind: 'conflict'; code: string; candidates?: unknown[]; detail?: ConflictDetail }
+  | {
+      kind: 'conflict'
+      code: string
+      candidates?: unknown[]
+      detail?: ConflictDetail
+      /**
+       * The server's current version of what the request was about (Relationships: the management view on `stale_revision`,
+       * the three current basic details on `stale_person_basics`). Untrusted: the caller must check its shape.
+       */
+      current?: unknown
+    }
   /** 419: the request-forgery check refused even after a fresh token was fetched. */
   | { kind: 'csrf' }
   /**
@@ -233,6 +243,8 @@ function failureFor(reply: Reply | null): Failure {
             candidates: reply.body.candidates as unknown[],
           }),
         ...(detail !== undefined && { detail }),
+        ...(isRecord(reply.body) &&
+          isRecord(reply.body.current) && { current: reply.body.current }),
       }
     }
     case 413:
@@ -249,6 +261,11 @@ function failureFor(reply: Reply | null): Failure {
         }
         if (typeof message === 'string' && isFieldErrors(errors)) {
           return { kind: 'invalid', message, errors, ...(typeof code === 'string' && { code }) }
+        }
+        // A refusal of the whole request, not of one field (Relationships: `transition_not_allowed`,
+        // `confirmation_required`): a message and a stable code, and no `errors` map.
+        if (typeof message === 'string' && typeof code === 'string' && errors === undefined) {
+          return { kind: 'invalid', message, errors: {}, code }
         }
       }
       return { kind: 'unexpected', status: reply.status }

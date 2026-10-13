@@ -163,6 +163,27 @@ describe('failures', () => {
       {},
       { kind: 'conflict', code: 'possible_duplicate' },
     ],
+    // Relationships (ADR 0038): a stale-state 409 carries the server's current version, and only an object is kept.
+    [
+      409,
+      { message: 'x', code: 'stale_revision', current: { revision: 4 } },
+      {},
+      { kind: 'conflict', code: 'stale_revision', current: { revision: 4 } },
+    ],
+    [
+      409,
+      { message: 'x', code: 'stale_revision', current: 'no' },
+      {},
+      { kind: 'conflict', code: 'stale_revision' },
+    ],
+    // A refusal of the whole request names a code and has no field errors; without a code it is still unexpected.
+    [
+      422,
+      { message: 'x', code: 'transition_not_allowed' },
+      {},
+      { kind: 'invalid', message: 'x', errors: {}, code: 'transition_not_allowed' },
+    ],
+    [422, { message: 'x' }, {}, { kind: 'unexpected', status: 422 }],
   ]
 
   it.each(cases)('classifies HTTP %i', async (status, body, headers, expected) => {

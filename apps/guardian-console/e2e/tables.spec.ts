@@ -196,6 +196,7 @@ test.describe('long values', () => {
         mfa: { enrolled: true, recovery_codes_remaining: 8 },
         invitation: null,
         assignments: [],
+        sourced_grants: [],
       })
       await admin.route('**/api/v1/admin/accounts?*', (route) =>
         route.fulfill({
@@ -297,6 +298,7 @@ test.describe('long values', () => {
                     granted_at: '2026-09-19T09:05:00Z',
                   },
                 ],
+                sourced_grants: [],
               },
             ],
             meta: { page: 1, per_page: 25, total: 1, last_page: 1 },

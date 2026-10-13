@@ -48,7 +48,7 @@ export function Alert({
       className={alert({ tone })}
     >
       <StatusIcon kind={tone} className="mt-0.5 size-4 shrink-0" />
-      <div className="min-w-0 text-foreground">{children}</div>
+      <div className="min-w-0 wrap-anywhere text-foreground">{children}</div>
     </div>
   )
 }

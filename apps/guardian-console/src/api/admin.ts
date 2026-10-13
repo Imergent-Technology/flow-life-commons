@@ -14,6 +14,22 @@ export interface Assignment {
   grantedAt: string
 }
 
+/**
+ * Access an Account holds BECAUSE OF a specific source (today a relationship's default role), listed apart from its
+ * independent assignments. Display only: there is no way to revoke one here, because withdrawing it is a decision on its
+ * source. `sourceType` and `sourceLabel` are the server's words; the source id is an opaque identifier and not content.
+ */
+export interface SourcedGrant {
+  key: string
+  name: string
+  description: string
+  sourceType: string
+  sourceLabel: string
+  grantedAt: string
+  /** The Account of the operator whose authorized act made this grant effective, if it is recorded. */
+  grantedByAccountId: string | null
+}
+
 export interface ManagedAccount {
   id: string
   personId: string
@@ -27,6 +43,8 @@ export interface ManagedAccount {
   mfa: { enrolled: boolean; recoveryCodesRemaining: number }
   invitation: { expiresAt: string; expired: boolean; delivery: 'email' | 'operator' } | null
   assignments: Assignment[]
+  /** Never merged into `assignments`: they are not independently revocable. */
+  sourcedGrants: SourcedGrant[]
 }
 
 /** A system role as the server offers it for assignment. The Console renders it and defines none of its own. */
@@ -54,6 +72,17 @@ interface WireAssignment {
   granted_at: string
 }
 
+interface WireSourcedGrant {
+  key: string
+  name: string
+  description: string
+  source_type: string
+  source_label: string
+  source_id: string
+  granted_at: string
+  granted_by_account_id: string | null
+}
+
 interface WireAccount {
   id: string
   person_id: string
@@ -67,6 +96,7 @@ interface WireAccount {
   mfa: { enrolled: boolean; recovery_codes_remaining: number }
   invitation: { expires_at: string; expired: boolean; delivery: 'email' | 'operator' } | null
   assignments: WireAssignment[]
+  sourced_grants: WireSourcedGrant[]
 }
 
 const isString = (value: unknown): value is string => typeof value === 'string'
@@ -82,6 +112,20 @@ function isWireAssignment(value: unknown): value is WireAssignment {
     isString(value.name) &&
     isString(value.description) &&
     isString(value.granted_at)
+  )
+}
+
+function isWireSourcedGrant(value: unknown): value is WireSourcedGrant {
+  return (
+    isRecord(value) &&
+    isString(value.key) &&
+    isString(value.name) &&
+    isString(value.description) &&
+    isString(value.source_type) &&
+    isString(value.source_label) &&
+    isString(value.source_id) &&
+    isString(value.granted_at) &&
+    isNullableString(value.granted_by_account_id)
   )
 }
 
@@ -107,7 +151,9 @@ function isWireAccount(value: unknown): value is WireAccount {
         typeof invitation.expired === 'boolean' &&
         (invitation.delivery === 'email' || invitation.delivery === 'operator'))) &&
     Array.isArray(assignments) &&
-    assignments.every(isWireAssignment)
+    assignments.every(isWireAssignment) &&
+    Array.isArray(value.sourced_grants) &&
+    value.sourced_grants.every(isWireSourcedGrant)
   )
 }
 
@@ -136,6 +182,15 @@ function accountFrom(wire: WireAccount): ManagedAccount {
       name: a.name,
       description: a.description,
       grantedAt: a.granted_at,
+    })),
+    sourcedGrants: wire.sourced_grants.map((g) => ({
+      key: g.key,
+      name: g.name,
+      description: g.description,
+      sourceType: g.source_type,
+      sourceLabel: g.source_label,
+      grantedAt: g.granted_at,
+      grantedByAccountId: g.granted_by_account_id,
     })),
   }
 }

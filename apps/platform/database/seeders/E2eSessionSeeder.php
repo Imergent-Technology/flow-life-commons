@@ -71,6 +71,11 @@ final class E2eSessionSeeder extends Seeder
         // And one for the library closeout (WP6): a File Card is deleted from management and the library stops serving it. It signs in with
         // recovery code 4 and proves with 8 (e2e/resources-closeout.spec.ts); 0 is the only plain-Guardian code left over.
         'resources-stale-library' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 16, 4],
+        // Relationships (G10 WP5): an administrator who may manage every type. One session is freshly verified, for the routine
+        // journeys; one is STALE, for the journey that proves the shared step-up prompt guards Guardian recognition and deletion.
+        // The stale one signs in with recovery code 8 and proves with 7 (e2e/relationships.spec.ts).
+        'relationships-admin' => [E2eAccountSeeder::RELATIONSHIPS_ADMIN_EMAIL, E2eAccountSeeder::RELATIONSHIPS_ADMIN_PASSWORD, 'Y', 0, self::RECOVERY_INDEX],
+        'relationships-admin-stale' => [E2eAccountSeeder::RELATIONSHIPS_ADMIN_EMAIL, E2eAccountSeeder::RELATIONSHIPS_ADMIN_PASSWORD, 'Y', 16, 8],
     ];
 
     /** @var array<string, string> the cookie jar of the sign-in in progress: name => value as the server sent it */
