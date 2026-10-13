@@ -12,6 +12,8 @@ export const CATEGORY = {
   running: 'Running the Sanctuary',
   safety: 'Safety and Wellbeing',
   members: 'Member Circle',
+  /** G10: the Volunteer audience's Category, holding the two Packs below. */
+  volunteering: 'Volunteering',
 } as const
 
 export const PACK = {
@@ -27,6 +29,10 @@ export const PACK = {
   /** A Series of three, ending in a PDF. */
   series: 'Fire Safety Orientation',
   membersOnly: 'Member Circle Handbook',
+  /** G10: for Guardians AND Volunteers: one Card for both, one narrowed to each audience, and a Draft Card. */
+  shared: 'Community Day Briefing',
+  /** G10: for Volunteers only, with a File Card. */
+  volunteersOnly: 'Volunteer Welcome',
 } as const
 
 export const CARD = {
@@ -43,7 +49,37 @@ export const CARD = {
   evacuation: 'Evacuation plan',
   booking: 'Open the room booking calendar',
   floorPlan: 'Floor plan of the sanctuary',
+  /** In `shared`: for both audiences. */
+  dayPlan: 'Plan for the day',
+  /** In `shared`: narrowed to Volunteers. */
+  stations: 'Volunteer stations',
+  /** In `shared`: narrowed to Guardians. */
+  hosting: 'Guardian hosting notes',
+  /** In `shared`: a Draft. */
+  rain: 'Rain plan',
+  /** In `volunteersOnly`. */
+  firstSession: 'Before your first session',
+  /** In `volunteersOnly`: a File Card (a CSV). */
+  signUp: 'Session sign-up sheet',
 } as const
+
+/** The Published demo Packs each audience is eligible for, in the order a reader is shown them (ResourcesDemoSeederTest pins these). */
+export const ELIGIBLE = {
+  guardian: [
+    PACK.narrowed,
+    PACK.single,
+    PACK.operations,
+    PACK.link,
+    PACK.image,
+    PACK.series,
+    PACK.shared,
+  ],
+  volunteer: [PACK.shared, PACK.volunteersOnly],
+  member: [PACK.narrowed, PACK.membersOnly],
+} as const
+
+/** A word in the Volunteer-only Pack and nowhere a Guardian or Member may read. */
+export const VOLUNTEER_WORD = 'lanyard'
 
 /** A word that is in the hidden Card's title and body and nowhere a Guardian may read. */
 export const HIDDEN_WORD = 'facilitation'

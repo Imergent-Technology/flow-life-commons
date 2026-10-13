@@ -116,6 +116,7 @@ test.describe('the library, from the seeded dataset', () => {
       CATEGORY.started,
       CATEGORY.running,
       CATEGORY.safety,
+      CATEGORY.volunteering,
     ])
 
     const running = page.getByRole('region', { name: CATEGORY.running })
@@ -131,11 +132,16 @@ test.describe('the library, from the seeded dataset', () => {
     await expect(page.getByRole('region', { name: CATEGORY.safety }).getByRole('link')).toHaveText([
       PACK.series,
     ])
+    // G10: the Pack for Guardians and Volunteers, and not the one for Volunteers only.
+    await expect(
+      page.getByRole('region', { name: CATEGORY.volunteering }).getByRole('link'),
+    ).toHaveText([PACK.shared])
 
     // Not a Draft, not a Pack for Members, and not the Category that holds only that Pack.
     const body = page.locator('body')
     await expect(body).not.toContainText(PACK.draft)
     await expect(body).not.toContainText(PACK.membersOnly)
+    await expect(body).not.toContainText(PACK.volunteersOnly)
     await expect(page.getByRole('region', { name: CATEGORY.members })).toHaveCount(0)
     await expect(page.getByRole('option', { name: CATEGORY.members })).toHaveCount(0)
     await page.context().close()
