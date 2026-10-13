@@ -122,16 +122,16 @@ function demoLibraryTitles(Actor $as, ?string $search = null): array
     return $titles;
 }
 
-it('makes four Categories, eight Packs, sixteen Cards and three files, through the use cases, and no Person, Account or role of its own', function () {
+it('makes five Categories, ten Packs, twenty-two Cards and four files, through the use cases, and no Person, Account or role of its own', function () {
     $operator = demoGuardian();
     $accounts = DB::table('accounts')->count();
     $people = DB::table('people')->count();
     seedResourcesDemo();
 
     expect(DB::table('resource_categories')->orderBy('position')->pluck('name')->all())->toBe(ResourcesDemoSeeder::categories())
-        ->and(DB::table('resource_packs')->count())->toBe(8)
-        ->and(DB::table('resource_cards')->count())->toBe(16)
-        ->and(DB::table('resource_assets')->count())->toBe(3)
+        ->and(DB::table('resource_packs')->count())->toBe(10)
+        ->and(DB::table('resource_cards')->count())->toBe(22)
+        ->and(DB::table('resource_assets')->count())->toBe(4)
         ->and(DB::table('accounts')->count())->toBe($accounts)
         ->and(DB::table('people')->count())->toBe($people)
         ->and(DB::table('resource_packs')->pluck('created_by_person_id')->unique()->all())->toBe([$operator->personId->value]);
@@ -155,7 +155,9 @@ it('gives each Pack the Category, audiences, Series and publication state it exi
         ->and($state(ResourcesDemoSeeder::IMAGE))->toBe([ResourcesDemoSeeder::RUNNING, ['guardian'], false, 'published'])
         ->and($state(ResourcesDemoSeeder::DRAFT))->toBe([ResourcesDemoSeeder::RUNNING, ['guardian'], false, 'draft'])
         ->and($state(ResourcesDemoSeeder::SERIES))->toBe([ResourcesDemoSeeder::SAFETY, ['guardian'], true, 'published'])
-        ->and($state(ResourcesDemoSeeder::MEMBERS_ONLY))->toBe([ResourcesDemoSeeder::MEMBER_CIRCLE, ['member'], false, 'published']);
+        ->and($state(ResourcesDemoSeeder::MEMBERS_ONLY))->toBe([ResourcesDemoSeeder::MEMBER_CIRCLE, ['member'], false, 'published'])
+        ->and($state(ResourcesDemoSeeder::SHARED))->toBe([ResourcesDemoSeeder::VOLUNTEERING, ['guardian', 'volunteer'], false, 'published'])
+        ->and($state(ResourcesDemoSeeder::VOLUNTEERS_ONLY))->toBe([ResourcesDemoSeeder::VOLUNTEERING, ['volunteer'], false, 'published']);
 });
 
 it('gives each Card the Type, state and audience it exists to show', function () {
@@ -189,7 +191,20 @@ it('gives each Card the Type, state and audience it exists to show', function ()
             ['Evacuation plan', 'file', 'published', 'inherit'],
         ])
         ->and($summary(ResourcesDemoSeeder::DRAFT))->toBe([['Winter dates', 'basic', 'draft', 'inherit']])
+        // For Guardians and Volunteers: one Card for both, one narrowed to each audience, and a Draft.
+        ->and($summary(ResourcesDemoSeeder::SHARED))->toBe([
+            [ResourcesDemoSeeder::SHARED_CARD, 'basic', 'published', 'inherit'],
+            [ResourcesDemoSeeder::VOLUNTEER_CARD, 'basic', 'published', 'narrowed'],
+            [ResourcesDemoSeeder::GUARDIAN_CARD, 'basic', 'published', 'narrowed'],
+            [ResourcesDemoSeeder::SHARED_DRAFT_CARD, 'basic', 'draft', 'inherit'],
+        ])
+        ->and($summary(ResourcesDemoSeeder::VOLUNTEERS_ONLY))->toBe([
+            ['Before your first session', 'basic', 'published', 'inherit'],
+            [ResourcesDemoSeeder::VOLUNTEER_FILE_CARD, 'file', 'published', 'inherit'],
+        ])
         ->and(DB::table('resource_card_audiences')->where('card_id', demoCardRows(ResourcesDemoSeeder::NARROWED)[1]->id)->pluck('audience')->all())->toBe(['member'])
+        ->and(DB::table('resource_card_audiences')->where('card_id', demoCardRows(ResourcesDemoSeeder::SHARED)[1]->id)->pluck('audience')->all())->toBe(['volunteer'])
+        ->and(DB::table('resource_card_audiences')->where('card_id', demoCardRows(ResourcesDemoSeeder::SHARED)[2]->id)->pluck('audience')->all())->toBe(['guardian'])
         ->and(Resources::str(demoCardRows(ResourcesDemoSeeder::LINK)[0]->external_uri))->toBe(ResourcesDemoSeeder::LINK_ADDRESS);
 });
 
@@ -198,9 +213,9 @@ it('stores each file through the Resources store, as a real file of its kind, an
     seedResourcesDemo();
 
     $assets = DB::table('resource_assets')->orderBy('original_filename')->get();
-    expect($assets->pluck('original_filename')->all())->toBe(['evacuation-plan.pdf', 'sanctuary-floor-plan.png', 'two-week-shift-rota-template-for-sanctuary-guardians.csv'])
-        ->and($assets->pluck('media_type')->all())->toBe(['application/pdf', 'image/png', 'text/csv'])
-        ->and(ResourceFiles::stored())->toHaveCount(3);
+    expect($assets->pluck('original_filename')->all())->toBe(['evacuation-plan.pdf', 'sanctuary-floor-plan.png', 'two-week-shift-rota-template-for-sanctuary-guardians.csv', 'volunteer-session-sign-up-sheet.csv'])
+        ->and($assets->pluck('media_type')->all())->toBe(['application/pdf', 'image/png', 'text/csv', 'text/csv'])
+        ->and(ResourceFiles::stored())->toHaveCount(4);
 
     foreach ($assets as $asset) {
         $bytes = ResourceFiles::storedBytes(Resources::str($asset->storage_key));
@@ -215,7 +230,7 @@ it('keeps the committed files tiny', function () {
     $dir = dirname(__DIR__, 4).'/database/seeders/resources-demo';
     $files = array_values(array_diff(scandir($dir) ?: [], ['.', '..']));
 
-    expect($files)->toBe(['evacuation-plan.pdf', 'sanctuary-floor-plan.png', 'two-week-shift-rota-template-for-sanctuary-guardians.csv']);
+    expect($files)->toBe(['evacuation-plan.pdf', 'sanctuary-floor-plan.png', 'two-week-shift-rota-template-for-sanctuary-guardians.csv', 'volunteer-session-sign-up-sheet.csv']);
     foreach ($files as $file) {
         expect(filesize("{$dir}/{$file}"))->toBeLessThan(4096);
     }
@@ -278,8 +293,8 @@ it('leaves no orphaned file and no file-less asset: the store and the asset rows
     $report = app(PruneOrphanedAssets::class)(new DateTimeImmutable('+10 days'), true); // far past the grace, so any orphan would be listed
     expect($report->removed)->toBe([])
         ->and($report->missing)->toBe([])
-        ->and($report->kept)->toBe(3)
-        ->and(ResourceFiles::stored())->toHaveCount(3);
+        ->and($report->kept)->toBe(4)
+        ->and(ResourceFiles::stored())->toHaveCount(4);
 });
 
 it('leaves a Pack that exists under a demo title alone, and makes only the rest', function () {
@@ -290,7 +305,7 @@ it('leaves a Pack that exists under a demo title alone, and makes only the rest'
     expect(DB::table('resource_packs')->where('title', ResourcesDemoSeeder::SINGLE)->count())->toBe(1)
         ->and(DB::table('resource_cards')->where('pack_id', $mine->pack->id->value)->count())->toBe(0) // nothing written in it
         ->and(demoPackRow(ResourcesDemoSeeder::SINGLE)->summary)->toBe('Someone already wrote this one')
-        ->and(DB::table('resource_packs')->count())->toBe(8); // the other seven arrived
+        ->and(DB::table('resource_packs')->count())->toBe(10); // the other nine arrived
 });
 
 it('does not make a Category twice when a Guardian already has one of that name', function () {
@@ -299,7 +314,7 @@ it('does not make a Category twice when a Guardian already has one of that name'
     seedResourcesDemo();
 
     expect(DB::table('resource_categories')->where('name', ResourcesDemoSeeder::RUNNING)->count())->toBe(1)
-        ->and(DB::table('resource_categories')->count())->toBe(4);
+        ->and(DB::table('resource_categories')->count())->toBe(5);
 });
 
 it('makes a Pack whole or not at all: a failure leaves no half-made Pack to be skipped on the next run', function () {
@@ -316,8 +331,8 @@ it('makes a Pack whole or not at all: a failure leaves no half-made Pack to be s
 
     $store->failPut = false;
     seedResourcesDemo();
-    expect(DB::table('resource_packs')->count())->toBe(8)
-        ->and(DB::table('resource_cards')->count())->toBe(16);
+    expect(DB::table('resource_packs')->count())->toBe(10)
+        ->and(DB::table('resource_cards')->count())->toBe(22);
 });
 
 it('shows a Guardian only the Cards they may read: a Series with a Member-only Card is A, C and D as 1, 2 and 3 of 3', function () {
@@ -337,15 +352,15 @@ it('shows a Guardian only the Cards they may read: a Series with a Member-only C
     expect(array_map(fn ($c): string => $c->card->title, $operations->cards))->toBe(['Keys, alarm and access', 'Cleaning and supplies', 'Shift rota template']);
 });
 
-it('lists three Categories and six Packs to a Guardian, in order, with no Draft, no Member-only Pack and no Member-only Category', function () {
+it('lists four Categories and seven Packs to a Guardian, in order, with no Draft, no Member-only Pack and no Member-only Category', function () {
     $guardian = demoReader();
     demoGuardian();
     seedResourcesDemo();
 
     $library = app(BrowseDeliveredResources::class)($guardian, null, null);
-    expect(array_map(fn ($entry): string => $entry->category->name, $library))->toBe([ResourcesDemoSeeder::GETTING_STARTED, ResourcesDemoSeeder::RUNNING, ResourcesDemoSeeder::SAFETY])
+    expect(array_map(fn ($entry): string => $entry->category->name, $library))->toBe([ResourcesDemoSeeder::GETTING_STARTED, ResourcesDemoSeeder::RUNNING, ResourcesDemoSeeder::SAFETY, ResourcesDemoSeeder::VOLUNTEERING])
         ->and(demoLibraryTitles($guardian))->toBe([
-            ResourcesDemoSeeder::NARROWED, ResourcesDemoSeeder::SINGLE, ResourcesDemoSeeder::OPERATIONS, ResourcesDemoSeeder::LINK, ResourcesDemoSeeder::IMAGE, ResourcesDemoSeeder::SERIES,
+            ResourcesDemoSeeder::NARROWED, ResourcesDemoSeeder::SINGLE, ResourcesDemoSeeder::OPERATIONS, ResourcesDemoSeeder::LINK, ResourcesDemoSeeder::IMAGE, ResourcesDemoSeeder::SERIES, ResourcesDemoSeeder::SHARED,
         ]);
 
     // Counts are of what this viewer can see: three of the Onboarding Series' four, three of Operations' four.
@@ -357,7 +372,32 @@ it('lists three Categories and six Packs to a Guardian, in order, with no Draft,
     }
     expect($counts[ResourcesDemoSeeder::NARROWED])->toBe(3)
         ->and($counts[ResourcesDemoSeeder::OPERATIONS])->toBe(3)
-        ->and($counts[ResourcesDemoSeeder::SINGLE])->toBe(1);
+        ->and($counts[ResourcesDemoSeeder::SINGLE])->toBe(1)
+        ->and($counts[ResourcesDemoSeeder::SHARED])->toBe(2); // for both, and the Guardians' own; not the Volunteers' Card, not the Draft
+});
+
+it('gives a Volunteer, a Guardian and a Person who is both each their own part of the Volunteering Packs (G10)', function () {
+    $volunteer = Access::actorFor(Audiences::reader(['volunteer']));
+    $guardian = demoReader();
+    $both = Access::actorFor(Audiences::reader(['guardian', 'volunteer']));
+    demoGuardian();
+    seedResourcesDemo();
+    $shared = PackId::fromString(Resources::str(demoPackRow(ResourcesDemoSeeder::SHARED)->id));
+    $titles = fn (Actor $as): array => array_map(fn ($c): string => $c->card->title, app(GetDeliveredPack::class)($as, $shared)->cards);
+
+    expect(demoLibraryTitles($volunteer))->toBe([ResourcesDemoSeeder::SHARED, ResourcesDemoSeeder::VOLUNTEERS_ONLY])
+        ->and($titles($volunteer))->toBe([ResourcesDemoSeeder::SHARED_CARD, ResourcesDemoSeeder::VOLUNTEER_CARD])
+        ->and($titles($guardian))->toBe([ResourcesDemoSeeder::SHARED_CARD, ResourcesDemoSeeder::GUARDIAN_CARD])
+        // OR, not AND: both narrowed Cards, and still never the Draft.
+        ->and($titles($both))->toBe([ResourcesDemoSeeder::SHARED_CARD, ResourcesDemoSeeder::VOLUNTEER_CARD, ResourcesDemoSeeder::GUARDIAN_CARD])
+        ->and(demoLibraryTitles($both))->toContain(ResourcesDemoSeeder::VOLUNTEERS_ONLY)
+        // The Volunteer-only Pack is "not found" to a Guardian, and its words find nothing for them.
+        ->and(demoLibraryTitles($guardian, ResourcesDemoSeeder::VOLUNTEER_WORD))->toBe([])
+        ->and(demoLibraryTitles($volunteer, ResourcesDemoSeeder::VOLUNTEER_WORD))->toBe([ResourcesDemoSeeder::VOLUNTEERS_ONLY])
+        ->and(demoLibraryTitles($volunteer, 'hosting'))->toBe([])   // the Guardians' Card, by its words
+        ->and(demoLibraryTitles($both, 'Rain'))->toBe([]);          // the Draft Card, by its words
+    expect(fn () => app(GetDeliveredPack::class)($guardian, PackId::fromString(Resources::str(demoPackRow(ResourcesDemoSeeder::VOLUNTEERS_ONLY)->id))))
+        ->toThrow(ResourcePackNotFound::class);
 });
 
 it('answers a Draft Pack and a Member-only Pack exactly as a Pack that does not exist', function () {
@@ -408,7 +448,7 @@ it('points rows whose operator was replaced at the current operator, and touches
         ->and(DB::table('resource_categories')->pluck('updated_by_person_id')->unique()->all())->toBe([$operator->personId->value])
         ->and(DB::table('resource_packs')->where('title', ResourcesDemoSeeder::LINK)->value('updated_by_person_id'))->toBe($other->personId->value) // still exists: untouched
         ->and(DB::table('resource_cards')->where('title', 'Your first shift')->value('updated_by_person_id'))->toBe($operator->personId->value)
-        ->and(demoCounts()['resource_packs'])->toBe(8)
+        ->and(demoCounts()['resource_packs'])->toBe(10)
         // Nothing but provenance moved: the same rows, in the same states, with the same revisions and times.
         ->and(array_map(fn (array $row): array => array_diff_key($row, array_flip(['created_by_person_id', 'updated_by_person_id'])), $after['resource_packs']))
         ->toEqual(array_map(fn (array $row): array => array_diff_key($row, array_flip(['created_by_person_id', 'updated_by_person_id'])), $before['resource_packs']))
@@ -429,7 +469,7 @@ it('runs in the local environment too', function () {
     demoGuardian();
     seedResourcesDemo('local');
 
-    expect(DB::table('resource_packs')->count())->toBe(8);
+    expect(DB::table('resource_packs')->count())->toBe(10);
 });
 
 it('needs an operator who may manage Resources to write as, and says so, rather than inventing one', function () {

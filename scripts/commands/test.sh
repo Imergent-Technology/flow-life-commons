@@ -115,6 +115,8 @@ test_e2e() {
     php_run php artisan db:seed --class=DiscussionsDemoSeeder --force --no-interaction
     step "Seeding the Resources demo data (development only, repeatable: Packs that exist are left alone, and provenance is repaired)"
     php_run php artisan db:seed --class=ResourcesDemoSeeder --force --no-interaction
+    step "Seeding the Relationships demo data (development only, repeatable: relationships that exist are left alone)"
+    php_run php artisan db:seed --class=RelationshipsDemoSeeder --force --no-interaction
     mkdir -p apps/guardian-console/e2e/.fixtures
     cp apps/platform/storage/app/private/e2e-sessions.json apps/guardian-console/e2e/.fixtures/sessions.json
     php_run php artisan cache:clear --no-interaction
@@ -131,6 +133,11 @@ test_e2e() {
     # Unconditionally, through the real authority: a crashed or interrupted pass must never leave the
     # development origin in maintenance mode for the next person.
     php_run php artisan up --no-interaction >/dev/null 2>&1 || true
+
+    # The journeys recorded, changed, granted, withdrew and deleted relationships through the real platform: what they left behind,
+    # the demo and the personas included, must still agree with the definitions and with Access (ADR 0038, F15).
+    step "Relationships integrity after the run (relationships:check)"
+    php_run php artisan relationships:check --no-interaction || status=$?
 
     return "$status"
 }

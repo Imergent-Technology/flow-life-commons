@@ -78,6 +78,18 @@ final class E2eSessionSeeder extends Seeder
         // The Resource Library's audience reader (G10 WP6): a fresh session of a restricted Console user, an Active Guardian without `resources.view` (e2e/resources-modes.spec.ts).
         'audience-reader' => [E2eAccountSeeder::AUDIENCE_READER_EMAIL, E2eAccountSeeder::AUDIENCE_READER_PASSWORD, 'Z', 0, self::RECOVERY_INDEX],
         'relationships-admin-stale' => [E2eAccountSeeder::RELATIONSHIPS_ADMIN_EMAIL, E2eAccountSeeder::RELATIONSHIPS_ADMIN_PASSWORD, 'Y', 16, 8],
+        // The G10 personas (G10 WP7, e2e/g10-*.spec.ts), each a fresh session of its own Account. See E2eAccountSeeder::PERSONA_*.
+        'persona-role-only' => [E2eAccountSeeder::PERSONA_ROLE_ONLY[0], E2eAccountSeeder::PERSONA_ROLE_ONLY[2], E2eAccountSeeder::PERSONA_ROLE_ONLY[4], 0, self::RECOVERY_INDEX],
+        'persona-initiate' => [E2eAccountSeeder::PERSONA_INITIATE[0], E2eAccountSeeder::PERSONA_INITIATE[2], E2eAccountSeeder::PERSONA_INITIATE[4], 0, self::RECOVERY_INDEX],
+        'persona-participant' => [E2eAccountSeeder::PERSONA_PARTICIPANT[0], E2eAccountSeeder::PERSONA_PARTICIPANT[2], E2eAccountSeeder::PERSONA_PARTICIPANT[4], 0, self::RECOVERY_INDEX],
+        'persona-volunteer' => [E2eAccountSeeder::PERSONA_VOLUNTEER[0], E2eAccountSeeder::PERSONA_VOLUNTEER[2], E2eAccountSeeder::PERSONA_VOLUNTEER[4], 0, self::RECOVERY_INDEX],
+        'persona-multi' => [E2eAccountSeeder::PERSONA_MULTI[0], E2eAccountSeeder::PERSONA_MULTI[2], E2eAccountSeeder::PERSONA_MULTI[4], 0, self::RECOVERY_INDEX],
+        'persona-unadmitted' => [E2eAccountSeeder::PERSONA_UNADMITTED[0], E2eAccountSeeder::PERSONA_UNADMITTED[2], E2eAccountSeeder::PERSONA_UNADMITTED[4], 0, self::RECOVERY_INDEX],
+        'persona-former' => [E2eAccountSeeder::PERSONA_FORMER[0], E2eAccountSeeder::PERSONA_FORMER[2], E2eAccountSeeder::PERSONA_FORMER[4], 0, self::RECOVERY_INDEX],
+        'persona-lifecycle-kept' => [E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[0], E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[2], E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[4], 0, self::RECOVERY_INDEX],
+        'persona-lifecycle-sole' => [E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[0], E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[2], E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[4], 0, self::RECOVERY_INDEX],
+        // STALE, so Resource cleanup has to establish recent verification itself before it may delete (e2e/resources-cleanup.spec.ts).
+        'cleanup-probe-stale' => [E2eAccountSeeder::CLEANUP_PROBE[0], E2eAccountSeeder::CLEANUP_PROBE[2], E2eAccountSeeder::CLEANUP_PROBE[4], 16, self::RECOVERY_INDEX],
     ];
 
     /** @var array<string, string> the cookie jar of the sign-in in progress: name => value as the server sent it */

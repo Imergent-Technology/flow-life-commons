@@ -118,7 +118,13 @@ arch('Role identity stays inside Access', function () {
     expect('App\\Modules\\Access\\Domain\\RoleAssignmentRepository')->toOnlyBeUsedIn('App\\Modules\\Access');
     expect('App\\Modules\\Access\\Application\\GrantRole')->toOnlyBeUsedIn('App\\Modules\\Access');
     expect('App\\Modules\\Access\\Application\\RevokeRole')->toOnlyBeUsedIn('App\\Modules\\Access');
-    expect('App\\Modules\\Access\\Application\\GrantRoleToAccount')->toOnlyBeUsedIn('App\\Modules\\Access');
+    // The one exception: the Relationships demo assigns one independent role (Guardian Full, beside a relationship-managed Guardian
+    // Initiate grant) through the operator's own audited use case, exactly as the Account page does. It is opt-in, refused outside
+    // local and testing, and referenced by nothing in the application (RelationshipsDemoSeederTest pins each).
+    expect('App\\Modules\\Access\\Application\\GrantRoleToAccount')->toOnlyBeUsedIn([
+        'App\\Modules\\Access',
+        'Database\\Seeders\\RelationshipsDemoSeeder',
+    ]);
     expect('App\\Modules\\Access\\Application\\RevokeRoleFromAccount')->toOnlyBeUsedIn('App\\Modules\\Access');
     expect('App\\Modules\\Access\\Application\\ConsoleUserFixture')->toOnlyBeUsedIn([
         'App\\Modules\\Access',
