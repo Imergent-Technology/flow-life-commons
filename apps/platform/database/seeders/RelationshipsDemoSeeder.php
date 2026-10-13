@@ -12,7 +12,7 @@ use App\Modules\Access\Application\InviteExistingPerson;
 use App\Modules\Access\Application\ListRoleCatalog;
 use App\Modules\Identity\Application\PersonHasAccount;
 use App\Modules\Identity\Application\ResolveActor;
-use App\Modules\Membership\Application\GetCurrentMembership;
+use App\Modules\Membership\Application\GetMembershipRecord;
 use App\Modules\Membership\Application\GrantMembershipAccess;
 use App\Modules\Membership\Domain\MembershipGrantSource;
 use App\Modules\Relationships\Application\ChangeRelationshipStatus;
@@ -70,7 +70,7 @@ use RuntimeException;
  *
  * Repeatable: a Person is recognised by their exact email, through intake's own lookup. A relationship that already exists is left
  * alone, with everything an operator has since done to it, and none of its steps is taken again; a Person already invited is not
- * invited again; an active Membership is not granted again; an assigned role is assigned idempotently. Running this again adds nothing.
+ * invited again; a Person who already has any Membership grant is not granted another; an assigned role is assigned idempotently. Running this again adds nothing.
  * Each use case is its own transaction, so a run that fails part-way leaves whole steps behind and the next run finishes the rest.
  */
 final class RelationshipsDemoSeeder extends Seeder
@@ -101,6 +101,7 @@ final class RelationshipsDemoSeeder extends Seeder
         Capability::ManageVolunteers,         // Volunteer intake, status, fields and basic details
         Capability::AssignRoles,              // granting Guardian Initiate through the relationship, and the one independent role
         Capability::ManageMembershipRecords,  // Membership's grant
+        Capability::ViewMembershipRecords,    // whether a Person already has one
         Capability::IssueInvitations,         // inviting a Person to an Account
         Capability::ViewAccounts,             // reading the role catalog, as the Account page does
     ];
@@ -268,7 +269,9 @@ final class RelationshipsDemoSeeder extends Seeder
         }
 
         $first = $spec['relationships'][0]['steps'][0][1];
-        if ($spec['member'] !== null && ! ($this->container->make(GetCurrentMembership::class))($id)->active) {
+        // The operator's own member-detail read (not the eligibility read, which only Resources' audience eligibility may call): a Person who
+        // has ever been granted Membership, active or since revoked, is left as they are.
+        if ($spec['member'] !== null && ($this->container->make(GetMembershipRecord::class))($as, $id)->grants === []) {
             $this->at($first);
             ($this->container->make(GrantMembershipAccess::class))($as, $id, new DateTimeImmutable($spec['member'].' UTC'), null, MembershipGrantSource::Operator, 'demo');
         }
