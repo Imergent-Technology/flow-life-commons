@@ -196,9 +196,13 @@ export async function nextCode(secret: string): Promise<string> {
   return totpForStep(secret, step)
 }
 
-/** The recovery codes the development seeder gives a fixture (E2eAccountSeeder::recoveryCodes). */
+/**
+ * The recovery codes the development seeder gives a fixture (E2eAccountSeeder::recoveryCodes): `E2E<tag>-RC00-0000-000<n>` for a
+ * one-character tag, `E2E<a>-<b>C00-0000-000<n>` for a two-character one.
+ */
 export function recoveryCodesFor(tag: string): string[] {
-  return Array.from({ length: 10 }, (_, n) => `E2E${tag}-RC00-0000-000${String(n)}`)
+  const [first, second] = tag.length === 2 ? [tag.charAt(0), tag.charAt(1)] : [tag, 'R']
+  return Array.from({ length: 10 }, (_, n) => `E2E${first}-${second}C00-0000-000${String(n)}`)
 }
 
 /**
@@ -253,6 +257,17 @@ export type FixtureSession =
   | 'relationships-admin'
   | 'audience-reader'
   | 'relationships-admin-stale'
+  // The G10 personas (E2eAccountSeeder::PERSONA_*), each its own Account; see e2e/g10-personas.spec.ts.
+  | 'persona-role-only'
+  | 'persona-initiate'
+  | 'persona-participant'
+  | 'persona-volunteer'
+  | 'persona-multi'
+  | 'persona-unadmitted'
+  | 'persona-former'
+  | 'persona-lifecycle-kept'
+  | 'persona-lifecycle-sole'
+  | 'cleanup-probe-stale'
 
 interface MintedSession {
   session: string

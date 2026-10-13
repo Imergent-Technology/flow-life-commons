@@ -2,6 +2,7 @@ import { expect, type Browser, type Page } from '@playwright/test'
 
 import { inTheme, type Theme } from './axe.ts'
 import { apiFrom, signedInAs } from './support.ts'
+import { workerSession, type VerifiedSession } from './verified.ts'
 
 // Helpers for the Resources management journeys (resources-*.spec.ts). Nothing here is a test. Data is made through the API, from the
 // signed-in page exactly as the Console would, so a journey that is about the SCREEN does not spend its time on set-up. Every name is
@@ -265,10 +266,37 @@ export async function packOf(page: Page, packId: string): Promise<PackBody> {
   ) as PackBody
 }
 
-/** Deletes what a journey made, quietly: a Pack (with its Cards and files) then the Category. Needs a recent proof, which a fresh session has. */
+/** What one cleanup did: what it deleted, what was already gone, and how its session got the proof that deleting a Pack needs. */
+export interface CleanupReport {
+  removed: string[]
+  alreadyGone: string[]
+  signIns: number
+  proofs: number
+}
+
+/**
+ * Deletes what a journey made, and only that: the Packs it registered (with their Cards and files), then the Categories. Nothing is
+ * looked up by name and nothing else is touched, so journeys running in parallel each remove exactly their own.
+ *
+ * It deletes in a session of the WORKER's own (`workerSession`, e2e/verified.ts), never in the journey's: deleting a Pack needs a proof
+ * from the last 15 minutes, a long run outlives the minted sessions' proofs, and proving on a session other journeys share would sign
+ * them out. When the platform asks for verification, that session proves (with its own authenticator) and the deletion is made again.
+ *
+ * Every answer is checked. `204` is removed. `404` with the management route's own not-found code (`pack_not_found`,
+ * `category_not_found`) means the journey deleted it itself, and is reported as already gone. Anything else (a refusal, a Category
+ * still holding a Pack, a verification that could not be established) is a failure: every leftover is listed, by kind and id with the
+ * platform's answer, the remaining deletions are still attempted so one failure hides no other, and then `run` throws, so the
+ * journey's hook fails rather than reporting success.
+ */
 export class RemoveAfter {
   private readonly packs: string[] = []
   private readonly categories: string[] = []
+  private readonly session: ((browser: Browser) => VerifiedSession) | undefined
+
+  /** `session` decides where the deletions are made (default: this worker's own verified session). */
+  constructor(session?: (browser: Browser) => VerifiedSession) {
+    this.session = session
+  }
 
   pack(id: string): void {
     this.packs.push(id)
@@ -278,11 +306,49 @@ export class RemoveAfter {
     this.categories.push(id)
   }
 
-  async run(page: Page): Promise<void> {
-    for (const id of this.packs)
-      await apiFrom(page, 'DELETE', `${ROOT}/packs/${id}`).catch(() => undefined)
-    for (const id of this.categories)
-      await apiFrom(page, 'DELETE', `${ROOT}/categories/${id}`).catch(() => undefined)
+  /** `from` is any page of the journey; only its browser is used. */
+  async run(from: Page): Promise<CleanupReport> {
+    const packs = this.packs.splice(0)
+    const categories = this.categories.splice(0)
+    const report: CleanupReport = { removed: [], alreadyGone: [], signIns: 0, proofs: 0 }
+    if (packs.length === 0 && categories.length === 0) return report
+
+    const browser = from.context().browser()
+    if (browser === null) throw new Error('Cleanup needs the browser the journey ran in.')
+    const session = this.session?.(browser) ?? workerSession(browser)
+    const before = { signIns: session.signIns, proofs: session.proofs }
+    const failures: string[] = []
+
+    const remove = async (
+      kind: 'Pack' | 'Category',
+      path: string,
+      id: string,
+      goneCode: string,
+    ) => {
+      const what = `${kind} ${id}`
+      try {
+        const answer = await session.request('DELETE', path)
+        const code = (answer.body as { code?: unknown } | null)?.code
+        if (answer.status === 204) report.removed.push(what)
+        else if (answer.status === 404 && code === goneCode) report.alreadyGone.push(what)
+        else failures.push(`${what}: ${String(answer.status)} ${JSON.stringify(answer.body)}`)
+      } catch (error) {
+        failures.push(`${what}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    // Packs first: a Category that still holds a Pack is refused (`category_not_empty`).
+    for (const id of packs) await remove('Pack', `${ROOT}/packs/${id}`, id, 'pack_not_found')
+    for (const id of categories)
+      await remove('Category', `${ROOT}/categories/${id}`, id, 'category_not_found')
+
+    report.signIns = session.signIns - before.signIns
+    report.proofs = session.proofs - before.proofs
+    if (failures.length > 0) {
+      throw new Error(
+        `Cleanup left ${String(failures.length)} fixture(s) behind:\n${failures.map((f) => `  - ${f}`).join('\n')}`,
+      )
+    }
+    return report
   }
 }
 

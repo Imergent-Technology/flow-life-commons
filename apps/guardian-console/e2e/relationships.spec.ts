@@ -1,7 +1,8 @@
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test'
 
 import { axeViolations, inTheme, THEMES, type Theme } from './axe.ts'
-import { apiFrom, nextCode, recoveryCodesFor, signedInAs, type FixtureSession } from './support.ts'
+import { apiFrom, recoveryCodesFor, signedInAs, type FixtureSession } from './support.ts'
+import { verifiedAdminPage, workerSession } from './verified.ts'
 
 // Relationships (ADR 0038, G10 WP5), in real Chromium through the real gateway and with the real platform deciding every request.
 // The personas are real assignments, not interception:
@@ -10,16 +11,17 @@ import { apiFrom, nextCode, recoveryCodesFor, signedInAs, type FixtureSession } 
 // The one thing no real persona is, is "may manage a type but not view it"; that single state is simulated by removing `view` from
 // the served definition, and the platform still answers every request it is sent.
 //
-// Each journey makes its own people with random names and removes the relationships it made, as the administrator (deleting needs a
-// recent proof). The administrator's recovery codes are single use: 9 and 8 sign the two sessions in and 7 proves the stale one. Any
-// other proof (a long run ages a session past 15 minutes) is made with the authenticator, which has no such limit.
+// Each journey makes its own people with random names and removes the relationships it made, as an administrator (deleting needs a
+// recent proof). The administrator's recovery codes are single use: 9 and 8 sign the two sessions in and 7 proves the stale one. Work
+// that needs a recent proof otherwise runs in the worker's own freshly signed-in administrator session (e2e/verified.ts), never by
+// proving on the minted `relationships-admin` session: proving rotates a session's id, and that session is shared with journeys in other
+// workers, which a rotation would sign out mid-step (and a long run ages it past its 15-minute proof).
 
 test.describe.configure({ timeout: 240_000 })
 
 const ROOT = '/api/v1/admin/relationships'
 const ADMIN_PASSWORD = 'e2e-relationships-admin-password-not-a-secret'
 const ADMIN_CODES = recoveryCodesFor('Y')
-const ADMIN_SECRET = 'KRUGKIDROVUWG2ZAMJZG653OEBTYPHLI'
 const GUARDIAN_PASSWORD = 'e2e-admin-guardian-password-not-a-secret'
 const GUARDIAN_CODES = recoveryCodesFor('S')
 
@@ -56,25 +58,6 @@ function personIdIn(page: Page): string {
   return found?.[1] ?? ''
 }
 
-/**
- * A session whose proof of who it is has aged past 15 minutes (a long run does that) is asked for one by the platform. Proving
- * freshens it, so a journey that must not be interrupted does so once, up front, with the authenticator.
- */
-async function ensureVerified(page: Page, password: string, secret: string): Promise<void> {
-  const me = (await apiFrom(page, 'GET', '/api/v1/me')).body as {
-    mfa: { security_verified_until: string | null }
-  }
-  if (me.mfa.security_verified_until !== null) return
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const proved = await apiFrom(page, 'POST', '/api/v1/security/verify', {
-      current_password: password,
-      code: await nextCode(secret),
-    })
-    if (proved.status === 204) return
-  }
-  expect(false, 'prove who is asking').toBe(true)
-}
-
 async function relationshipOf(
   page: Page,
   slug: string,
@@ -97,20 +80,29 @@ async function remove(page: Page, slug: string, personId: string): Promise<void>
   )
 }
 
-/** Removes a relationship as the administrator, whatever the journey's own persona may do (deletion needs a recent proof). */
+/**
+ * Removes a relationship as an administrator, whatever the journey's own persona may do: deletion needs a recent proof, so it is made in
+ * this worker's own verified session (e2e/verified.ts), which proves if it must without touching a session anyone else holds.
+ */
 async function adminRemove(
   browser: Browser,
   baseURL: string | undefined,
   slug: string,
   personId: string,
 ): Promise<void> {
-  const admin = await signedIn(browser, baseURL, 'relationships-admin')
-  try {
-    await ensureVerified(admin, ADMIN_PASSWORD, ADMIN_SECRET)
-    await remove(admin, slug, personId)
-  } finally {
-    await admin.context().close()
-  }
+  const session = workerSession(browser, baseURL)
+  const read = await session.request('GET', `${ROOT}/${slug}/${personId}/management`)
+  if (read.status === 404) return
+  expect(read.status, JSON.stringify(read.body)).toBe(200)
+  const current = read.body as { relationship_id: string; revision: number }
+  const deleted = await session.request(
+    'DELETE',
+    `${ROOT}/${slug}/${personId}?relationship_id=${current.relationship_id}&revision=${String(current.revision)}`,
+  )
+  expect(
+    deleted.status,
+    `remove the ${slug} relationship of ${personId}: ${JSON.stringify(deleted.body)}`,
+  ).toBe(204)
 }
 
 /** Records a person as a Volunteer through the API (a Volunteer needs no recent proof), and returns the person's id. */
@@ -316,11 +308,11 @@ test.describe('an administrator recognising a Guardian', () => {
     browser,
     baseURL,
   }) => {
-    const admin = await signedIn(browser, baseURL, 'relationships-admin')
-    await ensureVerified(admin, ADMIN_PASSWORD, ADMIN_SECRET)
-    // The Guardian role's own person: an existing person, with an Account that already holds the Console, so an Initiate grant
-    // through the relationship adds nothing it did not have, and the journey removes the relationship at the end.
-    const holder = 'E2E Plain Guardian'
+    const admin = await verifiedAdminPage(browser, baseURL)
+    // An existing person with an Account that already holds the Console through the Guardian role, so an Initiate grant through the
+    // relationship adds nothing it did not have. This journey's own (E2eAccountSeeder::INITIATE_HOLDER_EMAIL), so no other journey
+    // meets them while they are a Guardian, and the journey removes the relationship at the end.
+    const holder = 'E2E Initiate Holder'
     let personId = ''
 
     try {
@@ -349,7 +341,7 @@ test.describe('an administrator recognising a Guardian', () => {
       await expect(access).toContainText('Granted, and in effect')
 
       // The Account page lists it apart from the independent assignments, read-only, with its source.
-      const accounts = (await apiFrom(admin, 'GET', '/api/v1/admin/accounts?q=e2e.admin.guardian@'))
+      const accounts = (await apiFrom(admin, 'GET', '/api/v1/admin/accounts?q=e2e.persona.holder@'))
         .body as {
         data: { id: string }[]
       }
@@ -479,8 +471,7 @@ test.describe('what the platform lets each real persona do', () => {
     browser,
     baseURL,
   }) => {
-    const admin = await signedIn(browser, baseURL, 'relationships-admin')
-    await ensureVerified(admin, ADMIN_PASSWORD, ADMIN_SECRET)
+    const admin = await verifiedAdminPage(browser, baseURL)
     const name = `E2E Viewed Guardian ${tag()}`
     const made = await apiFrom(admin, 'POST', `${ROOT}/guardians`, {
       new_person: { display_name: name, email: null, phone: null },
@@ -781,8 +772,7 @@ for (const theme of THEMES) {
       browser,
       baseURL,
     }) => {
-      const admin = await signedIn(browser, baseURL, 'relationships-admin', theme)
-      await ensureVerified(admin, ADMIN_PASSWORD, ADMIN_SECRET)
+      const admin = await verifiedAdminPage(browser, baseURL, theme)
       const name = `E2E Audited Guardian ${tag()}`
       const personId = await makeGuardian(admin, name, 'active', 'decline')
       let volunteerId = ''
@@ -909,8 +899,7 @@ test.describe('layout, Guardian screens', () => {
     browser,
     baseURL,
   }) => {
-    const admin = await signedIn(browser, baseURL, 'relationships-admin')
-    await ensureVerified(admin, ADMIN_PASSWORD, ADMIN_SECRET)
+    const admin = await verifiedAdminPage(browser, baseURL)
     const name = `E2E ${'G'.repeat(120)}${tag()}`
     const personId = await makeGuardian(admin, name, 'active', 'decline')
     try {
