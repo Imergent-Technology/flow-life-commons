@@ -122,7 +122,7 @@ test_e2e() {
     php_run php artisan cache:clear --no-interaction
     step "E2E tests (Playwright, chromium)"
     local status=0
-    dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test --grep-invert @maintenance "$@" || status=$?
+    dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test --grep-invert "@maintenance|@leftovers" "$@" || status=$?
 
     # The maintenance journeys raise the authoritative `storage/framework/down` flag, and that flag is
     # global to the origin: every other journey running beside them would be answered with a 503. So
@@ -133,6 +133,11 @@ test_e2e() {
     # Unconditionally, through the real authority: a crashed or interrupted pass must never leave the
     # development origin in maintenance mode for the next person.
     php_run php artisan up --no-interaction >/dev/null 2>&1 || true
+
+    # After every other journey, and with the origin up again: the Resources the suite leaves behind must be exactly the demo's
+    # (e2e/resources-leftovers.spec.ts). Not a maintenance journey, which takes the origin down.
+    step "E2E leftovers (the suite leaves only the demo Resources behind)"
+    dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test --grep @leftovers --workers=1 "$@" || status=$?
 
     # The journeys recorded, changed, granted, withdrew and deleted relationships through the real platform: what they left behind,
     # the demo and the personas included, must still agree with the definitions and with Access (ADR 0038, F15).

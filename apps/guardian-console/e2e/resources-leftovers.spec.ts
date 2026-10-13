@@ -7,11 +7,12 @@ import { workerSession } from './verified.ts'
 
 // After the whole suite, the development database holds the demo's Resources and nothing a journey made (G10 WP7). Every Resources
 // journey removes exactly what it registered (`RemoveAfter`, which fails loudly when it cannot), so anything else here is a leak: a
-// journey that registered nothing, or a cleanup that was cut off. It runs in the serial maintenance pass, which `./flow test e2e` starts
-// only after every other journey has finished. A Pack or Category a person made by hand in their own development database is reported
-// too: the check is exact, by design, and names what it found.
+// journey that registered nothing, or a cleanup that was cut off. It is tagged @leftovers and runs in a pass of its own, which
+// `./flow test e2e` starts only after every other journey AND after the maintenance pass, once the origin has been brought back up (it
+// is not a @maintenance journey: those take the origin down, and this one needs it). A Pack or Category a person made by hand in
+// their own development database is reported too: the check is exact, by design, and names what it found.
 
-test('@maintenance the suite leaves exactly the demo Resources behind: every demo Pack and Category, and nothing else', async ({
+test('@leftovers the suite leaves exactly the demo Resources behind: every demo Pack and Category, and nothing else', async ({
   browser,
 }) => {
   const session = workerSession(browser)

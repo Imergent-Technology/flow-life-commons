@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
-import { aMemberId, apiFrom, signedInAs } from './support.ts'
+import { aMemberId, apiFrom } from './support.ts'
+import { verifiedAdminPage } from './verified.ts'
 
 /**
  * e2e/support.ts's own helpers, where no real journey already exercises their less common path.
@@ -21,8 +22,10 @@ test.describe('aMemberId', () => {
     browser,
     baseURL,
   }) => {
-    const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
-    await admin.goto('/') // apiFrom evaluates a same-origin fetch; the minted session starts at about:blank
+    // Registering a Member and revoking its grant need a recent proof, which the minted `admin-read` session has only for its first
+    // 15 minutes (a full run is longer, so the proof had lapsed by the time this ran). The worker's own verified session is signed in
+    // for real, recently, and shared with no other journey (e2e/verified.ts).
+    const admin = await verifiedAdminPage(browser, baseURL)
 
     await admin.route('**/api/v1/admin/members?per_page=1', (route) =>
       route.fulfill({
