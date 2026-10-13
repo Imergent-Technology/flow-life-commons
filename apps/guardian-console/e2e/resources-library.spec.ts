@@ -598,6 +598,66 @@ test.describe('a Series with a Card Guardians cannot see', () => {
     await expect(page.getByRole('tooltip')).toHaveText('Where we meet.')
     await page.context().close()
   })
+
+  for (const theme of THEMES) {
+    test(`${theme} theme: a summary opened by a resting pointer is put away with Escape wherever focus is, can be hovered, returns on the next visit, and the Card it covers is reached without moving the pointer (WCAG 1.4.13)`, async ({
+      browser,
+      baseURL,
+    }) => {
+      const page = await signedInAsReader(browser, baseURL, theme)
+      const s = fixtures.series
+      const startSummary =
+        (await libraryPackOf(page, s.id)).cards.find((c) => c.id === s.start.id)?.summary ?? ''
+      await page.goto(`/resource-library/${s.id}`)
+      const heading = page.getByRole('heading', { level: 1 })
+      await expect(heading).toBeFocused()
+      const first = cardNav(page).getByRole('link', { name: s.start.title })
+      const tip = page.getByRole('tooltip')
+
+      // Open by the pointer alone, while focus stays on the heading; it describes the link, and passes axe (contrast included).
+      await first.hover()
+      await expect(tip).toHaveText(startSummary)
+      await expect(first).toHaveAccessibleDescription(startSummary)
+      expect(await axeViolations(page), 'an open summary').toEqual([])
+
+      // The pointer can move onto it without it going, and back to the link.
+      await tip.hover()
+      await expect(tip).toBeVisible()
+      await first.hover()
+      await expect(tip).toBeVisible()
+
+      // Escape puts it away with neither the pointer nor focus moving, and it stays away while the pointer rests there.
+      await page.keyboard.press('Escape')
+      await expect(tip).toHaveCount(0)
+      await expect(heading).toBeFocused()
+      await first.hover()
+      await expect(tip).toHaveCount(0)
+
+      // Escape works with the pointer resting on the text itself too.
+      await page.mouse.move(0, 0)
+      await first.hover()
+      await tip.hover()
+      await page.keyboard.press('Escape')
+      await expect(tip).toHaveCount(0)
+
+      // Leaving and coming back shows it again.
+      await page.mouse.move(0, 0)
+      await first.hover()
+      await expect(tip).toHaveText(startSummary)
+
+      // While it shows it covers the Card beneath it (it must stay while the pointer moves onto it). Escape uncovers that Card with no move
+      // of the pointer, and it is chosen directly; choosing a Card puts its own summary away, so the next one is chosen directly too.
+      const second = cardNav(page).getByRole('link', { name: s.link.title })
+      await page.keyboard.press('Escape')
+      await expect(tip).toHaveCount(0)
+      await second.click()
+      await expect(page.getByRole('heading', { level: 2, name: s.link.title })).toBeFocused()
+      await expect(tip).toHaveCount(0)
+      await cardNav(page).getByRole('link', { name: s.image.title }).click()
+      await expect(page.getByRole('heading', { level: 2, name: s.image.title })).toBeFocused()
+      await page.context().close()
+    })
+  }
 })
 
 // --- Cards of each Type ---------------------------------------------------------------------------------------------------------

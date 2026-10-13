@@ -340,9 +340,8 @@ test.describe('the same library, read by the two readers', () => {
     await expect(viewer.getByRole('article')).toContainText(
       'Narrower than its Pack: the Pack is for Guardians, Volunteers.',
     )
-    // A Draft File Card is served to the viewer, through the VIEWER's file route. (The summary of the Card just chosen is still showing
-    // while the pointer rests on it, and it sits over the next item by design, so the pointer moves away first, as a person's would.)
-    await viewer.mouse.move(0, 0)
+    // A Draft File Card is served to the viewer, through the VIEWER's file route. (Choosing the last Card put its summary away, so the
+    // next is chosen directly: no move of the pointer is needed to uncover it.)
     await cardNav(viewer).getByRole('link', { name: f.mixed.file.title }).click()
     const view = viewer.getByRole('link', { name: /^View PDF/ })
     const href = (await view.getAttribute('href')) ?? ''
