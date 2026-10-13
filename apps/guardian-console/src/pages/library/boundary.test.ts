@@ -200,6 +200,21 @@ function violations(source: Source): string[] {
     }
   }
 
+  if (place === 'viewer') {
+    // The shared reader and the shared navigation take a limited shape. A viewer Card is a superset of it, so handing one over whole
+    // type-checks and shows nothing wrong today; it would put state, audiences and the editor in reach of code that is shared with the
+    // audience reader. The viewer therefore projects first, and this keeps it doing so.
+    for (const tag of code.matchAll(/<LibraryCardBody\b[^>]*>/g)) {
+      if (!/\bcard=\{readingOf\(/.test(tag[0]))
+        found.push('the whole viewer Card to the shared reader')
+    }
+    for (const tag of code.matchAll(/<(?:CardNavigation|SeriesControls)\b[^>]*>/g)) {
+      if (!/\bcards=\{[^}]*\.map\(navigableOf\)\}/.test(tag[0])) {
+        found.push('the whole viewer Cards to the shared navigation')
+      }
+    }
+  }
+
   const unextended = source.path.replace(/\.(?:ts|tsx)$/, '')
   if (/\/api\/v1\/|\brequest(?:Json|Void)\b|\bfetch\s*\(/.test(code)) {
     found.push('its own request: every request goes through the client')
@@ -492,6 +507,31 @@ describe('the rules can fail', () => {
     ['the shared reader taking the route', R, "import { useLibraryMode } from '../libraryMode.ts'"],
   ])('flags %s', (_name, path, text) => {
     expect(violations(at(path, text)).length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    [
+      'a viewer Card handed whole to the shared reader',
+      '<LibraryCardBody key={current.id} card={current} />',
+    ],
+    ['a viewer Card handed over under another name', '<LibraryCardBody card={whole} />'],
+    [
+      'every viewer Card handed whole to the navigation',
+      '<CardNavigation cards={cards} currentId={x} />',
+    ],
+    [
+      'every viewer Card handed whole to the series controls',
+      '<SeriesControls cards={pack.cards} currentId={x} />',
+    ],
+  ])('flags %s', (_name, text) => {
+    expect(violations(at(V, text)).length).toBeGreaterThan(0)
+  })
+
+  it('accepts the viewer projecting before it hands anything over, and does not require it of the audience reader', () => {
+    const projected =
+      '<LibraryCardBody key={current.id} card={readingOf(current)} />\n<CardNavigation cards={cards.map(navigableOf)} currentId={x} />\n<SeriesControls cards={cards.map(navigableOf)} currentId={x} />'
+    expect(violations(at(V, projected))).toEqual([])
+    expect(violations(at(A, '<LibraryCardBody key={current.id} card={current} />'))).toEqual([])
   })
 
   it('lets only the chooser name both readers’ pages', () => {

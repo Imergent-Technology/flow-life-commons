@@ -192,7 +192,12 @@ describe('when the platform takes resources.view away from a viewer', () => {
     await waitFor(() => {
       expect(meCalls(w).length).toBe(meBefore + 1)
     })
-    // Nothing is decided yet: the audience reader has not been asked, and the viewer has not been asked again.
+    // Nothing is decided yet: the audience reader has not been asked, and the viewer has not been asked again. The screen says
+    // so, and says nothing else: not "could not be confirmed" (that is for an answer that settled nothing), and nothing opened.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(screen.getByText('Checking your access to Resources…')).toBeVisible()
+    expect(screen.queryByText(/could not be confirmed/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
     expect(audienceCalls(w)).toEqual([])
     expect(viewerCalls(w).filter((c) => c.path.includes('publication=draft'))).toHaveLength(1)
 

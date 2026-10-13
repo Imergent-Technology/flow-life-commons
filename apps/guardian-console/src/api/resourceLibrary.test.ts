@@ -119,6 +119,22 @@ describe('the audience reader (policy C)', () => {
     expect((await getAudiencePack(PACK_ID)).ok).toBe(false)
   })
 
+  it.each([
+    ['a publication state', { state: 'draft' }],
+    ['the Pack’s audiences', { audiences: ['guardian'] }],
+    ['a draft count', { draft_card_count: 2 }],
+    ['an editor', { updated_by: { display_name: 'Hone' } }],
+    ['a time of editing', { updated_at: '2026-09-22T08:00:00Z' }],
+  ])(
+    'refuses a Pack that carries %s even when every one of its Cards is clean',
+    async (_name, extra) => {
+      serve()
+        .on(`GET ${MY_RESOURCES_PACK}`, json(wireLibraryPack(extra)))
+        .install()
+      expect((await getAudiencePack(PACK_ID)).ok).toBe(false)
+    },
+  )
+
   it('refuses a Card that carries a Draft marker, an audience list or an editor', async () => {
     for (const extra of [
       { state: 'draft' },
