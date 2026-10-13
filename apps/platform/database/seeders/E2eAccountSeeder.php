@@ -235,11 +235,11 @@ final class E2eAccountSeeder extends Seeder
     public const string RELATIONSHIPS_ADMIN_SECRET = 'KRUGKIDROVUWG2ZAMJZG653OEBTYPHLI';
 
     /**
-     * The Resource Library's AUDIENCE reader (G10 WP6, e2e/resources-audience.spec.ts): a real Console user who holds the Console and
+     * The Resource Library's AUDIENCE reader (G10 WP6, e2e/resources-modes.spec.ts): a real Console user who holds the Console and
      * nothing else (Guardian Initiate, ADR 0038 A3), so `resources.view` is not among their capabilities and the library opens as
-     * policy C. They are eligible for nothing until a journey records them in a relationship (through the real API, as the
-     * Relationships administrator) and they are not eligible for anything again when it deletes it. Their own account, so no other
-     * journey shares their sessions, recovery codes or time steps.
+     * policy C. The role alone makes them eligible for nothing: their Guardian eligibility comes from an ACTIVE Guardian relationship
+     * that {@see self::recordAsActiveGuardian()} records through the real Relationships use case, and `forget()` removes it when the
+     * fixture Accounts are recreated. Their own account, so no other journey shares their sessions, recovery codes or time steps.
      */
     public const string AUDIENCE_READER_EMAIL = 'e2e.audience.reader@example.org';
 

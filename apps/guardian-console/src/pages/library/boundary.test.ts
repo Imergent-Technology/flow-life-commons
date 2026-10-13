@@ -246,18 +246,31 @@ function violations(source: Source): string[] {
 
 // -- The client's own two sections --------------------------------------------------------------------------------------------------
 
-function clientSections(text: string): { audience: string; viewer: string } {
+function clientSections(text: string): { shared: string; audience: string; viewer: string } {
   const code = stripComments(text)
   const audienceAt = code.indexOf('const AUDIENCE_FAMILY = ')
   const viewerAt = code.indexOf('const VIEWER_FAMILY = ')
   if (audienceAt < 0 || viewerAt < 0 || viewerAt < audienceAt)
     throw new Error('The client no longer has two sections.')
-  return { audience: code.slice(audienceAt, viewerAt), viewer: code.slice(viewerAt) }
+  return {
+    shared: code.slice(0, audienceAt),
+    audience: code.slice(audienceAt, viewerAt),
+    viewer: code.slice(viewerAt),
+  }
 }
 
 function clientViolations(text: string): string[] {
-  const { audience, viewer } = clientSections(text)
+  const { shared, audience, viewer } = clientSections(text)
   const found: string[] = []
+  // The part above both sections is policy-neutral: validators, types and the path check, which takes its family as an argument. A
+  // route literal or a family constant here would be one both readers can reach, so it could hand either the other's endpoint.
+  if (/my-resources|resource-library/.test(shared))
+    found.push('a reader family’s route in the shared part')
+  if (/AUDIENCE_FAMILY|VIEWER_FAMILY/.test(shared)) found.push('a reader family in the shared part')
+  if (/\/admin\/(?!\$\{family\}\/)/.test(shared))
+    found.push('an admin route in the shared part that is not built from a reader’s family')
+  if (/\/admin\/resources(?![-\w])/.test(shared))
+    found.push('a management endpoint in the shared part')
   if (audience.includes('resource-library'))
     found.push("the audience client names the viewer's route")
   if (/VIEWER_FAMILY|viewer/i.test(audience.replace(/PRIVILEGED_FIELDS[\s\S]*?\]/, ''))) {
@@ -582,8 +595,20 @@ describe('the rules can fail', () => {
   })
 
   describe('the client’s sections', () => {
-    const sections = (audience: string, viewer: string) =>
-      `const AUDIENCE_FAMILY = 'my-resources'\n${audience}\nconst VIEWER_FAMILY = 'resource-library'\n${viewer}`
+    const sections = (audience: string, viewer: string, shared = '') =>
+      `${shared}\nconst AUDIENCE_FAMILY = 'my-resources'\n${audience}\nconst VIEWER_FAMILY = 'resource-library'\n${viewer}`
+
+    it('accepts the shared part’s family-parameterised path check, the real client’s only route', () => {
+      expect(
+        clientViolations(
+          sections(
+            '',
+            '',
+            'const p = `/api/v1/admin/${family}/packs/${encodeURIComponent(packId)}/cards/x/file`',
+          ),
+        ),
+      ).toEqual([])
+    })
 
     it('accepts a client whose sections each keep to their own route', () => {
       expect(
@@ -612,6 +637,27 @@ describe('the rules can fail', () => {
         sections('', "const m = '/api/v1/admin/resources/packs'"),
       ],
       ['a write', sections("requestJson({ method: 'POST' })", '')],
+      [
+        'a viewer route literal in the shared part, reached from the audience reader (the audit’s mutation)',
+        sections(
+          'const a = SHARED_ROUTE',
+          '',
+          "const SHARED_ROUTE = '/api/v1/admin/resource-library'",
+        ),
+      ],
+      [
+        'an audience route literal in the shared part',
+        sections('', '', "const SHARED_ROUTE = '/api/v1/admin/my-resources'"),
+      ],
+      [
+        'a management route literal in the shared part',
+        sections('', '', "const SHARED_ROUTE = '/api/v1/admin/resources/packs'"),
+      ],
+      [
+        'a fixed admin route in the shared part, whatever it is called',
+        sections('', '', "const ROUTE = '/api/v1/admin/anything'"),
+      ],
+      ['a reader family constant in the shared part', sections('', '', 'const F = VIEWER_FAMILY')],
     ])('flags %s', (_name, text) => {
       expect(clientViolations(text).length).toBeGreaterThan(0)
     })

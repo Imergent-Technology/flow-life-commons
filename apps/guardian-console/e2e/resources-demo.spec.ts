@@ -700,10 +700,12 @@ test.describe('who may read the library, and who may manage', () => {
     await expect(page.getByRole('link', { name: 'Resource Library', exact: true })).toBeVisible()
 
     asked.length = 0
-    for (const path of ['/resource-library', `/resource-library/${demo.single.id}`]) {
-      await page.goto(path)
-      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
-    }
+    await page.goto('/resource-library')
+    await expect(page.getByRole('heading', { level: 1, name: 'Resource Library' })).toBeVisible()
+    await page.goto(`/resource-library/${demo.single.id}`)
+    // A manager is not thereby eligible for anything: this Pack is one and the same "not found" for them, and no error screen.
+    await expect(page.getByRole('heading', { level: 1, name: 'Resource not found' })).toBeVisible()
+    await expect(page.getByText('That Resource could not be found.')).toBeVisible()
     // The library opened, and it asked the audience reader only: management does not grant viewing, and eligibility is not a role.
     expect(asked.some((url) => url.includes('/api/v1/admin/my-resources'))).toBe(true)
     expect(asked.filter((url) => url.includes('/api/v1/admin/resource-library'))).toEqual([])

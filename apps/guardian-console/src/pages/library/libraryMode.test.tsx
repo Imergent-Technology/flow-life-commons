@@ -1,10 +1,11 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useMemo, useState, type ReactNode } from 'react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { Link, MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { CurrentAccount } from '../../api/auth.ts'
+import App from '../../App.tsx'
 import { AuthContext, type AuthContextValue } from '../../auth/auth-context.ts'
 import { operator, serveOperator } from '../../test/admin.ts'
 import { deferred } from '../../test/deferred.ts'
@@ -18,16 +19,19 @@ import {
   wireLibraryPack,
   wireListedEntry,
 } from '../../test/library.ts'
+import { LocationProbe } from '../../test/LocationProbe.tsx'
 import { renderApp } from '../../test/renderApp.tsx'
-import { PACK_ID } from '../../test/resources.ts'
+import { CARD_ID, doc, PACK_ID } from '../../test/resources.ts'
 import {
   DRAFT_PACK_ID,
   RESOURCE_LIBRARY,
   RESOURCE_LIBRARY_PACK,
+  numbered,
   THREE_VIEWER_CARDS,
   VIEWER,
   VIEWER_GROUPS,
   viewerLibraryOf,
+  wireViewerCard,
   wireViewerGroup,
   wireViewerListed,
   wireViewerPack,
@@ -249,6 +253,110 @@ describe('when the platform takes resources.view away from a viewer', () => {
     expect(
       w.api.calls.filter((c) => c.path === `${MY_RESOURCES}/packs/${DRAFT_PACK_ID}`),
     ).toHaveLength(1)
+  })
+
+  it('keeps nothing of a Draft Pack the viewer had fully loaded: the deep link is resolved again by policy C, and a late viewer answer restores nothing', async () => {
+    const w = world()
+    const DRAFT_PATH = `${RESOURCE_LIBRARY}/packs/${DRAFT_PACK_ID}`
+    const BODY = 'UNMISTAKABLE draft body'
+    // A Draft Pack the viewer reads IN FULL: a Draft Card narrowed to Volunteers, with its audiences, its editor and its body.
+    const secret = wireViewerPack({
+      id: DRAFT_PACK_ID,
+      title: 'Secret draft plan',
+      state: 'draft',
+      audiences: ['volunteer'],
+      cards: numbered([
+        wireViewerCard({
+          id: CARD_ID,
+          title: 'Embargoed first Card',
+          state: 'draft',
+          audience_mode: 'narrowed',
+          audiences: ['volunteer'],
+          content: { format: 'prosemirror', version: 1, document: doc(BODY) },
+        }),
+      ]),
+    })
+    w.api.on(`GET ${DRAFT_PATH}`, () =>
+      w.viewerAllowed ? json(secret) : json({ message: 'Forbidden.' }, 403),
+    )
+    const privileged = ['Secret draft plan', 'Embargoed first Card', BODY, 'Hone Guardian']
+    const expectNoneOfIt = () => {
+      expectNothingPrivileged()
+      for (const value of privileged)
+        expect(document.body.textContent, `"${value}" is still on screen`).not.toContain(value)
+    }
+
+    // The test's own link stands for a pasted address or the Back button: in-app navigation to an address.
+    render(
+      <MemoryRouter initialEntries={[`/resource-library/${DRAFT_PACK_ID}`]}>
+        <App />
+        <LocationProbe />
+        <Link to={`/resource-library/${DRAFT_PACK_ID}`}>Go to the pasted address</Link>
+      </MemoryRouter>,
+    )
+    const user = userEvent.setup()
+
+    // 1-3. The privileged Pack really is loaded and on screen, with everything that must never reach audience mode.
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Secret draft plan' }),
+    ).toBeVisible()
+    for (const value of [BODY, 'Embargoed first Card', 'Hone Guardian'])
+      expect(
+        document.body.textContent,
+        `"${value}" should be on screen before the refusal`,
+      ).toContain(value)
+    expect(document.body.textContent).toContain('Draft')
+    expect(document.body.textContent).toContain('Volunteers')
+    expect(callsTo(w, DRAFT_PATH)).toHaveLength(1)
+
+    // 4. To the library list.
+    await user.click(
+      within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByRole('link', {
+        name: 'Library',
+      }),
+    )
+    await screen.findByRole('heading', { level: 2, name: 'Uncategorized' })
+    // A search is still unanswered when the platform changes its mind...
+    const slow = deferred<Response>()
+    w.api.on(`GET ${RESOURCE_LIBRARY}?q=slow`, () => slow.promise)
+    await user.type(screen.getByLabelText('Search Resources'), 'slow')
+    await user.click(screen.getByRole('button', { name: 'Search' }))
+
+    // 5-7. ...the viewing capability goes, the next viewer request is refused, the viewer is gone, and /me is asked again.
+    revoke(w)
+    w.api.on(`GET ${RESOURCE_LIBRARY}?q=slow&publication=draft`, () => json({ message: 'x' }, 403))
+    const meBefore = meCalls(w).length
+    await user.selectOptions(screen.getByLabelText('Publication'), 'draft')
+    expect(await screen.findByRole('link', { name: 'Welcome pack' })).toBeVisible()
+    expect(meCalls(w).length).toBe(meBefore + 1)
+    expect(screen.queryByLabelText('Publication')).not.toBeInTheDocument()
+    expectNoneOfIt()
+    const viewerCallsAtDowngrade = viewerCalls(w).length
+
+    // 8-9. The same Pack address, now: policy C answers 404, and only policy C was asked.
+    await user.click(screen.getByRole('link', { name: 'Go to the pasted address' }))
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Resource not found' }),
+    ).toBeVisible()
+    expect(screen.getByText('That Resource could not be found.')).toBeVisible()
+    expect(screen.getByTestId('location').textContent).toBe(`/resource-library/${DRAFT_PACK_ID}`)
+    expect(callsTo(w, `${MY_RESOURCES}/packs/${DRAFT_PACK_ID}`)).toHaveLength(1)
+    // The privileged Pack was requested once, before the refusal, and never again.
+    expect(callsTo(w, DRAFT_PATH)).toHaveLength(1)
+    expect(viewerCalls(w)).toHaveLength(viewerCallsAtDowngrade)
+    expectNoneOfIt()
+
+    // 10. The old viewer answer finally arrives, carrying the Draft, and restores nothing.
+    slow.resolve(
+      viewerLibraryOf(
+        wireViewerGroup([
+          wireViewerListed({ id: DRAFT_PACK_ID, title: 'Secret draft plan', state: 'draft' }),
+        ]),
+      ),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(screen.getByRole('heading', { level: 1, name: 'Resource not found' })).toBeVisible()
+    expectNoneOfIt()
   })
 
   it('cannot be undone by a viewer answer that arrives late', async () => {
