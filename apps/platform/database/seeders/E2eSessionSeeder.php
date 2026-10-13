@@ -75,6 +75,8 @@ final class E2eSessionSeeder extends Seeder
         // journeys; one is STALE, for the journey that proves the shared step-up prompt guards Guardian recognition and deletion.
         // The stale one signs in with recovery code 8 and proves with 7 (e2e/relationships.spec.ts).
         'relationships-admin' => [E2eAccountSeeder::RELATIONSHIPS_ADMIN_EMAIL, E2eAccountSeeder::RELATIONSHIPS_ADMIN_PASSWORD, 'Y', 0, self::RECOVERY_INDEX],
+        // The Resource Library's audience reader (G10 WP6): a fresh session of a restricted Console user (e2e/resources-audience.spec.ts).
+        'audience-reader' => [E2eAccountSeeder::AUDIENCE_READER_EMAIL, E2eAccountSeeder::AUDIENCE_READER_PASSWORD, 'Z', 0, self::RECOVERY_INDEX],
         'relationships-admin-stale' => [E2eAccountSeeder::RELATIONSHIPS_ADMIN_EMAIL, E2eAccountSeeder::RELATIONSHIPS_ADMIN_PASSWORD, 'Y', 16, 8],
     ];
 

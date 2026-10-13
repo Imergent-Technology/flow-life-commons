@@ -3,6 +3,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test'
 import { axeViolations, inTheme, THEMES, type Theme } from './axe.ts'
 import {
   LIBRARY,
+  VIEWER_LIBRARY,
   makeBasicCard,
   makeCategory,
   makeLinkCard,
@@ -14,6 +15,7 @@ import {
   publishPack,
   RemoveAfter,
   ROOT,
+  signedInAsReader,
   unique,
 } from './resources.ts'
 import { apiFrom, signedInAs } from './support.ts'
@@ -117,7 +119,11 @@ interface Fixtures {
 
 let fixtures: Fixtures
 
-const signedIn = async (
+/**
+ * The MANAGER: `plain-guardian` holds both Resources capabilities, so it makes the content here and, being a holder of `resources.view`,
+ * would read ALL of it as the privileged viewer. A journey about what a reader is shown reads as `signedInAsReader` instead.
+ */
+const signedInManager = async (
   browser: Browser,
   baseURL: string | undefined,
   theme?: Theme,
@@ -130,7 +136,7 @@ const signedIn = async (
 }
 
 test.beforeAll(async ({ browser, baseURL }) => {
-  const page = await signedIn(browser, baseURL)
+  const page = await signedInManager(browser, baseURL)
   const category = await makeCategory(page)
   removal.category(category.id)
   const both = ['guardian', 'member']
@@ -227,7 +233,7 @@ test.beforeAll(async ({ browser, baseURL }) => {
     `C${'a'.repeat(60)}${crypto.randomUUID().slice(0, 8)}t`,
   )
   removal.category(longCategory.id)
-  const longTitle = `L${'o'.repeat(150)}ng`
+  const longTitle = `L${'o'.repeat(150)}${crypto.randomUUID().slice(0, 8)}`
   const longPack = await makePack(page, {
     title: longTitle,
     categoryId: longCategory.id,
@@ -287,7 +293,7 @@ test.beforeAll(async ({ browser, baseURL }) => {
 })
 
 test.afterAll(async ({ browser, baseURL }) => {
-  const page = await signedIn(browser, baseURL)
+  const page = await signedInManager(browser, baseURL)
   await removal.run(page)
   await page.context().close()
 })
@@ -333,7 +339,7 @@ test.describe('reading the library', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const asked: string[] = []
     page.on('request', (request) => asked.push(request.url()))
     await page.goto('/resource-library')
@@ -365,7 +371,9 @@ test.describe('reading the library', () => {
 
     // Reading never touches management, and never needs the editor.
     expect(asked.filter((url) => url.includes('/api/v1/admin/resources'))).toEqual([])
-    expect(asked.some((url) => url.includes('/api/v1/admin/resource-library'))).toBe(true)
+    expect(asked.some((url) => url.includes('/api/v1/admin/my-resources'))).toBe(true)
+    // A reader without `resources.view` is never asked for, or served, the privileged viewer.
+    expect(asked.filter((url) => url.includes('/api/v1/admin/resource-library'))).toEqual([])
     await page.context().close()
   })
 
@@ -373,7 +381,7 @@ test.describe('reading the library', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     await page.goto('/resource-library')
     await page.getByLabel('Search Resources').fill(fixtures.series.hidden.title)
     await page
@@ -405,7 +413,7 @@ test.describe('reading the library', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     await page.goto(`/resource-library/${fixtures.single.id}`)
 
     await expect(page.getByRole('heading', { level: 1, name: fixtures.single.title })).toBeVisible()
@@ -421,7 +429,7 @@ test.describe('reading the library', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     await page.goto(`/resource-library/${fixtures.several.id}`)
 
     await expect(cardNav(page).getByRole('link')).toHaveText([
@@ -444,7 +452,7 @@ test.describe('a Series with a Card Guardians cannot see', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     await page.goto(`/resource-library/${s.id}`)
 
@@ -481,7 +489,7 @@ test.describe('a Series with a Card Guardians cannot see', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     await page.goto(cardAddress(s.id, s.hidden.id))
 
@@ -499,7 +507,7 @@ test.describe('a Series with a Card Guardians cannot see', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const shown: string[] = []
     for (const path of [
       `/resource-library/${fixtures.draft.id}`,
@@ -521,7 +529,7 @@ test.describe('a Series with a Card Guardians cannot see', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     await page.goto(`/resource-library/${s.id}`)
 
@@ -550,7 +558,7 @@ test.describe('a Series with a Card Guardians cannot see', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     const delivered = await libraryPackOf(page, s.id)
     const startSummary = delivered.cards.find((c) => c.id === s.start.id)?.summary ?? ''
@@ -582,7 +590,7 @@ test.describe('a Series with a Card Guardians cannot see', () => {
   })
 
   test('shows a Card’s summary on hover too', async ({ browser, baseURL }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     await page.goto(`/resource-library/${s.id}`)
 
@@ -599,7 +607,7 @@ test.describe('Cards of each Type', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     const asked: string[] = []
     page.on('request', (request) => asked.push(request.url()))
@@ -619,7 +627,7 @@ test.describe('Cards of each Type', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     const asked: string[] = []
     page.on('request', (request) => asked.push(request.url()))
@@ -633,10 +641,11 @@ test.describe('Cards of each Type', () => {
     expect(src).toBe(`${LIBRARY}/packs/${s.id}/cards/${s.image.id}/file?disposition=inline`)
     await expect(page.locator('dd', { hasText: 'floor-plan.png' })).toBeVisible()
     await expect(page.getByText('PNG image')).toBeVisible()
-    // The file came from the library's route and from no management one.
+    // The file came from the audience reader's route, and from no management route and not the privileged viewer's.
     expect(
-      asked.some((url) => url.includes(`/resource-library/packs/${s.id}/cards/${s.image.id}/file`)),
+      asked.some((url) => url.includes(`/my-resources/packs/${s.id}/cards/${s.image.id}/file`)),
     ).toBe(true)
+    expect(asked.filter((url) => url.includes('/api/v1/admin/resource-library'))).toEqual([])
     expect(asked.filter((url) => url.includes('/api/v1/admin/resources'))).toEqual([])
     await page.context().close()
   })
@@ -645,11 +654,11 @@ test.describe('Cards of each Type', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     // Not a real missing file (the store cannot be emptied from a journey): the platform's own answer for one, `asset_unavailable`,
     // given to the image request, to show what the reader meets.
-    await page.route('**/resource-library/packs/*/cards/*/file?disposition=inline', (route) =>
+    await page.route('**/my-resources/packs/*/cards/*/file?disposition=inline', (route) =>
       route.fulfill({
         status: 404,
         json: { message: 'x', code: 'asset_unavailable' },
@@ -667,7 +676,7 @@ test.describe('Cards of each Type', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     await page.goto(cardAddress(s.id, s.pdf.id))
 
@@ -693,7 +702,7 @@ test.describe('Cards of each Type', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     const s = fixtures.series
     await page.goto(cardAddress(s.id, s.text.id))
 
@@ -714,45 +723,72 @@ test.describe('Cards of each Type', () => {
 
 // --- Who may read ---------------------------------------------------------------------------------------------------------------
 
-test.describe('who may read the library', () => {
-  async function asWithout(
-    browser: Browser,
-    baseURL: string | undefined,
-    removed: string,
-  ): Promise<{ page: Page; asked: string[] }> {
-    const page = await signedIn(browser, baseURL)
-    // The platform's role catalog grants the two capabilities together, so no real account holds one without the other. These
-    // personas are the same session with one capability taken out of what /me says: this proves the CONSOLE's side (what it shows,
-    // and that it asks for nothing). The platform's side is proved with a real account below, and by its own test suite.
-    const me = (await apiFrom(page, 'GET', '/api/v1/me')).body as { capabilities: string[] }
-    expect(me.capabilities).toContain(removed)
-    await page.route('**/api/v1/me', (route) =>
-      route.fulfill({
-        json: { ...me, capabilities: me.capabilities.filter((c) => c !== removed) },
-      }),
-    )
+test.describe('who may read the library, and which library they get', () => {
+  const askedOf = (page: Page): string[] => {
     const asked: string[] = []
     page.on('request', (request) => {
-      if (request.url().includes('/api/v1/admin/resource')) asked.push(request.url())
+      if (/\/api\/v1\/admin\/(?:resource|my-resources)/.test(request.url()))
+        asked.push(request.url())
     })
-    return { page, asked }
+    return asked
   }
+  const fromViewer = (url: string) => url.includes('/api/v1/admin/resource-library')
+  const fromReader = (url: string) => url.includes('/api/v1/admin/my-resources')
+  const fromManagement = (url: string) => /\/api\/v1\/admin\/resources(?![-\w])/.test(url)
 
-  test('someone who may only VIEW reads the library and is offered no management', async ({
+  test('a holder of resources.view reads EVERYTHING through the privileged viewer, a Draft included, with management beside it', async ({
     browser,
     baseURL,
   }) => {
-    const { page, asked } = await asWithout(browser, baseURL, 'resources.manage')
+    // The real persona: `plain-guardian` holds both Resources capabilities. Nothing is intercepted.
+    const page = await signedInManager(browser, baseURL)
+    const asked = askedOf(page)
 
     await page.goto('/resource-library')
     await expect(page.getByRole('heading', { level: 1, name: 'Resource Library' })).toBeVisible()
+    // The Published Packs, and the Draft that a reader is never shown, with its state said in words.
     await expect(page.getByRole('link', { name: fixtures.single.title })).toBeVisible()
+    const draft = page.getByRole('listitem').filter({
+      has: page.getByRole('link', { name: fixtures.draft.title, exact: true }),
+    })
+    await expect(draft).toContainText('Draft')
+    await expect(draft).toContainText('For Guardians')
+    // The viewer's own filters, and its own library of Cards: the Series counts every Card, the one narrowed away included.
+    await expect(page.getByLabel('Publication', { exact: true })).toBeVisible()
+    await expect(page.getByLabel('Audience', { exact: true })).toBeVisible()
+    await expect(
+      page.getByRole('listitem').filter({
+        has: page.getByRole('link', { name: fixtures.series.title, exact: true }),
+      }),
+    ).toContainText('Series · 6 Cards')
+    await expect(page.getByRole('link', { name: 'All Resource Packs' }).first()).toBeVisible()
+
+    expect(asked.some(fromViewer)).toBe(true)
+    expect(asked.filter(fromReader)).toEqual([])
+    expect(asked.filter(fromManagement)).toEqual([])
+    await page.context().close()
+  })
+
+  test('a Console user without resources.view is served what a Guardian is eligible for: no Draft, no markers, no filters, and no management', async ({
+    browser,
+    baseURL,
+  }) => {
+    // The real persona: a restricted Console user (Guardian Initiate role) who is an Active Guardian.
+    const page = await signedInAsReader(browser, baseURL)
+    const asked = askedOf(page)
+
+    await page.goto('/resource-library')
+    await expect(page.getByRole('link', { name: fixtures.single.title })).toBeVisible()
+    await expect(page.getByRole('link', { name: fixtures.draft.title })).toHaveCount(0)
+    await expect(page.getByLabel('Publication', { exact: true })).toHaveCount(0)
+    await expect(page.getByLabel('Audience', { exact: true })).toHaveCount(0)
     await expect(
       page.getByRole('link', { name: 'Resource Library', exact: true }).first(),
     ).toBeVisible()
     await expect(page.getByRole('link', { name: 'All Resource Packs' })).toHaveCount(0)
     await expect(page.getByRole('link', { name: 'Categories', exact: true })).toHaveCount(0)
-    expect(asked.every((url) => url.includes('/resource-library'))).toBe(true)
+    expect(asked.length).toBeGreaterThan(0)
+    expect(asked.every(fromReader)).toBe(true)
 
     asked.length = 0
     for (const path of ['/resources', '/resources/new', '/resources/categories']) {
@@ -760,21 +796,42 @@ test.describe('who may read the library', () => {
       await expect(page.getByRole('heading', { level: 1, name: 'Not permitted' })).toBeVisible()
     }
     expect(asked).toEqual([])
+
+    // And the platform refuses what this persona never holds, whatever the Console shows: the viewer's routes and management.
+    expect((await apiFrom(page, 'GET', VIEWER_LIBRARY)).status).toBe(403)
+    expect(
+      (await apiFrom(page, 'GET', `${VIEWER_LIBRARY}/packs/${fixtures.draft.id}`)).status,
+    ).toBe(403)
+    expect((await apiFrom(page, 'GET', `${ROOT}/packs`)).status).toBe(403)
     await page.context().close()
   })
 
-  test('someone who may only MANAGE is not given the library, and it asks for nothing', async ({
+  test('someone who may only MANAGE is given the audience reader, never the viewer, and what they read is only what their relationships make them eligible for', async ({
     browser,
     baseURL,
   }) => {
-    const { page, asked } = await asWithout(browser, baseURL, 'resources.view')
+    const page = await signedInManager(browser, baseURL)
+    // SIMULATED: no real account holds `resources.manage` without `resources.view` (the role catalog grants them together), so this
+    // is the same session with `resources.view` taken out of what /me says. It proves the CONSOLE's side: which library opens and what
+    // is asked for. The platform's side is real: it answers `my-resources` from the Person's relationships, and `plain-guardian` has
+    // none, so there is nothing for them to read. The platform's own refusals of policy A are proved by its test suite (WP4) and above.
+    const me = (await apiFrom(page, 'GET', '/api/v1/me')).body as { capabilities: string[] }
+    expect(me.capabilities).toContain('resources.view')
+    await page.route('**/api/v1/me', (route) =>
+      route.fulfill({
+        json: { ...me, capabilities: me.capabilities.filter((c) => c !== 'resources.view') },
+      }),
+    )
+    const asked = askedOf(page)
 
     await page.goto('/resource-library')
-    await expect(page.getByRole('heading', { level: 1, name: 'Not permitted' })).toBeVisible()
-    await page.goto(`/resource-library/${fixtures.single.id}`)
-    await expect(page.getByRole('heading', { level: 1, name: 'Not permitted' })).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Resource Library', exact: true })).toHaveCount(0)
-    expect(asked).toEqual([])
+    await expect(page.getByRole('heading', { level: 1, name: 'Resource Library' })).toBeVisible()
+    await expect(page.getByText('There are no Resources for you yet.')).toBeVisible()
+    await expect(page.getByLabel('Publication', { exact: true })).toHaveCount(0)
+    await expect(page.getByRole('link', { name: 'All Resource Packs' }).first()).toBeVisible()
+    expect(asked.some(fromReader)).toBe(true)
+    expect(asked.filter(fromViewer)).toEqual([])
+    expect(asked.filter(fromManagement)).toEqual([])
     await page.context().close()
   })
 
@@ -790,16 +847,15 @@ test.describe('who may read the library', () => {
     await page.getByRole('button', { name: 'Sign in' }).click()
     await expect(page).toHaveURL(/\/my$/)
 
-    const asked: string[] = []
-    page.on('request', (request) => {
-      if (request.url().includes('/api/v1/admin/resource')) asked.push(request.url())
-    })
+    const asked = askedOf(page)
     await page.goto('/resource-library')
     await expect(page.getByRole('heading', { level: 1, name: 'Access denied' })).toBeVisible()
     expect(asked).toEqual([])
 
+    // Neither reader serves someone the Console does not admit; ineligibility is a 404, a missing Console admission is a 403.
     expect((await apiFrom(page, 'GET', LIBRARY)).status).toBe(403)
     expect((await apiFrom(page, 'GET', `${LIBRARY}/packs/${fixtures.single.id}`)).status).toBe(403)
+    expect((await apiFrom(page, 'GET', VIEWER_LIBRARY)).status).toBe(403)
     expect((await apiFrom(page, 'GET', `${ROOT}/packs`)).status).toBe(403)
     await context.close()
   })
@@ -827,7 +883,7 @@ test.describe('the library does not load the editor', () => {
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInManager(browser, baseURL)
     const asked: string[] = []
     page.on('request', (request) => asked.push(request.url()))
     for (const path of libraryPaths(fixtures)) {
@@ -887,7 +943,7 @@ for (const theme of THEMES) {
       browser,
       baseURL,
     }) => {
-      const page = await signedIn(browser, baseURL, theme)
+      const page = await signedInAsReader(browser, baseURL, theme)
       const s = fixtures.series
       const screens: [string, string, () => Promise<void>][] = [
         [
@@ -963,7 +1019,7 @@ const WIDTHS = [320, 375, 1280]
 test.describe('no page scrolls sideways, even with long unbroken names, titles and addresses', () => {
   for (const width of WIDTHS) {
     test(`at ${String(width)}px`, async ({ browser, baseURL }) => {
-      const page = await signedIn(browser, baseURL)
+      const page = await signedInAsReader(browser, baseURL)
       await page.setViewportSize({ width, height: 800 })
       const f = fixtures
       const routes: [string, string][] = [
@@ -992,7 +1048,7 @@ test.describe('no page scrolls sideways, even with long unbroken names, titles a
     browser,
     baseURL,
   }) => {
-    const page = await signedIn(browser, baseURL)
+    const page = await signedInAsReader(browser, baseURL)
     await page.setViewportSize({ width: 320, height: 800 })
     await page.goto('/resource-library')
     await expect(

@@ -3,6 +3,7 @@ import { expect, test, type Browser, type Page } from '@playwright/test'
 import {
   documentOf,
   LIBRARY,
+  VIEWER_LIBRARY,
   makeBasicCard,
   makeCategory,
   makeLinkCard,
@@ -106,9 +107,14 @@ test.describe.serial('authoring a Resource Pack, start to finish', () => {
     expect(packId).not.toBe('')
     removal.pack(packId)
 
-    // Member content is authorable, and the Console says plainly that nothing delivers it to Members yet.
+    // Every audience is authorable (Guardians, Members and Volunteers, in that order), and the Console says plainly where Resources are
+    // read today: in the Console, by people who belong to the audience AND can sign in to it. Belonging is not admission.
     const audiences = page.getByRole('form', { name: 'Pack audiences' })
-    await expect(audiences).toContainText('Nothing delivers it to Members yet')
+    await expect(audiences.getByRole('checkbox')).toHaveCount(3)
+    await expect(audiences.getByRole('checkbox', { name: 'Volunteers' })).toBeVisible()
+    await expect(audiences).toContainText('Resources are read in the Console')
+    await expect(audiences).toContainText('belonging to an audience does not give that access')
+    await expect(audiences).not.toContainText('Nothing delivers it to Members yet')
     await audiences.getByRole('checkbox', { name: 'Guardians' }).check()
     await audiences.getByRole('button', { name: 'Save audiences' }).click()
     await expect(page.getByText('The Pack’s audiences were saved.')).toBeVisible()
@@ -158,8 +164,9 @@ test.describe.serial('authoring a Resource Pack, start to finish', () => {
     await expect(page.getByText('The Pack is now Published.')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Unpublish Pack' })).toBeVisible()
 
-    // The library — the platform's own projection — now has it, under its Category.
-    const library = (await apiFrom(page, 'GET', LIBRARY)).body as {
+    // The privileged library (this person holds `resources.view`) now lists it, under its Category. What a Guardian is served is judged
+    // as a Guardian, in the library journeys; this person has no relationships, so the audience reader would serve them nothing.
+    const library = (await apiFrom(page, 'GET', VIEWER_LIBRARY)).body as {
       data: { category: { name: string }; packs: { title: string }[] }[]
     }
     const found = library.data.find((entry) => entry.category.name === names.category)
@@ -375,10 +382,16 @@ test.describe.serial('a File Card, from upload to replacement', () => {
     for await (const chunk of await download.createReadStream()) chunks.push(chunk as Buffer)
     expect(Buffer.concat(chunks).equals(pdfBytes('v1'))).toBe(true)
 
-    // The library route answers a Draft Card exactly as it answers a Card that does not exist.
-    const library = await apiFrom(page, 'GET', `${LIBRARY}/packs/${packId}/cards/${cardId}/file`)
-    expect(library.status).toBe(404)
-    expect(library.body).toMatchObject({ code: 'resource_pack_not_found' })
+    // The privileged viewer's route serves it too: `resources.view` reads every Card, Drafts included, and their files (ADR 0038, R9).
+    // (That the AUDIENCE route answers a Draft Card exactly as it answers a Card that does not exist is proved as a reader, in
+    // resources-closeout.spec.ts and resources-demo.spec.ts; this person has no relationships, so it would say nothing here.)
+    const viewer = await page.evaluate(async (path) => {
+      const response = await (
+        globalThis as unknown as { fetch: (p: string) => Promise<{ status: number }> }
+      ).fetch(path)
+      return response.status
+    }, `${VIEWER_LIBRARY}/packs/${packId}/cards/${cardId}/file`)
+    expect(viewer).toBe(200)
   })
 
   test('the file is replaced; the Card keeps its revision and no verification is asked', async () => {
@@ -640,6 +653,7 @@ test.describe('who may manage Resources', () => {
       (await apiFrom(page, 'POST', `${ROOT}/categories`, { name: unique('Nope') })).status,
     ).toBe(403)
     expect((await apiFrom(page, 'GET', LIBRARY)).status).toBe(403)
+    expect((await apiFrom(page, 'GET', VIEWER_LIBRARY)).status).toBe(403)
     await context.close()
   })
 })

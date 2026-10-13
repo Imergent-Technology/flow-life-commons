@@ -13,6 +13,8 @@ import {
   RemoveAfter,
   ROOT,
   unique,
+  signedInAsReader,
+  VIEWER_LIBRARY,
 } from './resources.ts'
 import { cardAddress } from './resourcesDemo.ts'
 import { apiFrom, recoveryCodesFor, signedInAs, type FixtureSession } from './support.ts'
@@ -37,14 +39,21 @@ async function guardian(
   return page
 }
 
-/** Searches the library the way a reader does, and waits for the platform's answer to it. */
-async function searchLibrary(page: Page, text: string): Promise<void> {
+/**
+ * Searches the library the way a reader does, and waits for the platform's answer to it. `family` is the route that answers: the audience
+ * reader's `my-resources` for someone without `resources.view` (the default), or the privileged viewer's `resource-library`.
+ */
+async function searchLibrary(
+  page: Page,
+  text: string,
+  family: 'my-resources' | 'resource-library' = 'my-resources',
+): Promise<void> {
   await page.goto('/resource-library')
   await expect(page.getByRole('heading', { level: 1, name: 'Resource Library' })).toBeVisible()
   await page.getByLabel('Search Resources').fill(text)
   const answered = page.waitForResponse(
     (response) =>
-      response.url().includes('/api/v1/admin/resource-library?') && response.url().includes('q='),
+      response.url().includes(`/api/v1/admin/${family}?`) && response.url().includes('q='),
   )
   await page
     .getByRole('search', { name: 'Find Resources' })
@@ -54,8 +63,12 @@ async function searchLibrary(page: Page, text: string): Promise<void> {
 }
 
 /** Finds a Pack in the library the way a reader does: by searching for it, then following its link. */
-async function openFromLibrary(page: Page, title: string): Promise<void> {
-  await searchLibrary(page, title)
+async function openFromLibrary(
+  page: Page,
+  title: string,
+  family: 'my-resources' | 'resource-library' = 'my-resources',
+): Promise<void> {
+  await searchLibrary(page, title, family)
   await page.getByRole('link', { name: title, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
 }
@@ -99,25 +112,33 @@ test.describe.serial('a Resource, from the first word to a reader and back again
     summary: 'Written in the browser, for Guardians.',
     editedSummary: 'Corrected after a reader asked.',
   }
+  // `page` authors (and, holding `resources.view`, would read everything); `guardianPage` reads as a Guardian is served (policy C).
   let page: Page
+  let guardianPage: Page
   let packId = ''
   let cardId = ''
   const asked: string[] = []
 
   test.beforeAll(async ({ browser, baseURL }) => {
     page = await guardian(browser, baseURL)
-    page.on('request', (request) => asked.push(request.url()))
+    guardianPage = await signedInAsReader(browser, baseURL)
+    guardianPage.on('request', (request) => asked.push(request.url()))
   })
 
   test.afterAll(async () => {
     await removal.run(page)
     await page.context().close()
+    await guardianPage.context().close()
   })
 
   test('before anything is written, the library does not have it', async () => {
-    await page.goto('/resource-library')
-    await expect(page.getByRole('heading', { level: 1, name: 'Resource Library' })).toBeVisible()
-    await expect(page.getByRole('link', { name: names.pack })).toHaveCount(0)
+    for (const reading of [guardianPage, page]) {
+      await reading.goto('/resource-library')
+      await expect(
+        reading.getByRole('heading', { level: 1, name: 'Resource Library' }),
+      ).toBeVisible()
+      await expect(reading.getByRole('link', { name: names.pack })).toHaveCount(0)
+    }
   })
 
   test('a Category, a Pack aimed at Guardians, and a Card with rich content are authored in management', async () => {
@@ -168,9 +189,18 @@ test.describe.serial('a Resource, from the first word to a reader and back again
 
   test('it is still not in the library while it is a Draft, and is once the Card and then the Pack are published', async () => {
     // A Draft Pack is simply not there for a reader.
-    await searchLibrary(page, names.pack)
-    await expect(page.getByText('No Resources match.')).toBeVisible()
-    expect((await apiFrom(page, 'GET', `${LIBRARY}/packs/${packId}`)).status).toBe(404)
+    await searchLibrary(guardianPage, names.pack)
+    await expect(guardianPage.getByText('No Resources match.')).toBeVisible()
+    expect((await apiFrom(guardianPage, 'GET', `${LIBRARY}/packs/${packId}`)).status).toBe(404)
+
+    // And it is there, marked as a Draft, for someone who holds `resources.view`: a different policy answers them.
+    await searchLibrary(page, names.pack, 'resource-library')
+    const entry = page.getByRole('listitem').filter({
+      has: page.getByRole('link', { name: names.pack, exact: true }),
+    })
+    await expect(entry).toContainText('Draft')
+    await expect(entry).toContainText('For Guardians')
+    expect((await apiFrom(page, 'GET', `${VIEWER_LIBRARY}/packs/${packId}`)).status).toBe(200)
 
     await page.goto(`/resources/packs/${packId}/cards/${cardId}`)
     await page.getByRole('button', { name: 'Publish Card' }).click()
@@ -182,26 +212,31 @@ test.describe.serial('a Resource, from the first word to a reader and back again
 
   test('a Guardian finds it in the library under its Category, opens it, and reads what was authored', async () => {
     asked.length = 0
-    await openFromLibrary(page, names.pack)
+    await openFromLibrary(guardianPage, names.pack)
 
-    await expect(page.getByText(names.summary)).toBeVisible()
-    await expect(page.getByText(`In ${names.category}`)).toBeVisible()
+    await expect(guardianPage.getByText(names.summary)).toBeVisible()
+    await expect(guardianPage.getByText(`In ${names.category}`)).toBeVisible()
     // One Card: read plainly, its title under the Pack's, with the authored heading and list.
-    await expect(page.getByRole('heading', { level: 2, name: names.card })).toBeVisible()
+    await expect(guardianPage.getByRole('heading', { level: 2, name: names.card })).toBeVisible()
     await expect(
-      page.getByRole('heading', { level: 2, name: 'Opening times', exact: true }),
+      guardianPage.getByRole('heading', { level: 2, name: 'Opening times', exact: true }),
     ).toBeVisible()
-    await expect(page.getByRole('listitem').filter({ hasText: 'Doors open at nine' })).toBeVisible()
-    await expect(page.getByRole('listitem').filter({ hasText: 'Tea is at ten' })).toBeVisible()
-    await expect(cardNav(page)).toHaveCount(0)
+    await expect(
+      guardianPage.getByRole('listitem').filter({ hasText: 'Doors open at nine' }),
+    ).toBeVisible()
+    await expect(
+      guardianPage.getByRole('listitem').filter({ hasText: 'Tea is at ten' }),
+    ).toBeVisible()
+    await expect(cardNav(guardianPage)).toHaveCount(0)
 
-    const library = (await apiFrom(page, 'GET', LIBRARY)).body as {
+    const library = (await apiFrom(guardianPage, 'GET', LIBRARY)).body as {
       data: { category: { name: string }; packs: { title: string; card_count: number }[] }[]
     }
     const entry = library.data.find((group) => group.category.name === names.category)
     expect(entry?.packs).toEqual([expect.objectContaining({ title: names.pack, card_count: 1 })])
-    // Reading asked the library and never management.
+    // Reading asked the audience reader and never management, and never the privileged viewer.
     expect(asked.filter((url) => url.includes('/api/v1/admin/resources'))).toEqual([])
+    expect(asked.filter((url) => url.includes('/api/v1/admin/resource-library'))).toEqual([])
   })
 
   test('the Pack and the Card are edited in management, and the library delivers the change', async () => {
@@ -219,16 +254,18 @@ test.describe.serial('a Resource, from the first word to a reader and back again
     await page.getByRole('button', { name: 'Save Card' }).click()
     await expect(page.getByText('The Card was saved.')).toBeVisible()
 
-    await page.goto(`/resource-library/${packId}`)
-    await expect(page.getByText(names.editedSummary)).toBeVisible()
-    await expect(page.getByText(names.summary)).toHaveCount(0)
+    await guardianPage.goto(`/resource-library/${packId}`)
+    await expect(guardianPage.getByText(names.editedSummary)).toBeVisible()
+    await expect(guardianPage.getByText(names.summary)).toHaveCount(0)
     await expect(
-      page.getByRole('heading', { level: 2, name: `${names.card} (updated)` }),
+      guardianPage.getByRole('heading', { level: 2, name: `${names.card} (updated)` }),
     ).toBeVisible()
     await expect(
-      page.getByRole('listitem').filter({ hasText: 'Tea is at ten, with biscuits' }),
+      guardianPage.getByRole('listitem').filter({ hasText: 'Tea is at ten, with biscuits' }),
     ).toBeVisible()
-    await expect(page.getByRole('listitem').filter({ hasText: 'Doors open at nine' })).toBeVisible()
+    await expect(
+      guardianPage.getByRole('listitem').filter({ hasText: 'Doors open at nine' }),
+    ).toBeVisible()
   })
 
   test('unpublishing it takes it out of the library, and publishing it puts it back', async () => {
@@ -237,16 +274,18 @@ test.describe.serial('a Resource, from the first word to a reader and back again
     await expect(page.getByText('The Pack is now a Draft again.')).toBeVisible()
 
     // Gone, and indistinguishable from a Pack that was never there.
-    await page.goto(`/resource-library/${packId}`)
-    await expect(page.getByRole('heading', { level: 1, name: 'Resource not found' })).toBeVisible()
-    await searchLibrary(page, names.pack)
-    await expect(page.getByText('No Resources match.')).toBeVisible()
+    await guardianPage.goto(`/resource-library/${packId}`)
+    await expect(
+      guardianPage.getByRole('heading', { level: 1, name: 'Resource not found' }),
+    ).toBeVisible()
+    await searchLibrary(guardianPage, names.pack)
+    await expect(guardianPage.getByText('No Resources match.')).toBeVisible()
 
     await page.goto(`/resources/packs/${packId}`)
     await page.getByRole('button', { name: 'Publish Pack' }).click()
     await expect(page.getByText('The Pack is now Published.')).toBeVisible()
-    await page.goto(`/resource-library/${packId}`)
-    await expect(page.getByRole('heading', { level: 1, name: names.pack })).toBeVisible()
+    await guardianPage.goto(`/resource-library/${packId}`)
+    await expect(guardianPage.getByRole('heading', { level: 1, name: names.pack })).toBeVisible()
   })
 })
 
@@ -255,6 +294,7 @@ test.describe.serial('a Resource, from the first word to a reader and back again
 test.describe.serial('a File Card, uploaded in management and presented by the library', () => {
   const title = unique('E2E Closeout File')
   let page: Page
+  let guardianPage: Page
   let packId = ''
   let packTitle = ''
   let cardId = ''
@@ -262,6 +302,7 @@ test.describe.serial('a File Card, uploaded in management and presented by the l
 
   test.beforeAll(async ({ browser, baseURL }) => {
     page = await guardian(browser, baseURL)
+    guardianPage = await signedInAsReader(browser, baseURL)
     const category = await makeCategory(page)
     removal.category(category.id)
     const pack = await makePack(page, { categoryId: category.id, audiences: ['guardian'] })
@@ -270,12 +311,13 @@ test.describe.serial('a File Card, uploaded in management and presented by the l
     packTitle = pack.title
     await makeBasicCard(page, packId, { title: unique('E2E Intro'), publish: true })
     await publishPack(page, packId)
-    page.on('request', (request) => asked.push(request.url()))
+    guardianPage.on('request', (request) => asked.push(request.url()))
   })
 
   test.afterAll(async () => {
     await removal.run(page)
     await page.context().close()
+    await guardianPage.context().close()
   })
 
   test('an image File Card is created and published in management', async () => {
@@ -296,24 +338,27 @@ test.describe.serial('a File Card, uploaded in management and presented by the l
 
   test('the library shows the image in the Card, through its own authorized route', async () => {
     asked.length = 0
-    await page.goto(cardAddress(packId, cardId))
+    await guardianPage.goto(cardAddress(packId, cardId))
 
-    await expect(cardNav(page).getByRole('link', { name: title })).toHaveAttribute(
+    await expect(cardNav(guardianPage).getByRole('link', { name: title })).toHaveAttribute(
       'aria-current',
       'true',
     )
-    const image = page.getByRole('img', { name: title })
+    const image = guardianPage.getByRole('img', { name: title })
     await expect(image).toBeVisible()
     await expect(image).toHaveJSProperty('complete', true)
     await expect(image).toHaveJSProperty('naturalWidth', 1)
     expect(await image.getAttribute('src')).toBe(
       `${LIBRARY}/packs/${packId}/cards/${cardId}/file?disposition=inline`,
     )
-    await expect(page.locator('dd', { hasText: 'Closeout plan.png' })).toBeVisible()
-    // The file came from the library's route; the management route was never asked.
-    expect(asked.some((url) => url.includes(`/resource-library/packs/${packId}/`))).toBe(true)
+    await expect(guardianPage.locator('dd', { hasText: 'Closeout plan.png' })).toBeVisible()
+    // The file came from the audience reader's route; neither the management route nor the privileged viewer's was asked.
+    expect(asked.some((url) => url.includes(`/my-resources/packs/${packId}/`))).toBe(true)
     expect(asked.filter((url) => url.includes('/api/v1/admin/resources'))).toEqual([])
-    expect(await page.locator('body').innerText()).not.toMatch(/storage|digest|sha-?256|private/i)
+    expect(asked.filter((url) => url.includes('/api/v1/admin/resource-library'))).toEqual([])
+    expect(await guardianPage.locator('body').innerText()).not.toMatch(
+      /storage|digest|sha-?256|private/i,
+    )
   })
 
   test('the file is replaced in management, and the library presents the replacement', async () => {
@@ -328,25 +373,25 @@ test.describe.serial('a File Card, uploaded in management and presented by the l
       page.getByText('The file was replaced. The Card now offers the new file.'),
     ).toBeVisible()
 
-    await page.goto(cardAddress(packId, cardId))
+    await guardianPage.goto(cardAddress(packId, cardId))
     // The image is gone and a PDF is offered in its place, on the same Card and the same address.
-    await expect(page.getByRole('img', { name: title })).toHaveCount(0)
-    const view = page.getByRole('link', { name: /^View PDF/ })
+    await expect(guardianPage.getByRole('img', { name: title })).toHaveCount(0)
+    const view = guardianPage.getByRole('link', { name: /^View PDF/ })
     const href = (await view.getAttribute('href')) ?? ''
     expect(href).toBe(`${LIBRARY}/packs/${packId}/cards/${cardId}/file?disposition=inline`)
     await expect(view).toHaveAttribute('target', '_blank')
     await expect(view).toHaveAttribute('rel', 'noopener noreferrer')
-    await expect(page.locator('dd', { hasText: 'Closeout guide.pdf' })).toBeVisible()
-    await expect(page.locator('dd', { hasText: 'Closeout plan.png' })).toHaveCount(0)
+    await expect(guardianPage.locator('dd', { hasText: 'Closeout guide.pdf' })).toBeVisible()
+    await expect(guardianPage.locator('dd', { hasText: 'Closeout plan.png' })).toHaveCount(0)
 
-    const served = await fetchedFrom(page, href)
+    const served = await fetchedFrom(guardianPage, href)
     expect(served.status).toBe(200)
     expect(served.type).toContain('application/pdf')
     expect(served.disposition).toMatch(/^inline/)
 
     const [download] = await Promise.all([
-      page.waitForEvent('download'),
-      page.getByRole('link', { name: /^Download/ }).click(),
+      guardianPage.waitForEvent('download'),
+      guardianPage.getByRole('link', { name: /^Download/ }).click(),
     ])
     expect(download.suggestedFilename()).toBe('Closeout guide.pdf')
     const chunks: Buffer[] = []
@@ -359,14 +404,24 @@ test.describe.serial('a File Card, uploaded in management and presented by the l
     await page.getByRole('button', { name: 'Unpublish Card' }).click()
     await expect(page.getByText('The Card is now a Draft again.')).toBeVisible()
 
-    const refused = await apiFrom(page, 'GET', `${LIBRARY}/packs/${packId}/cards/${cardId}/file`)
+    // A reader is not served the unpublished Card's file, by any address: the one ordinary "not found".
+    const refused = await apiFrom(
+      guardianPage,
+      'GET',
+      `${LIBRARY}/packs/${packId}/cards/${cardId}/file`,
+    )
     expect(refused.status).toBe(404)
     expect(refused.body).toMatchObject({ code: 'resource_pack_not_found' })
 
+    // A holder of `resources.view` IS served it: the privileged viewer reads every Card, Drafts included, and its files.
+    const viewed = await fetchedFrom(page, `${VIEWER_LIBRARY}/packs/${packId}/cards/${cardId}/file`)
+    expect(viewed.status).toBe(200)
+    expect(viewed.type).toContain('application/pdf')
+
     // And the Pack, now with one Card for a reader, is read plainly: the unpublished Card is not a hint of anything.
-    await openFromLibrary(page, packTitle)
-    await expect(cardNav(page)).toHaveCount(0)
-    await expect(page.locator('body')).not.toContainText(title)
+    await openFromLibrary(guardianPage, packTitle)
+    await expect(cardNav(guardianPage)).toHaveCount(0)
+    await expect(guardianPage.locator('body')).not.toContainText(title)
     expect((await packOf(page, packId)).cards.map((c) => c.state)).toContain('draft')
   })
 })
@@ -382,6 +437,7 @@ test.describe
   const kept = unique('E2E Kept Card')
   let stale: Page
   let reader: Page
+  let cleaner: Page
   let packId = ''
   let cardId = ''
   let keptId = ''
@@ -389,7 +445,8 @@ test.describe
   test.beforeAll(async ({ browser, baseURL }) => {
     // The session's last proof is OLDER than the 15 minutes the platform allows: everything routine is fine, deletion is not.
     stale = await guardian(browser, baseURL, 'resources-stale-library')
-    reader = await guardian(browser, baseURL)
+    reader = await signedInAsReader(browser, baseURL)
+    cleaner = await guardian(browser, baseURL)
     const category = await makeCategory(stale)
     removal.category(category.id)
     const pack = await makePack(stale, { categoryId: category.id, audiences: ['guardian'] })
@@ -410,7 +467,8 @@ test.describe
 
   test.afterAll(async () => {
     await stale.context().close()
-    await removal.run(reader)
+    await removal.run(cleaner)
+    await cleaner.context().close()
     await reader.context().close()
   })
 
@@ -473,7 +531,7 @@ test.describe
     await expect(reader.locator('body')).not.toContainText(doomed)
     await expect(reader.getByRole('navigation', { name: 'Cards in this Resource' })).toHaveCount(0)
     expect(
-      (await packOf(reader, packId)).cards.map((c) => c.id),
+      (await packOf(cleaner, packId)).cards.map((c) => c.id),
       'management agrees',
     ).toEqual([keptId])
   })
