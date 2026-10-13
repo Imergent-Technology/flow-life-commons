@@ -11,7 +11,6 @@ import {
   PEOPLE_MANAGE,
   PEOPLE_VIEW,
   RESOURCES_MANAGE,
-  RESOURCES_VIEW,
 } from './auth/capabilities.ts'
 import { RequireAuthentication } from './auth/RequireAuthentication.tsx'
 import { RequireCapability } from './auth/RequireCapability.tsx'
@@ -30,8 +29,8 @@ import { RegisterMemberPage } from './pages/admin/RegisterMemberPage.tsx'
 import { DiscussionPage } from './pages/discussions/DiscussionPage.tsx'
 import { DiscussionsPage } from './pages/discussions/DiscussionsPage.tsx'
 import { StartDiscussionPage } from './pages/discussions/StartDiscussionPage.tsx'
-import { LibraryPackPage } from './pages/library/LibraryPackPage.tsx'
-import { LibraryPage } from './pages/library/LibraryPage.tsx'
+import { LibraryHomePage, LibraryPackPage } from './pages/library/LibraryPages.tsx'
+import { LibraryRoute } from './pages/library/LibraryRoute.tsx'
 import { PeoplePage } from './pages/people/PeoplePage.tsx'
 import { RelationshipDirectoryPage } from './pages/relationships/RelationshipDirectoryPage.tsx'
 import { RelationshipIntakePage } from './pages/relationships/RelationshipIntakePage.tsx'
@@ -149,22 +148,15 @@ function App() {
                       </RequireCapability>
                     }
                   />
-                  <Route
-                    path="resource-library"
-                    element={
-                      <RequireCapability capability={RESOURCES_VIEW}>
-                        <LibraryPage />
-                      </RequireCapability>
-                    }
-                  />
-                  <Route
-                    path="resource-library/:packId"
-                    element={
-                      <RequireCapability capability={RESOURCES_VIEW}>
-                        <LibraryPackPage />
-                      </RequireCapability>
-                    }
-                  />
+                  {/*
+                   * The Resource Library is for everyone the Console admits (ADR 0038, C1): LibraryRoute chooses the reader from `/me`
+                   * (the viewer with `resources.view`, the audience reader without it) and follows the platform if that changes. There
+                   * is no capability guard here on purpose, and no way to choose a reader from an address.
+                   */}
+                  <Route path="resource-library" element={<LibraryRoute />}>
+                    <Route index element={<LibraryHomePage />} />
+                    <Route path=":packId" element={<LibraryPackPage />} />
+                  </Route>
                   <Route
                     path="resources"
                     element={

@@ -1,21 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
-import { getLibraryPack, type DeliveredPack } from '../../api/resourceLibrary.ts'
-import { useBreadcrumbLeaf } from '../../shell/breadcrumb-leaf.ts'
-import { Alert } from '../../ui/Alert.tsx'
-import { Button } from '../../ui/Button.tsx'
-import { DetailLayout, Page } from '../../ui/Page.tsx'
-import { PageHeader } from '../../ui/PageHeader.tsx'
-import { SkeletonRegion, SkeletonText } from '../../ui/Skeleton.tsx'
-import { TextLink } from '../../ui/TextLink.tsx'
-import { useLoad } from '../../ui/useLoad.ts'
-import { CardNavigation, SeriesControls } from './CardNavigation.tsx'
-import { LibraryCardBody } from './LibraryCardBody.tsx'
-import { describeLibraryFailure, NOT_FOUND_MESSAGE } from './wording.ts'
+import { getAudiencePack, type AudiencePack } from '../../../api/resourceLibrary.ts'
+import { useBreadcrumbLeaf } from '../../../shell/breadcrumb-leaf.ts'
+import { Alert } from '../../../ui/Alert.tsx'
+import { Button } from '../../../ui/Button.tsx'
+import { DetailLayout, Page } from '../../../ui/Page.tsx'
+import { PageHeader } from '../../../ui/PageHeader.tsx'
+import { SkeletonRegion, SkeletonText } from '../../../ui/Skeleton.tsx'
+import { TextLink } from '../../../ui/TextLink.tsx'
+import { useLoad } from '../../../ui/useLoad.ts'
+import { useReportForbidden } from '../libraryMode.ts'
+import { CardNavigation, SeriesControls } from '../reading/CardNavigation.tsx'
+import { LibraryCardBody } from '../reading/LibraryCardBody.tsx'
+import { describeLibraryFailure, NOT_FOUND_MESSAGE } from '../wording.ts'
 
 /**
- * One Resource Pack as a Guardian may read it (ADR 0037, decisions 45-47). The Pack arrives whole from the library endpoint, with
+ * One Resource Pack as the signed-in Person may read it (ADR 0037, decisions 45-47; ADR 0038, C7). The Pack arrives whole from `/admin/my-resources`, with
  * only the Cards this viewer may see, so choosing a Card is immediate and asks for nothing more. Whether it is read simply or
  * browsed is decided by what arrived: one Card is shown plainly, with no browsing controls; more than one gets direct navigation by
  * title, and a Series also gets Previous and Next. Nothing here can tell that another Card exists.
@@ -24,7 +25,7 @@ import { describeLibraryFailure, NOT_FOUND_MESSAGE } from './wording.ts'
  * that is not among those delivered is not an error and says nothing about itself: the first Card is read instead. A Pack that is
  * not available to this viewer, for whatever reason, is one ordinary "could not be found".
  */
-export function LibraryPackPage() {
+export function AudiencePackPage() {
   const { packId = '' } = useParams()
   // Keyed by the Pack: moving to another one starts fresh.
   return <PackView key={packId} packId={packId} />
@@ -33,15 +34,17 @@ export function LibraryPackPage() {
 function PackView({ packId }: { packId: string }) {
   const [attempt, setAttempt] = useState(0)
   const load = useCallback(
-    (signal: AbortSignal) => getLibraryPack(packId, signal),
+    (signal: AbortSignal) => getAudiencePack(packId, signal),
     // `attempt` is not read: a new load function is how "Try again" asks again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [packId, attempt],
   )
   const [pack] = useLoad(load)
+  // A 403 is Console admission withdrawn, never an ineligible Pack (that is the 404 below): the route decides what follows.
+  const refused = useReportForbidden(pack.status === 'failed' ? pack.failure : null, 'audience')
   useBreadcrumbLeaf(pack.status === 'loaded' ? pack.value.title : undefined)
 
-  if (pack.status === 'loading') {
+  if (pack.status === 'loading' || refused) {
     return (
       <Page width="detail">
         <SkeletonRegion label="Loading the Resource…" visibleLabel>
@@ -80,7 +83,7 @@ function PackView({ packId }: { packId: string }) {
   return <PackReader pack={pack.value} />
 }
 
-function PackReader({ pack }: { pack: DeliveredPack }) {
+function PackReader({ pack }: { pack: AudiencePack }) {
   const [params] = useSearchParams()
   const { cards } = pack
   const requested = params.get('card')

@@ -1,13 +1,38 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type Browser, type Page } from '@playwright/test'
 
-import { apiFrom } from './support.ts'
+import { inTheme, type Theme } from './axe.ts'
+import { apiFrom, signedInAs } from './support.ts'
 
 // Helpers for the Resources management journeys (resources-*.spec.ts). Nothing here is a test. Data is made through the API, from the
 // signed-in page exactly as the Console would, so a journey that is about the SCREEN does not spend its time on set-up. Every name is
 // random, so journeys running in parallel (and the next run) never meet each other's data; `RemoveAfter` deletes what a journey made.
 
 export const ROOT = '/api/v1/admin/resources'
-export const LIBRARY = '/api/v1/admin/resource-library'
+/**
+ * What a READER is served (policy C, ADR 0038 R14): only what the signed-in Person is eligible for, as the platform's projection has
+ * decided it. The Resource Library reads this for everyone without `resources.view`, and a journey about what a Guardian is or is not
+ * shown reads it as the audience reader (below), never as a holder of `resources.view`, who is served `VIEWER_LIBRARY` instead.
+ */
+export const LIBRARY = '/api/v1/admin/my-resources'
+/** What a holder of `resources.view` is served (policy A, R4-R9): every Pack and Card, Drafts and every audience included. */
+export const VIEWER_LIBRARY = '/api/v1/admin/resource-library'
+
+/**
+ * A page signed in as the AUDIENCE READER: a real Console user who holds the Console and no Resources capability, and who is an Active
+ * Guardian (recorded by the seeder through the Relationships use case). The library opens for them as policy C, and what they are
+ * shown is exactly what a Guardian is eligible for. Content is made and managed by `plain-guardian`, never by this persona.
+ */
+export async function signedInAsReader(
+  browser: Browser,
+  baseURL: string | undefined,
+  theme?: Theme,
+): Promise<Page> {
+  const page = await signedInAs(browser, baseURL ?? '', 'audience-reader')
+  if (theme !== undefined) await inTheme(page, theme)
+  await page.goto('/')
+  await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
+  return page
+}
 
 export const unique = (label: string): string => `${label} ${crypto.randomUUID().slice(0, 8)}`
 

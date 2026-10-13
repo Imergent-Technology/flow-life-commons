@@ -6,6 +6,7 @@ namespace Database\Seeders;
 
 use App\Modules\Access\Application\ConsoleUserFixture;
 use App\Modules\Identity\Application\EnrollTotpFixture;
+use App\Modules\Identity\Application\ResolveActor;
 use App\Modules\Identity\Domain\Account;
 use App\Modules\Identity\Domain\AccountInvitation;
 use App\Modules\Identity\Domain\AccountInvitationId;
@@ -15,6 +16,8 @@ use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\InvitationToken;
 use App\Modules\Identity\Domain\Person;
 use App\Modules\Identity\Domain\PersonRepository;
+use App\Modules\Relationships\Application\EstablishRelationship;
+use App\Modules\Relationships\Application\RelationshipCatalog;
 use App\Shared\Domain\AccountId;
 use App\Shared\Domain\PersonId;
 use DateTimeImmutable;
@@ -231,6 +234,19 @@ final class E2eAccountSeeder extends Seeder
 
     public const string RELATIONSHIPS_ADMIN_SECRET = 'KRUGKIDROVUWG2ZAMJZG653OEBTYPHLI';
 
+    /**
+     * The Resource Library's AUDIENCE reader (G10 WP6, e2e/resources-modes.spec.ts): a real Console user who holds the Console and
+     * nothing else (Guardian Initiate, ADR 0038 A3), so `resources.view` is not among their capabilities and the library opens as
+     * policy C. The role alone makes them eligible for nothing: their Guardian eligibility comes from an ACTIVE Guardian relationship
+     * that {@see self::recordAsActiveGuardian()} records through the real Relationships use case, and `forget()` removes it when the
+     * fixture Accounts are recreated. Their own account, so no other journey shares their sessions, recovery codes or time steps.
+     */
+    public const string AUDIENCE_READER_EMAIL = 'e2e.audience.reader@example.org';
+
+    public const string AUDIENCE_READER_PASSWORD = 'e2e-audience-reader-password-not-a-secret';
+
+    public const string AUDIENCE_READER_SECRET = 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U';
+
     /** An ordinary active Account the step-up journey disables. It holds no access. */
     public const string STALE_TARGET_EMAIL = 'e2e.admin.target@example.org';
 
@@ -382,8 +398,32 @@ final class E2eAccountSeeder extends Seeder
             $totp($account->id, $secret, self::recoveryCodes($tag));
         }
 
+        // The restricted Console user: admitted, with no Resources capability, so the library opens as the audience reader.
+        $reader = $this->activeAccount($accounts, $people, $hasher, $now, self::AUDIENCE_READER_EMAIL, 'E2E Audience Reader', self::AUDIENCE_READER_PASSWORD);
+        $consoleUser->initiate($reader->personId);
+        $totp($reader->id, self::AUDIENCE_READER_SECRET, self::recoveryCodes('Z'));
+        $this->recordAsActiveGuardian($reader->personId);
+
         $this->activeAccount($accounts, $people, $hasher, $now, self::STALE_TARGET_EMAIL, 'E2E Stale Target', self::STALE_TARGET_PASSWORD);
         $this->activeAccount($accounts, $people, $hasher, $now, self::RESET_TARGET_EMAIL, 'E2E Reset Target', self::RESET_TARGET_PASSWORD);
+    }
+
+    /**
+     * Records the audience reader as an ACTIVE Guardian, the way an operator does: through the Relationships use case, as the
+     * Relationships administrator, with the default role declined (so no relationship-managed grant is made and the Account still
+     * holds the Console and nothing else). Eligibility for the `guardian` audience comes from this relationship and from nothing the
+     * Account holds (ADR 0038, R10, R12): they are Console-admitted with no Resources capability and eligible to read Guardian content.
+     */
+    private function recordAsActiveGuardian(PersonId $person): void
+    {
+        $administrator = DB::table('accounts')->where('email_canonical', self::RELATIONSHIPS_ADMIN_EMAIL)->value('id');
+        $actor = is_string($administrator) ? $this->container->make(ResolveActor::class)(AccountId::fromString($administrator)) : null;
+        $type = $this->container->make(RelationshipCatalog::class)->type('guardian');
+        if ($actor === null || $type === null) {
+            throw new RuntimeException('The Relationships administrator and the Guardian type are needed to record the audience reader.');
+        }
+
+        ($this->container->make(EstablishRelationship::class))($actor, $type, $person, true, 'active', [], true, 'decline');
     }
 
     /** An active Account with a known password, created afresh (a previous run's copy is removed first). */
@@ -461,6 +501,13 @@ final class E2eAccountSeeder extends Seeder
             DB::table('account_invitations')->where('account_id', $account->id)->delete();
             DB::table('role_assignments')->where('person_id', $account->person_id)->delete();
             DB::table('sourced_role_grants')->where('person_id', $account->person_id)->delete();
+            // Whatever a previous run recorded about this Person in a relationship, children first (they restrict the Person's deletion).
+            foreach (DB::table('person_relationships')->where('person_id', $account->person_id)->pluck('id') as $relationship) {
+                foreach (['person_relationship_role_provisions', 'person_relationship_field_values', 'person_relationship_status_changes'] as $table) {
+                    DB::table($table)->where('relationship_id', $relationship)->delete();
+                }
+            }
+            DB::table('person_relationships')->where('person_id', $account->person_id)->delete();
             DB::table('accounts')->where('id', $account->id)->delete();
             DB::table('people')->where('id', $account->person_id)->delete();
         }

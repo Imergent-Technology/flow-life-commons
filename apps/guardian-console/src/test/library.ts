@@ -11,20 +11,24 @@ import {
   PACK_ID,
 } from './resources.ts'
 
-// The Resource library as the server sends it (openapi/openapi.yaml, ADR 0037): wire shapes (snake_case), so a test proves the Console
-// reads what the server really says. A delivered Pack has only the Cards the viewer may see; nothing here carries state, revision,
-// audiences, provenance or a stored position, because the server's delivery never does.
+// The Resource library as the server sends it (openapi/openapi.yaml, ADR 0037, ADR 0038): wire shapes (snake_case), so a test proves the
+// Console reads what the server really says. There are TWO answers, and a test of one must never be served by the other:
+//   - the AUDIENCE reader (`/admin/my-resources`, policy C): a delivered Pack has only the Cards the reader may see; nothing here carries
+//     state, revision, audiences, provenance or a stored position, because delivery never does. (This file's `wireDelivered*`.)
+//   - the VIEWER (`/admin/resource-library`, policy A, `resources.view`): everything, with the state, audiences and last editor as data.
+//     (`test/viewerLibrary.ts`.)
 
-export const LIBRARY = '/api/v1/admin/resource-library'
-export const LIBRARY_PACK = `${LIBRARY}/packs/${PACK_ID}`
+/** Policy C, the audience reader's family of routes. */
+export const MY_RESOURCES = '/api/v1/admin/my-resources'
+export const MY_RESOURCES_PACK = `${MY_RESOURCES}/packs/${PACK_ID}`
 
-/** A Guardian who may read the library and manage nothing. */
-export const READER = ['console.access', 'resources.view']
+/** Someone the Console admits who may not view the whole library: the audience reader. Nothing in it is a relationship or a role. */
+export const READER = ['console.access']
 /** One who may manage Resources and, since the role catalog grants it separately, nothing of the library: the Console must not assume. */
 export const MANAGER_ONLY = ['console.access', 'resources.manage']
 
 export const filePath = (packId = PACK_ID, cardId = CARD_ID) =>
-  `${LIBRARY}/packs/${packId}/cards/${cardId}/file`
+  `${MY_RESOURCES}/packs/${packId}/cards/${cardId}/file`
 
 export const wireDeliveredFile = (
   overrides: Record<string, unknown> = {},
@@ -50,12 +54,15 @@ export const wireDeliveredCard = (
   ...overrides,
 })
 
+/** A File Card, whose file is served by the route of ITS OWN id (the platform names no other, and the Console accepts no other). */
 export const wireFileCard = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
   wireDeliveredCard({
     type: 'file',
     title: 'Handbook',
     summary: '',
-    file: wireDeliveredFile(),
+    file: wireDeliveredFile({
+      download_path: filePath(PACK_ID, (overrides.id as string | undefined) ?? CARD_ID),
+    }),
     content: { format: 'prosemirror', version: 1, document: EMPTY_DOC },
     ...overrides,
   })

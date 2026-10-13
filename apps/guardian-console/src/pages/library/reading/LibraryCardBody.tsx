@@ -1,13 +1,13 @@
 import { useState } from 'react'
 
-import { mediaTypeLabel, sizeLabel } from '../../admin/resourcesWording.ts'
-import type { DeliveredCard, DeliveredFile } from '../../api/resourceLibrary.ts'
-import { RichContentRenderer } from '../../richtext/RichContentRenderer.tsx'
-import { parseContentDocument } from '../../richtext/contract.ts'
-import { Alert } from '../../ui/Alert.tsx'
-import { buttonVariants } from '../../ui/button-variants.ts'
-import { Button } from '../../ui/Button.tsx'
-import { Property, PropertyList } from '../../ui/PropertyList.tsx'
+import { mediaTypeLabel, sizeLabel } from '../../../admin/resourcesWording.ts'
+import type { ReadingCard, ReadingFile } from '../../../api/resourceLibrary.ts'
+import { RichContentRenderer } from '../../../richtext/RichContentRenderer.tsx'
+import { parseContentDocument } from '../../../richtext/contract.ts'
+import { Alert } from '../../../ui/Alert.tsx'
+import { buttonVariants } from '../../../ui/button-variants.ts'
+import { Button } from '../../../ui/Button.tsx'
+import { Property, PropertyList } from '../../../ui/PropertyList.tsx'
 
 /** Whether a document draws nothing (an empty one). One that does not pass the profile is not blank: the renderer says it can't be shown. */
 function isBlank(document: unknown): boolean {
@@ -16,7 +16,10 @@ function isBlank(document: unknown): boolean {
 }
 
 /**
- * What a Card is, drawn from what the library delivered and nothing else. The Type decides the shape:
+ * What a Card is, drawn from what a reader was given and nothing else. It is shared by both readers of the library and is handed a
+ * `ReadingCard`: the fields a reader needs and no state, audience or editor, so it cannot show what it never received (ADR 0038, C7).
+ * It imports no client and requests no data; a file is served by the path the reader's own client allowed, and only that. The Type
+ * decides the shape:
  *
  * - Basic: its rich content (through the renderer, which refuses a document outside the profile as a whole), and a related link if it has one;
  * - External link: its description and a clear way to open the address, which the platform never visits itself;
@@ -25,7 +28,7 @@ function isBlank(document: unknown): boolean {
  * A Card with no content of its own is described by its summary instead, so there is something to read; a Card with content is
  * not given its summary as well, which would only say the same thing twice.
  */
-export function LibraryCardBody({ card }: { card: DeliveredCard }) {
+export function LibraryCardBody({ card }: { card: ReadingCard }) {
   const blank = isBlank(card.document)
 
   return (
@@ -105,7 +108,7 @@ function ExternalAction({
 const RASTER_IMAGES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 
 /**
- * A File Card's file, served by the library's route (the path the API named, never one built here). A raster image is shown in the
+ * A File Card's file, served by the route of the reader's own family (the path the API named and that reader's client allowed, never one built here). A raster image is shown in the
  * Card with `<img>`, which the platform's policy allows, rather than by opening the file in a page of its own. A PDF is opened in a new
  * tab to be viewed; everything else is a download. Nothing is fetched into the page to preview it.
  *
@@ -113,7 +116,7 @@ const RASTER_IMAGES: readonly string[] = ['image/png', 'image/jpeg', 'image/webp
  * file is asked for. An image that cannot be loaded is therefore met with a message and a way to ask again, and no link to a file
  * already known not to be there.
  */
-function FileBody({ card, file }: { card: DeliveredCard; file: DeliveredFile }) {
+function FileBody({ card, file }: { card: ReadingCard; file: ReadingFile }) {
   const path = file.downloadPath
   const isImage = RASTER_IMAGES.includes(file.mediaType)
   const isPdf = file.mediaType === 'application/pdf'

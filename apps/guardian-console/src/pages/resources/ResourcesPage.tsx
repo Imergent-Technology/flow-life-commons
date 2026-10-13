@@ -46,7 +46,7 @@ const PER_PAGE = 25
 const CARD_TYPES: readonly CardType[] = ['basic', 'external_link', 'file']
 
 /**
- * Resource management (ADR 0037): every Resource Pack, Drafts included, for the Guardians who author them. It is the editor's
+ * Resource management (ADR 0037): every Resource Pack, Drafts included, for the people who author them. It is the editor's
  * view, not the library a Guardian reads: it shows what a Pack IS (its state, its audiences, how many of its Cards are
  * published), and who may see it is the server's projection, never worked out here. The server owns the order (Category, then
  * Pack order, uncategorised last), the filters and the paging; this asks for one page at a time and does not re-sort it. Search
@@ -91,7 +91,7 @@ export function ResourcesPage() {
     <Page width="wide">
       <PageHeader
         title="Resources"
-        description="The Resource Packs Guardians write and keep, Drafts included. Open one to edit its Cards, audiences and publication."
+        description="The Resource Packs the team writes and keeps, Drafts included. Open one to edit its Cards, audiences and publication."
         action={
           <>
             <Link to="/resources/categories" className={buttonVariants({})}>

@@ -43,6 +43,8 @@ describe('visibleNavigation', () => {
       'All people',
       'Add a person',
       'Tags',
+      'Resources',
+      'Resource Library',
       'Admin',
       'All accounts',
       'Invite an operator',
@@ -51,13 +53,27 @@ describe('visibleNavigation', () => {
     ])
   })
 
-  it('shows Overview alone to someone with no capability: no Admin section at all', () => {
-    expect(labels(having())).toEqual(['Overview'])
+  // The Resource Library has no capability of its own (ADR 0038, C1): everyone the Console admits reads one, and which one is the
+  // library's decision. So "nothing" is the Overview and the library, and still no Admin section at all.
+  it('shows the Overview and the Resource Library to someone with no capability: no Admin section at all', () => {
+    expect(labels(having())).toEqual(['Overview', 'Resources', 'Resource Library'])
   })
 
   it('filters individual items', () => {
-    expect(labels(having(ACCOUNTS_VIEW))).toEqual(['Overview', 'Admin', 'All accounts'])
-    expect(labels(having(INVITATIONS_ISSUE))).toEqual(['Overview', 'Admin', 'Invite an operator'])
+    expect(labels(having(ACCOUNTS_VIEW))).toEqual([
+      'Overview',
+      'Resources',
+      'Resource Library',
+      'Admin',
+      'All accounts',
+    ])
+    expect(labels(having(INVITATIONS_ISSUE))).toEqual([
+      'Overview',
+      'Resources',
+      'Resource Library',
+      'Admin',
+      'Invite an operator',
+    ])
   })
 
   it('drops a group with no visible items, and keeps the others', () => {
@@ -67,19 +83,38 @@ describe('visibleNavigation', () => {
   })
 
   it('shows the People section by its own capabilities, independent of Admin', () => {
-    expect(labels(having(PEOPLE_VIEW))).toEqual(['Overview', 'People', 'All people', 'Tags'])
+    expect(labels(having(PEOPLE_VIEW))).toEqual([
+      'Overview',
+      'People',
+      'All people',
+      'Tags',
+      'Resources',
+      'Resource Library',
+    ])
     expect(labels(having(ACCOUNTS_VIEW))).not.toContain('People')
   })
 
   it('never infers People view from People manage', () => {
     const sections = having(PEOPLE_MANAGE)
-    expect(labels(sections)).toEqual(['Overview', 'People', 'Add a person'])
+    expect(labels(sections)).toEqual([
+      'Overview',
+      'People',
+      'Add a person',
+      'Resources',
+      'Resource Library',
+    ])
     expect(labels(sections)).not.toContain('All people')
   })
 
   it('never infers view from manage', () => {
     const sections = having(MEMBERSHIP_MANAGE)
-    expect(labels(sections)).toEqual(['Overview', 'Admin', 'Add a member'])
+    expect(labels(sections)).toEqual([
+      'Overview',
+      'Resources',
+      'Resource Library',
+      'Admin',
+      'Add a member',
+    ])
     expect(labels(sections)).not.toContain('All members')
   })
 
@@ -179,14 +214,19 @@ describe('breadcrumbs', () => {
 
 describe('firstDestination', () => {
   it('leads to the section itself, or to the first page beneath it', () => {
-    const [overview, people, admin] = having(...everything).map(firstDestination)
+    const [overview, people, resources, admin] = having(...everything).map(firstDestination)
     expect(overview).toBe('/')
     expect(people).toBe('/people')
+    expect(resources).toBe('/resource-library')
     expect(admin).toBe('/admin/accounts')
   })
 
   it('leads to the first page the operator may see', () => {
-    expect(having(MEMBERSHIP_VIEW).map(firstDestination)).toEqual(['/', '/admin/members'])
+    expect(having(MEMBERSHIP_VIEW).map(firstDestination)).toEqual([
+      '/',
+      '/resource-library',
+      '/admin/members',
+    ])
   })
 })
 
@@ -218,19 +258,22 @@ describe('Resources management', () => {
     expect(labels(having(RESOURCES_MANAGE))).toEqual([
       'Overview',
       'Resources',
+      'Resource Library',
       'All Resource Packs',
       'Add a Resource Pack',
       'Categories',
     ])
   })
 
-  it('does not offer the management pages to someone who may only view Resources: view does not imply manage', () => {
+  it('does not offer the management pages to someone who may only view Resources, or to anyone else: reading does not imply managing', () => {
     expect(labels(having(RESOURCES_VIEW))).toEqual(['Overview', 'Resources', 'Resource Library'])
-    expect(labels(having())).toEqual(['Overview'])
+    expect(labels(having())).toEqual(['Overview', 'Resources', 'Resource Library'])
   })
 
-  it('does not offer the library to someone who may only manage Resources: manage does not imply view', () => {
-    expect(labels(having(RESOURCES_MANAGE))).not.toContain('Resource Library')
+  it('offers the library to someone who may only manage Resources, and to everyone: it is the same entry for every reader', () => {
+    // Which library opens (everything, or what the person is eligible for) is the page's decision from /me, not the navigation's.
+    expect(labels(having(RESOURCES_MANAGE))).toContain('Resource Library')
+    expect(labels(having())).toEqual(labels(having(RESOURCES_VIEW)))
   })
 
   it('offers both, the library first, to someone who holds both capabilities', () => {

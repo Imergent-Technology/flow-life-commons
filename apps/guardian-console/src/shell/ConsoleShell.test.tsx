@@ -484,7 +484,7 @@ describe('the mobile navigation sheet', () => {
     expect(within(sheet).queryByRole('heading', { name: 'Accounts' })).toBeNull()
   })
 
-  it('shows Overview alone, and no Administration, to an operator with no capability', async () => {
+  it('shows the Overview and the Resource Library, and no Administration, to an operator with no capability', async () => {
     const user = userEvent.setup()
     await open('/', 600, ['console.access'])
     await user.click(opener())
@@ -493,7 +493,7 @@ describe('the mobile navigation sheet', () => {
       within(sheet)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['Overview'])
+    ).toEqual(['Overview', 'Resource Library'])
     expect(within(sheet).queryByRole('heading', { name: 'Administration' })).toBeNull()
   })
 

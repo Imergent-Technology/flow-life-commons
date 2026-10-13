@@ -1,9 +1,20 @@
 import { Link } from 'react-router'
 
-import type { DeliveredCard } from '../../api/resourceLibrary.ts'
-import { buttonVariants } from '../../ui/button-variants.ts'
-import { cn, focusRing } from '../../ui/cn.ts'
-import { Tooltip } from '../../ui/Tooltip.tsx'
+import { Badge } from '../../../ui/Badge.tsx'
+import { buttonVariants } from '../../../ui/button-variants.ts'
+import { cn, focusRing } from '../../../ui/cn.ts'
+import { Tooltip } from '../../../ui/Tooltip.tsx'
+
+/**
+ * What navigation needs of a Card, and nothing else. A reader that has more to say about a Card (the viewer marks a Draft) says it in
+ * `mark`, as plain words; the audience reader never has one. Navigation reads neither state nor audiences, so it cannot surface them.
+ */
+export interface NavigableCard {
+  id: string
+  title: string
+  summary: string
+  mark?: string | undefined
+}
 
 /** The address of one Card of the Pack being read: the same page, with that Card chosen. It is a delivered Card's own id, nothing hidden. */
 const cardLocation = (cardId: string): string => `?card=${encodeURIComponent(cardId)}`
@@ -18,7 +29,7 @@ export function CardNavigation({
   cards,
   currentId,
 }: {
-  cards: readonly DeliveredCard[]
+  cards: readonly NavigableCard[]
   currentId: string
 }) {
   return (
@@ -43,6 +54,11 @@ export function CardNavigation({
                     )}
                   >
                     {card.title}
+                    {card.mark === undefined ? null : (
+                      <Badge variant="neutral" className="ml-2 align-middle">
+                        {card.mark}
+                      </Badge>
+                    )}
                   </Link>
                 )}
               </Tooltip>
@@ -63,7 +79,7 @@ export function SeriesControls({
   cards,
   currentId,
 }: {
-  cards: readonly DeliveredCard[]
+  cards: readonly NavigableCard[]
   currentId: string
 }) {
   const at = cards.findIndex((card) => card.id === currentId)

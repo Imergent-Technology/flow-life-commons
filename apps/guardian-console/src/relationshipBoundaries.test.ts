@@ -31,10 +31,10 @@ const rules: Rule[] = [
   {
     name: 'a relationship type named in the source',
     because:
-      "types, labels and slugs arrive as served definitions (ADR 0038, C1, C2); a name written here would be a second catalog that drifts, and would make a type's screens different from another's. The registry of extensions is the one place a type key may be written. The Resources client and its wording hold the audience keys and their labels, which are a different catalog (ADR 0037) that WP6 extends",
+      "types, labels and slugs arrive as served definitions (ADR 0038, C1, C2); a name written here would be a second catalog that drifts, and would make a type's screens different from another's. The registry of extensions is the one place a type key may be written. The audience catalog, the Resources client and its wording hold the audience keys and their labels, which are a different catalog (ADR 0037) that WP6 extends",
     appliesTo: anyProduction,
     allowedIn:
-      /^\.\/(?:relationships\/extensions\.ts|api\/resources\.ts|admin\/resourcesWording\.ts)$/,
+      /^\.\/(?:relationships\/extensions\.ts|api\/(?:audiences|resources)\.ts|admin\/resourcesWording\.ts)$/,
     // Case does not matter: a label compared to a type's name is the same second catalog as its key.
     pattern:
       /['"`](?:guardians?|volunteers?|apprentices?)['"`]|\/relationships\/(?:guardians?|volunteers?)\b/i,

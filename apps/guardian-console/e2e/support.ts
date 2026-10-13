@@ -251,6 +251,7 @@ export type FixtureSession =
   | 'resources-stale-pack'
   | 'resources-stale-library'
   | 'relationships-admin'
+  | 'audience-reader'
   | 'relationships-admin-stale'
 
 interface MintedSession {

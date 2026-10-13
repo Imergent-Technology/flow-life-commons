@@ -616,6 +616,30 @@ describe('a Card’s audience', () => {
     })
   })
 
+  it('narrows a Card to Volunteers when its Pack is for them, and offers them only then', async () => {
+    const { user, api } = await openCard(
+      wireCard(),
+      wirePack({ audiences: ['guardian', 'volunteer'] }),
+    )
+    api.on(`PUT ${CARD_PATH}/audiences`, () =>
+      json(wireCard({ audience_mode: 'narrowed', audiences: ['volunteer'] })),
+    )
+    const form = screen.getByRole('form', { name: 'Card audience' })
+    expect(form).toHaveTextContent('Currently: Guardians')
+
+    await user.click(within(form).getByRole('radio', { name: /Only part of that audience/ }))
+    // The Pack is not for Members, so a Card cannot be offered Members; it is for Volunteers, so it can be offered them.
+    expect(within(form).queryByRole('checkbox', { name: 'Members' })).not.toBeInTheDocument()
+    await user.click(within(form).getByRole('checkbox', { name: 'Volunteers' }))
+    await user.click(within(form).getByRole('button', { name: 'Save audience' }))
+
+    expect(await screen.findByText('The Card’s audience was saved.')).toBeInTheDocument()
+    expect(api.callsTo(`PUT ${CARD_PATH}/audiences`)[0]?.body).toEqual({
+      mode: 'narrowed',
+      audiences: ['volunteer'],
+    })
+  })
+
   it('returns to inheriting by sending the mode alone', async () => {
     const { user, api } = await openCard(
       wireCard({ audience_mode: 'narrowed', audiences: ['guardian'] }),

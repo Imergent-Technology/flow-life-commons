@@ -111,6 +111,7 @@ describe('the Relationships group is built from the served definitions', () => {
     expect(labelsOf(sections)).toEqual([
       'Relationships: Volunteers',
       'Relationships: Record a Volunteer',
+      'Library: Resource Library',
     ])
   })
 

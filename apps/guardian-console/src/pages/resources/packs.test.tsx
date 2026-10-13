@@ -110,6 +110,23 @@ describe('the Resource Pack list', () => {
     )
   })
 
+  it('filters by Volunteers through the server, and lists Volunteers among a Pack’s audiences', async () => {
+    const { user, api } = await openList([wireListedPack({ audiences: ['guardian', 'volunteer'] })])
+    const table = await screen.findByRole('table', { name: 'Resource Packs' })
+    expect(within(table).getByText('Guardians, Volunteers')).toBeInTheDocument()
+    expect(
+      within(screen.getByLabelText('Audience'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Any audience', 'Guardians', 'Members', 'Volunteers'])
+
+    await user.selectOptions(screen.getByLabelText('Audience'), 'volunteer')
+
+    await waitFor(() => {
+      expect(lastQuery(api).get('audience')).toBe('volunteer')
+    })
+  })
+
   it('says there are none yet, and offers the first', async () => {
     await openList([])
     expect(await screen.findByText('There are no Resource Packs yet.')).toBeInTheDocument()
@@ -611,10 +628,16 @@ describe('publishing a Pack', () => {
 })
 
 describe('a Pack’s audiences', () => {
-  it('replaces the whole set, and says plainly that nothing delivers to Members yet', async () => {
+  it('replaces the whole set, and says plainly where Resources are read and that belonging to an audience is not Console access', async () => {
     const { user, api } = await openPack()
     const form = screen.getByRole('form', { name: 'Pack audiences' })
-    expect(within(form).getByText(/Nothing delivers it to Members yet/)).toBeInTheDocument()
+    const note = within(form).getByText(/Resources are read in the Console/)
+    // Eligibility and admission are two things (ADR 0038, A7, R14): being a Member or a Volunteer lets nobody in, and nothing
+    // outside the Console delivers yet. It must not say or imply that any audience reads without signing in, or only Guardians do.
+    expect(note).toHaveTextContent('belonging to an audience does not give that access')
+    expect(note).toHaveTextContent('Nothing outside the Console delivers Resources yet')
+    expect(note).not.toHaveTextContent(/Nothing delivers it to Members/)
+    expect(note).not.toHaveTextContent(/only Guardians|Guardian’s library/)
     api.on(`PUT ${PACK_PATH}/audiences`, () =>
       json(wirePack({ audiences: ['guardian', 'member'] })),
     )
@@ -625,6 +648,29 @@ describe('a Pack’s audiences', () => {
     expect(await screen.findByText('The Pack’s audiences were saved.')).toBeInTheDocument()
     expect(api.callsTo(`PUT ${PACK_PATH}/audiences`)[0]?.body).toEqual({
       audiences: ['guardian', 'member'],
+    })
+  })
+
+  it('offers Volunteers as a third audience, and sends the set in the catalog’s order whatever order it was chosen in', async () => {
+    const { user, api } = await openPack(wirePack({ audiences: ['guardian'] }))
+    const form = screen.getByRole('form', { name: 'Pack audiences' })
+    expect(
+      within(form)
+        .getAllByRole('checkbox')
+        .map((box) => (box as HTMLInputElement).labels?.[0]?.textContent),
+    ).toEqual(['Guardians', 'Members', 'Volunteers'])
+    api.on(`PUT ${PACK_PATH}/audiences`, () =>
+      json(wirePack({ audiences: ['guardian', 'member', 'volunteer'] })),
+    )
+
+    // Volunteers first, then Members: the request is still guardian, member, volunteer.
+    await user.click(within(form).getByRole('checkbox', { name: 'Volunteers' }))
+    await user.click(within(form).getByRole('checkbox', { name: 'Members' }))
+    await user.click(within(form).getByRole('button', { name: 'Save audiences' }))
+
+    await screen.findByText('The Pack’s audiences were saved.')
+    expect(api.callsTo(`PUT ${PACK_PATH}/audiences`)[0]?.body).toEqual({
+      audiences: ['guardian', 'member', 'volunteer'],
     })
   })
 
@@ -795,7 +841,35 @@ describe('previewing a Pack', () => {
     expect(result).toHaveTextContent('The Pack is a Draft, so Guardians cannot see it yet')
   })
 
-  it('previews Members, with the plain note that nothing delivers to them yet, and says when they would see nothing', async () => {
+  it('previews Volunteers through the management preview only, and says what they would see', async () => {
+    const { user, api } = await openPack()
+    api.on(`GET ${PACK_PATH}/preview`, () =>
+      json(wirePreview({ audience: 'volunteer', pack_state: 'published' })),
+    )
+    const form = screen.getByRole('form', { name: 'Preview the Pack' })
+    expect(
+      within(form)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Guardians', 'Members', 'Volunteers'])
+
+    await user.selectOptions(within(form).getByLabelText('Preview as'), 'volunteer')
+    await user.click(within(form).getByRole('button', { name: 'Preview' }))
+
+    const result = await screen.findByTestId('pack-preview')
+    expect(previewCalls(api)[0]?.path).toBe(`${PACK_PATH}/preview?audience=volunteer`)
+    expect(result).toHaveTextContent('Volunteers would see 1 Card in Training guides')
+    // Preview is management's: it never reaches for either reading family, which would show a different thing to a different person.
+    expect(
+      api.calls.filter(
+        (call) =>
+          call.path.startsWith('/api/v1/admin/resource-library') ||
+          call.path.startsWith('/api/v1/admin/my-resources'),
+      ),
+    ).toEqual([])
+  })
+
+  it('previews Members, with the plain note on where Resources are read, and says when they would see nothing', async () => {
     const { user, api } = await openPack()
     api.on(`GET ${PACK_PATH}/preview`, () =>
       json(
@@ -805,7 +879,7 @@ describe('previewing a Pack', () => {
     const form = screen.getByRole('form', { name: 'Preview the Pack' })
 
     await user.selectOptions(within(form).getByLabelText('Preview as'), 'member')
-    expect(within(form).getByText(/Nothing delivers it to Members yet/)).toBeInTheDocument()
+    expect(within(form).getByText(/Resources are read in the Console/)).toBeInTheDocument()
     await user.click(within(form).getByRole('button', { name: 'Preview' }))
 
     const result = await screen.findByTestId('pack-preview')

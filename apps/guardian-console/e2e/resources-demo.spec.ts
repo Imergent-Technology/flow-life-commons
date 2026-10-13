@@ -1,7 +1,7 @@
 import { expect, test, type Browser, type Page } from '@playwright/test'
 
 import { axeViolations, inTheme, THEMES, type Theme } from './axe.ts'
-import { LIBRARY, ROOT } from './resources.ts'
+import { LIBRARY, ROOT, signedInAsReader, VIEWER_LIBRARY } from './resources.ts'
 import {
   cardAddress,
   cardIdOf,
@@ -29,7 +29,11 @@ test.describe.configure({ timeout: 240_000 })
 
 let demo: Record<keyof typeof PACK, DemoPack>
 
-const guardian = async (
+/**
+ * The MANAGER: `plain-guardian` holds `resources.view` and `resources.manage`, so it finds the seeded ids through management and, as a
+ * viewer, would read ALL of the dataset. What a Guardian is and is not shown is judged as `reader` (below) instead.
+ */
+const manager = async (
   browser: Browser,
   baseURL: string | undefined,
   theme?: Theme,
@@ -41,8 +45,11 @@ const guardian = async (
   return page
 }
 
+/** The AUDIENCE reader: a restricted Console user who is an Active Guardian, served by policy C. See `signedInAsReader`. */
+const reader = signedInAsReader
+
 test.beforeAll(async ({ browser, baseURL }) => {
-  const page = await guardian(browser, baseURL)
+  const page = await manager(browser, baseURL)
   demo = await demoPacks(page)
   await page.context().close()
 })
@@ -82,7 +89,7 @@ async function search(page: Page, text: string): Promise<void> {
   await page.getByLabel('Search Resources').fill(text)
   const answered = page.waitForResponse(
     (response) =>
-      response.url().includes('/api/v1/admin/resource-library?') && response.url().includes('q='),
+      response.url().includes('/api/v1/admin/my-resources?') && response.url().includes('q='),
   )
   await page
     .getByRole('search', { name: 'Find Resources' })
@@ -98,7 +105,7 @@ test.describe('the library, from the seeded dataset', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     await page.goto('/resource-library')
     await expect(page.getByRole('region', { name: CATEGORY.running })).toBeVisible()
 
@@ -138,7 +145,7 @@ test.describe('the library, from the seeded dataset', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     await page.goto('/resource-library')
     const entry = (title: string) =>
       page
@@ -160,7 +167,7 @@ test.describe('the library, from the seeded dataset', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     await page.goto('/resource-library')
     const asked: string[] = []
     page.on('request', (request) => asked.push(request.url()))
@@ -198,10 +205,11 @@ test.describe('the library, from the seeded dataset', () => {
     await search(page, 'incident') // only in the Card's content, after its summary ends
     await expect(page.getByText('No Resources match.')).toBeVisible()
 
-    // Every search went to the library, none to management.
+    // Every search went to the audience reader, none to management and none to the privileged viewer.
     expect(asked.filter((url) => url.includes('/api/v1/admin/resources'))).toEqual([])
+    expect(asked.filter((url) => url.includes('/api/v1/admin/resource-library'))).toEqual([])
     expect(
-      asked.filter((url) => url.includes('/api/v1/admin/resource-library?')).length,
+      asked.filter((url) => url.includes('/api/v1/admin/my-resources?')).length,
     ).toBeGreaterThan(5)
     await page.context().close()
   })
@@ -214,11 +222,11 @@ test.describe('what a Guardian is never shown', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     const shown: string[] = []
     const answered: { status: number; body: string }[] = []
     page.on('response', async (response) => {
-      if (/\/resource-library\/packs\/[^/]+$/.test(response.url())) {
+      if (/\/my-resources\/packs\/[^/]+$/.test(response.url())) {
         answered.push({ status: response.status(), body: await response.text() })
       }
     })
@@ -248,7 +256,7 @@ test.describe('what a Guardian is never shown', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     const hiddenId = idOf('narrowed', CARD.hidden)
 
     // What the platform delivers: three Cards numbered 1..3, and no trace of the fourth.
@@ -287,7 +295,7 @@ test.describe('what a Guardian is never shown', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     const asks = [
       `${LIBRARY}/packs/${demo.operations.id}/cards/${idOf('operations', CARD.draft)}/file`, // a Draft Card (and not a File Card)
       `${LIBRARY}/packs/${demo.narrowed.id}/cards/${idOf('narrowed', CARD.hidden)}/file`, // a hidden Card
@@ -306,7 +314,8 @@ test.describe('what a Guardian is never shown', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await manager(browser, baseURL)
+    const guardian = await reader(browser, baseURL)
     await page.goto('/resources')
     await page.getByLabel('Search titles').fill('Winter')
     await page.getByRole('button', { name: 'Search' }).click()
@@ -325,8 +334,19 @@ test.describe('what a Guardian is never shown', () => {
     await page.goto(`/resources/packs/${demo.operations.id}`)
     await expect(page.getByRole('list', { name: 'Cards' }).getByRole('listitem')).toHaveCount(4)
     await expect(page.getByRole('list', { name: 'Cards' })).toContainText(CARD.draft)
-    expect((await deliveredPack(page, demo.operations.id)).cards).toHaveLength(3)
+    expect((await deliveredPack(guardian, demo.operations.id)).cards).toHaveLength(3)
+    // And the privileged viewer, who holds `resources.view`, is told of all four, the Draft marked as one.
+    const viewed = await apiFrom(page, 'GET', `${VIEWER_LIBRARY}/packs/${demo.operations.id}`)
+    expect(viewed.status).toBe(200)
+    expect(
+      (viewed.body as { cards: { title: string; state: string }[] }).cards.map((c) => [
+        c.title,
+        c.state,
+      ]),
+    ).toContainEqual([CARD.draft, 'draft'])
+    expect((viewed.body as { cards: unknown[] }).cards).toHaveLength(4)
     await page.context().close()
+    await guardian.context().close()
   })
 })
 
@@ -337,7 +357,7 @@ test.describe('one Card, several Cards and a Series', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     await page.goto('/resource-library')
     await page.getByRole('link', { name: PACK.single, exact: true }).click()
 
@@ -366,7 +386,7 @@ test.describe('one Card, several Cards and a Series', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     await page.goto(`/resource-library/${demo.operations.id}`)
 
     await expect(cardNav(page).getByRole('link')).toHaveText([CARD.keys, CARD.cleaning, CARD.rota])
@@ -388,7 +408,7 @@ test.describe('one Card, several Cards and a Series', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     await page.goto(`/resource-library/${demo.narrowed.id}`)
 
     await expect(cardNav(page).getByRole('link')).toHaveText([
@@ -433,7 +453,7 @@ test.describe('one Card, several Cards and a Series', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     await page.goto(`/resource-library/${demo.series.id}`)
     await expect(page.getByRole('heading', { level: 2, name: CARD.why })).toBeVisible()
 
@@ -468,7 +488,7 @@ test.describe('each kind of Card, as authored', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     await page.goto(`/resource-library/${demo.single.id}`)
     await expect(page.getByRole('heading', { level: 2, name: 'Opening' })).toBeVisible()
     await expect(page.getByRole('list').filter({ hasText: 'Turn off the alarm' })).toBeVisible()
@@ -498,7 +518,7 @@ test.describe('each kind of Card, as authored', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     const reached: string[] = []
     // The external site is never contacted: anything the browser tries to fetch from it is answered here, and counted.
     await page.context().route('https://example.org/**', (route) => {
@@ -529,7 +549,7 @@ test.describe('each kind of Card, as authored', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     const asked: string[] = []
     page.on('request', (request) => asked.push(request.url()))
     await page.goto(`/resource-library/${demo.image.id}`)
@@ -553,7 +573,7 @@ test.describe('each kind of Card, as authored', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     const pdfId = idOf('series', CARD.evacuation)
     await page.goto(cardAddress(demo.series.id, pdfId))
 
@@ -595,11 +615,11 @@ test.describe('each kind of Card, as authored', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     let failures = 1
     // Not a missing file (the store cannot be emptied from a journey): the platform's own answer for one, `asset_unavailable`, given to
     // the first image request only, to show what the reader meets and that asking again works.
-    await page.route('**/resource-library/packs/*/cards/*/file?disposition=inline', (route) =>
+    await page.route('**/my-resources/packs/*/cards/*/file?disposition=inline', (route) =>
       failures-- > 0
         ? route.fulfill({ status: 404, json: { message: 'x', code: 'asset_unavailable' } })
         : route.continue(),
@@ -620,13 +640,13 @@ test.describe('each kind of Card, as authored', () => {
 // --- Who may read ----------------------------------------------------------------------------------------------------------------
 
 test.describe('who may read the library, and who may manage', () => {
-  /** The same signed-in Guardian, with one capability taken out of what `/me` says: no real account holds one without the other. */
+  /** The same signed-in manager, with one capability taken out of what `/me` says: no real account holds one without the other. */
   async function asWithout(
     browser: Browser,
     baseURL: string | undefined,
     removed: string,
   ): Promise<{ page: Page; asked: string[] }> {
-    const page = await guardian(browser, baseURL)
+    const page = await manager(browser, baseURL)
     const me = (await apiFrom(page, 'GET', '/api/v1/me')).body as { capabilities: string[] }
     expect(me.capabilities).toContain(removed)
     await page.route('**/api/v1/me', (route) =>
@@ -636,21 +656,29 @@ test.describe('who may read the library, and who may manage', () => {
     )
     const asked: string[] = []
     page.on('request', (request) => {
-      if (request.url().includes('/api/v1/admin/resource')) asked.push(request.url())
+      if (/\/api\/v1\/admin\/(?:resource|my-resources)/.test(request.url()))
+        asked.push(request.url())
     })
     return { page, asked }
   }
 
-  test('view only: the library is read, nothing of management is offered, and none of it is asked for', async ({
+  test('view only: the whole library is read through the privileged viewer, nothing of management is offered, and none of it is asked for', async ({
     browser,
     baseURL,
   }) => {
+    // SIMULATED: `resources.manage` removed from /me. The platform answers the viewer's routes for real.
     const { page, asked } = await asWithout(browser, baseURL, 'resources.manage')
     await page.goto('/resource-library')
     await expect(page.getByRole('link', { name: PACK.single, exact: true })).toBeVisible()
+    // A holder of `resources.view` is shown everything: the Draft, and the Pack for Members only, each said in words.
+    const draft = page.getByRole('listitem').filter({
+      has: page.getByRole('link', { name: PACK.draft, exact: true }),
+    })
+    await expect(draft).toContainText('Draft')
+    await expect(page.getByRole('link', { name: PACK.membersOnly, exact: true })).toBeVisible()
     await expect(page.getByRole('link', { name: 'All Resource Packs' })).toHaveCount(0)
     await expect(page.getByRole('link', { name: 'Categories', exact: true })).toHaveCount(0)
-    expect(asked.every((url) => url.includes('/resource-library'))).toBe(true)
+    expect(asked.every((url) => url.includes('/api/v1/admin/resource-library'))).toBe(true)
 
     asked.length = 0
     for (const path of ['/resources', `/resources/packs/${demo.operations.id}`]) {
@@ -661,25 +689,27 @@ test.describe('who may read the library, and who may manage', () => {
     await page.context().close()
   })
 
-  test('manage only: management works and the library is refused, asking nothing of the library', async ({
+  test('manage only: management works and the library is the audience reader, never the viewer, whatever the manager can write', async ({
     browser,
     baseURL,
   }) => {
+    // SIMULATED: `resources.view` removed from /me. The platform answers `my-resources` for real, from this Person's relationships.
     const { page, asked } = await asWithout(browser, baseURL, 'resources.view')
     await page.goto('/resources')
     await expect(page.getByRole('heading', { level: 1, name: 'Resources' })).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Resource Library', exact: true })).toHaveCount(0)
-    // The Resources entry opens management, not a library this person may not read.
-    await page.goto('/')
-    await page.getByRole('link', { name: 'Resources', exact: true }).first().click()
-    await expect(page).toHaveURL(/\/resources$/)
+    await expect(page.getByRole('link', { name: 'Resource Library', exact: true })).toBeVisible()
 
     asked.length = 0
-    for (const path of ['/resource-library', `/resource-library/${demo.single.id}`]) {
-      await page.goto(path)
-      await expect(page.getByRole('heading', { level: 1, name: 'Not permitted' })).toBeVisible()
-    }
-    expect(asked.filter((url) => url.includes('/resource-library'))).toEqual([])
+    await page.goto('/resource-library')
+    await expect(page.getByRole('heading', { level: 1, name: 'Resource Library' })).toBeVisible()
+    await page.goto(`/resource-library/${demo.single.id}`)
+    // A manager is not thereby eligible for anything: this Pack is one and the same "not found" for them, and no error screen.
+    await expect(page.getByRole('heading', { level: 1, name: 'Resource not found' })).toBeVisible()
+    await expect(page.getByText('That Resource could not be found.')).toBeVisible()
+    // The library opened, and it asked the audience reader only: management does not grant viewing, and eligibility is not a role.
+    expect(asked.some((url) => url.includes('/api/v1/admin/my-resources'))).toBe(true)
+    expect(asked.filter((url) => url.includes('/api/v1/admin/resource-library'))).toEqual([])
+    expect(asked.filter((url) => /\/api\/v1\/admin\/resources(?![-\w])/.test(url))).toEqual([])
     await page.context().close()
   })
 
@@ -687,7 +717,7 @@ test.describe('who may read the library, and who may manage', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await manager(browser, baseURL)
     await page.goto('/resource-library')
     const section = page.getByRole('navigation', { name: 'Resources' })
     await expect(section.getByRole('link')).toHaveText([
@@ -724,6 +754,7 @@ test.describe('who may read the library, and who may manage', () => {
     expect(asked).toEqual([])
     expect((await apiFrom(page, 'GET', LIBRARY)).status).toBe(403)
     expect((await apiFrom(page, 'GET', `${LIBRARY}/packs/${demo.single.id}`)).status).toBe(403)
+    expect((await apiFrom(page, 'GET', VIEWER_LIBRARY)).status).toBe(403)
     expect((await apiFrom(page, 'GET', `${ROOT}/packs`)).status).toBe(403)
     await context.close()
   })
@@ -736,7 +767,7 @@ test.describe('a keyboard path through reading', () => {
     browser,
     baseURL,
   }) => {
-    const page = await guardian(browser, baseURL)
+    const page = await reader(browser, baseURL)
     const delivered = await deliveredPack(page, demo.series.id)
     const summaryOfExits = delivered.cards.find((c) => c.title === CARD.exits)?.summary ?? ''
     expect(summaryOfExits).not.toBe('')
@@ -913,7 +944,10 @@ for (const theme of THEMES) {
     ]
     for (const [name, path, ready] of screens) {
       test(name, async ({ browser, baseURL }) => {
-        const page = await guardian(browser, baseURL, theme)
+        // The management screens are the manager's; the library is read as a Guardian is served it.
+        const page = name.startsWith('the management')
+          ? await manager(browser, baseURL, theme)
+          : await reader(browser, baseURL, theme)
         await page.goto(path())
         await ready(page)
         expect(await axeViolations(page), name).toEqual([])
@@ -922,7 +956,7 @@ for (const theme of THEMES) {
     }
 
     test('a Card’s summary showing', async ({ browser, baseURL }) => {
-      const page = await guardian(browser, baseURL, theme)
+      const page = await reader(browser, baseURL, theme)
       await page.goto(`/resource-library/${demo.narrowed.id}`)
       await cardNav(page).getByRole('link', { name: CARD.firstShift }).focus()
       await expect(page.getByRole('tooltip')).toBeVisible()
@@ -937,7 +971,7 @@ for (const theme of THEMES) {
 test.describe('no page scrolls sideways, from the phone to the desktop', () => {
   for (const width of [320, 375, 1280]) {
     test(`at ${String(width)}px`, async ({ browser, baseURL }) => {
-      const page = await guardian(browser, baseURL)
+      const page = await reader(browser, baseURL)
       await page.setViewportSize({ width, height: 800 })
       const routes: [string, string][] = [
         ['the library, with its Categories and Packs', '/resource-library'],

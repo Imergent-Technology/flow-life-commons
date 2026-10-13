@@ -185,13 +185,22 @@ export function isOrderMismatch(failure: Failure): boolean {
   return failure.kind === 'conflict' && failure.code === 'order_mismatch'
 }
 
-const audienceLabels: Record<Audience, string> = { guardian: 'Guardians', member: 'Members' }
+const audienceLabels: Record<Audience, string> = {
+  guardian: 'Guardians',
+  member: 'Members',
+  volunteer: 'Volunteers',
+}
 export function audienceLabel(audience: Audience): string {
   return audienceLabels[audience]
 }
 
-export const MEMBER_DELIVERY_NOTE =
-  'Member content can be written, targeted and previewed here. Nothing delivers it to Members yet: the Member-facing surface comes later, so a Pack aimed only at Members does not appear in any Guardian’s library.'
+/**
+ * Where a Resource is read today (ADR 0038, R14, R16). Eligibility and Console admission are two different things, and this says
+ * neither more nor less than the platform does: an audience is a label on what is written; it is the Console that delivers it, to
+ * people it admits, by the audiences they belong to, and to whoever may view the whole library. Nothing else delivers it yet.
+ */
+export const AUDIENCE_DELIVERY_NOTE =
+  'Resources are read in the Console. People read the Packs aimed at the audiences they belong to, and only if they can sign in to the Console; belonging to an audience does not give that access. Anyone who may view the whole library reads every Pack, whoever it is aimed at. Nothing outside the Console delivers Resources yet: there is no separate Member page and no website delivery.'
 
 const stateLabels: Record<PublicationState, string> = { draft: 'Draft', published: 'Published' }
 export function stateLabel(state: PublicationState): string {

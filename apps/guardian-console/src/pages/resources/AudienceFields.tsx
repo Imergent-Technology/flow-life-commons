@@ -1,11 +1,11 @@
-import { audienceLabel, MEMBER_DELIVERY_NOTE } from '../../admin/resourcesWording.ts'
+import { audienceLabel, AUDIENCE_DELIVERY_NOTE } from '../../admin/resourcesWording.ts'
 import { AUDIENCES, type Audience } from '../../api/resources.ts'
 import { Checkbox } from '../../ui/Checkbox.tsx'
 
 /**
  * A group of audience checkboxes. A Pack's audiences are combined by OR: anyone who is in any of them is in. `options` is
  * every audience that may be chosen here (all of them for a Pack; only the Pack's own for a narrowed Card), and the server holds
- * the rules either way. Choosing Members carries a plain note that nothing delivers to Members yet.
+ * the rules either way. It carries a plain note on where Resources are read today.
  */
 export function AudienceFields({
   legend,
@@ -22,7 +22,6 @@ export function AudienceFields({
   disabled?: boolean
   error?: string | undefined
 }) {
-  const showNote = options.includes('member')
   return (
     <fieldset className="flex flex-col gap-2" disabled={disabled}>
       <legend className="text-label font-medium text-foreground">{legend}</legend>
@@ -39,7 +38,7 @@ export function AudienceFields({
           }}
         />
       ))}
-      {showNote ? <p className="text-meta text-muted-foreground">{MEMBER_DELIVERY_NOTE}</p> : null}
+      <p className="text-meta text-muted-foreground">{AUDIENCE_DELIVERY_NOTE}</p>
       {error !== undefined ? (
         <p role="alert" className="text-label text-danger">
           {error}

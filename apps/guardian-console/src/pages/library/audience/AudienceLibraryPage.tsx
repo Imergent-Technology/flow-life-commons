@@ -1,33 +1,36 @@
 import { useCallback, useState, type SyntheticEvent } from 'react'
 
 import {
-  browseLibrary,
-  type LibraryCategory,
-  type LibraryPackEntry,
-} from '../../api/resourceLibrary.ts'
-import type { CategoryRef } from '../../api/resources.ts'
-import { Alert } from '../../ui/Alert.tsx'
-import { Button } from '../../ui/Button.tsx'
-import { EmptyState } from '../../ui/EmptyState.tsx'
-import { Field } from '../../ui/Field.tsx'
-import { Input } from '../../ui/Input.tsx'
-import { Page } from '../../ui/Page.tsx'
-import { PageHeader } from '../../ui/PageHeader.tsx'
-import { Select } from '../../ui/Select.tsx'
-import { SkeletonRegion, SkeletonText } from '../../ui/Skeleton.tsx'
-import { TextLink } from '../../ui/TextLink.tsx'
-import { useLoad } from '../../ui/useLoad.ts'
-import { describeLibraryFailure } from './wording.ts'
+  browseAudienceLibrary,
+  type AudienceCategory,
+  type AudiencePackEntry,
+} from '../../../api/resourceLibrary.ts'
+import type { CategoryRef } from '../../../api/resources.ts'
+import { Alert } from '../../../ui/Alert.tsx'
+import { Button } from '../../../ui/Button.tsx'
+import { EmptyState } from '../../../ui/EmptyState.tsx'
+import { Field } from '../../../ui/Field.tsx'
+import { Input } from '../../../ui/Input.tsx'
+import { Page } from '../../../ui/Page.tsx'
+import { PageHeader } from '../../../ui/PageHeader.tsx'
+import { Select } from '../../../ui/Select.tsx'
+import { SkeletonRegion, SkeletonText } from '../../../ui/Skeleton.tsx'
+import { TextLink } from '../../../ui/TextLink.tsx'
+import { useLoad } from '../../../ui/useLoad.ts'
+import { useReportForbidden } from '../libraryMode.ts'
+import { describeLibraryFailure } from '../wording.ts'
 
 /**
- * The Resource Library (ADR 0037): what a Guardian may read, grouped by Category, as the platform's delivery projection answers it.
- * It is for reading, not authoring, and it is a different surface from Resource management: it asks only the library endpoint, so a
- * Draft, a Pack aimed at someone else, or a Card this person may not see is not here and is not hinted at. The server owns the order
+ * The Resource Library for someone without `resources.view` (ADR 0038, C7; ADR 0037): what the signed-in Person may read, grouped by
+ * Category, as the platform's delivery projection answers it. The audiences are theirs: Guardian, Volunteer and Member, as their
+ * relationships make them eligible, and nothing here says which one made a Resource appear. It is for reading, not authoring, and it
+ * asks only `/admin/my-resources`, so a Draft, a Pack aimed at someone else, or a Card this person may not see is not here and is not
+ * hinted at: no count, no title, no marker. The server owns the order
  * (Categories, then Packs), the search (titles and summaries of what is visible, never content) and which Categories are listed; this
  * shows them as sent. The library is not paged. Search is submitted rather than run on every keystroke; a Category filter applies
  * at once.
  */
-export function LibraryPage() {
+export function AudienceLibraryPage() {
   const [typed, setTyped] = useState('')
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('')
@@ -38,7 +41,7 @@ export function LibraryPage() {
 
   const load = useCallback(
     async (signal: AbortSignal) => {
-      const result = await browseLibrary({
+      const result = await browseAudienceLibrary({
         ...(category !== '' && { category }),
         ...(query !== '' && { query }),
         signal,
@@ -53,13 +56,18 @@ export function LibraryPage() {
     [category, query, attempt],
   )
   const [library] = useLoad(load)
+  // A 403 here is a Console that has withdrawn admission, never an ineligible Resource (that is a 404): the route decides what follows.
+  const refused = useReportForbidden(
+    library.status === 'failed' ? library.failure : null,
+    'audience',
+  )
   const filtered = category !== '' || query !== ''
 
   return (
     <Page width="wide">
       <PageHeader
         title="Resource Library"
-        description="Guides, links and files for Guardians, by Category."
+        description="Guides, links and files for you, by Category."
       />
 
       <form
@@ -113,12 +121,12 @@ export function LibraryPage() {
         </Button>
       </form>
 
-      {library.status === 'loading' ? (
+      {library.status === 'loading' || refused ? (
         <SkeletonRegion label="Loading Resources…" visibleLabel>
           <SkeletonText lines={4} />
         </SkeletonRegion>
       ) : null}
-      {library.status === 'failed' ? (
+      {library.status === 'failed' && !refused ? (
         <div className="flex flex-col items-start gap-3">
           <Alert tone="error">{describeLibraryFailure(library.failure).message}</Alert>
           <Button
@@ -150,7 +158,7 @@ export function LibraryPage() {
           >
             {filtered
               ? 'Try different words, or another Category.'
-              : 'When Resources are published for Guardians they will appear here.'}
+              : 'When Resources are published for you they will appear here.'}
           </EmptyState>
         ) : (
           <div className="flex flex-col gap-8">
@@ -164,7 +172,7 @@ export function LibraryPage() {
   )
 }
 
-function CategoryGroup({ group }: { group: LibraryCategory }) {
+function CategoryGroup({ group }: { group: AudienceCategory }) {
   const headingId = `category-${group.category.id}`
   return (
     <section aria-labelledby={headingId} className="flex flex-col gap-3">
@@ -184,13 +192,13 @@ function CategoryGroup({ group }: { group: LibraryCategory }) {
 }
 
 /** Series and size say how a Pack is read; a single Card needs neither. The count is of what THIS viewer can see. */
-function packNote(pack: LibraryPackEntry): string | null {
+function packNote(pack: AudiencePackEntry): string | null {
   const cards = pack.cardCount > 1 ? `${String(pack.cardCount)} Cards` : null
   if (pack.isSeries && cards !== null) return `Series · ${cards}`
   return cards
 }
 
-function PackEntry({ pack }: { pack: LibraryPackEntry }) {
+function PackEntry({ pack }: { pack: AudiencePackEntry }) {
   const note = packNote(pack)
   return (
     <li className="relative flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-4 hover:bg-muted/50">
