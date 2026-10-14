@@ -76,7 +76,7 @@ it('is not part of the default seeder, and nothing in the application refers to 
     foreach (['app', 'bootstrap', 'config', 'routes'] as $dir) {
         foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator("{$root}/{$dir}", FilesystemIterator::SKIP_DOTS)) as $file) {
             assert($file instanceof SplFileInfo);
-            if ($file->getExtension() === 'php' && preg_match('/E2eSessionSeeder|E2eAccountSeeder|e2e-sessions/', (string) file_get_contents($file->getPathname())) === 1) {
+            if ($file->getExtension() === 'php' && preg_match('/E2eSessionSeeder|E2eAccountSeeder|E2eAgedSessionSeeder|E2eSessionKeepAlive|e2e-sessions|e2e-session-ids/', (string) file_get_contents($file->getPathname())) === 1) {
                 $offenders[] = str_replace("{$root}/", '', $file->getPathname());
             }
         }

@@ -39,6 +39,13 @@ final class E2eSessionSeeder extends Seeder
     /** Where the cookies are written, relative to storage/. `./flow test e2e` hands the file to the browser suite. */
     public const string FILE = 'app/private/e2e-sessions.json';
 
+    /**
+     * The id of each minted session (name => session id), beside the cookies. Only {@see E2eSessionKeepAlive} reads it: a minted
+     * session is used for the first time whenever its journey is scheduled, which on a slow run is more than the 30 minutes of
+     * inactivity the platform allows, and the keep-alive keeps exactly these sessions from idling out.
+     */
+    public const string IDS_FILE = 'app/private/e2e-session-ids.json';
+
     private const string HOST = 'commons.flowlife.localhost';
 
     private const string SESSION_COOKIE = '__Host-flowlife-session';
@@ -99,17 +106,30 @@ final class E2eSessionSeeder extends Seeder
 
     public function run(): void
     {
+        $this->mintAll(0);
+    }
+
+    /**
+     * Mints every session. `$proofNoNewerThan` makes every session's last proof at least that many minutes old (the declared age
+     * stands when it is older): {@see E2eAgedSessionSeeder} uses it to make a journey that leans on a MINTED session's recent proof fail
+     * at once, whatever the host's speed, instead of only when the run happens to be slow.
+     */
+    public function mintAll(int $proofNoNewerThan): void
+    {
         if (! $this->container->environment('local', 'testing')) {
             throw new RuntimeException('The e2e session fixtures may only be minted in a local or testing environment.');
         }
 
         $minted = [];
+        $ids = [];
         foreach (self::SESSIONS as $name => [$email, $password, $tag, $minutesSinceProof, $codeIndex]) {
-            $minted[$name] = $this->mint($email, $password, E2eAccountSeeder::recoveryCodes($tag)[$codeIndex], $minutesSinceProof);
+            $minted[$name] = $this->mint($email, $password, E2eAccountSeeder::recoveryCodes($tag)[$codeIndex], max($minutesSinceProof, $proofNoNewerThan));
+            $ids[$name] = $this->sessionId(rawurldecode($minted[$name]['session']));
         }
 
         File::ensureDirectoryExists(dirname(storage_path(self::FILE)));
         File::put(storage_path(self::FILE), json_encode($minted, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));
+        File::put(storage_path(self::IDS_FILE), json_encode($ids, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));
     }
 
     /** @return array{session: string, xsrf: string} */

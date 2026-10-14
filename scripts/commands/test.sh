@@ -67,6 +67,20 @@ test_frontend() {
     node_run npm test -- "$@"
 }
 
+# Keeps the minted browser sessions from idling out during a long run (development only; see E2eSessionKeepAlive).
+e2e_keep_sessions_alive() {
+    while sleep 300; do
+        php_run php artisan db:seed --class=E2eSessionKeepAlive --force --no-interaction >/dev/null 2>&1 || true
+    done
+}
+
+e2e_stop_keep_alive() {
+    if [[ -n "${E2E_KEEPALIVE_PID:-}" ]]; then
+        kill "$E2E_KEEPALIVE_PID" 2>/dev/null || true
+        E2E_KEEPALIVE_PID=''
+    fi
+}
+
 # Browser smoke test against the running stack, from the `e2e` profile.
 test_e2e() {
     local s
@@ -108,7 +122,16 @@ test_e2e() {
     # Legitimately authenticated sessions for the journeys that are not about signing in (development only). They are minted
     # by the platform's own sign-in, in-process, so no journey spends the public login rate budget just to get started. The
     # file holds live (if worthless) session cookies: it is git-ignored, and rewritten on every run.
-    php_run php artisan db:seed --class=E2eSessionSeeder --force --no-interaction
+    #
+    # E2E_AGED_SESSIONS=1 mints every one of them as if its last proof were already 20 minutes old (past the 15-minute window), the
+    # diagnostic for a journey that leans on a MINTED session's recent proof: such a journey passes only if it happens to run early,
+    # so how fast the host is decides the result. In this mode it fails at its first protected step, whatever the host's speed.
+    local session_seeder=E2eSessionSeeder
+    if [[ "${E2E_AGED_SESSIONS:-}" == 1 ]]; then
+        session_seeder=E2eAgedSessionSeeder
+        warn "E2E_AGED_SESSIONS=1: every minted session's proof is 20 minutes old. This run is a diagnostic, not the acceptance run."
+    fi
+    php_run php artisan db:seed --class="$session_seeder" --force --no-interaction
     step "Seeding the CRM demo data (development only, repeatable: it adds nothing that is already there)"
     php_run php artisan db:seed --class=CrmDemoSeeder --force --no-interaction
     step "Seeding the Discussions demo data (development only, repeatable, and repaired after the fixture Accounts are recreated)"
@@ -122,6 +145,12 @@ test_e2e() {
     php_run php artisan cache:clear --no-interaction
     step "E2E tests (Playwright, chromium)"
     local status=0
+    # A minted session is first used whenever its journey is scheduled, and the platform ends a session after 30 minutes without a
+    # request. A run that outlasts that (a slow host) would find Sign-in pages where those sessions were, so the sessions are kept
+    # from idling out for as long as the run lasts. See E2eSessionKeepAlive: it moves `last_activity` and nothing else.
+    e2e_keep_sessions_alive &
+    E2E_KEEPALIVE_PID=$!
+    trap e2e_stop_keep_alive EXIT
     dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test --grep-invert "@maintenance|@leftovers" "$@" || status=$?
 
     # The maintenance journeys raise the authoritative `storage/framework/down` flag, and that flag is
@@ -138,6 +167,7 @@ test_e2e() {
     # (e2e/resources-leftovers.spec.ts). Not a maintenance journey, which takes the origin down.
     step "E2E leftovers (the suite leaves only the demo Resources behind)"
     dcq --profile e2e run --rm --no-deps "${TTY_ARGS[@]}" e2e npx playwright test --grep @leftovers --workers=1 "$@" || status=$?
+    e2e_stop_keep_alive
 
     # The journeys recorded, changed, granted, withdrew and deleted relationships through the real platform: what they left behind,
     # the demo and the personas included, must still agree with the definitions and with Access (ADR 0038, F15).
