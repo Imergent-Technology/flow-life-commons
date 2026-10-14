@@ -18,8 +18,10 @@ use Tests\Support\Resources;
  * refused with `unknown_relationship_field` and change nothing (Metadata: unknown; no leakage across types), and the provisioning hint
  * is true only for the Guardian manage capability together with `access.roles.assign` (Provisioning hint never authorizes). Console
  * admission alone reaches no operation (Self-service cannot provision). The provisioning hint is proved for the cells a real persona
- * reaches; "manages Guardians but cannot assign roles" is reached by none (A3) and, because the hint is decided by the real Authorizer and not
- * the Gate, by no isolation either, so that cell rests on the code and the A2 static pin. Runs on MariaDB and PostgreSQL.
+ * reaches. "Manages Guardians but cannot assign roles" is reached by no real role (A3). Its server refusal is isolated in
+ * `GuardianProvisioningTest` (`denyRoleAssignment()`: the Actor manages Guardians and Access finds no role-assignment authority, so
+ * `role_provisioning_not_permitted`, the intake rollback and `defer`), and the hint's `access.roles.assign` conjunct is isolated in
+ * `ProvisioningHintTest`, through a test-only definition that borrows a pair the Guardian role does hold. Runs on MariaDB and PostgreSQL.
  */
 
 const MATRIX_CAPABILITIES = ['guardians.view', 'guardians.manage', 'volunteers.view', 'volunteers.manage'];
@@ -120,7 +122,9 @@ it('authorizes every operation of a type by exactly the capability its definitio
                 ->and(DB::table('person_relationships')->count())->toBe($before);
         }
         $held = [$capability];
-        expect(matrixCall($console, $method, $path, $body())->status())->not->toBe(403, "{$slug} {$label} with {$capability}");
+        // The positive cell is the exact success, not merely "not forbidden": a 500, a 404 or a 422 here would pass the gate and
+        // prove nothing about authorization. Only intake creates, so only it answers 201.
+        expect(matrixCall($console, $method, $path, $body())->status())->toBe($label === 'intake' ? 201 : 200, "{$slug} {$label} with {$capability}");
     }
 
     // Deletion last, as it ends the relationship: the type's own manage capability, and nothing else.
