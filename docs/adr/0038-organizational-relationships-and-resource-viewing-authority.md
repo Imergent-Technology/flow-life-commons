@@ -242,7 +242,7 @@ The independent audit of commit `30a5443` found no blocker or high finding, five
 
 | # | Ruling | Implemented by |
 | --- | --- | --- |
-| AR1 | **The role catalog.** Five roles: `platform_administrator` (unchanged); `guardian-initiate` (Guardian Initiate, minimal Console access); `guardian-full` (Guardian, today's `guardian` bundle); `guardian-senior` (Senior Guardian, initially the same bundle as Guardian, with no approval, financial, subscription or administrative authority); `console-participant` (Console Participant, minimal Console access). The `guardian` role key becomes `guardian-full` through a controlled migration that preserves every effective permission. Roles are additive, coexist on one Account, form no hierarchy and establish no relationship. The relationship type key stays `guardian` | A3, M6, Part K |
+| AR1 | **The role catalog.** Five roles: `platform_administrator` (unchanged); `guardian-initiate` (Guardian Initiate, minimal Console access); `guardian-full` (Guardian, the `guardian` bundle of the development line when this was ruled: not production v0.3.0's, which grants `console.access` only, see the [G10 release readiness](../runbooks/g10-release-readiness.md#what-changes-for-people-who-hold-the-guardian-role-today) runbook); `guardian-senior` (Senior Guardian, initially the same bundle as Guardian, with no approval, financial, subscription or administrative authority); `console-participant` (Console Participant, minimal Console access). The `guardian` role key becomes `guardian-full` through a controlled migration that preserves every effective permission of the development line's `guardian` role (measured against production v0.3.0 the holders gain capabilities; that expansion needs the product owner's authorization at release). Roles are additive, coexist on one Account, form no hierarchy and establish no relationship. The relationship type key stays `guardian` | A3, M6, Part K |
 | AR2 | **Relationship-managed default role.** A definition may name one default role that an authorized operator may choose to provision. Guardian: `guardian-initiate`, on Active recognition or activation, with explicit confirmation, offered preselected when the operator may both manage Guardians and assign roles. Volunteer: none. Member and Partner: deferred. The choice decides whether a grant exists. Without role-assignment authority, no role is granted, by a non-escalating contract. Provisioning is never suppressed or replaced because of other roles. Grants keep durable attribution to their relationship instance and coexist with independent grants of the same role. A Person without an Account keeps the authorized intent, fulfilled only through a trusted Account linkage. Inactivation withdraws, reactivation restores only a previously authorized grant, and deletion removes grant and intent. Independent grants are never touched | Part K |
 | AR3 | **M1, accepted.** A `volunteers.manage` holder may deliberately attach an existing Person and so bring them into basic-detail scope, Guardians included. The design states this consequence and the safeguards that exist. It adds no recent verification to ordinary Volunteer intake | P3, P8, threat review |
 | AR4 | **M2, corrected.** CRM gains `contact_methods.updated_by_account_id`, written by ordinary and delegated contact-method edits alike. The expected-value contract, lock order and hidden-collision behaviour are specified, and they disclose nothing | P5, P9 |
@@ -887,7 +887,7 @@ A3. **The role catalog and the initial capability mapping** (N1, AR1). These are
 | Role key | Display name | Capabilities |
 | --- | --- | --- |
 | `platform_administrator` | Platform administrator | Every capability, present and future (derived, unchanged) |
-| `guardian-full` | Guardian | Exactly today's `guardian` bundle: `console.access`, `crm.people.view`, `crm.people.manage`, `discussions.view`, `discussions.participate`, `resources.view`, `resources.manage`. Plus, from WP1: `guardians.view`, `volunteers.view`, `volunteers.manage` |
+| `guardian-full` | Guardian | Exactly the development line's `guardian` bundle when this was decided (v0.3.0's grants `console.access` only; see the release readiness runbook): `console.access`, `crm.people.view`, `crm.people.manage`, `discussions.view`, `discussions.participate`, `resources.view`, `resources.manage`. Plus, from WP1: `guardians.view`, `volunteers.view`, `volunteers.manage` |
 | `guardian-senior` | Senior Guardian | Initially identical to `guardian-full`. It has no approval, waiver, financial, subscription or administrative capability, and does not imply Platform Administrator. Later capabilities may tell it apart once their workflows are designed |
 | `guardian-initiate` | Guardian Initiate | `console.access` only |
 | `console-participant` | Console Participant | `console.access` only |
@@ -1162,7 +1162,7 @@ K12. **Changing the policy, and future configuration.**
 ### Part M — Guardian adoption, bootstrap and the role-key migration
 
 Two operations happen in G10 and must not be confused. They have different semantics and different owners:
-- **The role-key migration (M6)** renames a permission bundle. It is automatic, runs in one release, and changes no one's effective permissions. It creates no relationship.
+- **The role-key migration (M6)** renames a permission bundle. It is automatic, runs in one release, and the rename itself changes no one's effective permissions (relative to production v0.3.0 the catalog's `guardian-full` bundle is larger; the release needs the product owner's authorization). It creates no relationship.
 - **Guardian adoption (M1–M5)** records organizational recognition. It is manual, done by an authorized operator, one Person at a time, and it creates no role unless that operator chooses the default role (Part K).
 
 M1. **No automatic mapping** (N2). Nothing creates or removes a Guardian relationship because a Person holds any Guardian-named role (`guardian-full`, `guardian-senior`, `guardian-initiate`, or the retired `guardian`), holds `console.access` or Resource capabilities, or has an administrative Account. This rules out every migration, seeder, scheduled job and rule. The role-key migration (M6) in particular creates no relationship.
@@ -1223,7 +1223,7 @@ M6. **The role-key migration: `guardian` → `guardian-full`** (AR1). Built and 
   - Bootstrap: it names only `platform_administrator`.
   - OpenAPI: it lists no role keys.
 - **What is proved (WP2A):**
-  - before and after the migration, on both engines, every Person's effective capability set is identical;
+  - before and after the migration, on both engines, every Person's effective capability set is identical (on the development line, not against production v0.3.0);
   - no `guardian` row remains;
   - no Person gains or loses a role;
   - a stored `guardian` key grants nothing;
