@@ -71,7 +71,12 @@ use RuntimeException;
  * Repeatable: a Person is recognised by their exact email, through intake's own lookup. A relationship that already exists is left
  * alone, with everything an operator has since done to it, and none of its steps is taken again; a Person already invited is not
  * invited again; a Person who already has any Membership grant is not granted another; an assigned role is assigned idempotently. Running this again adds nothing.
- * Each use case is its own transaction, so a run that fails part-way leaves whole steps behind and the next run finishes the rest.
+ * Each use case is its own transaction, so a run that fails part-way leaves whole steps behind. The next run does NOT finish them: a
+ * relationship that already exists is skipped with all of its remaining steps, however far it got. A crash between one person's steps
+ * (for example after Bernard's Guardian Initiate grant and before his inactivation) therefore leaves that relationship as it was, with a
+ * grant a rerun never corrects. This is development data only: to repair it, remove the demo's relationships through the Console (or
+ * recreate the development database) and run the seeder again. It is not made self-healing, because a demo that rewrote what an operator
+ * had since done to it would no longer be a demo of that.
  */
 final class RelationshipsDemoSeeder extends Seeder
 {
