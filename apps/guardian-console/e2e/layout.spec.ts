@@ -27,6 +27,17 @@ interface Dom {
   matchMedia: (query: string) => { matches: boolean }
 }
 
+/**
+ * A CSS time as milliseconds. The token is read as the browser reports a custom property, which is the author's text in the development
+ * server and the minifier's in the production build (`0ms` becomes `0s`, `180ms` may become `.18s`): the same duration, spelled
+ * differently, so what is asserted is the duration and not its spelling.
+ */
+function milliseconds(time: string): number {
+  const parsed = /^(-?\d*\.?\d+)(ms|s)$/.exec(time)
+  if (parsed?.[1] === undefined || parsed[2] === undefined) return Number.NaN
+  return Math.round(Number(parsed[1]) * (parsed[2] === 's' ? 1000 : 1))
+}
+
 const horizontalOverflow = (page: Page): Promise<number> =>
   page.evaluate(() => {
     const root = (globalThis as unknown as Dom).document.documentElement
@@ -462,13 +473,13 @@ test.describe('someone who asked for reduced motion is not animated at', () => {
       if (reduce) {
         expect(skeleton.name, 'skeleton').toBe('none')
         expect(drawer.name, 'drawer').toBe('none')
-        expect(token).toBe('0ms')
+        expect(milliseconds(token), 'the slow duration token').toBe(0)
         expect(hover, 'button transition').toBe('0s')
       } else {
         // The control: with no preference the same things DO move, so the assertions above can fail.
         expect(skeleton.name, 'skeleton (control)').toBe('pulse')
         expect(drawer.name, 'drawer (control)').toBe('drawer-in')
-        expect(token).toBe('180ms')
+        expect(milliseconds(token), 'the slow duration token (control)').toBe(180)
         expect(hover, 'button transition (control)').not.toBe('0s')
       }
       await admin.context().close()
