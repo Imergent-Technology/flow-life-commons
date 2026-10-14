@@ -1,5 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { operator, serveOperator } from '../../test/admin.ts'
 import { json } from '../../test/fakeApi.ts'
@@ -37,6 +37,21 @@ afterEach(() => {
 })
 
 describe('the editor and the library', () => {
+  // The first full render of the library in a worker pays for everything that is first used then (the page's own code, Testing Library's
+  // role queries, the first request), which is more than the one second a `findBy` is given and is not what these tests are about. So
+  // the route is rendered once, to the point where it is ready, before the first of them starts: the same read-only path, with the
+  // same check. If the library asked for the editor here, this fails first, and the cache cannot hide it from the tests that follow.
+  // This hook's wait is its own; the tests below keep the default.
+  beforeAll(async () => {
+    const api = serveOperator(operator(READER))
+    api.on(`GET ${MY_RESOURCES}`, () => libraryOf(...TWO_GROUPS))
+    renderApp('/resource-library')
+    await screen.findByRole('link', { name: 'Welcome pack' }, { timeout: 10_000 })
+    expect(editor.requested).toBe(false)
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
   // One page per test: each is a single render and a single wait, so none of them is long enough to be a victim of a busy machine.
   const SERIES = numbered([
     ...THREE_CARDS.slice(0, 1),
