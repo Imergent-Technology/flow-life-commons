@@ -268,6 +268,7 @@ export type FixtureSession =
   | 'persona-lifecycle-kept'
   | 'persona-lifecycle-sole'
   | 'cleanup-probe-stale'
+  | 'volunteer-manager-stale'
 
 interface MintedSession {
   session: string

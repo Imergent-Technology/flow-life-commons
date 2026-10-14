@@ -1,7 +1,14 @@
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test'
 
 import { axeViolations, inTheme, THEMES, type Theme } from './axe.ts'
-import { apiFrom, recoveryCodesFor, signedInAs, type FixtureSession } from './support.ts'
+import {
+  apiFrom,
+  recoveryCodesFor,
+  replayedStatus,
+  sessionCookie,
+  signedInAs,
+  type FixtureSession,
+} from './support.ts'
 import { verifiedAdminPage, workerSession } from './verified.ts'
 
 // Relationships (ADR 0038, G10 WP5), in real Chromium through the real gateway and with the real platform deciding every request.
@@ -22,8 +29,8 @@ test.describe.configure({ timeout: 240_000 })
 const ROOT = '/api/v1/admin/relationships'
 const ADMIN_PASSWORD = 'e2e-relationships-admin-password-not-a-secret'
 const ADMIN_CODES = recoveryCodesFor('Y')
-const GUARDIAN_PASSWORD = 'e2e-admin-guardian-password-not-a-secret'
-const GUARDIAN_CODES = recoveryCodesFor('S')
+const VOLUNTEER_MANAGER_PASSWORD = 'e2e-persona-volmanager-password-not-a-secret'
+const VOLUNTEER_MANAGER_CODES = recoveryCodesFor('PA')
 
 const tag = () => crypto.randomUUID().slice(0, 8)
 const ulid = /([0-9A-Za-z]{26})\/?$/
@@ -186,8 +193,17 @@ test.describe('a Volunteer manager', () => {
   test('finds the Relationships entries the definitions serve, records a new Volunteer, maintains them, and removes them', async ({
     browser,
     baseURL,
+    request,
   }) => {
-    const page = await signedIn(browser, baseURL, 'plain-guardian')
+    // The journey deletes a Volunteer, which needs a recent proof: it runs in a STALE session of a Volunteer manager of its own, so the
+    // proof it must make rotates that session and no other. The minted `plain-guardian` session, which journeys in other workers share,
+    // is held beside it only to show, at the end, that the proof did not touch it.
+    const page = await signedIn(browser, baseURL, 'volunteer-manager-stale')
+    const shared = await signedInAs(browser, baseURL ?? '', 'plain-guardian')
+    const sharedCookie = await sessionCookie(shared.context())
+    expect(sharedCookie, 'the shared plain-guardian session is injected').toBeDefined()
+    const staleCookie = await sessionCookie(page.context())
+    expect(staleCookie, 'the stale session is injected').toBeDefined()
     const unique = tag()
     const name = `E2E Volunteer ${unique}`
     const email = `volunteer.${unique}@example.org`
@@ -282,21 +298,29 @@ test.describe('a Volunteer manager', () => {
       const confirm = page.getByRole('dialog', { name: `Delete ${name}'s volunteer permanently?` })
       await expect(confirm).toContainText('does not delete')
       await confirm.getByRole('button', { name: 'Delete permanently' }).click()
+      // The session's proof is 16 minutes old, so the platform asks for a new one, always: not a probe that may not find it.
       const prompt = page.getByRole('dialog', { name: 'Confirm it is you' })
-      if (await prompt.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await prompt.getByLabel('Current password').fill(GUARDIAN_PASSWORD)
-        await prompt.getByRole('button', { name: 'Use a recovery code instead' }).click()
-        await prompt.getByLabel('Recovery code').fill(GUARDIAN_CODES[0] ?? '')
-        await prompt.getByRole('button', { name: 'Confirm' }).click()
-        await confirm.getByRole('button', { name: 'Delete permanently' }).click()
-      }
+      await expect(prompt).toBeVisible()
+      await prompt.getByLabel('Current password').fill(VOLUNTEER_MANAGER_PASSWORD)
+      await prompt.getByRole('button', { name: 'Use a recovery code instead' }).click()
+      await prompt.getByLabel('Recovery code').fill(VOLUNTEER_MANAGER_CODES[0] ?? '')
+      await prompt.getByRole('button', { name: 'Confirm' }).click()
+      await confirm.getByRole('button', { name: 'Delete permanently' }).click()
       await expect(page.getByRole('heading', { level: 1, name: 'Volunteers' })).toBeVisible()
       await expect(page.getByText(`${name}'s volunteer was deleted permanently.`)).toBeVisible()
       expect((await apiFrom(page, 'GET', `${ROOT}/volunteers/${personId}`)).status).toBe(404)
       // The person is still in CRM: deleting a relationship deletes nothing else.
       expect((await apiFrom(page, 'GET', `/api/v1/admin/people/${personId}`)).status).toBe(200)
       personId = ''
+
+      // The proof was real, and it stayed in this journey's session: proving rotated THIS session's id (the cookie it held before is
+      // dead), and the minted `plain-guardian` session that other journeys share still authenticates, replayed and live.
+      expect(await replayedStatus(request, baseURL ?? '', staleCookie?.value ?? '')).toBe(401)
+      expect(await replayedStatus(request, baseURL ?? '', sharedCookie?.value ?? '')).toBe(200)
+      await shared.goto('/api/v1/health')
+      expect((await apiFrom(shared, 'GET', '/api/v1/me')).status).toBe(200)
     } finally {
+      await shared.context().close()
       await page.context().close()
       if (personId !== '') await adminRemove(browser, baseURL, 'volunteers', personId)
     }

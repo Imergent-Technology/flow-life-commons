@@ -288,6 +288,14 @@ final class E2eAccountSeeder extends Seeder
     public const string INITIATE_HOLDER_EMAIL = 'e2e.persona.holder@example.org';
 
     /**
+     * The Volunteer manager whose journey deletes a Volunteer (e2e/relationships.spec.ts). Deleting a Volunteer needs a recent proof, so
+     * its session is minted STALE and the journey proves in it (the prompt is required, never probed for). That proof rotates the id of
+     * THIS Account's session and no other, so no journey that shares a minted session (`plain-guardian`, `relationships-admin`) is
+     * ever signed out by it. The Console user role, as the plain Guardian holds, and no relationship.
+     */
+    public const array VOLUNTEER_MANAGER = ['e2e.persona.volmanager@example.org', 'E2E Volunteer Manager', 'e2e-persona-volmanager-password-not-a-secret', 'T2DMZVACSB32R6KLLIJASUSSQRHTK3AW', 'PA'];
+
+    /**
      * Resource cleanup's own regression probe (e2e/resources-cleanup.spec.ts): a Resources manager whose session is minted STALE, so
      * the cleanup must establish recent verification itself, with this Account's authenticator, before it can delete a Pack.
      */
@@ -537,6 +545,9 @@ final class E2eAccountSeeder extends Seeder
         $this->establish($kept, 'volunteer', 'active');
         $this->establish($this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_LIFECYCLE_SOLE), 'guardian', 'active', 'grant');
 
+        // The Volunteer manager whose deletion journey proves in a stale session of its own: the Console user role, no relationship.
+        $consoleUser($this->persona($accounts, $people, $hasher, $totp, $now, self::VOLUNTEER_MANAGER));
+
         // The cleanup probe: a Resources manager (the Console user role), with no relationship.
         $consoleUser($this->persona($accounts, $people, $hasher, $totp, $now, self::CLEANUP_PROBE));
 
@@ -708,6 +719,12 @@ final class E2eAccountSeeder extends Seeder
             }
             DB::table('person_relationships')->where('person_id', $account->person_id)->delete();
             DB::table('membership_grants')->where('person_id', $account->person_id)->delete();
+            // What a journey recorded about this Person in CRM (the lifecycle journey's scoped phone correction adds a contact method
+            // to a persona), which restricts the Person's deletion: without these the NEXT run's seeding stopped here and left the
+            // Person behind with no Account.
+            foreach (['contact_interactions', 'contact_methods', 'contact_profiles', 'contact_tag_assignments'] as $table) {
+                DB::table($table)->where('person_id', $account->person_id)->delete();
+            }
             DB::table('accounts')->where('id', $account->id)->delete();
             DB::table('people')->where('id', $account->person_id)->delete();
         }

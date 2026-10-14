@@ -88,6 +88,8 @@ final class E2eSessionSeeder extends Seeder
         'persona-former' => [E2eAccountSeeder::PERSONA_FORMER[0], E2eAccountSeeder::PERSONA_FORMER[2], E2eAccountSeeder::PERSONA_FORMER[4], 0, self::RECOVERY_INDEX],
         'persona-lifecycle-kept' => [E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[0], E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[2], E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[4], 0, self::RECOVERY_INDEX],
         'persona-lifecycle-sole' => [E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[0], E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[2], E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[4], 0, self::RECOVERY_INDEX],
+        // STALE, for the Volunteer-deletion journey (e2e/relationships.spec.ts): it must prove, in this Account's session and no shared one.
+        'volunteer-manager-stale' => [E2eAccountSeeder::VOLUNTEER_MANAGER[0], E2eAccountSeeder::VOLUNTEER_MANAGER[2], E2eAccountSeeder::VOLUNTEER_MANAGER[4], 16, self::RECOVERY_INDEX],
         // STALE, so Resource cleanup has to establish recent verification itself before it may delete (e2e/resources-cleanup.spec.ts).
         'cleanup-probe-stale' => [E2eAccountSeeder::CLEANUP_PROBE[0], E2eAccountSeeder::CLEANUP_PROBE[2], E2eAccountSeeder::CLEANUP_PROBE[4], 16, self::RECOVERY_INDEX],
     ];
