@@ -77,28 +77,39 @@ test('removes what it registered when its session’s proof has lapsed: it prove
   expect(await categoryListed(page, category.id)).toBe(false)
 })
 
-test('fails, naming every fixture it could not remove with the platform’s answer, and still removes the rest', async ({
+test('fails, naming every fixture it could not remove with the platform’s answer, and still removes the rest, whatever order they were registered in', async ({
   browser,
 }) => {
   const page = await maker(browser)
   // A Category that holds a Pack the journey did NOT register: the platform refuses to delete it (`category_not_empty`).
   const held = await makeCategory(page)
   const holder = await makePack(page, { categoryId: held.id })
+  // What the cleanup was asked to remove AFTER the refused one: an empty Category, and a Pack. A cleanup that stopped at the first
+  // failure would leave both behind, so they are registered after it, and the Category is the last thing processed.
+  const emptied = await makeCategory(page)
   const other = await makePack(page)
 
   const removal = new RemoveAfter()
-  removal.category(held.id)
+  removal.category(held.id) // registered first, so it is the first to be refused
+  removal.category(emptied.id)
   removal.pack(other.id)
   const failure = await removal.run(page).then(
     () => null,
     (error: unknown) => (error instanceof Error ? error.message : String(error)),
   )
   expect(failure, 'a refused deletion fails the cleanup').not.toBeNull()
+  // It names the one fixture it could not remove, with the platform's own answer, and no other.
   expect(failure).toContain('Cleanup left 1 fixture(s) behind')
   expect(failure).toContain(`Category ${held.id}: 409`)
   expect(failure).toContain('category_not_empty')
-  // The failure hid nothing: the other Pack was still removed.
+  expect(failure).not.toContain(emptied.id)
+  expect(failure).not.toContain(other.id)
+  // The failure hid nothing, and carried on: the Pack and the Category registered after the refused one were both removed.
   expect(await statusOf(page, `${ROOT}/packs/${other.id}`)).toBe(404)
+  expect(await categoryListed(page, emptied.id)).toBe(false)
+  // It took nothing it was not asked to: the refused Category and the Pack it holds (not registered) are still there.
+  expect(await categoryListed(page, held.id)).toBe(true)
+  expect(await statusOf(page, `${ROOT}/packs/${holder.id}`)).toBe(200)
   // A failed run does not keep what it failed on: running again does nothing, and reports nothing.
   expect(await removal.run(page)).toEqual({ removed: [], alreadyGone: [], signIns: 0, proofs: 0 })
 
