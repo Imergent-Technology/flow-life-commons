@@ -76,6 +76,7 @@ e2e_keep_sessions_alive() {
 
 e2e_stop_keep_alive() {
     if [[ -n "${E2E_KEEPALIVE_PID:-}" ]]; then
+        pkill -P "$E2E_KEEPALIVE_PID" 2>/dev/null || true # its pending `sleep`, which would otherwise outlive it
         kill "$E2E_KEEPALIVE_PID" 2>/dev/null || true
         E2E_KEEPALIVE_PID=''
     fi
