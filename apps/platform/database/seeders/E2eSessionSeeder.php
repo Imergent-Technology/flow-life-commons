@@ -64,8 +64,6 @@ final class E2eSessionSeeder extends Seeder
     private const array SESSIONS = [
         'admin-read' => [E2eAccountSeeder::ADMIN_READ_EMAIL, E2eAccountSeeder::ADMIN_READ_PASSWORD, 'H', 0, self::RECOVERY_INDEX],
         'admin-stale' => [E2eAccountSeeder::ADMIN_STALE_EMAIL, E2eAccountSeeder::ADMIN_STALE_PASSWORD, 'J', 16, self::RECOVERY_INDEX],
-        'admin-story' => [E2eAccountSeeder::ADMIN_STORY_EMAIL, E2eAccountSeeder::ADMIN_STORY_PASSWORD, 'N', 0, self::RECOVERY_INDEX],
-        'admin-recover' => [E2eAccountSeeder::ADMIN_RECOVER_EMAIL, E2eAccountSeeder::ADMIN_RECOVER_PASSWORD, 'Q', 0, self::RECOVERY_INDEX],
         // A stale session of its own for the Discussions closeout: the administration journey uses (and rotates) 'admin-stale'.
         'discussions-stale' => [E2eAccountSeeder::ADMIN_STORY_EMAIL, E2eAccountSeeder::ADMIN_STORY_PASSWORD, 'N', 16, 8],
         'plain-guardian' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 0, self::RECOVERY_INDEX],
@@ -97,6 +95,11 @@ final class E2eSessionSeeder extends Seeder
         'persona-lifecycle-sole' => [E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[0], E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[2], E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[4], 0, self::RECOVERY_INDEX],
         // STALE, for the Volunteer-deletion journey (e2e/relationships.spec.ts): it must prove, in this Account's session and no shared one.
         'volunteer-manager-stale' => [E2eAccountSeeder::VOLUNTEER_MANAGER[0], E2eAccountSeeder::VOLUNTEER_MANAGER[2], E2eAccountSeeder::VOLUNTEER_MANAGER[4], 16, self::RECOVERY_INDEX],
+        // STALE, for e2e/session-lifecycle.spec.ts: two sessions of one Account, both alive and both without a recent proof, so that one can
+        // prove (recovery code 7) while the other is shown to be untouched. They sign in with recovery codes 8 and 6; 9 and 0 are the
+        // Volunteer-deletion journey's (e2e/relationships.spec.ts).
+        'lifecycle-a-stale' => [E2eAccountSeeder::VOLUNTEER_MANAGER[0], E2eAccountSeeder::VOLUNTEER_MANAGER[2], E2eAccountSeeder::VOLUNTEER_MANAGER[4], 16, 8],
+        'lifecycle-b-stale' => [E2eAccountSeeder::VOLUNTEER_MANAGER[0], E2eAccountSeeder::VOLUNTEER_MANAGER[2], E2eAccountSeeder::VOLUNTEER_MANAGER[4], 16, 6],
         // STALE, so Resource cleanup has to establish recent verification itself before it may delete (e2e/resources-cleanup.spec.ts).
         'cleanup-probe-stale' => [E2eAccountSeeder::CLEANUP_PROBE[0], E2eAccountSeeder::CLEANUP_PROBE[2], E2eAccountSeeder::CLEANUP_PROBE[4], 16, self::RECOVERY_INDEX],
     ];

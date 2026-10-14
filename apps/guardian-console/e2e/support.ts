@@ -247,8 +247,6 @@ export async function apiFrom(
 export type FixtureSession =
   | 'admin-read'
   | 'admin-stale'
-  | 'admin-story'
-  | 'admin-recover'
   | 'plain-guardian'
   | 'discussions-stale'
   | 'resources-stale-card'
@@ -269,6 +267,8 @@ export type FixtureSession =
   | 'persona-lifecycle-sole'
   | 'cleanup-probe-stale'
   | 'volunteer-manager-stale'
+  | 'lifecycle-a-stale'
+  | 'lifecycle-b-stale'
 
 interface MintedSession {
   session: string

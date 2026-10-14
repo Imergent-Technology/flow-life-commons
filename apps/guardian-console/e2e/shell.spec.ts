@@ -811,9 +811,14 @@ test.describe('under the production policy', () => {
     await expect(pinned(page)).toBeVisible()
     const badge = consoleNav(page).getByRole('img', { name: 'Flow Life Commons' })
     await expect(badge).toBeVisible()
-    expect(
-      await badge.evaluate((image) => (image as unknown as { naturalWidth: number }).naturalWidth),
-    ).toBeGreaterThan(0) // it actually loaded: same origin, hashed, under img-src 'self'
+    // It actually loaded: same origin, hashed, under img-src 'self'. Visible is not decoded, so the width is polled (for the default
+    // expectation timeout, no longer): read at once it is 0 on a loaded host for an image still on its way, and 0 for ever if the
+    // policy had refused it, which is what this is here to tell apart.
+    await expect
+      .poll(() =>
+        badge.evaluate((image) => (image as unknown as { naturalWidth: number }).naturalWidth),
+      )
+      .toBeGreaterThan(0)
     const menu = await openAccountMenu(page)
     await menu.getByRole('menuitemradio', { name: 'Dark' }).click()
     expect(await themeOf(page)).toBe('dark')

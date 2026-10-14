@@ -262,3 +262,44 @@ export async function verifiedAdminPage(
   await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible()
   return page
 }
+
+// --- a fresh sign-in as a NAMED fixture administrator --------------------------------------------------------------------------------
+
+/**
+ * Fixture administrators whose identity a journey asserts ("E2E Admin Read", "(you)"), so a worker's administrator will not do. The same
+ * Accounts the minted `admin-*` sessions belong to (E2eAccountSeeder), with the credentials it gives them.
+ */
+export const ADMIN_READ: Prover = {
+  email: 'e2e.admin.read@example.org',
+  password: 'e2e-admin-read-password-not-a-secret',
+  secret: 'OXYIMCFIPNZB575Y7MZF7OBR26YHQGEY',
+}
+export const ADMIN_STORY: Prover = {
+  email: 'e2e.admin.story@example.org',
+  password: 'e2e-admin-story-password-not-a-secret',
+  secret: 'WPASVORC3QYT2LZHKBMKTHAYVK3OI242',
+}
+export const ADMIN_RECOVER: Prover = {
+  email: 'e2e.admin.recover@example.org',
+  password: 'e2e-admin-recover-password-not-a-secret',
+  secret: '2FESGCFGXJ7JEMBIVYHTWUXA7NDCLLV3',
+}
+
+/**
+ * A NEW page in a session of its own, signed in for real as `prover` (password, then a code from the Account's authenticator), so
+ * freshly verified however old the minted sessions are and however long the suite has been running. For a journey that needs a recent
+ * proof and is about WHO the administrator is, so `verifiedAdminPage` (a worker's administrator) will not do.
+ *
+ * The session is the journey's alone. It is not the minted session of that Account, which other journeys hold and which is never
+ * proved on (proving rotates the id), and it is not another sign-in's, so nothing here can sign another journey out. A time step this
+ * Account's authenticator already spent (another worker signed in as it in the same half-minute) is retried with the next one. The
+ * caller closes the page's context.
+ */
+export async function freshlyVerifiedAs(
+  browser: Browser,
+  baseURL: string | undefined,
+  prover: Prover,
+): Promise<Page> {
+  const origin = baseURL ?? test.info().project.use.baseURL ?? ''
+  return new VerifiedSession(browser, origin, prover).ready()
+}

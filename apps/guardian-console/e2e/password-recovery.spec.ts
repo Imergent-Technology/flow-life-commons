@@ -1,12 +1,7 @@
 import { expect, test } from '@playwright/test'
 
-import {
-  expectNoTokenShapedText,
-  locationOf,
-  mailpit,
-  messageIdsTo,
-  signedInAs,
-} from './support.ts'
+import { expectNoTokenShapedText, locationOf, mailpit, messageIdsTo } from './support.ts'
+import { ADMIN_RECOVER, freshlyVerifiedAs } from './verified.ts'
 
 // An operator sends an Account holder the NORMAL password-reset email (ADR 0024), in real Chromium through the real gateway
 // with real Mailpit mail. What it proves: the operator's screen and the API response never carry the token or the link; the
@@ -14,7 +9,7 @@ import {
 // still lands on the existing reset page. It does NOT complete the password change: credentials/console specs already prove
 // that path, and finishing it here would only make this fixture mutation-heavy.
 //
-// The operator is a pre-minted, freshly verified Platform Administrator session (E2eSessionSeeder). The target is its OWN
+// The operator is a Platform Administrator signed in for real at the start of the journey, so freshly verified whatever the suite's age. The target is its OWN
 // fixture (E2eAccountSeeder::RESET_TARGET_EMAIL): a reset token is per-Account state, so no other journey reads it.
 const TARGET = { email: 'e2e.admin.resettarget@example.org', name: 'E2E Reset Target' }
 
@@ -25,7 +20,8 @@ test.describe('an operator sends a password reset email', () => {
     request,
   }) => {
     const url = baseURL ?? ''
-    const admin = await signedInAs(browser, url, 'admin-recover')
+    // Sending a reset needs a recent proof: a session of its own, signed in for real, has one however long the suite has run.
+    const admin = await freshlyVerifiedAs(browser, url, ADMIN_RECOVER)
     const before = await messageIdsTo(request, url, TARGET.email)
 
     // Account detail, as an operator reaches it.

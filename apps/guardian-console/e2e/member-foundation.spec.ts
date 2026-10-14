@@ -11,10 +11,10 @@ import {
   messageIdsTo,
   mailpit,
   nextCode,
-  signedInAs,
   signOut,
   unique,
 } from './support.ts'
+import { ADMIN_READ, freshlyVerifiedAs } from './verified.ts'
 
 // WP5 (ADR 0032, ADR 0033, docs/architecture/member-access.md): end-to-end validation of the Member
 // foundation, in real Chromium through the real gateway. Two independent journeys, each proving a
@@ -113,8 +113,9 @@ test.describe.serial('Journey A — inviting an existing Person to Commons (WP5,
   let personId: string
 
   test.beforeAll(async ({ browser, baseURL }) => {
-    admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
-    await admin.goto('/') // apiFrom evaluates a same-origin fetch; the minted session starts at about:blank
+    // Registering a member needs a recent proof: a session of its own, signed in for real, has one however long the suite has run.
+    admin = await freshlyVerifiedAs(browser, baseURL ?? '', ADMIN_READ)
+    await admin.goto('/') // apiFrom evaluates a same-origin fetch; a new page starts at about:blank
     person = await freshPage(browser, baseURL ?? '')
 
     // The fixture: a real Person with a real, currently-active Membership grant, created through the
@@ -320,7 +321,7 @@ test.describe
     browser,
     baseURL,
   }) => {
-    const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
+    const admin = await freshlyVerifiedAs(browser, baseURL ?? '', ADMIN_READ)
     await openAccount(admin, PROMOTION.email, PROMOTION.name)
     await expect(admin.getByText('They hold no access.')).toBeVisible()
 
