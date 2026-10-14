@@ -1,6 +1,12 @@
 import { expect, test } from '@playwright/test'
 
-import { expectNoTokenShapedText, locationOf, mailpit, messageIdsTo } from './support.ts'
+import {
+  expectNoTokenShapedText,
+  locationOf,
+  mailpit,
+  messageIdsTo,
+  onOriginUnderTest,
+} from './support.ts'
 import { ADMIN_RECOVER, freshlyVerifiedAs } from './verified.ts'
 
 // An operator sends an Account holder the NORMAL password-reset email (ADR 0024), in real Chromium through the real gateway
@@ -99,7 +105,7 @@ test.describe('an operator sends a password reset email', () => {
 
     // The holder follows the link: the existing reset page, with the secret scrubbed from the address.
     const holder = await (await browser.newContext({ baseURL: url })).newPage()
-    await holder.goto(link ?? '')
+    await holder.goto(onOriginUnderTest(link ?? '', url))
     await expect(
       holder.getByRole('heading', { level: 1, name: 'Choose a new password' }),
     ).toBeVisible()

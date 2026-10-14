@@ -313,6 +313,18 @@ export async function signedInAs(
   return context.newPage()
 }
 
+/**
+ * An e-mailed link, to be followed on the origin under test. The platform writes a link with its configured address (APP_URL, the
+ * development host), and a person reaches the same Console, with the same path and the same secrets in the fragment, wherever it is served.
+ * The functional journeys run against the production BUILD, so following the link as written would leave that origin for the Vite
+ * development server in the middle of a journey. The link itself is still asserted as the platform wrote it; only where the browser goes
+ * changes.
+ */
+export function onOriginUnderTest(link: string, baseURL: string): string {
+  const written = new URL(link)
+  return `${new URL(baseURL).origin}${written.pathname}${written.search}${written.hash}`
+}
+
 /** The invitation the platform mailed to an address: the whole link (with the token in its fragment), once it arrives. */
 export async function invitationEmailedTo(
   request: APIRequestContext,

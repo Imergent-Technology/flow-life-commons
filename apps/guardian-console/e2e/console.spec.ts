@@ -10,6 +10,7 @@ import {
   messageIdsTo,
   meStatus,
   nextCode,
+  onOriginUnderTest,
   replayedStatus,
   scriptVisibleCookies,
   sessionCookie,
@@ -483,7 +484,7 @@ test.describe('a forgotten password', () => {
 
     // Follow the link, as a person does. Viewing it spends nothing.
     const viewer = await freshPage(browser, url)
-    await viewer.goto(link ?? '')
+    await viewer.goto(onOriginUnderTest(link ?? '', url))
     await expect(
       viewer.getByRole('heading', { level: 1, name: 'Choose a new password' }),
     ).toBeVisible()
@@ -501,7 +502,7 @@ test.describe('a forgotten password', () => {
     await viewer.context().close()
 
     // Use it. A refused password does not spend the token.
-    await anonymous.goto(link ?? '')
+    await anonymous.goto(onOriginUnderTest(link ?? '', url))
     await anonymous.getByLabel('New password', { exact: true }).fill('too short')
     await anonymous.getByLabel('Confirm new password').fill('too short')
     await anonymous.getByRole('button', { name: 'Set new password' }).click()

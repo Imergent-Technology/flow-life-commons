@@ -15,7 +15,6 @@ const GUARDIAN = 'e2e.guardian@example.org'
 const GUARDIAN_PASSWORD = 'e2e-fixture-password-not-a-secret'
 const GUARDIAN_SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
 const SESSION_COOKIE = '__Host-flowlife-session'
-const HOST = 'commons.flowlife.localhost'
 
 interface Api {
   status: number
@@ -73,7 +72,7 @@ test.describe('Guardian Console session authentication', () => {
     expect(session, 'the __Host- session cookie was rejected by Chromium').toBeDefined()
     expect(session).toMatchObject({
       name: SESSION_COOKIE,
-      domain: HOST, // host-only: no leading dot, so no Domain attribute was sent
+      domain: new URL(page.url()).hostname, // the origin under test; host-only: no leading dot, so no Domain attribute was sent
       path: '/',
       secure: true,
       httpOnly: true,
@@ -82,7 +81,7 @@ test.describe('Guardian Console session authentication', () => {
 
     // The token cookie is readable by script on purpose; the session cookie must not be.
     const xsrf = await cookie(page, 'XSRF-TOKEN')
-    expect(xsrf).toMatchObject({ domain: HOST, httpOnly: false })
+    expect(xsrf).toMatchObject({ domain: new URL(page.url()).hostname, httpOnly: false })
     const visibleToScript = await scriptVisibleCookies(page)
     expect(visibleToScript).toContain('XSRF-TOKEN=')
     expect(visibleToScript).not.toContain('flowlife-session')
@@ -197,8 +196,8 @@ test.describe('Guardian Console session authentication', () => {
       (await api(page, 'POST', '/api/v1/login', { email: EMAIL, password: PASSWORD })).status,
     ).toBe(200)
 
-    // A different SITE: the gateway's catch-all answers here, and 127.0.0.1 is not
-    // commons.flowlife.localhost. It attacks with the user's browser and their cookies.
+    // A different SITE: the gateway's catch-all answers here, and 127.0.0.1 is not the origin under test. It attacks that origin, with
+    // the user's browser and their cookies.
     const attacker = await context.newPage()
     await attacker.goto(`http://127.0.0.1:${new URL(page.url()).port}/`)
     const attempt = await attacker.evaluate(
@@ -213,7 +212,7 @@ test.describe('Guardian Console session authentication', () => {
           return 'refused by the browser'
         }
       },
-      `http://${HOST}:${new URL(page.url()).port}/api/v1/logout`,
+      `http://${new URL(page.url()).host}/api/v1/logout`,
     )
     await attacker.close()
     expect(['sent', 'refused by the browser']).toContain(attempt)
@@ -237,7 +236,7 @@ test.describe('Guardian Console session authentication', () => {
           return 'blocked by CORS'
         }
       },
-      `http://${HOST}:${new URL(page.url()).port}/api/v1/me`,
+      `http://${new URL(page.url()).host}/api/v1/me`,
     )
 
     expect(outcome).toBe('blocked by CORS')
@@ -249,10 +248,11 @@ test.describe('Guardian Console session authentication', () => {
   }) => {
     // Node cannot resolve *.localhost, so talk to the gateway by address and present the
     // real hostname, marking the request as the browser would if it came from another site.
-    const port = new URL(baseURL ?? '').port
+    const origin = new URL(baseURL ?? '')
+    const port = origin.port
     for (const site of ['cross-site', 'same-site']) {
       const response = await request.post(`http://127.0.0.1:${port}/api/v1/login`, {
-        headers: { Host: `${HOST}:${port}`, 'Sec-Fetch-Site': site, Accept: 'application/json' },
+        headers: { Host: origin.host, 'Sec-Fetch-Site': site, Accept: 'application/json' },
         data: { email: EMAIL, password: PASSWORD },
       })
       expect(response.status(), site).toBe(419)

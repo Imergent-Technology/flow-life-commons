@@ -8,6 +8,7 @@ import {
   invitationEmailedTo,
   meStatus,
   nextCode,
+  onOriginUnderTest,
   recoveryCodesFor,
   signedInAs,
   unique,
@@ -224,7 +225,7 @@ test.describe.serial('inviting, changing access, disabling and re-enabling someo
     const mail = await invitationEmailedTo(request, baseURL ?? '', invitee.email)
     expect(mail.link).toContain('/accept-invitation#token=') // in the FRAGMENT, out of access logs
     expect(mail.link).not.toContain('?token=')
-    await person.goto(mail.link)
+    await person.goto(onOriginUnderTest(mail.link, baseURL ?? ''))
   })
 
   test('the invitee accepts it, their email is VERIFIED, and they enrol before entering the Console', async () => {

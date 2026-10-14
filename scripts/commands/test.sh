@@ -107,12 +107,17 @@ test_e2e() {
     if ! [[ "$codes" =~ ^[0-9]+$ ]] || ((codes < 100)); then
         die "e2e presents many second-factor codes from one address, but the platform allows only '${codes:-unset}' per address per window. Set IDENTITY_MFA_MAX_PER_IP=200 in apps/platform/.env (see .env.example) and retry."
     fi
-    # The browser security journeys (e2e/security.spec.ts) run against the gateway's
-    # production-equivalent site, which serves the Console's real production BUILD under the production
-    # security headers. Building it here is what makes that surface the thing being tested rather than
-    # whatever happened to be in dist/ from an earlier day.
-    step "Building the Guardian Console (the production-equivalent origin serves this build)"
+    # Every browser journey except the development gateway's (e2e/gateway.spec.ts, which needs Vite) runs against the Console's real
+    # production BUILD, served beside the real API under the production security headers by the gateway's production-equivalent site
+    # (prod.flowlife.localhost). Building it here is what makes that surface the thing being tested rather than whatever happened to be
+    # in dist/ from an earlier day. The directory's CONTENTS are removed first (never the directory: the gateway mounts it), so a build
+    # that fails, or writes nothing, cannot leave an earlier one behind to be tested in its place; the build and its verification must
+    # both succeed or the run stops here; and e2e/globalSetup.ts then refuses a build that is missing, incomplete or older than its
+    # source, or an origin that is serving a different one. See docs/development/testing.md.
+    step "Building the Guardian Console (the browser journeys run against this build, served by the production-equivalent origin)"
+    find apps/guardian-console/dist -mindepth 1 -delete 2>/dev/null || true
     node_run npm run build
+    node_run npm run verify:build
     step "Migrating the development database (a newer schema than the stack was built with would fail the seed)"
     php_run php artisan migrate --force --no-interaction
     step "Seeding the e2e fixture account (development only)"

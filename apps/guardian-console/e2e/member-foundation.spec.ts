@@ -11,6 +11,7 @@ import {
   messageIdsTo,
   mailpit,
   nextCode,
+  onOriginUnderTest,
   signOut,
   unique,
 } from './support.ts'
@@ -202,7 +203,7 @@ test.describe.serial('Journey A — inviting an existing Person to Commons (WP5,
       'You have been invited to Flow Life Commons',
     )
 
-    await person.goto(mail.link)
+    await person.goto(onOriginUnderTest(mail.link, baseURL ?? ''))
   })
 
   test('the invitee accepts through the neutral Commons page, and the Account becomes active', async () => {
