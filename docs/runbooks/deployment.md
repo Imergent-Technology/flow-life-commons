@@ -3,9 +3,9 @@
 - **Purpose:** put a release of the Commons platform onto the production host, and get it off again when it is wrong.
 - **Owner:** whoever holds the hosting account and server access.
 - **Design:** [ADR 0027](../adr/0027-release-and-deployment-model.md). Read it once before the first deployment; this runbook assumes its decisions rather than re-arguing them.
-- **Last tested:** the **host capabilities** this procedure depends on were probed directly on 2026-09-21 and are recorded in [production readiness](production-readiness.md), section 4. **The procedure itself was executed end to end for the first time on 2026-09-22**, first deployment through administrator bootstrap, bringing v0.1.1 fully live. It has been repeated since; most recently for v0.2.1 ([§11](#11-later-deployments)).
+- **Last tested:** the **host capabilities** this procedure depends on were probed directly on 2026-09-21 and are recorded in [production readiness](production-readiness.md), section 4. **The procedure itself was executed end to end for the first time on 2026-09-22**, first deployment through administrator bootstrap, bringing v0.1.1 fully live. It has been repeated since; production now runs **v0.3.0** ([§11](#11-later-deployments)).
 
-> **Status: VERIFIED manually on production.** The full procedure — first deployment, maintenance mode, migrations, caches, administrator bootstrap, scheduler cron, and normal-traffic verification — was first executed end to end on the real host on 2026-09-22, for v0.1.1, and has been repeated since for v0.2.0 and v0.2.1. It is still entirely manual and nothing on the host is automated; see [the first-deployment closure record](#10-first-production-deployment-closure-2026-09-22) and [later deployments](#11-later-deployments) below.
+> **Status: VERIFIED manually on production.** The full procedure — first deployment, maintenance mode, migrations, caches, administrator bootstrap, scheduler cron, and normal-traffic verification — was first executed end to end on the real host on 2026-09-22, for v0.1.1, and has been repeated since for v0.2.0, v0.2.1 and v0.3.0, which production runs now. It is still entirely manual and nothing on the host is automated; see [the first-deployment closure record](#10-first-production-deployment-closure-2026-09-22) and [later deployments](#11-later-deployments) below.
 >
 > The `current` symlink swap **is** observed immediately by both PHP and static requests, and **no opcache reset, restart or wait is required** — measured on 2026-09-21 and again across the real release swap on 2026-09-22. The maintenance mechanism is verified end to end on production, including the rewrite condition reading the flag through the storage symlink, and including the `/api` and `/up` carve-out under real Apache + LSAPI.
 >
@@ -31,7 +31,7 @@ A **release** is a tagged, built, validated artifact ([§8](#8-flow-release-the-
 2. A change **materially benefits from validation on the real host** — for example Apache/LSAPI behaviour, maintenance mode, production security headers or configuration, deployment or rollback mechanics, the scheduler or a future queue, filesystem or public-storage behaviour, outbound integrations or other host-sensitive services, or a schema migration where a real-host rehearsal has value.
 3. There is **another concrete reason** to expose the release on the real host.
 
-Ordinary application, frontend and visual changes do not need a deployment merely because a release exists. Deploy periodically anyway, so that this procedure does not rot. As of 2026-09-25 production has no live end users and serves mainly as a deployment and host-validation environment, and v0.3.0 is the likely next milestone deployment unless a host-sensitive change gives a reason sooner.
+Ordinary application, frontend and visual changes do not need a deployment merely because a release exists. Deploy periodically anyway, so that this procedure does not rot. As of 2026-09-25 production had no live end users and served mainly as a deployment and host-validation environment. v0.3.0 was then deployed ([§11](#11-later-deployments)). The next release from `main` carries everything since v0.3.0 and is `restore-required`; what it needs first is in [next-release readiness](g10-release-readiness.md).
 
 ### `--previous` is the release on the host, not the previous tag
 
@@ -709,6 +709,12 @@ The design in [ADR 0027](../adr/0027-release-and-deployment-model.md) had, by 20
 ## 11. Later deployments
 
 The record of each deployment is its entry in `shared/deploy.log` on the host (steps 17 and 14). This section keeps only what is worth having in the repository: a short note for a deployment that confirmed something about the procedure or the host. It is not a release-notes log; the architecture documents stay free of chronology on purpose.
+
+### v0.3.0 — release id `20260927T072528-2f385b7`
+
+- **What:** v0.3.0 (commit `2f385b79a7b83323c6f15a6685ee610ccd85b5bf`, annotated tag `v0.3.0`, reachable from `main`), the Guardian Console visual foundation ([ADR 0030](../adr/0030-guardian-console-visual-system.md)). The artifact was built at `2026-09-27T07:25:28Z`. It contained **no new migrations** over v0.2.1, so its `schema_rollback` was `not-applicable`: a rollback would have been switching `current` back to v0.2.1.
+- **How this is known:** the product owner ran `release:show` on the production host. It reported this release id, commit, build time, previous release (v0.2.1) and classification. This entry was added during G6 planning (2026-10-15), because the deployment had not been recorded here. **The date production was switched to v0.3.0 was not independently confirmed**, and the build time above is not a deployment time.
+- **What it means for the next release:** v0.3.0 is the `--previous` baseline for a build from `main`, provided production still runs it when the artifact is built (read it again with `release:show`; see [`--previous` is the release on the host](#--previous-is-the-release-on-the-host-not-the-previous-tag)). That release carries 14 migrations and is `restore-required` ([next-release readiness](g10-release-readiness.md)).
 
 ### v0.2.1 — release id `20260925T020248-78d4868`
 
