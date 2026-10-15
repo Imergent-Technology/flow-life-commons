@@ -579,28 +579,47 @@ paths:
       summary: Change the signed-in account's password
       description: >-
         Changes the password of the signed-in account. **A session alone is not enough:** the
-        caller must re-prove the **current password**, which is the re-authentication control
-        until step-up authentication (MFA) exists. The current password is verified against the
-        credential as it is at the moment of the change, under a lock, so a reset or change that
-        committed a moment ago is honoured; a concurrent disable wins and the answer is `401`.
+        caller must re-prove the **current password**, and **if the account has an authenticator, a
+        fresh second factor as well** (an authenticator `code` or one unused `recovery_code`). An
+        account **without** an authenticator changes its password on the current password alone.
+
+
+        **The server decides whether a second factor is required**, from the account as it is at
+        the moment of the change and under the account's lock: nothing the client sends or knows
+        (including `GET /me`'s `mfa.enrolled`) is believed. So an authenticator enrolled or reset a
+        moment ago is honoured. A request that omits the factor for an account that needs it is
+        answered `422` with `errors.code`; one that sends a factor for an account that has none is
+        not harmed by it (the factor is neither checked nor spent). The current password is
+        verified against the credential as it is at the moment of the change, so a reset or change
+        that committed a moment ago is honoured; a concurrent disable wins and the answer is `401`.
+        A session's earlier sign-in, or its recent security verification, never stands in for the
+        factor.
 
 
         On success:
 
         - every **other** session of the account is ended;
 
+        - the account's security generation advances (ADR 0025);
+
         - **this** session is rotated: a new session id and CSRF token (the response carries the
           new cookies, and the old session id stops working), and
 
-        - its **authentication instant is restarted**: the current password was just proved, so
-          the 12-hour absolute lifetime runs from now (`GET /me` shows the new
-          `session.authenticated_at`).
+        - **nothing else about it changes.** A password change is **not a sign-in**: the session's
+          `authenticated_at` (and so its 12-hour absolute expiry, `session.absolute_expires_at` in
+          `GET /me`) and its recent-security-verification instant are carried over exactly as they
+          were. Changing a password never extends how long a session can live.
 
 
-        A wrong current password, or a new password that does not meet the policy, changes
-        nothing at all, including the session. Repeated wrong attempts are rate limited per
-        account and per source address, so a stolen session cannot be used to guess the current
-        password. Stateful: needs the session cookie and CSRF token like `POST /logout`.
+        Everything that can refuse does so before anything is written, and a spent recovery code or
+        authenticator time step is rolled back with the change. A wrong current password, a missing,
+        wrong or already-used second factor, or a new password that does not meet the policy changes
+        **nothing at all**: not the password, not any session, not the security generation, not a
+        recovery code or time step. A recovery code, once used, is spent; an authenticator code is
+        accepted once. Attempts are rate limited per account and per source address (one allowance
+        covers the password and the factor, each request counting once), so a stolen session cannot
+        be used to guess either. Stateful: needs the session cookie and CSRF token like
+        `POST /logout`.
       tags: [Authentication]
       security:
         - sessionCookie: []
@@ -631,9 +650,11 @@ paths:
                 $ref: '#/components/schemas/Message'
         '422':
           description: >-
-            Nothing was changed. `errors.current_password` if the current password is wrong,
-            `errors.password` for a new password that does not meet the policy (with a reason for
-            each), or a confirmation that does not match.
+            Nothing was changed. `errors.current_password` if the current password is wrong;
+            `errors.code` (or `errors.recovery_code`, when that is what was sent) if the account has
+            an authenticator and the second factor is missing, wrong or already used; `errors.password`
+            for a new password that does not meet the policy (with a reason for each), or a
+            confirmation that does not match.
           content:
             application/json:
               schema:
@@ -6966,6 +6987,11 @@ components:
           description: Must equal `password` once both are normalised. Secret.
     ChangePasswordRequest:
       type: object
+      description: >-
+        The current password, the new one and, **only when the account has an authenticator**, a
+        second factor: `code` OR `recovery_code`, never both. Whether the account has an
+        authenticator is decided by the server (see `POST /password/change`); an account without
+        one sends neither.
       required: [current_password, password, password_confirmation]
       properties:
         current_password:
@@ -6986,6 +7012,21 @@ components:
           format: password
           writeOnly: true
           description: Must equal `password` once both are normalised. Secret.
+        code:
+          type: string
+          maxLength: 32
+          writeOnly: true
+          description: >-
+            A fresh 6-digit code from the authenticator app (spaces are ignored). Required when the
+            account has an authenticator, unless `recovery_code` is sent. Each code is accepted once.
+            Secret.
+        recovery_code:
+          type: string
+          maxLength: 64
+          writeOnly: true
+          description: >-
+            One of the account's single-use recovery codes, in place of `code`. Spent when the
+            change succeeds. Secret.
     ForgotPasswordRequest:
       type: object
       required: [email]

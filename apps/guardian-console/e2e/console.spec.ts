@@ -113,6 +113,15 @@ async function authenticatedAt(page: Page): Promise<string> {
   })
 }
 
+/** The latest the session can last, as the platform reports it. */
+async function sessionEnd(page: Page): Promise<string> {
+  return page.evaluate(async () => {
+    const response = await fetch('/api/v1/me')
+    return ((await response.json()) as { session: { absolute_expires_at: string } }).session
+      .absolute_expires_at
+  })
+}
+
 test.describe('signing in and out of the Console', () => {
   test('an unauthenticated visitor is sent to sign in, and sign-in works by keyboard alone, returns them to where they were headed, survives a refresh, and signing out ends it for good', async ({
     page,
@@ -224,6 +233,7 @@ test.describe('signing in and out of the Console', () => {
     await context.clearCookies({ name: '__Host-flowlife-session' })
 
     await page.getByLabel('Current password').fill('whatever it was')
+    await page.getByLabel('Authentication code').fill('123456') // this Account has an authenticator; the session is gone anyway
     await page.getByLabel('New password', { exact: true }).fill(unique('nope'))
     await page.getByLabel('Confirm new password').fill('does not matter now')
     await page.getByRole('button', { name: 'Change password' }).click()
@@ -579,13 +589,17 @@ test.describe('changing a password while signed in', () => {
     await expect(consoleHeading(page)).toBeVisible()
     const before = await sessionCookie(page.context())
     const startedBefore = await authenticatedAt(page)
+    const endBefore = await sessionEnd(page)
     await page.waitForTimeout(1100) // instants are whole seconds
 
     await goToAccountSecurity(page)
     await expect(page.getByRole('heading', { level: 1, name: 'Account security' })).toBeVisible()
 
     // A wrong current password changes nothing, and says which field.
+    // (This Account has an authenticator, so the form asks for a code too; the password is judged first, so the
+    // code here is never looked at, and so is not spent.)
     await page.getByLabel('Current password').fill('definitely not the current one')
+    await page.getByLabel('Authentication code').fill('000000')
     await page.getByLabel('New password', { exact: true }).fill(newPassword)
     await page.getByLabel('Confirm new password').fill(newPassword)
     await page.getByRole('button', { name: 'Change password' }).click()
@@ -596,8 +610,25 @@ test.describe('changing a password while signed in', () => {
     expect(await replayedStatus(request, url, before?.value ?? '')).toBe(200) // untouched
     expect(await authenticatedAt(page)).toBe(startedBefore)
 
-    // The right one changes it, and the person stays signed in.
+    // The right password but no code: the field is required, so the browser stops the submit and puts focus there.
     await page.getByLabel('Current password').fill(CHANGER.password)
+    await expect(page.getByLabel('Authentication code')).toHaveValue('') // a refused code is dropped
+    await page.getByRole('button', { name: 'Change password' }).click()
+    await expect(page.getByLabel('Authentication code')).toBeFocused()
+    await expect(page.getByText(/Your password has been changed/)).toHaveCount(0)
+
+    // The right password and a WRONG code: one sentence on the code field, and the typed code is dropped.
+    await page.getByLabel('Authentication code').fill('000000')
+    await page.getByRole('button', { name: 'Change password' }).click()
+    await expect(page.getByLabel('Authentication code')).toHaveAccessibleDescription(
+      /The code is not valid/,
+    )
+    await expect(page.getByLabel('Authentication code')).toBeFocused()
+    await expect(page.getByLabel('Authentication code')).toHaveValue('')
+    expect(await replayedStatus(request, url, before?.value ?? '')).toBe(200) // still untouched
+
+    // The right password and a right code: changed, and the person stays signed in.
+    await page.getByLabel('Authentication code').fill(await nextCode(CHANGER.secret))
     await page.getByRole('button', { name: 'Change password' }).click()
     await expect(
       page.getByText('Your password has been changed. Other devices have been signed out.'),
@@ -606,8 +637,10 @@ test.describe('changing a password while signed in', () => {
     await expect(page.getByRole('button', { name: /account menu/i })).toBeVisible()
     expect(await meStatus(page)).toBe(200)
 
-    // The platform rotated the session: re-dated, and the id that was copied before is dead.
-    expect(await authenticatedAt(page)).not.toBe(startedBefore)
+    // The platform rotated the session, which keeps its ORIGINAL start (a password change is not a sign-in, G6
+    // WP1-01), and the id that was copied before is dead.
+    expect(await authenticatedAt(page)).toBe(startedBefore)
+    expect(await sessionEnd(page)).toBe(endBefore)
     expect(await replayedStatus(request, url, before?.value ?? '')).toBe(401)
     // No session identifier is ever put on the page.
     await expect(page.locator('body')).not.toContainText(/flowlife-session|session id/i)

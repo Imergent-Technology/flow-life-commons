@@ -27,6 +27,18 @@ final class MfaProblems
         ], 422);
     }
 
+    /**
+     * The Account has an authenticator and the request carried no code (changing a password, G6 WP1-01). Said on the
+     * field the person fills in; it reveals nothing the signed-in person's own `/me` does not already say.
+     */
+    public static function codeRequired(): JsonResponse
+    {
+        return response()->json([
+            'message' => 'Enter a code from your authenticator app, or a recovery code.',
+            'errors' => ['code' => ['Enter a code from your authenticator app, or a recovery code.']],
+        ], 422);
+    }
+
     /** A half-finished sign-in that cannot be continued. Identical for every reason. */
     public static function signInExpired(): JsonResponse
     {
@@ -37,6 +49,10 @@ final class MfaProblems
     {
         if ($e->reason === SecondFactorFailure::InvalidCode) {
             return self::invalidCode($e->method);
+        }
+
+        if ($e->reason === SecondFactorFailure::CodeRequired) {
+            return self::codeRequired();
         }
 
         // No authenticator setup in progress (or none to replace): say so, on the field it concerns.

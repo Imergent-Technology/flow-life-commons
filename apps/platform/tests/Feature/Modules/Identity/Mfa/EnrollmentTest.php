@@ -124,6 +124,61 @@ it('does not enrol anything by generating a secret: the Account is exactly as it
     expect(Mfa::isEnrolled($account))->toBeFalse();
 });
 
+it('is refused by every credential-management and step-up endpoint while enrolment is pending', function () {
+    // The password is proved and an authenticator is half set up: still not authentication (G6 WP1-04). A correct
+    // code from the pending secret is not a way in through any endpoint but the one that confirms the enrolment.
+    $account = Mfa::guardian();
+    $console = pendingEnrollment();
+    [$secret] = setup($console);
+
+    // (`mfa/authenticator/confirm` here is the REPLACEMENT's confirm, which needs a session; the enrolment's own is
+    // `mfa/enrollment/confirm`, covered below.)
+    foreach (Mfa::privilegedRequests(['code' => Totp::next($secret)]) as [$path, $body]) {
+        $console->post($path, $body)->assertUnauthorized();
+    }
+
+    expect(Mfa::isEnrolled($account))->toBeFalse()
+        ->and(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(0)
+        ->and(Identity::events('mfa.enabled'))->toBe([]);
+    $console->me()->assertUnauthorized();
+});
+
+it('ends the pending enrolment after the configured number of wrong codes, and not before', function (int $limit) {
+    config(['identity.mfa.max_challenge_failures' => $limit]);
+    $account = Mfa::guardian();
+    $console = pendingEnrollment();
+    [$secret] = setup($console);
+
+    // Each wrong code is answered as one; the last of them ends the pending sign-in.
+    for ($i = 0; $i < $limit; $i++) {
+        $console->post('/api/v1/mfa/enrollment/confirm', ['code' => '000000'])->assertUnprocessable();
+    }
+
+    // The pending sign-in is over: even the correct code cannot finish it, and the Account is not enrolled.
+    $console->post('/api/v1/mfa/enrollment/confirm', ['code' => Totp::next($secret)])->assertUnauthorized();
+    expect(Mfa::isEnrolled($account))->toBeFalse()
+        ->and(DB::table('account_recovery_codes')->count())->toBe(0)
+        ->and(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(0);
+    // The password must be proved again, which starts a fresh enrolment.
+    $again = pendingEnrollment();
+    setup($again);
+})->with([3, 5]);
+
+it('lets the right code enrol after one fewer wrong codes than the limit', function (int $limit) {
+    config(['identity.mfa.max_challenge_failures' => $limit]);
+    $account = Mfa::guardian();
+    $console = pendingEnrollment();
+    [$secret] = setup($console);
+
+    for ($i = 0; $i < $limit - 1; $i++) {
+        $console->post('/api/v1/mfa/enrollment/confirm', ['code' => '000000'])->assertUnprocessable();
+    }
+
+    $console->post('/api/v1/mfa/enrollment/confirm', ['code' => Totp::next($secret)])->assertOk();
+    expect(Mfa::isEnrolled($account))->toBeTrue();
+    $console->me()->assertOk();
+})->with([3, 5]);
+
 it('leaves MFA disabled, and no session, after a wrong code', function () {
     $account = Mfa::guardian();
     $console = pendingEnrollment();

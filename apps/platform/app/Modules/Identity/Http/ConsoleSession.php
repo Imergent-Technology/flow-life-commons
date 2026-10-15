@@ -22,7 +22,7 @@ use InvalidArgumentException;
  *
  * The session stores `authenticated_at`, the instant of authentication. It is what the
  * absolute lifetime is measured from, and it is independent of Laravel's sliding
- * `last_activity`. Re-authenticating writes a new one.
+ * `last_activity`. Only a sign-in (`establish`) writes one; nothing re-dates it afterwards.
  *
  * Multi-factor authentication (ADR 0023) adds two more, and one state that is NOT authentication:
  *
@@ -215,18 +215,20 @@ final readonly class ConsoleSession
     }
 
     /**
-     * The Account has just re-proved its credential (it changed its password with the current one), so
-     * the same session gets a NEW identity and a NEW authentication instant.
+     * Gives the same session a NEW identity, and nothing else: `regenerate(true)` is a new session id and CSRF token
+     * and the OLD row deleted (without the `true` the framework keeps it, so an id a thief may have copied would
+     * stay valid). What the session HAS proved is carried over exactly as it was: `authenticated_at` (so the
+     * 12-hour absolute lifetime of ADR 0016 still runs from the original sign-in), `second_factor_verified_at`,
+     * `security_verified_at` and the security generation.
      *
-     * - `regenerate(true)`: a new session id and CSRF token, and the OLD row deleted. Without the
-     *   `true` the framework keeps the old row, so the id a thief may have copied would stay valid.
-     * - `authenticated_at` is restarted: re-proving the credential is a fresh authentication, so the
-     *   12-hour absolute lifetime (ADR 0016: "re-authentication starts a new one") runs from now.
+     * For a credential change made on a live session (a password change). It is deliberately NOT a
+     * re-authentication: re-proving a credential does not restart the lifetime, because then anyone holding a
+     * session and the password could extend it for ever (G6 WP1-01). The only things that start a lifetime are
+     * `establish` (a sign-in) and nothing else.
      */
-    public function reauthenticate(Request $request): void
+    public function rotate(Request $request): void
     {
         $request->session()->regenerate(true);
-        $request->session()->put(self::AUTHENTICATED_AT, now()->getTimestamp());
     }
 
     /** The Account this session was authenticated as, read from the session itself. */

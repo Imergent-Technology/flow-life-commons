@@ -143,6 +143,35 @@ it('distrusts a verification instant that is missing, malformed or in the future
     'a negative number' => [-1],
 ]);
 
+it('trusts a verification instant up to 60 seconds ahead of this node\'s clock, and not a second further', function (int $ahead, bool $trusted) {
+    [$console] = Mfa::signedIn();
+
+    $console->tamperSession(function (Store $session) use ($ahead): void {
+        $session->put('security_verified_at', Carbon::now()->getTimestamp() + $ahead);
+    });
+
+    $trusted ? $console->get(SENSITIVE)->assertOk() : $console->get(SENSITIVE)->assertForbidden();
+})->with([
+    'in step' => [0, true],
+    'a minute ahead: tolerated skew' => [60, true],
+    'a second past the skew' => [61, false],
+]);
+
+it('ends a verification at exactly its maximum age: the last second before is trusted, the second itself is not', function (int $age, bool $trusted) {
+    [$console] = Mfa::signedIn();
+
+    $console->tamperSession(function (Store $session) use ($age): void {
+        $session->put('security_verified_at', Carbon::now()->getTimestamp() - $age);
+    });
+
+    $trusted ? $console->get(SENSITIVE)->assertOk() : $console->get(SENSITIVE)->assertForbidden();
+})->with([
+    'just verified' => [0, true],
+    'a second short of fifteen minutes' => [15 * 60 - 1, true],
+    'fifteen minutes exactly' => [15 * 60, false],
+    'a second past' => [15 * 60 + 1, false],
+]);
+
 it('does not take "recently verified" from anything the client sends', function () {
     Identity::savedActiveAccount();
     $console = new Console;

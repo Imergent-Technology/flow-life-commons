@@ -121,7 +121,7 @@ test.describe('signing in with an authenticator', () => {
     await page.reload()
     await expect(consoleHeading(page)).toBeVisible()
     await goToAccountSecurity(page)
-    await expect(page.getByText('Authenticator app')).toBeVisible()
+    await expect(page.getByText('Authenticator app', { exact: true })).toBeVisible()
     await expect(page.locator('body')).not.toContainText(LATER.secret)
     await expectOnlyUiPreferences(page)
     const output = logged.join('\n')
@@ -412,6 +412,9 @@ test.describe('a pending sign-in', () => {
       current_password: PENDING.password,
       password: newPassword,
       password_confirmation: newPassword,
+      // This Account has an authenticator, so the change needs a second factor too. A recovery code, so that the
+      // authenticator steps stay free for the waiting sign-in below.
+      recovery_code: recoveryCodesFor(PENDING.tag)[0] ?? '',
     })
     expect(changed.status).toBe(204)
 

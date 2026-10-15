@@ -59,7 +59,7 @@ Two independent bounds, because they defend against different things:
 | Bound | Value | Mechanism |
 | --- | --- | --- |
 | **Sliding inactivity** | 30 minutes | `SESSION_LIFETIME=30`. Laravel's session handler writes `last_activity` on each request and expires the session that long after the last one, so the framework's lifetime *is* a sliding timeout — no custom code |
-| **Absolute** | 12 hours | Ours: record `authenticated_at` when authentication succeeds, and reject/invalidate the session once that age is exceeded, **regardless of subsequent activity**. Re-authentication establishes a new absolute lifetime |
+| **Absolute** | 12 hours | Ours: record `authenticated_at` when authentication succeeds, and reject/invalidate the session once that age is exceeded, **regardless of subsequent activity**. A new **sign-in** establishes a new absolute lifetime; nothing else does (see the amendment at the end) |
 
 **Why both.** A sliding timeout protects the operator who walks away; it gives an attacker nothing, because whoever holds a stolen cookie can keep it alive indefinitely by making one request every 29 minutes. The absolute cap converts "indefinite" into "bounded", which is the residual risk of cookie authentication once the cookie itself is host-only. Laravel has no absolute-lifetime concept, so this is roughly fifteen lines of middleware plus a test — small enough to build now and awkward to retrofit later, since existing sessions would have no `authenticated_at`.
 
@@ -94,3 +94,7 @@ The cookie property was measured in Chromium against sibling hosts rather than a
 - **Bearer token held in the browser:** works across origins, but must live in `localStorage` (XSS-stealable, persistent) or memory (lost on refresh), and revocation is weaker. Unacceptable for the most privileged surface.
 - **Sanctum SPA mode across subdomains:** solves a problem we chose not to have, and requires the broader cookie scope rejected above.
 - **JWTs:** no practical server-side revocation; a stolen token stays valid to expiry.
+
+## Amendments
+
+- **2026-10-15 (G6 WP1-01): re-proving a credential is not a new sign-in.** The table above once read "Re-authentication establishes a new absolute lifetime", and the implementation applied it to a password change, which restarted `authenticated_at`. With a second factor in place that let anyone holding a stolen cookie and the password keep the session alive indefinitely, which is the property the absolute cap exists to prevent. The rule is now: **only a sign-in starts an absolute lifetime.** A password change, a step-up verification and a replaced authenticator rotate or refresh other state but never `authenticated_at`. Recorded in [identity and access](../architecture/identity-and-access.md#g6-wp1-corrections-2026-10-15).

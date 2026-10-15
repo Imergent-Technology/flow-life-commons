@@ -30,7 +30,7 @@ interface Errors {
 }
 
 interface Session {
-  session: { authenticated_at: string }
+  session: { authenticated_at: string; absolute_expires_at: string }
   capabilities: string[]
   account: { email: string }
 }
@@ -178,10 +178,14 @@ test.describe('the credential lifecycle, end to end', () => {
     })
     expect(changed.status).toBe(204)
 
-    // This session lives on, with a new authentication instant.
+    // This session lives on, and a password change is not a sign-in: its authentication instant (and so its
+    // absolute expiry) is the ORIGINAL one, not restarted (G6 WP1-01).
     const meAfter = await api(laptop, 'GET', '/api/v1/me')
     expect(meAfter.status).toBe(200)
-    expect((meAfter.body as Session).session.authenticated_at).not.toBe(authenticatedBefore)
+    expect((meAfter.body as Session).session.authenticated_at).toBe(authenticatedBefore)
+    expect((meAfter.body as Session).session.absolute_expires_at).toBe(
+      (meBefore.body as Session).session.absolute_expires_at,
+    )
 
     // The other browser was signed out by the change.
     expect((await api(phone, 'GET', '/api/v1/me')).status).toBe(401)

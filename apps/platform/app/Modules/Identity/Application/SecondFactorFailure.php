@@ -6,8 +6,8 @@ namespace App\Modules\Identity\Application;
 
 /**
  * Why a second-factor step was refused: a reason CLASS for the audit trail, never the submitted code.
- * Only InvalidCode is told to the caller as such; every other reason ends the half-finished sign-in and
- * reads to the caller as "start again".
+ * Only InvalidCode and CodeRequired are told to the caller as such; every other reason ends the
+ * half-finished sign-in and reads to the caller as "start again".
  */
 enum SecondFactorFailure: string
 {
@@ -18,4 +18,7 @@ enum SecondFactorFailure: string
     case NoPendingSecret = 'no_pending_secret';
     case AlreadyEnrolled = 'already_enrolled';
     case NotEnrolled = 'not_enrolled';
+
+    /** An Account with an authenticator changed its password without presenting a code (G6 WP1-01). */
+    case CodeRequired = 'code_required';
 }

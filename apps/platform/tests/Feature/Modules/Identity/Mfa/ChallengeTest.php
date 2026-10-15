@@ -54,6 +54,30 @@ it('does not sign in on a correct password alone: /me and every gate stay unauth
         ->and(Identity::events('authentication.succeeded'))->toBe([]);
 });
 
+it('is refused by every credential-management and step-up endpoint, however valid its proof looks, and spends nothing', function () {
+    // A pending sign-in has the password but not the second factor: it is NOT authentication. Each of these needs
+    // an authenticated session, so each answers 401 even when handed a correct code (G6 WP1-04).
+    [$console, $account, $factor] = pendingChallenge();
+
+    foreach (Mfa::privilegedRequests(['code' => Totp::next($factor['secret'])]) as [$path, $body]) {
+        $console->post($path, $body)->assertUnauthorized();
+    }
+    foreach (Mfa::privilegedRequests(['recovery_code' => $factor['codes'][0]]) as [$path, $body]) {
+        $console->post($path, $body)->assertUnauthorized();
+    }
+
+    // Nothing was verified, spent or established.
+    expect(Mfa::factorRow($account)?->last_used_step)->toBeNull()
+        ->and(Mfa::remainingCodes($account))->toBe(10)
+        ->and(DB::table('sessions')->whereNotNull('user_id')->count())->toBe(0)
+        ->and(Identity::events('security.reverified'))->toBe([])
+        ->and(Identity::events('mfa.recovery_codes_regenerated'))->toBe([])
+        ->and(Identity::events('authentication.succeeded'))->toBe([]);
+    $console->me()->assertUnauthorized();
+    // And the pending sign-in is still there to be finished properly.
+    $console->challenge($factor['secret'])->assertOk();
+});
+
 it('holds only the minimum in the pending sign-in: no password, hash, secret, code or capability', function () {
     [$console, , $factor] = pendingChallenge();
     $stored = Mfa::text(DB::table('sessions')->latest('last_activity')->value('payload'));
@@ -246,7 +270,7 @@ it('does not let a password replaced by another sign-in of the same Account fini
     // The person is signed in on another device and changes the password there.
     $other = new Console;
     $other->loginWithMfa('ada@example.org', Identity::PASSWORD, $factor['secret'])->assertOk();
-    $other->post('/api/v1/password/change', ['current_password' => Identity::PASSWORD, 'password' => Passwords::STRONG, 'password_confirmation' => Passwords::STRONG])->assertNoContent();
+    $other->post('/api/v1/password/change', ['current_password' => Identity::PASSWORD, 'password' => Passwords::STRONG, 'password_confirmation' => Passwords::STRONG, 'code' => Totp::next($factor['secret'])])->assertNoContent();
 
     $console->challenge($factor['secret'])->assertUnauthorized();
     $console->me()->assertUnauthorized();

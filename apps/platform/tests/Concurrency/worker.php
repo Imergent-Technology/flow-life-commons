@@ -193,9 +193,13 @@ try {
     } elseif ($operation === 'reset') {
         $app->make(ResetPassword::class)(EmailAddress::fromString($arg('email')), $arg('token'), $arg('password'), new ClientContext('127.0.0.1', 'worker'));
     } elseif ($operation === 'change') {
+        // A second factor only when the race supplies one (an Account with an authenticator needs it).
+        $proof = isset($decoded['recovery_code']) ? SecondFactorProof::recoveryCode($arg('recovery_code'))
+            : (isset($decoded['code']) ? SecondFactorProof::totp($arg('code')) : null);
         $app->make(ChangePassword::class)(
             Actor::user(AccountId::fromString($arg('account')), PersonId::fromString($arg('person'))),
             $arg('current'), $arg('password'), 'the-workers-own-session', new ClientContext('127.0.0.1', 'worker'),
+            $proof,
         );
     } elseif ($operation === 'request_reset') {
         $app->make(RequestPasswordReset::class)(EmailAddress::fromString($arg('email')), new ClientContext('127.0.0.1', 'worker'));

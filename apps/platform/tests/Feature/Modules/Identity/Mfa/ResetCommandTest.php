@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Identity\Application\AccountSecurityGeneration;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\PendingCommand;
@@ -32,6 +33,7 @@ it('resets the sole administrator after showing who it is and asking for the add
     $console = new Console;
     $console->loginWithMfa('root@example.org', Identity::PASSWORD, $factor['secret'])->assertOk();
     $hash = DB::table('accounts')->value('password_hash');
+    $generation = app(AccountSecurityGeneration::class)->current($root->id);
 
     resetMfaCommand(['email' => 'Root@Example.org'])
         ->expectsOutputToContain('Root Administrator')
@@ -46,7 +48,8 @@ it('resets the sole administrator after showing who it is and asking for the add
         ->and(DB::table('accounts')->value('password_hash'))->toBe($hash)
         ->and(DB::table('accounts')->value('status'))->toBe('active')
         ->and(Access::activeAdministrators())->toBe(1)
-        ->and(Identity::events('mfa.reset_from_server'))->toHaveCount(1);
+        ->and(Identity::events('mfa.reset_from_server'))->toHaveCount(1)
+        ->and(app(AccountSecurityGeneration::class)->current($root->id))->toBe($generation + 1);   // ADR 0025
     $console->me()->assertUnauthorized();
     (new Console)->login('root@example.org', Identity::PASSWORD)->assertStatus(202)->assertJson(['next' => 'enrollment']);
 });

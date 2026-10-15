@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Modules\Identity\Application\AccountSecurityGeneration;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Tests\Support\Access;
@@ -98,4 +99,23 @@ it('recovers the SOLE administrator when another administrator does it, and leav
 
     expect(Access::activeAdministrators())->toBe(2);
     (new Console)->login('locked@example.org', Identity::PASSWORD)->assertStatus(202)->assertJson(['next' => 'enrollment']);
+});
+
+it('advances the target\'s security generation, so even a session row that outlives the reset is refused (ADR 0025)', function () {
+    // The HTTP path (G6 WP1-04), shown on an ordinary Member whose session has NO Console access: nothing else
+    // (a second factor now due, a missing role) would end it, so only the generation can. The row is put back
+    // after the reset to stand for a session that a race left behind.
+    [$console] = Mfa::signedInAdmin();
+    [$member, $target] = Mfa::signedInMember('member@example.org', Totp::RFC_SECRET);
+    $member->me()->assertOk();
+    $generation = app(AccountSecurityGeneration::class)->current($target->id);
+    $survivor = DB::table('sessions')->where('user_id', $target->id->value)->first();
+    expect($survivor)->not->toBeNull();
+
+    $console->post("/api/v1/admin/accounts/{$target->id->value}/mfa/reset")->assertOk();
+
+    expect(app(AccountSecurityGeneration::class)->current($target->id))->toBe($generation + 1);
+    DB::table('sessions')->insert((array) $survivor);
+    $member->me()->assertUnauthorized();
+    expect(Identity::events('session.superseded'))->toHaveCount(1);
 });

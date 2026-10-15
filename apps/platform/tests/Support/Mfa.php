@@ -142,6 +142,23 @@ final class Mfa
         return [$console, $account, $factor];
     }
 
+    /**
+     * Every authenticated credential-management and step-up request, with valid-looking proof in its body, as a
+     * list of [path, body]: what a pending sign-in (password proved, second factor not) must NOT be able to use.
+     *
+     * @param  array<string, string>  $proof  `code` or `recovery_code`
+     * @return list<array{string, array<string, string>}>
+     */
+    public static function privilegedRequests(array $proof): array
+    {
+        return [
+            ['/api/v1/security/verify', ['current_password' => Identity::PASSWORD, ...$proof]],
+            ['/api/v1/mfa/recovery-codes', ['current_password' => Identity::PASSWORD, ...$proof]],
+            ['/api/v1/mfa/authenticator', ['current_password' => Identity::PASSWORD, ...$proof]],
+            ['/api/v1/mfa/authenticator/confirm', $proof],
+        ];
+    }
+
     /** The whole text of every recorded security event, for asserting what must never be in it. */
     public static function auditText(): string
     {

@@ -84,11 +84,33 @@ describe('password change', () => {
     await user.type(screen.getByLabelText('Confirm new password'), 'a long enough new passphrase')
     await user.click(screen.getByRole('button', { name: 'Change password' }))
 
-    expect(
-      await screen.findByText(
-        'Your password has been changed. Other devices have been signed out.',
-      ),
-    ).toBeVisible()
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Your password has been changed. Other devices have been signed out.',
+    )
+    // An ordinary Member with no authenticator is not asked for a code, and none is sent.
+    expect(screen.queryByLabelText('Authentication code')).not.toBeInTheDocument()
+    expect(api.callsTo('POST /api/v1/password/change')[0]?.body).not.toHaveProperty('code')
+  })
+
+  it('asks a Member who HAS an authenticator for a code, and sends it (the same shared form)', async () => {
+    const api = serve(true)
+    api.on('POST /api/v1/password/change', empty())
+    const user = userEvent.setup()
+    await openSecurity()
+
+    await user.type(screen.getByLabelText('Current password'), PASSWORD)
+    await user.type(screen.getByLabelText('Authentication code'), '654321')
+    await user.type(screen.getByLabelText('New password'), 'a long enough new passphrase')
+    await user.type(screen.getByLabelText('Confirm new password'), 'a long enough new passphrase')
+    await user.click(screen.getByRole('button', { name: 'Change password' }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Your password has been changed.')
+    expect(api.callsTo('POST /api/v1/password/change')[0]?.body).toEqual({
+      current_password: PASSWORD,
+      password: 'a long enough new passphrase',
+      password_confirmation: 'a long enough new passphrase',
+      code: '654321',
+    })
   })
 })
 

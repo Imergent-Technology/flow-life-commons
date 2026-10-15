@@ -31,7 +31,9 @@ Route::middleware('stateful')->group(function (): void {
     Route::post('logout', LogoutController::class)->name('api.v1.logout');
     Route::get('me', MeController::class)->middleware('auth:web')->name('api.v1.me');
     // Authenticated, so on the session surface with CSRF. Any signed-in Account may change its own
-    // password: authentication is the whole requirement, plus the current password in the body.
+    // password, with the current password in the body. An Account that has an authenticator must also
+    // present a fresh second factor (a code or an unused recovery code); an Account without one stays
+    // password-only. The use case decides which, from the Account itself, under its row lock.
     Route::post('password/change', ChangePasswordController::class)->middleware('auth:web')->name('api.v1.password.change');
 
     /*

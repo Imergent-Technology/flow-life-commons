@@ -36,7 +36,7 @@ final readonly class MfaAudit
     }
 
     /**
-     * A second-factor step was refused. `$during` is `sign_in` or `security_verification`. The Account is
+     * A second-factor step was refused. `$during` is `sign_in`, `security_verification` or `password_change`. The Account is
      * the subject where it exists; nobody is authenticated for a sign-in, so there is no actor.
      */
     public function challengeFailed(?Account $account, SecondFactorFailure $reason, string $during, ClientContext $client): void

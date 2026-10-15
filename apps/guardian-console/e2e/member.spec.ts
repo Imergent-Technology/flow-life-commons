@@ -133,6 +133,8 @@ test.describe('a non-Console Account changing its own password', () => {
     expect(new URL(page.url()).pathname).toBe('/my/security')
     // No two-step verification section: this Account has no authenticator, and nothing here invents one.
     await expect(page.getByRole('heading', { name: 'Two-step verification' })).toHaveCount(0)
+    // ...and so it is not asked for a code when it changes its password.
+    await expect(page.getByLabel('Authentication code')).toHaveCount(0)
 
     const next = unique('member-security')
     await page.getByLabel('Current password').fill(MEMBER_CHANGE.password)
