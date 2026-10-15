@@ -134,11 +134,19 @@ export function resetPassword(input: {
   })
 }
 
-/** Signed in: a 401 here means the session ended (see `onSessionRejected`). */
+/**
+ * Signed in: a 401 here means the session ended (see `onSessionRejected`).
+ *
+ * `proof` is the second factor the person typed, and is sent ONLY when they were asked for one. Whether the
+ * Account has an authenticator is the server's decision, made under the Account's lock; a request that omits the
+ * proof for an Account that needs it is refused with a message on the `code` field, and one that includes it for
+ * an Account that does not is not hurt by it.
+ */
 export function changePassword(input: {
   currentPassword: string
   password: string
   passwordConfirmation: string
+  proof?: SecondFactorProof | undefined
 }): Promise<Result<null>> {
   return requestVoid({
     method: 'POST',
@@ -148,6 +156,7 @@ export function changePassword(input: {
       current_password: input.currentPassword,
       password: input.password,
       password_confirmation: input.passwordConfirmation,
+      ...(input.proof === undefined ? {} : proofBody(input.proof)),
     },
   })
 }

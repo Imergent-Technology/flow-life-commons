@@ -12,6 +12,7 @@ import {
   sessionCookie,
   signOut,
   totpForStep,
+  unique,
 } from './support.ts'
 
 // Two-step verification in the Console (ADR 0023), in real Chromium through the real gateway. The accounts are
@@ -53,6 +54,12 @@ const STALE: Fixture = {
   password: 'e2e-mfa-stale-password-not-a-secret',
   secret: 'ON2GC3DFFVZWK5DVOAWWKMTFFVTGS6BB',
   tag: 'V',
+}
+const CHANGE: Fixture = {
+  email: 'e2e.ui.change@example.org',
+  password: 'e2e-ui-change-password-not-a-secret',
+  secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+  tag: 'C',
 }
 const PENDING: Fixture = {
   email: 'e2e.mfa.pending@example.org',
@@ -162,6 +169,85 @@ test.describe('signing in with an authenticator', () => {
     await expect(consoleHeading(page)).toBeVisible()
     await goToAccountSecurity(page)
     expect(await recoveryLeft(page)).toBe('8')
+  })
+})
+
+/** `session.authenticated_at` and `session.absolute_expires_at`, as the page itself would read them from /me. */
+async function sessionTimes(page: Page): Promise<{ startedAt: string; endsAt: string }> {
+  return page.evaluate(async () => {
+    const me = (await (await fetch('/api/v1/me')).json()) as {
+      session: { authenticated_at: string; absolute_expires_at: string }
+    }
+    return { startedAt: me.session.authenticated_at, endsAt: me.session.absolute_expires_at }
+  })
+}
+
+test.describe('changing the password of an Account with an authenticator', () => {
+  test('needs the current password AND a code, spends nothing on a refusal, and never extends the session', async ({
+    browser,
+    baseURL,
+  }) => {
+    test.setTimeout(90_000)
+    const page = await freshPage(browser, baseURL ?? '')
+    const logged = captureConsole(page)
+    const codes = recoveryCodesFor(CHANGE.tag)
+    const changed = unique('changed')
+
+    await passwordStep(page, CHANGE)
+    await submitCode(page, CHANGE.secret)
+    await expect(consoleHeading(page)).toBeVisible()
+    await goToAccountSecurity(page)
+    const before = await sessionTimes(page)
+    await page.waitForTimeout(1100) // instants are whole seconds
+
+    // The form asks for the code because the Account has an authenticator.
+    const password = page.getByLabel('Current password')
+    await expect(page.getByLabel('Authentication code')).toBeVisible()
+    await password.fill(CHANGE.password)
+    await page.getByLabel('New password', { exact: true }).fill(changed)
+    await page.getByLabel('Confirm new password').fill(changed)
+
+    // No code: the field is required, so the browser stops the submit and puts focus there; nothing is sent.
+    await page.getByRole('button', { name: 'Change password' }).click()
+    await expect(page.getByLabel('Authentication code')).toBeFocused()
+    await expect(page.getByText(/Your password has been changed/)).toHaveCount(0)
+    expect(await meStatus(page)).toBe(200)
+
+    // A wrong code: one sentence, on the field; the typed code is dropped, the passwords stay.
+    await page.getByLabel('Authentication code').fill('000000')
+    await page.getByRole('button', { name: 'Change password' }).click()
+    await expect(page.getByLabel('Authentication code')).toHaveAccessibleDescription(
+      /The code is not valid/,
+    )
+    await expect(page.getByLabel('Authentication code')).toHaveValue('')
+    await expect(page.getByLabel('Current password')).toHaveValue(CHANGE.password)
+    expect(await meStatus(page)).toBe(200)
+
+    // The right code: changed, and the session is the SAME one in every way that matters.
+    await page.getByLabel('Authentication code').fill(await nextCode(CHANGE.secret))
+    await page.getByRole('button', { name: 'Change password' }).click()
+    await expect(page.getByText(/Your password has been changed/)).toBeVisible()
+    await expect(page.getByText(/time limit is unchanged/)).toBeVisible()
+    expect(await meStatus(page)).toBe(200)
+    expect(await sessionTimes(page)).toEqual(before)
+    await expect(page.getByLabel('Current password')).toHaveValue('')
+    await expect(page.getByLabel('Authentication code')).toHaveValue('')
+
+    // Put it back with a recovery code (single use; `./flow test e2e` reseeds them), so the fixture is reusable.
+    await page.getByLabel('Current password').fill(changed)
+    await page.getByLabel('New password', { exact: true }).fill(CHANGE.password)
+    await page.getByLabel('Confirm new password').fill(CHANGE.password)
+    await page.getByRole('button', { name: 'Use a recovery code instead' }).click()
+    await page.getByLabel('Recovery code').fill(codes[0] ?? '')
+    await page.getByRole('button', { name: 'Change password' }).click()
+    await expect(page.getByText(/Your password has been changed/)).toBeVisible()
+    expect(await sessionTimes(page)).toEqual(before)
+
+    for (const forbidden of [CHANGE.password, changed, CHANGE.secret, codes[0] ?? '']) {
+      expect(logged.join('\n')).not.toContain(forbidden)
+    }
+    await expectOnlyUiPreferences(page)
+    await page.context().close()
   })
 })
 

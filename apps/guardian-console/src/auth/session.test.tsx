@@ -463,6 +463,8 @@ describe('an ended session', () => {
     renderApp('/account/security')
 
     await user.type(await screen.findByLabelText('Current password'), 'old password value')
+    // This Account has an authenticator, so the form asks for a code too.
+    await user.type(screen.getByLabelText('Authentication code'), '123456')
     await user.type(screen.getByLabelText('New password'), 'a brand new long passphrase')
     await user.type(screen.getByLabelText('Confirm new password'), 'a brand new long passphrase')
     await user.click(screen.getByRole('button', { name: 'Change password' }))

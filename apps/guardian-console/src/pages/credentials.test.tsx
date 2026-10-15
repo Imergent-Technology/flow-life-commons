@@ -582,24 +582,28 @@ describe('accept an invitation', () => {
   })
 })
 
-describe('change password', () => {
-  const signedInAccount = accountFor()
+/** The success notice. (The Console's Account security page can show another status of its own, about recovery codes.) */
+async function passwordChangedNotice(): Promise<HTMLElement> {
+  const notice = (await screen.findByText(/Your password has been changed/)).closest(
+    '[role="status"]',
+  )
+  if (!(notice instanceof HTMLElement)) throw new Error('The success notice is not a status.')
+  return notice
+}
 
-  function signedIn() {
-    let account = signedInAccount
+describe('change password', () => {
+  // Most of these are an Account WITHOUT an authenticator: it is never asked for a second factor.
+  const unenrolled = {
+    enrolled: false,
+    recovery_codes_remaining: 0,
+    security_verified_until: null,
+  }
+  const signedInAccount = accountFor({ mfa: unenrolled })
+
+  function signedIn(account = signedInAccount) {
     api
       .on('GET /api/v1/me', () => json(account))
       .on('GET /api/v1/health', json({ status: 'ok', service: 's', api_version: 'v1', checks: {} }))
-    return {
-      rotateSession: () => {
-        account = accountFor({
-          session: {
-            authenticated_at: '2026-09-20T09:45:00Z',
-            absolute_expires_at: '2026-09-20T21:45:00Z',
-          },
-        })
-      },
-    }
   }
 
   async function fill(u: ReturnType<typeof user>, current = OLD_PASSWORD, password = NEW_PASSWORD) {
@@ -629,38 +633,41 @@ describe('change password', () => {
     expect(hint).toHaveAttribute('aria-hidden', 'true')
   })
 
-  it('stays signed in on success, re-reads /me, and confirms', async () => {
-    const server = signedIn()
-    api
-      .on('POST /api/v1/password/change', () => {
-        server.rotateSession() // the server restarted the session's authentication time
-        return empty()
-      })
-      .install()
+  it('stays signed in on success, re-reads /me, and confirms without claiming a new session', async () => {
+    signedIn()
+    api.on('POST /api/v1/password/change', empty()).install()
     renderApp('/account/security')
     const u = user()
     await screen.findByLabelText('Current password')
     const meBefore = api.callsTo('GET /api/v1/me').length
-    const startedBefore = screen.getByText('Session started').nextElementSibling?.textContent
+    const expiresBefore = screen.getByText('Ends no later than').nextElementSibling?.textContent
 
     await fill(u)
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
+    const status = await passwordChangedNotice()
+    expect(status).toHaveTextContent(
       'Your password has been changed. Other devices have been signed out.',
     )
-    expect(screen.getByRole('status')).toHaveFocus()
+    // It does not suggest the session was renewed.
+    expect(status).toHaveTextContent('time limit is unchanged')
+    expect(status.textContent).not.toMatch(/new session|renewed|extended|restart/i)
+    expect(status).toHaveFocus()
     expect(where()).toBe('/account/security') // not sent back to sign in
     expect(api.callsTo('POST /api/v1/login')).toHaveLength(0)
     await waitFor(() => {
       expect(api.callsTo('GET /api/v1/me').length).toBeGreaterThan(meBefore)
-      expect(screen.getByText('Session started').nextElementSibling?.textContent).not.toBe(
-        startedBefore,
-      )
     })
+    // The server's account of the session is shown, and it is the SAME one: nothing was re-dated.
+    expect(screen.getByText('Ends no later than').nextElementSibling?.textContent).toBe(
+      expiresBefore,
+    )
     expect(screen.getByRole('button', { name: /account menu/i })).toBeVisible()
     // What was typed does not linger.
     expect(screen.getByLabelText('Current password')).toHaveValue('')
     expect(screen.getByLabelText('New password')).toHaveValue('')
+    // An Account with no authenticator is not asked for a code, and none is sent.
+    expect(screen.queryByLabelText('Authentication code')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Recovery code')).not.toBeInTheDocument()
     expect(api.callsTo('POST /api/v1/password/change')[0]?.body).toEqual({
       current_password: OLD_PASSWORD,
       password: NEW_PASSWORD,
@@ -752,7 +759,7 @@ describe('change password', () => {
     const u = user()
 
     await fill(u)
-    await screen.findByRole('status')
+    await passwordChangedNotice()
 
     const logged = loggedText(spies)
     expect(logged).not.toContain(OLD_PASSWORD)
@@ -762,5 +769,269 @@ describe('change password', () => {
     expect(sessionStorage).toHaveLength(0)
     // No session identifier is ever shown: only the times.
     expect(document.body.textContent).not.toMatch(/session id|__Host|flowlife-session/i)
+  })
+})
+
+describe('change password for an Account with an authenticator', () => {
+  const CODE = '123456'
+  const RECOVERY = 'ABCDE-FGHIJ-KLMNO-PQRST'
+
+  function serve(account = accountFor()) {
+    api
+      .on('GET /api/v1/me', () => json(account))
+      .on('GET /api/v1/health', json({ status: 'ok', service: 's', api_version: 'v1', checks: {} }))
+  }
+
+  async function fillPasswords(u: ReturnType<typeof user>) {
+    await u.type(await screen.findByLabelText('Current password'), OLD_PASSWORD)
+    await u.type(screen.getByLabelText('New password'), NEW_PASSWORD)
+    await u.type(screen.getByLabelText('Confirm new password'), NEW_PASSWORD)
+  }
+
+  it('asks for an authenticator code, between the current password and the new one', async () => {
+    serve()
+    api.install()
+    renderApp('/account/security')
+
+    const field = await screen.findByLabelText('Authentication code')
+    expect(field).toHaveAttribute('autocomplete', 'one-time-code')
+    expect(field).toHaveAttribute('inputmode', 'numeric')
+    const [currentField, codeField, newField] = [
+      'Current password',
+      'Authentication code',
+      'New password',
+    ].map((label) => screen.getByLabelText(label))
+    const follows = (a: HTMLElement | undefined, b: HTMLElement | undefined) =>
+      a !== undefined &&
+      b !== undefined &&
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    expect(follows(currentField, codeField)).toBe(true)
+    expect(follows(codeField, newField)).toBe(true)
+  })
+
+  it('sends the code with the passwords, then clears every field and re-reads /me', async () => {
+    serve()
+    api.on('POST /api/v1/password/change', empty()).install()
+    renderApp('/account/security')
+    const u = user()
+    const meBefore = api.callsTo('GET /api/v1/me').length
+
+    await fillPasswords(u)
+    await u.type(screen.getByLabelText('Authentication code'), CODE)
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+
+    expect(await passwordChangedNotice()).toHaveTextContent('Your password has been changed.')
+    expect(api.callsTo('POST /api/v1/password/change')[0]?.body).toEqual({
+      current_password: OLD_PASSWORD,
+      password: NEW_PASSWORD,
+      password_confirmation: NEW_PASSWORD,
+      code: CODE,
+    })
+    await waitFor(() => {
+      expect(api.callsTo('GET /api/v1/me').length).toBeGreaterThan(meBefore)
+    })
+    for (const label of [
+      'Current password',
+      'Authentication code',
+      'New password',
+      'Confirm new password',
+    ]) {
+      expect(screen.getByLabelText(label)).toHaveValue('')
+    }
+  })
+
+  it('switches to a recovery code on request, and sends that INSTEAD of the code', async () => {
+    serve()
+    api.on('POST /api/v1/password/change', empty()).install()
+    renderApp('/account/security')
+    const u = user()
+
+    await fillPasswords(u)
+    await u.type(screen.getByLabelText('Authentication code'), CODE)
+    await u.click(screen.getByRole('button', { name: 'Use a recovery code instead' }))
+    // The switch drops what was typed: a code is not carried across to a field it does not belong in.
+    expect(screen.queryByLabelText('Authentication code')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Recovery code')).toHaveValue('')
+    await u.type(screen.getByLabelText('Recovery code'), RECOVERY)
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+
+    await passwordChangedNotice()
+    const body = api.callsTo('POST /api/v1/password/change')[0]?.body
+    expect(body).toEqual({
+      current_password: OLD_PASSWORD,
+      password: NEW_PASSWORD,
+      password_confirmation: NEW_PASSWORD,
+      recovery_code: RECOVERY,
+    })
+    expect(body).not.toHaveProperty('code')
+  })
+
+  it('shows a refused code against its field, focuses it, and does not keep the code', async () => {
+    serve()
+    api
+      .on(
+        'POST /api/v1/password/change',
+        json(
+          { message: 'The code is not valid.', errors: { code: ['The code is not valid.'] } },
+          422,
+        ),
+      )
+      .install()
+    renderApp('/account/security')
+    const u = user()
+
+    await fillPasswords(u)
+    await u.type(screen.getByLabelText('Authentication code'), '000000')
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+
+    const field = await screen.findByLabelText('Authentication code')
+    await waitFor(() => {
+      expect(field).toHaveAccessibleDescription(expect.stringContaining('The code is not valid.'))
+      expect(field).toHaveFocus()
+    })
+    // A code is single use, so the wrong one is dropped; the passwords the person typed stay to retry.
+    expect(field).toHaveValue('')
+    expect(screen.getByLabelText('Current password')).toHaveValue(OLD_PASSWORD)
+    expect(screen.getByLabelText('New password')).toHaveValue(NEW_PASSWORD)
+    expect(screen.queryByText(/has been changed/)).not.toBeInTheDocument()
+    expect(where()).toBe('/account/security')
+  })
+
+  it('shows a refused recovery code on the recovery field', async () => {
+    serve()
+    api
+      .on(
+        'POST /api/v1/password/change',
+        json(
+          {
+            message: 'The code is not valid.',
+            errors: { recovery_code: ['The code is not valid.'] },
+          },
+          422,
+        ),
+      )
+      .install()
+    renderApp('/account/security')
+    const u = user()
+
+    await fillPasswords(u)
+    await u.click(screen.getByRole('button', { name: 'Use a recovery code instead' }))
+    await u.type(screen.getByLabelText('Recovery code'), RECOVERY)
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+
+    const field = await screen.findByLabelText('Recovery code')
+    await waitFor(() => {
+      expect(field).toHaveAccessibleDescription(expect.stringContaining('The code is not valid.'))
+      expect(field).toHaveFocus()
+    })
+  })
+
+  it('puts a wrong current password on its own field even when a code was sent', async () => {
+    serve()
+    api
+      .on(
+        'POST /api/v1/password/change',
+        json(
+          {
+            message: 'The current password is incorrect.',
+            errors: { current_password: ['The current password is incorrect.'] },
+          },
+          422,
+        ),
+      )
+      .install()
+    renderApp('/account/security')
+    const u = user()
+
+    await fillPasswords(u)
+    await u.type(screen.getByLabelText('Authentication code'), CODE)
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+
+    const field = await screen.findByLabelText('Current password')
+    await waitFor(() => {
+      expect(field).toHaveFocus()
+    })
+    expect(field).toHaveAccessibleDescription('The current password is incorrect.')
+  })
+
+  it('disables the button while the change is in flight, so one click is one attempt', async () => {
+    serve()
+    let finish: (response: Response) => void = () => undefined
+    api
+      .on('POST /api/v1/password/change', () => new Promise<Response>((r) => (finish = r)))
+      .install()
+    renderApp('/account/security')
+    const u = user()
+
+    await fillPasswords(u)
+    await u.type(screen.getByLabelText('Authentication code'), CODE)
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+
+    expect(await screen.findByRole('button', { name: 'Changing password…' })).toBeDisabled()
+    finish(empty())
+    await passwordChangedNotice()
+    expect(api.callsTo('POST /api/v1/password/change')).toHaveLength(1)
+  })
+
+  it('believes the server over /me: a code asked for of an Account thought to have none appears, and is then sent', async () => {
+    // /me says no authenticator (it was enrolled in another tab since). The server decides what is required.
+    serve(
+      accountFor({
+        mfa: { enrolled: false, recovery_codes_remaining: 0, security_verified_until: null },
+      }),
+    )
+    let calls = 0
+    api
+      .on('POST /api/v1/password/change', () => {
+        calls += 1
+        return calls === 1
+          ? json(
+              {
+                message: 'Enter a code from your authenticator app, or a recovery code.',
+                errors: { code: ['Enter a code from your authenticator app, or a recovery code.'] },
+              },
+              422,
+            )
+          : empty()
+      })
+      .install()
+    renderApp('/account/security')
+    const u = user()
+    await fillPasswords(u)
+    expect(screen.queryByLabelText('Authentication code')).not.toBeInTheDocument()
+
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+
+    const field = await screen.findByLabelText('Authentication code')
+    await waitFor(() => {
+      expect(field).toHaveFocus()
+    })
+    expect(field).toHaveAccessibleDescription(
+      expect.stringContaining('Enter a code from your authenticator app, or a recovery code.'),
+    )
+    expect(api.callsTo('POST /api/v1/password/change')[0]?.body).not.toHaveProperty('code')
+
+    await u.type(field, CODE)
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+    await passwordChangedNotice()
+    expect(api.callsTo('POST /api/v1/password/change')[1]?.body).toMatchObject({ code: CODE })
+  })
+
+  it('does not display, log or store the code', async () => {
+    const spies = spyOnConsole()
+    serve()
+    api.on('POST /api/v1/password/change', empty()).install()
+    renderApp('/account/security')
+    const u = user()
+
+    await fillPasswords(u)
+    await u.type(screen.getByLabelText('Authentication code'), CODE)
+    await u.click(screen.getByRole('button', { name: 'Change password' }))
+    await passwordChangedNotice()
+
+    expect(loggedText(spies)).not.toContain(CODE)
+    expect(document.body.textContent).not.toContain(CODE)
+    expect(localStorage).toHaveLength(0)
+    expect(sessionStorage).toHaveLength(0)
   })
 })
