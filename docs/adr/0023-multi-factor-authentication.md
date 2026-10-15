@@ -102,3 +102,7 @@ Four facts were measured or read rather than assumed:
 - **Self-service MFA disablement.** Rejected: it would make MFA optional to anyone holding a session, and a stolen session would switch it off. Replacement (while the current factor still works) and administrative recovery cover the real needs.
 - **A "remember this device" bypass.** Out of scope, and it would create the exemption the policy exists to avoid.
 - **A generic authentication-factor framework.** Not built: there is one factor and one requirement. When a second factor type is real it introduces its own abstraction.
+
+## Amendments
+
+- **2026-10-15 (G6 WP1-01, owner ruling M1/DP2): changing a password is credential management.** ADR 0023 listed recovery-code regeneration and authenticator replacement as the operations that need fresh proof (the current password **and** a second factor), but the self-service password change, which pre-dates MFA, still needed the password alone. It now follows the same rule **when the Account has an active authenticator**: the request carries a `code` or a `recovery_code`, and a session's earlier second factor or recent verification never stands in for it. An Account without an authenticator is unaffected. Enrolment is read from the Account under its row lock, never from the client. A password change does not refresh the recent-verification window. See [identity and access](../architecture/identity-and-access.md#g6-wp1-corrections-2026-10-15).

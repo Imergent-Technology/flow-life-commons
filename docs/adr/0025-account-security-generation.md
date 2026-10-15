@@ -49,7 +49,7 @@ Exactly the operations that revoke sessions, in the same transaction, beside the
 | `DisableAccount` | all | advance |
 | `ResetPassword` | all | advance |
 | `ResetMultiFactor` (administrator, and from the server) | all | advance |
-| `ChangePassword` | all but the caller's | advance, and **re-bind the caller's session** |
+| `ChangePassword` | all but the caller's | advance, and **re-bind the caller's session** (its `authenticated_at` is kept: G6 WP1-01) |
 | `ConfirmAuthenticatorReplacement` | all but the caller's | advance, and **re-bind the caller's session** |
 
 The pairing is the rule: *revoking sessions and advancing the generation are one act*. An architecture test enforces it, in both directions, so a sixth such operation cannot be added with only half of it.
@@ -97,3 +97,7 @@ One window is **not** closed, and is not a defect: a request that has already pa
 **Delete the row and accept the window, documenting it as residual risk.** What Phase 8 did. Rejected for the production gate: "an attacker must be finishing a sign-in at the instant an operator resets it" describes a *narrow* window, and narrow is not the same as closed. The reset exists precisely because the second factor is believed to be in the wrong hands.
 
 **A generic session-invalidation or token-version framework covering every entity.** Rejected as speculative generality. The mechanism covers Accounts, because Accounts are what authenticate.
+
+## Amendments
+
+- **2026-10-15 (G6 WP1-03): email change.** The identity design describes an Account email change that invalidates other sessions. It is **not built**: nothing changes an Account's login email. If it is, it is a sixth operation that revokes sessions and so joins the table above, advancing the generation in the same transaction, and the architecture test that pairs the two will say so.
