@@ -10,6 +10,7 @@ import {
   messageIdsTo,
   meStatus,
   nextCode,
+  onOriginUnderTest,
   replayedStatus,
   scriptVisibleCookies,
   sessionCookie,
@@ -483,7 +484,7 @@ test.describe('a forgotten password', () => {
 
     // Follow the link, as a person does. Viewing it spends nothing.
     const viewer = await freshPage(browser, url)
-    await viewer.goto(link ?? '')
+    await viewer.goto(onOriginUnderTest(link ?? '', url))
     await expect(
       viewer.getByRole('heading', { level: 1, name: 'Choose a new password' }),
     ).toBeVisible()
@@ -501,16 +502,34 @@ test.describe('a forgotten password', () => {
     await viewer.context().close()
 
     // Use it. A refused password does not spend the token.
-    await anonymous.goto(link ?? '')
-    await anonymous.getByLabel('New password', { exact: true }).fill('too short')
+    await anonymous.goto(onOriginUnderTest(link ?? '', url))
+    // The first attempt is held back until the test lets it go, so the server's refusal always arrives after the
+    // moment a fast test would start typing again. The server still decides it, and the page still gets its answer.
+    const newPasswordField = anonymous.getByLabel('New password', { exact: true })
+    let letRefusalThrough: () => void = () => undefined
+    const refusalHeld = new Promise<void>((resolve) => {
+      letRefusalThrough = resolve
+    })
+    let held = false
+    await anonymous.route('**/api/v1/password/reset', async (route) => {
+      if (held) return route.continue()
+      held = true
+      await refusalHeld
+      await route.continue()
+    })
+    await newPasswordField.fill('too short')
     await anonymous.getByLabel('Confirm new password').fill('too short')
     await anonymous.getByRole('button', { name: 'Set new password' }).click()
-    await expect(anonymous.getByLabel('New password', { exact: true })).toHaveAccessibleDescription(
-      /at least 15/,
-    )
+    // The refusal moves focus to the New password field, so that is what to wait for: the field's description
+    // already carries the length guidance before the server has answered. It cannot be true yet.
+    await expect(newPasswordField).not.toBeFocused()
+    letRefusalThrough()
+    await expect(newPasswordField).toBeFocused()
+    await expect(newPasswordField).toHaveAccessibleDescription(/at least 15/)
 
-    await anonymous.getByLabel('New password', { exact: true }).fill(newPassword)
+    await newPasswordField.fill(newPassword)
     await anonymous.getByLabel('Confirm new password').fill(newPassword)
+    await expect(anonymous.getByLabel('Confirm new password')).toHaveValue(newPassword)
     await anonymous.getByRole('button', { name: 'Set new password' }).click()
     await expect(
       anonymous.getByRole('heading', { level: 1, name: 'Password changed' }),

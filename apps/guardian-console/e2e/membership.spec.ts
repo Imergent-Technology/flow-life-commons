@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import { signedInAs } from './support.ts'
+import { ADMIN_READ, freshlyVerifiedAs } from './verified.ts'
 
 // Membership administration (ADR 0028, Work Package 6), in real Chromium through the real gateway: an operator's
 // end-to-end path through the new Members surface, using the same platform-minted session the Accounts journeys use
@@ -46,7 +47,8 @@ test.describe('membership administration', () => {
     browser,
     baseURL,
   }) => {
-    const admin = await signedInAs(browser, baseURL ?? '', 'admin-read')
+    // Adding and revoking membership need a recent proof: a session of its own, signed in for real, has one however long the suite has run.
+    const admin = await freshlyVerifiedAs(browser, baseURL ?? '', ADMIN_READ)
     const name = `E2E Member ${crypto.randomUUID().slice(0, 8)}`
 
     await admin.goto('/')

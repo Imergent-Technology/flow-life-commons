@@ -45,10 +45,13 @@ use RuntimeException;
  * by Resources, never here). The operator is the first (by email) ACTIVE Account that may manage Resources; it creates no
  * Account, role, Membership or Person.
  *
- * The dataset (see {@see self::packs()}): four Categories, eight Packs and sixteen Cards, three of them with a file. Each Pack
+ * The dataset (see {@see self::packs()}): five Categories, ten Packs and twenty-two Cards, four of them with a file. Each Pack
  * exists to show one thing: a single Card read plainly; several Cards chosen by title; a Series; a Series with a Member-only Card
  * between two Guardian Cards (the Guardian sees A, C and D as 1, 2 and 3 of 3); an External link; an image, a PDF and a CSV; a
- * Pack for Members only (whose Category a Guardian is never shown); a Draft Pack; and a Draft Card in a Published Pack.
+ * Pack for Members only (whose Category a Guardian is never shown); a Draft Pack; and a Draft Card in a Published Pack. G10 added
+ * the Volunteer audience's two (ADR 0038, WP7), in a Category of their own so the eight before them are unchanged: a Pack for
+ * Volunteers only, with a File Card; and a Pack for Guardians AND Volunteers, with one Card narrowed to each and a Draft Card, so a
+ * Guardian, a Volunteer and a Person who is both each read a different part of the same Pack.
  *
  * Each use case stamps its own time with `now()`, so every step is run with the clock held at a fixed past instant, one minute
  * after the one before: the data never depends on the day it is made and no step is activity in the future. The clock is put back
@@ -76,6 +79,9 @@ final class ResourcesDemoSeeder extends Seeder
 
     /** A Category whose only Pack is for Members: a Guardian is never shown it. */
     public const string MEMBER_CIRCLE = 'Member Circle';
+
+    /** The Volunteer audience's Category (G10): a Volunteer-only Pack and a Pack for Guardians and Volunteers. */
+    public const string VOLUNTEERING = 'Volunteering';
 
     /** One Card, titled as its Pack, read plainly: no Card navigation and no counter. Rich content: headings, lists, a link, a quotation. */
     public const string SINGLE = 'Opening and Closing Checklist';
@@ -107,6 +113,30 @@ final class ResourcesDemoSeeder extends Seeder
     /** A Draft Pack. */
     public const string DRAFT = 'Winter Gathering Plan';
 
+    /** A Pack for Volunteers only, with a File Card (G10). */
+    public const string VOLUNTEERS_ONLY = 'Volunteer Welcome';
+
+    /** A Word in the Volunteer-only Pack's Cards and nowhere a Guardian or Member may read. */
+    public const string VOLUNTEER_WORD = 'lanyard';
+
+    /** The Volunteer-only Pack's File Card. */
+    public const string VOLUNTEER_FILE_CARD = 'Session sign-up sheet';
+
+    /** A Pack for Guardians AND Volunteers (G10): one Card for both, one narrowed to each audience, and a Draft Card. */
+    public const string SHARED = 'Community Day Briefing';
+
+    /** The Card of {@see self::SHARED} for both audiences. */
+    public const string SHARED_CARD = 'Plan for the day';
+
+    /** The Card of {@see self::SHARED} narrowed to Volunteers: a Guardian who is not a Volunteer never sees it. */
+    public const string VOLUNTEER_CARD = 'Volunteer stations';
+
+    /** The Card of {@see self::SHARED} narrowed to Guardians: a Volunteer who is not a Guardian never sees it. */
+    public const string GUARDIAN_CARD = 'Guardian hosting notes';
+
+    /** The Draft Card of {@see self::SHARED}: no reader sees it. */
+    public const string SHARED_DRAFT_CARD = 'Rain plan';
+
     /** The address of the External link Card: a reserved example domain, never fetched by anything. */
     public const string LINK_ADDRESS = 'https://example.org/flow-life/room-booking';
 
@@ -116,14 +146,15 @@ final class ResourcesDemoSeeder extends Seeder
     /** @return list<string> */
     public static function categories(): array
     {
-        return [self::GETTING_STARTED, self::RUNNING, self::SAFETY, self::MEMBER_CIRCLE];
+        return [self::GETTING_STARTED, self::RUNNING, self::SAFETY, self::MEMBER_CIRCLE, self::VOLUNTEERING];
     }
 
     /**
      * The Packs, in the order they are made (and so in the order they are shown within a Category). A Card is
-     * [title, type, content or null, uri or null, file or null, summary or null, narrowed to Members, published].
+     * [title, type, content or null, uri or null, file or null, summary or null, the audiences it is narrowed to (none: its Pack's),
+     * published].
      *
-     * @return list<array{title: string, summary: string, series: bool, category: string, audiences: list<Audience>, published: bool, at: string, cards: list<array{title: string, type: CardType, content: array<string, mixed>|null, uri: string|null, file: string|null, summary: string|null, membersOnly: bool, published: bool}>}>
+     * @return list<array{title: string, summary: string, series: bool, category: string, audiences: list<Audience>, published: bool, at: string, cards: list<array{title: string, type: CardType, content: array<string, mixed>|null, uri: string|null, file: string|null, summary: string|null, narrowed: list<Audience>, published: bool}>}>
      */
     public static function packs(): array
     {
@@ -141,7 +172,7 @@ final class ResourcesDemoSeeder extends Seeder
                     )),
                     self::basic(self::HIDDEN_CARD, self::doc(
                         self::p('Notes for the people who facilitate the Member circle: the '.self::HIDDEN_WORD.' prompts, the order of the evening, and who to ask for help.'),
-                    ), membersOnly: true),
+                    ), narrowed: [Audience::Member]),
                     self::basic('Your first shift', self::doc(
                         self::h(2, 'Before you arrive'),
                         self::ul('Read the opening checklist.', 'Check who else is on the rota.', 'Bring your own water bottle.'),
@@ -202,7 +233,7 @@ final class ResourcesDemoSeeder extends Seeder
                     [
                         'title' => 'Open the room booking calendar', 'type' => CardType::ExternalLink,
                         'content' => self::doc(self::p('All hires and gatherings are booked in the shared calendar. Check it before you promise anyone a room.')),
-                        'uri' => self::LINK_ADDRESS, 'file' => null, 'summary' => null, 'membersOnly' => false, 'published' => true,
+                        'uri' => self::LINK_ADDRESS, 'file' => null, 'summary' => null, 'narrowed' => [], 'published' => true,
                     ],
                 ],
             ],
@@ -247,6 +278,37 @@ final class ResourcesDemoSeeder extends Seeder
                     self::basic('Circle etiquette', self::doc(self::p('How we listen to one another in the circle.'))),
                 ],
             ],
+            [
+                'title' => self::SHARED, 'summary' => 'How the open day runs, for the Guardians who host it and the Volunteers who help.', 'series' => false,
+                'category' => self::VOLUNTEERING, 'audiences' => [Audience::Guardian, Audience::Volunteer], 'published' => true, 'at' => '2026-09-13 10:00:00',
+                'cards' => [
+                    self::basic(self::SHARED_CARD, self::doc(
+                        self::h(2, 'The day at a glance'),
+                        self::ol('Doors open at ten.', 'A welcome in the main hall at half past.', 'Tea, tours and conversation until two.', 'Everyone helps to tidy up.'),
+                    )),
+                    self::basic(self::VOLUNTEER_CARD, self::doc(
+                        self::p('Where each Volunteer stands: the welcome table, the tea room and the garden. Swap with someone if you would like a change.'),
+                    ), narrowed: [Audience::Volunteer]),
+                    self::basic(self::GUARDIAN_CARD, self::doc(
+                        self::p('The hosting Guardians open the building, lead the welcome and look after anyone who needs a quiet space.'),
+                    ), narrowed: [Audience::Guardian]),
+                    self::basic(self::SHARED_DRAFT_CARD, self::doc(self::p('What changes if it rains. Still being decided.')), published: false),
+                ],
+            ],
+            [
+                'title' => self::VOLUNTEERS_ONLY, 'summary' => 'Everything a new Volunteer needs before their first session.', 'series' => false,
+                'category' => self::VOLUNTEERING, 'audiences' => [Audience::Volunteer], 'published' => true, 'at' => '2026-09-13 11:00:00',
+                'cards' => [
+                    self::basic('Before your first session', self::doc(
+                        self::h(2, 'Welcome'),
+                        self::p('Collect your '.self::VOLUNTEER_WORD.' from the welcome table, and someone will show you around.'),
+                        self::ul('Wear comfortable shoes.', 'Tell us about anything you would rather not do.', 'Ask anyone with a '.self::VOLUNTEER_WORD.' for help.'),
+                    )),
+                    self::file(self::VOLUNTEER_FILE_CARD, 'volunteer-session-sign-up-sheet.csv', self::doc(
+                        self::p('A week of sessions to choose from. Put your name in any slot that suits you.'),
+                    ), 'Choose the sessions that suit you.'),
+                ],
+            ],
         ];
     }
 
@@ -283,7 +345,7 @@ final class ResourcesDemoSeeder extends Seeder
     }
 
     /**
-     * @param  array{title: string, summary: string, series: bool, category: string, audiences: list<Audience>, published: bool, at: string, cards: list<array{title: string, type: CardType, content: array<string, mixed>|null, uri: string|null, file: string|null, summary: string|null, membersOnly: bool, published: bool}>}  $spec
+     * @param  array{title: string, summary: string, series: bool, category: string, audiences: list<Audience>, published: bool, at: string, cards: list<array{title: string, type: CardType, content: array<string, mixed>|null, uri: string|null, file: string|null, summary: string|null, narrowed: list<Audience>, published: bool}>}  $spec
      * @param  array{categories: list<string>, packs: list<string>, cards: list<string>}  $ids
      */
     private function write(Actor $as, array $spec, CategoryId $category, array &$ids): string
@@ -303,9 +365,9 @@ final class ResourcesDemoSeeder extends Seeder
             $file = $card['file'] === null ? null : new IncomingFile(self::FILES.'/'.$card['file'], $card['file']);
             $made = $this->container->make(CreateCard::class)($as, $pack, $card['type'], $card['title'], $card['content'], $card['uri'], $card['summary'], $file)->card->id;
             $ids['cards'][] = $made->value;
-            if ($card['membersOnly']) {
+            if ($card['narrowed'] !== []) {
                 $tick();
-                $this->container->make(SetCardAudiences::class)($as, $pack, $made, AudienceMode::Narrowed, [Audience::Member]);
+                $this->container->make(SetCardAudiences::class)($as, $pack, $made, AudienceMode::Narrowed, $card['narrowed']);
             }
             if ($card['published']) {
                 $tick();
@@ -420,20 +482,21 @@ final class ResourcesDemoSeeder extends Seeder
 
     /**
      * @param  array<string, mixed>|null  $content
-     * @return array{title: string, type: CardType, content: array<string, mixed>|null, uri: string|null, file: string|null, summary: string|null, membersOnly: bool, published: bool}
+     * @param  list<Audience>  $narrowed
+     * @return array{title: string, type: CardType, content: array<string, mixed>|null, uri: string|null, file: string|null, summary: string|null, narrowed: list<Audience>, published: bool}
      */
-    private static function basic(string $title, ?array $content, bool $membersOnly = false, bool $published = true): array
+    private static function basic(string $title, ?array $content, array $narrowed = [], bool $published = true): array
     {
-        return ['title' => $title, 'type' => CardType::Basic, 'content' => $content, 'uri' => null, 'file' => null, 'summary' => null, 'membersOnly' => $membersOnly, 'published' => $published];
+        return ['title' => $title, 'type' => CardType::Basic, 'content' => $content, 'uri' => null, 'file' => null, 'summary' => null, 'narrowed' => $narrowed, 'published' => $published];
     }
 
     /**
      * @param  array<string, mixed>|null  $content
-     * @return array{title: string, type: CardType, content: array<string, mixed>|null, uri: string|null, file: string|null, summary: string|null, membersOnly: bool, published: bool}
+     * @return array{title: string, type: CardType, content: array<string, mixed>|null, uri: string|null, file: string|null, summary: string|null, narrowed: list<Audience>, published: bool}
      */
     private static function file(string $title, string $file, ?array $content, ?string $summary): array
     {
-        return ['title' => $title, 'type' => CardType::File, 'content' => $content, 'uri' => null, 'file' => $file, 'summary' => $summary, 'membersOnly' => false, 'published' => true];
+        return ['title' => $title, 'type' => CardType::File, 'content' => $content, 'uri' => null, 'file' => $file, 'summary' => $summary, 'narrowed' => [], 'published' => true];
     }
 
     /**

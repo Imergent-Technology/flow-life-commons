@@ -16,9 +16,15 @@ use App\Modules\Identity\Domain\EmailAddress;
 use App\Modules\Identity\Domain\InvitationToken;
 use App\Modules\Identity\Domain\Person;
 use App\Modules\Identity\Domain\PersonRepository;
+use App\Modules\Membership\Application\GrantMembershipAccess;
+use App\Modules\Membership\Domain\MembershipGrantSource;
+use App\Modules\Relationships\Application\ChangeRelationshipStatus;
 use App\Modules\Relationships\Application\EstablishRelationship;
 use App\Modules\Relationships\Application\RelationshipCatalog;
+use App\Modules\Relationships\Application\RelationshipManagementView;
+use App\Modules\Relationships\Domain\RelationshipType;
 use App\Shared\Domain\AccountId;
+use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
 use DateTimeImmutable;
 use Illuminate\Contracts\Hashing\Hasher;
@@ -247,6 +253,80 @@ final class E2eAccountSeeder extends Seeder
 
     public const string AUDIENCE_READER_SECRET = 'MFRGGZDFMZTWQ2LKNNWG23TPOBYXE43U';
 
+    /**
+     * The G10 personas (ADR 0038, testing strategy; e2e/g10-*.spec.ts). Each is a real Account whose authority comes from a real role
+     * assignment, and whose audiences come from real relationships (recorded through the Relationships use cases as the Relationships
+     * administrator) and real Membership (granted through Membership's own use case). No journey intercepts `/me` to make one. Each has
+     * its own Account, sessions, recovery codes and time steps, and the two that a journey CHANGES (`LIFECYCLE_*`) are used by that
+     * journey alone, so no parallel journey ever meets a persona another journey is mutating. All are recreated on every run.
+     *
+     * [email, display name, password, TOTP secret, recovery-code tag].
+     */
+    public const array PERSONA_ROLE_ONLY = ['e2e.persona.roleonly@example.org', 'E2E Role Only', 'e2e-persona-roleonly-password-not-a-secret', '4GWYMN5FVYW5LCFPILJJX4D2HQBI5YDO', 'E'];
+
+    public const array PERSONA_INITIATE = ['e2e.persona.initiate@example.org', 'E2E Restricted Guardian', 'e2e-persona-initiate-password-not-a-secret', 'XG6B2HFNAV4IBDDJNRSRAXRZLN6X3O7A', 'F'];
+
+    public const array PERSONA_PARTICIPANT = ['e2e.persona.participant@example.org', 'E2E Console Participant', 'e2e-persona-participant-password-not-a-secret', 'JBNUTG3VY5EOY4GOTAB2VBQOTDTQED4P', 'P1'];
+
+    public const array PERSONA_VOLUNTEER = ['e2e.persona.volunteer@example.org', 'E2E Participant Volunteer', 'e2e-persona-volunteer-password-not-a-secret', 'WDJEIXUSH4L6MLIXVV73UKKBRWN4FTMP', 'P2'];
+
+    public const array PERSONA_MULTI = ['e2e.persona.multi@example.org', 'E2E Guardian Volunteer Member', 'e2e-persona-multi-password-not-a-secret', 'A4HRVYQ23ECHHVSIT322PK5TFS4HJ6PO', 'P3'];
+
+    public const array PERSONA_UNADMITTED = ['e2e.persona.unadmitted@example.org', 'E2E Unadmitted Guardian', 'e2e-persona-unadmitted-password-not-a-secret', 'V2G2DFICPCYV3UWNMSVZHREMIJOH5BC4', 'P4'];
+
+    public const array PERSONA_FORMER = ['e2e.persona.former@example.org', 'E2E Former Guardian', 'e2e-persona-former-password-not-a-secret', '7CHMJ5GPLLNVG3OIFQ26LA7LAWHBA4WS', 'P5'];
+
+    public const array PERSONA_LIFECYCLE_KEPT = ['e2e.persona.lifecycle.kept@example.org', 'E2E Lifecycle Kept', 'e2e-persona-lifecycle-kept-password-not-a-secret', '7TUTEHS2WBO5CVAGPPOP4EBGL2H6GQGY', 'P6'];
+
+    public const array PERSONA_LIFECYCLE_SOLE = ['e2e.persona.lifecycle.sole@example.org', 'E2E Lifecycle Sole', 'e2e-persona-lifecycle-sole-password-not-a-secret', 'CWAJRELWEQAC4ICYHYQG6AKPU7Z2JMY5', 'P7'];
+
+    /**
+     * The person the administrator's Guardian Initiate journey records, grants, withdraws and deletes (e2e/relationships.spec.ts): an
+     * Account that already holds the Console through the Guardian role, used by that journey alone, so recording them as a Guardian
+     * mid-run never changes a persona another journey reads. It never signs in.
+     */
+    public const string INITIATE_HOLDER_EMAIL = 'e2e.persona.holder@example.org';
+
+    /**
+     * The Volunteer manager whose journey deletes a Volunteer (e2e/relationships.spec.ts). Deleting a Volunteer needs a recent proof, so
+     * its session is minted STALE and the journey proves in it (the prompt is required, never probed for). That proof rotates the id of
+     * THIS Account's session and no other, so no journey that shares a minted session (`plain-guardian`, `relationships-admin`) is
+     * ever signed out by it. The Console user role, as the plain Guardian holds, and no relationship.
+     */
+    public const array VOLUNTEER_MANAGER = ['e2e.persona.volmanager@example.org', 'E2E Volunteer Manager', 'e2e-persona-volmanager-password-not-a-secret', 'T2DMZVACSB32R6KLLIJASUSSQRHTK3AW', 'PA'];
+
+    /**
+     * Resource cleanup's own regression probe (e2e/resources-cleanup.spec.ts): a Resources manager whose session is minted STALE, so
+     * the cleanup must establish recent verification itself, with this Account's authenticator, before it can delete a Pack.
+     */
+    public const array CLEANUP_PROBE = ['e2e.cleanup.probe@example.org', 'E2E Cleanup Probe', 'e2e-cleanup-probe-password-not-a-secret', 'HIGRQXHHM2TI3UZQKLY2JRM22RWF65XE', 'P8'];
+
+    /**
+     * One Console administrator per browser worker (e2e/verified.ts). Work that needs a RECENT proof (deleting a Pack, recognising a
+     * Guardian, removing a relationship) is done in a session of the worker's own, signed in for real with its own authenticator, so
+     * no worker ever proves on a session another journey holds (proving rotates the session id, which would sign that journey out)
+     * and no two workers ever spend the same authenticator time step. Eight, for up to eight workers.
+     *
+     * @var list<array{string, string, string, string, string}>
+     */
+    public const array WORKERS = [
+        ['e2e.worker.0@example.org', 'E2E Worker 0', 'e2e-worker-0-password-not-a-secret', 'GCWIAIBLAWGEZ4LAJ27G6J2WZ347EVSG', 'W0'],
+        ['e2e.worker.1@example.org', 'E2E Worker 1', 'e2e-worker-1-password-not-a-secret', 'XI2IBMBBLREHJQPRAHCS3O3PL5PWFZA2', 'W1'],
+        ['e2e.worker.2@example.org', 'E2E Worker 2', 'e2e-worker-2-password-not-a-secret', 'D4QB7BJ5OJRSIIBVU5NV3S5YQLKLNT3U', 'W2'],
+        ['e2e.worker.3@example.org', 'E2E Worker 3', 'e2e-worker-3-password-not-a-secret', 'RR2BYXPVIGKOWSYP2C63UWYLNE5W4EF7', 'W3'],
+        ['e2e.worker.4@example.org', 'E2E Worker 4', 'e2e-worker-4-password-not-a-secret', 'ZL5ILBG33EMLMBW3TFY4RZQXIRZYZNK4', 'W4'],
+        ['e2e.worker.5@example.org', 'E2E Worker 5', 'e2e-worker-5-password-not-a-secret', 'F44R6U5HK3265QFEY5L77EXHPFSRCJMD', 'W5'],
+        ['e2e.worker.6@example.org', 'E2E Worker 6', 'e2e-worker-6-password-not-a-secret', 'E3XFIBY43P4WCBKNV5EYPEWXNZV6RNNS', 'W6'],
+        ['e2e.worker.7@example.org', 'E2E Worker 7', 'e2e-worker-7-password-not-a-secret', 'XEX6JB2NWWILCXSHEDWUY3JZSPPQUIWR', 'W7'],
+    ];
+
+    /**
+     * The demo seeders' operator (RelationshipsDemoSeeder). A Console administrator that is created once and, unlike every other
+     * fixture here, NEVER recreated: the demo records who recognised, changed and decided what, and a recreated operator would leave
+     * that history naming an Account that no longer exists. It never signs in to a journey.
+     */
+    public const array DEMO_OPERATOR = ['e2e.demo.operator@example.org', 'E2E Demo Operator', 'e2e-demo-operator-password-not-a-secret', 'YGQYSTW2MCT6IZYV3TWX7QQRWGVCPJTJ', 'P9'];
+
     /** An ordinary active Account the step-up journey disables. It holds no access. */
     public const string STALE_TARGET_EMAIL = 'e2e.admin.target@example.org';
 
@@ -406,6 +486,140 @@ final class E2eAccountSeeder extends Seeder
 
         $this->activeAccount($accounts, $people, $hasher, $now, self::STALE_TARGET_EMAIL, 'E2E Stale Target', self::STALE_TARGET_PASSWORD);
         $this->activeAccount($accounts, $people, $hasher, $now, self::RESET_TARGET_EMAIL, 'E2E Reset Target', self::RESET_TARGET_PASSWORD);
+
+        foreach (self::WORKERS as $worker) {
+            $consoleUser->administrator($this->persona($accounts, $people, $hasher, $totp, $now, $worker));
+        }
+        $this->demoOperator($accounts, $people, $hasher, $consoleUser, $totp, $now);
+        $this->resetPersonas($accounts, $people, $hasher, $consoleUser, $totp, $now);
+    }
+
+    /**
+     * The G10 personas (see {@see self::PERSONA_ROLE_ONLY}). Roles come from Access's fixture; everything a persona IS (a Guardian, a
+     * Volunteer, a Member) comes from the real use cases, so each relationship has its attributed history, each relationship-managed
+     * grant is made (and withdrawn) by Access through the relationship, and the Member's grant is Membership's own.
+     */
+    private function resetPersonas(
+        AccountRepository $accounts,
+        PersonRepository $people,
+        Hasher $hasher,
+        ConsoleUserFixture $consoleUser,
+        EnrollTotpFixture $totp,
+        DateTimeImmutable $now,
+    ): void {
+        // A. The Guardian ROLE and no Guardian relationship: its capabilities, and no Guardian audience.
+        $consoleUser($this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_ROLE_ONLY));
+
+        // B. The restricted Guardian: an Active Guardian whose Console admission is the relationship-managed Guardian Initiate grant.
+        $this->establish($this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_INITIATE), 'guardian', 'active', 'grant');
+
+        // C. A Console Participant: admitted by an independent role, with no relationship and no Membership.
+        $consoleUser->participant($this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_PARTICIPANT));
+
+        // D. A Console Participant who is an Active Volunteer.
+        $volunteer = $this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_VOLUNTEER);
+        $consoleUser->participant($volunteer);
+        $this->establish($volunteer, 'volunteer', 'active');
+
+        // E. An Active Guardian (admitted through the relationship-managed grant), an Active Volunteer and an Active Member.
+        $multi = $this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_MULTI);
+        $this->establish($multi, 'guardian', 'active', 'grant');
+        $this->establish($multi, 'volunteer', 'active');
+        ($this->container->make(GrantMembershipAccess::class))(
+            $this->relationshipsOperator(), $multi, $now->modify('-1 day'), null, MembershipGrantSource::Operator, 'e2e persona',
+        );
+
+        // An Active Guardian whose operator declined Guardian Initiate access, with no role: a Guardian, and not a Console user.
+        $this->establish($this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_UNADMITTED), 'guardian', 'active', 'decline');
+
+        // A Console Participant who WAS a Guardian (granted, then inactivated, which withdrew the grant) and is a Pending Volunteer.
+        $former = $this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_FORMER);
+        $consoleUser->participant($former);
+        $this->changeStatus($former, 'guardian', $this->establish($former, 'guardian', 'active', 'grant'), 'inactive');
+        $this->establish($former, 'volunteer', 'pending');
+
+        // The two personas the lifecycle journey changes: one whose admission is independent of the relationship, one whose is not.
+        $kept = $this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_LIFECYCLE_KEPT);
+        $consoleUser->participant($kept);
+        $this->establish($kept, 'guardian', 'active', 'grant');
+        $this->establish($kept, 'volunteer', 'active');
+        $this->establish($this->persona($accounts, $people, $hasher, $totp, $now, self::PERSONA_LIFECYCLE_SOLE), 'guardian', 'active', 'grant');
+
+        // The Volunteer manager whose deletion journey proves in a stale session of its own: the Console user role, no relationship.
+        $consoleUser($this->persona($accounts, $people, $hasher, $totp, $now, self::VOLUNTEER_MANAGER));
+
+        // The cleanup probe: a Resources manager (the Console user role), with no relationship.
+        $consoleUser($this->persona($accounts, $people, $hasher, $totp, $now, self::CLEANUP_PROBE));
+
+        $consoleUser($this->activeAccount($accounts, $people, $hasher, $now, self::INITIATE_HOLDER_EMAIL, 'E2E Initiate Holder', 'e2e-persona-holder-password-not-a-secret')->personId);
+    }
+
+    /**
+     * The demo operator: found by its email and kept (only created when missing), made a Console administrator if it is not one, and
+     * given its known second factor. See {@see self::DEMO_OPERATOR}.
+     */
+    private function demoOperator(
+        AccountRepository $accounts,
+        PersonRepository $people,
+        Hasher $hasher,
+        ConsoleUserFixture $consoleUser,
+        EnrollTotpFixture $totp,
+        DateTimeImmutable $now,
+    ): void {
+        [$email, $name, $password, $secret, $tag] = self::DEMO_OPERATOR;
+        $account = $accounts->findByEmail(EmailAddress::fromString($email));
+        if ($account === null) {
+            $person = Person::create(PersonId::generate(), $name, $now);
+            $people->save($person);
+            $account = Account::invite(AccountId::generate(), $person->id, EmailAddress::fromString($email), $now)->activate($hasher->make($password), $now);
+            $accounts->save($account);
+        }
+        $consoleUser->administrator($account->personId);
+        $totp($account->id, $secret, self::recoveryCodes($tag));
+    }
+
+    /**
+     * An active Account with a known password and second factor, created afresh.
+     *
+     * @param  array{string, string, string, string, string}  $spec  [email, display name, password, TOTP secret, recovery-code tag]
+     */
+    private function persona(AccountRepository $accounts, PersonRepository $people, Hasher $hasher, EnrollTotpFixture $totp, DateTimeImmutable $now, array $spec): PersonId
+    {
+        [$email, $name, $password, $secret, $tag] = $spec;
+        $account = $this->activeAccount($accounts, $people, $hasher, $now, $email, $name, $password);
+        $totp($account->id, $secret, self::recoveryCodes($tag));
+
+        return $account->personId;
+    }
+
+    /** Records a relationship the way an operator does: through the Relationships use case, as the Relationships administrator. */
+    private function establish(PersonId $person, string $type, string $status, ?string $defaultRole = null): RelationshipManagementView
+    {
+        return ($this->container->make(EstablishRelationship::class))(
+            $this->relationshipsOperator(), $this->relationshipType($type), $person, true, $status, [], $defaultRole !== null, $defaultRole,
+        );
+    }
+
+    /** Changes a relationship's status through the use case (which withdraws a relationship-managed grant on leaving Active). */
+    private function changeStatus(PersonId $person, string $type, RelationshipManagementView $current, string $status): void
+    {
+        ($this->container->make(ChangeRelationshipStatus::class))(
+            $this->relationshipsOperator(), $this->relationshipType($type), $person, $current->id, $current->revision, $status, false,
+        );
+    }
+
+    private function relationshipsOperator(): Actor
+    {
+        $administrator = DB::table('accounts')->where('email_canonical', self::RELATIONSHIPS_ADMIN_EMAIL)->value('id');
+        $actor = is_string($administrator) ? $this->container->make(ResolveActor::class)(AccountId::fromString($administrator)) : null;
+
+        return $actor ?? throw new RuntimeException('The Relationships administrator is needed to record the personas\' relationships.');
+    }
+
+    private function relationshipType(string $key): RelationshipType
+    {
+        return $this->container->make(RelationshipCatalog::class)->type($key)
+            ?? throw new RuntimeException("The relationship type {$key} is needed to record the personas' relationships.");
     }
 
     /**
@@ -416,14 +630,7 @@ final class E2eAccountSeeder extends Seeder
      */
     private function recordAsActiveGuardian(PersonId $person): void
     {
-        $administrator = DB::table('accounts')->where('email_canonical', self::RELATIONSHIPS_ADMIN_EMAIL)->value('id');
-        $actor = is_string($administrator) ? $this->container->make(ResolveActor::class)(AccountId::fromString($administrator)) : null;
-        $type = $this->container->make(RelationshipCatalog::class)->type('guardian');
-        if ($actor === null || $type === null) {
-            throw new RuntimeException('The Relationships administrator and the Guardian type are needed to record the audience reader.');
-        }
-
-        ($this->container->make(EstablishRelationship::class))($actor, $type, $person, true, 'active', [], true, 'decline');
+        $this->establish($person, 'guardian', 'active', 'decline');
     }
 
     /** An active Account with a known password, created afresh (a previous run's copy is removed first). */
@@ -477,14 +684,17 @@ final class E2eAccountSeeder extends Seeder
     }
 
     /**
-     * The ten recovery codes of a fixture, `E2E<tag>-RC00-0000-000<n>`. Every character is in the recovery-code
-     * alphabet (no I, L, O or U), so they are valid codes. e2e/support.ts builds the same list.
+     * The ten recovery codes of a fixture: `E2E<tag>-RC00-0000-000<n>` for a one-character tag, and `E2E<a>-<b>C00-0000-000<n>` for
+     * a two-character tag `<a><b>` (the single-character tags ran out; `<b>` is never `R`, so the two forms never meet). Every character
+     * is in the recovery-code alphabet (no I, L, O or U), so they are valid codes. e2e/support.ts builds the same list.
      *
      * @return list<string>
      */
     public static function recoveryCodes(string $tag): array
     {
-        return array_map(static fn (int $n): string => sprintf('E2E%s-RC00-0000-000%d', $tag, $n), range(0, 9));
+        [$first, $second] = strlen($tag) === 2 ? [$tag[0], $tag[1]] : [$tag, 'R'];
+
+        return array_map(static fn (int $n): string => sprintf('E2E%s-%sC00-0000-000%d', $first, $second, $n), range(0, 9));
     }
 
     /**
@@ -508,6 +718,13 @@ final class E2eAccountSeeder extends Seeder
                 }
             }
             DB::table('person_relationships')->where('person_id', $account->person_id)->delete();
+            DB::table('membership_grants')->where('person_id', $account->person_id)->delete();
+            // What a journey recorded about this Person in CRM (the lifecycle journey's scoped phone correction adds a contact method
+            // to a persona), which restricts the Person's deletion: without these the NEXT run's seeding stopped here and left the
+            // Person behind with no Account.
+            foreach (['contact_interactions', 'contact_methods', 'contact_profiles', 'contact_tag_assignments'] as $table) {
+                DB::table($table)->where('person_id', $account->person_id)->delete();
+            }
             DB::table('accounts')->where('id', $account->id)->delete();
             DB::table('people')->where('id', $account->person_id)->delete();
         }

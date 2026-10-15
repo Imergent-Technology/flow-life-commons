@@ -39,6 +39,13 @@ final class E2eSessionSeeder extends Seeder
     /** Where the cookies are written, relative to storage/. `./flow test e2e` hands the file to the browser suite. */
     public const string FILE = 'app/private/e2e-sessions.json';
 
+    /**
+     * The id of each minted session (name => session id), beside the cookies. Only {@see E2eSessionKeepAlive} reads it: a minted
+     * session is used for the first time whenever its journey is scheduled, which on a slow run is more than the 30 minutes of
+     * inactivity the platform allows, and the keep-alive keeps exactly these sessions from idling out.
+     */
+    public const string IDS_FILE = 'app/private/e2e-session-ids.json';
+
     private const string HOST = 'commons.flowlife.localhost';
 
     private const string SESSION_COOKIE = '__Host-flowlife-session';
@@ -57,8 +64,6 @@ final class E2eSessionSeeder extends Seeder
     private const array SESSIONS = [
         'admin-read' => [E2eAccountSeeder::ADMIN_READ_EMAIL, E2eAccountSeeder::ADMIN_READ_PASSWORD, 'H', 0, self::RECOVERY_INDEX],
         'admin-stale' => [E2eAccountSeeder::ADMIN_STALE_EMAIL, E2eAccountSeeder::ADMIN_STALE_PASSWORD, 'J', 16, self::RECOVERY_INDEX],
-        'admin-story' => [E2eAccountSeeder::ADMIN_STORY_EMAIL, E2eAccountSeeder::ADMIN_STORY_PASSWORD, 'N', 0, self::RECOVERY_INDEX],
-        'admin-recover' => [E2eAccountSeeder::ADMIN_RECOVER_EMAIL, E2eAccountSeeder::ADMIN_RECOVER_PASSWORD, 'Q', 0, self::RECOVERY_INDEX],
         // A stale session of its own for the Discussions closeout: the administration journey uses (and rotates) 'admin-stale'.
         'discussions-stale' => [E2eAccountSeeder::ADMIN_STORY_EMAIL, E2eAccountSeeder::ADMIN_STORY_PASSWORD, 'N', 16, 8],
         'plain-guardian' => [E2eAccountSeeder::PLAIN_GUARDIAN_EMAIL, E2eAccountSeeder::PLAIN_GUARDIAN_PASSWORD, 'S', 0, self::RECOVERY_INDEX],
@@ -78,6 +83,25 @@ final class E2eSessionSeeder extends Seeder
         // The Resource Library's audience reader (G10 WP6): a fresh session of a restricted Console user, an Active Guardian without `resources.view` (e2e/resources-modes.spec.ts).
         'audience-reader' => [E2eAccountSeeder::AUDIENCE_READER_EMAIL, E2eAccountSeeder::AUDIENCE_READER_PASSWORD, 'Z', 0, self::RECOVERY_INDEX],
         'relationships-admin-stale' => [E2eAccountSeeder::RELATIONSHIPS_ADMIN_EMAIL, E2eAccountSeeder::RELATIONSHIPS_ADMIN_PASSWORD, 'Y', 16, 8],
+        // The G10 personas (G10 WP7, e2e/g10-*.spec.ts), each a fresh session of its own Account. See E2eAccountSeeder::PERSONA_*.
+        'persona-role-only' => [E2eAccountSeeder::PERSONA_ROLE_ONLY[0], E2eAccountSeeder::PERSONA_ROLE_ONLY[2], E2eAccountSeeder::PERSONA_ROLE_ONLY[4], 0, self::RECOVERY_INDEX],
+        'persona-initiate' => [E2eAccountSeeder::PERSONA_INITIATE[0], E2eAccountSeeder::PERSONA_INITIATE[2], E2eAccountSeeder::PERSONA_INITIATE[4], 0, self::RECOVERY_INDEX],
+        'persona-participant' => [E2eAccountSeeder::PERSONA_PARTICIPANT[0], E2eAccountSeeder::PERSONA_PARTICIPANT[2], E2eAccountSeeder::PERSONA_PARTICIPANT[4], 0, self::RECOVERY_INDEX],
+        'persona-volunteer' => [E2eAccountSeeder::PERSONA_VOLUNTEER[0], E2eAccountSeeder::PERSONA_VOLUNTEER[2], E2eAccountSeeder::PERSONA_VOLUNTEER[4], 0, self::RECOVERY_INDEX],
+        'persona-multi' => [E2eAccountSeeder::PERSONA_MULTI[0], E2eAccountSeeder::PERSONA_MULTI[2], E2eAccountSeeder::PERSONA_MULTI[4], 0, self::RECOVERY_INDEX],
+        'persona-unadmitted' => [E2eAccountSeeder::PERSONA_UNADMITTED[0], E2eAccountSeeder::PERSONA_UNADMITTED[2], E2eAccountSeeder::PERSONA_UNADMITTED[4], 0, self::RECOVERY_INDEX],
+        'persona-former' => [E2eAccountSeeder::PERSONA_FORMER[0], E2eAccountSeeder::PERSONA_FORMER[2], E2eAccountSeeder::PERSONA_FORMER[4], 0, self::RECOVERY_INDEX],
+        'persona-lifecycle-kept' => [E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[0], E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[2], E2eAccountSeeder::PERSONA_LIFECYCLE_KEPT[4], 0, self::RECOVERY_INDEX],
+        'persona-lifecycle-sole' => [E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[0], E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[2], E2eAccountSeeder::PERSONA_LIFECYCLE_SOLE[4], 0, self::RECOVERY_INDEX],
+        // STALE, for the Volunteer-deletion journey (e2e/relationships.spec.ts): it must prove, in this Account's session and no shared one.
+        'volunteer-manager-stale' => [E2eAccountSeeder::VOLUNTEER_MANAGER[0], E2eAccountSeeder::VOLUNTEER_MANAGER[2], E2eAccountSeeder::VOLUNTEER_MANAGER[4], 16, self::RECOVERY_INDEX],
+        // STALE, for e2e/session-lifecycle.spec.ts: two sessions of one Account, both alive and both without a recent proof, so that one can
+        // prove (recovery code 7) while the other is shown to be untouched. They sign in with recovery codes 8 and 6; 9 and 0 are the
+        // Volunteer-deletion journey's (e2e/relationships.spec.ts).
+        'lifecycle-a-stale' => [E2eAccountSeeder::VOLUNTEER_MANAGER[0], E2eAccountSeeder::VOLUNTEER_MANAGER[2], E2eAccountSeeder::VOLUNTEER_MANAGER[4], 16, 8],
+        'lifecycle-b-stale' => [E2eAccountSeeder::VOLUNTEER_MANAGER[0], E2eAccountSeeder::VOLUNTEER_MANAGER[2], E2eAccountSeeder::VOLUNTEER_MANAGER[4], 16, 6],
+        // STALE, so Resource cleanup has to establish recent verification itself before it may delete (e2e/resources-cleanup.spec.ts).
+        'cleanup-probe-stale' => [E2eAccountSeeder::CLEANUP_PROBE[0], E2eAccountSeeder::CLEANUP_PROBE[2], E2eAccountSeeder::CLEANUP_PROBE[4], 16, self::RECOVERY_INDEX],
     ];
 
     /** @var array<string, string> the cookie jar of the sign-in in progress: name => value as the server sent it */
@@ -85,17 +109,30 @@ final class E2eSessionSeeder extends Seeder
 
     public function run(): void
     {
+        $this->mintAll(0);
+    }
+
+    /**
+     * Mints every session. `$proofNoNewerThan` makes every session's last proof at least that many minutes old (the declared age
+     * stands when it is older): {@see E2eAgedSessionSeeder} uses it to make a journey that leans on a MINTED session's recent proof fail
+     * at once, whatever the host's speed, instead of only when the run happens to be slow.
+     */
+    public function mintAll(int $proofNoNewerThan): void
+    {
         if (! $this->container->environment('local', 'testing')) {
             throw new RuntimeException('The e2e session fixtures may only be minted in a local or testing environment.');
         }
 
         $minted = [];
+        $ids = [];
         foreach (self::SESSIONS as $name => [$email, $password, $tag, $minutesSinceProof, $codeIndex]) {
-            $minted[$name] = $this->mint($email, $password, E2eAccountSeeder::recoveryCodes($tag)[$codeIndex], $minutesSinceProof);
+            $minted[$name] = $this->mint($email, $password, E2eAccountSeeder::recoveryCodes($tag)[$codeIndex], max($minutesSinceProof, $proofNoNewerThan));
+            $ids[$name] = $this->sessionId(rawurldecode($minted[$name]['session']));
         }
 
         File::ensureDirectoryExists(dirname(storage_path(self::FILE)));
         File::put(storage_path(self::FILE), json_encode($minted, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));
+        File::put(storage_path(self::IDS_FILE), json_encode($ids, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));
     }
 
     /** @return array{session: string, xsrf: string} */

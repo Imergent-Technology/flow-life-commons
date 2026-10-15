@@ -12,7 +12,9 @@ interface AxeViolation {
 
 /** Runs axe over the current page, with colour contrast ON, and returns readable violations. */
 export async function axeViolations(page: Page): Promise<string[]> {
-  await page.addScriptTag({ content: AXE })
+  // Evaluated in the page, not added to it as a <script>: the production build is served under `script-src 'self'`, which (rightly)
+  // refuses an inline script, and the policy is not loosened or bypassed for the audit, so the page is audited as it is shipped.
+  await page.evaluate(AXE)
   const violations = await page.evaluate(async () => {
     const runner = (globalThis as unknown as { axe: { run: (o: unknown) => Promise<unknown> } }).axe
     const results = (await runner.run({

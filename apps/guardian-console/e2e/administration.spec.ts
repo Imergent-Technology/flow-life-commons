@@ -8,10 +8,12 @@ import {
   invitationEmailedTo,
   meStatus,
   nextCode,
+  onOriginUnderTest,
   recoveryCodesFor,
   signedInAs,
   unique,
 } from './support.ts'
+import { ADMIN_READ, ADMIN_RECOVER, ADMIN_STORY, freshlyVerifiedAs } from './verified.ts'
 
 // Operator administration (ADR 0024), in real Chromium through the real gateway: what an administrator can do to other
 // people's access, and what stops anyone else.
@@ -74,7 +76,9 @@ test.describe('who may administer', () => {
     baseURL,
   }) => {
     const url = baseURL ?? ''
-    const admin = await signedInAs(browser, url, 'admin-read')
+    // A session of its own, signed in as the "E2E Admin Read" this journey describes: resetting an authenticator needs a recent proof
+    // (even to be refused for resetting one's own), and the minted session of that Account has one only for its first 15 minutes.
+    const admin = await freshlyVerifiedAs(browser, url, ADMIN_READ)
 
     await admin.goto('/')
     await expect(consoleHeading(admin)).toBeVisible()
@@ -194,7 +198,9 @@ test.describe.serial('inviting, changing access, disabling and re-enabling someo
   let secret = ''
 
   test.beforeAll(async ({ browser, baseURL }) => {
-    admin = await signedInAs(browser, baseURL ?? '', 'admin-story')
+    // Inviting, changing access and disabling each need a recent proof: a session of its own, signed in for real, has one however long
+    // the suite has run (a minted session's lasts 15 minutes).
+    admin = await freshlyVerifiedAs(browser, baseURL ?? '', ADMIN_STORY)
     person = await freshPage(browser, baseURL ?? '')
   })
 
@@ -219,7 +225,7 @@ test.describe.serial('inviting, changing access, disabling and re-enabling someo
     const mail = await invitationEmailedTo(request, baseURL ?? '', invitee.email)
     expect(mail.link).toContain('/accept-invitation#token=') // in the FRAGMENT, out of access logs
     expect(mail.link).not.toContain('?token=')
-    await person.goto(mail.link)
+    await person.goto(onOriginUnderTest(mail.link, baseURL ?? ''))
   })
 
   test('the invitee accepts it, their email is VERIFIED, and they enrol before entering the Console', async () => {
@@ -329,7 +335,7 @@ test.describe('recovering a second factor', () => {
   }) => {
     test.setTimeout(120_000)
     const url = baseURL ?? ''
-    const admin = await signedInAs(browser, url, 'admin-recover')
+    const admin = await freshlyVerifiedAs(browser, url, ADMIN_RECOVER)
     await openAccount(admin, RECOVER_TARGET.email, 'E2E Recover Target')
     await expect(admin.getByText('Set up, with 10 recovery codes left.')).toBeVisible()
 

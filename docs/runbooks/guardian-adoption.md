@@ -14,8 +14,10 @@ Two things happen in G10, and they are different:
 | What it is | Renames a permission bundle | Records organizational recognition |
 | When | Automatically, inside the release's maintenance window | Manually, after release |
 | Who | The release | A Platform Administrator, one Person at a time |
-| Changes anyone's permissions | No: every effective capability set is identical before and after | Only if the operator chooses Guardian Initiate access for that Person |
+| Changes anyone's permissions | The rename itself changes none: it moves each `guardian` assignment to `guardian-full` and the G10 catalog defines that bundle ([ADR 0038, A3](../adr/0038-organizational-relationships-and-resource-viewing-authority.md)). **Measured against production v0.3.0, existing Guardian-role holders gain nine capabilities** when the release is deployed ([G10 release readiness](g10-release-readiness.md#what-changes-for-people-who-hold-the-guardian-role-today)) | Only if the operator chooses Guardian Initiate access for that Person |
 | Creates a relationship | **Never** | Yes, for the Person the operator chose |
+
+The comparison baseline matters. Relative to the development line at the time ADR 0038 was accepted, the migration preserved each holder's capability set, and that is what its tests prove. Relative to production **v0.3.0**, whose `guardian` role grants `console.access` only, every current holder gains nine capabilities (People, Guardian discussions, Resources including Drafts, Guardians and Volunteers). That expansion reaches production only with the product owner's explicit authorization, which has not been given; the [G10 release readiness](g10-release-readiness.md#what-changes-for-people-who-hold-the-guardian-role-today) runbook lists the nine and the owner's decision. Neither the migration nor the role catalog is changed by adoption.
 
 Nothing creates a Guardian relationship because a Person holds a Guardian-named role, holds `console.access`, or has an administrative Account. Holding `guardian-full` is not evidence that someone is a Guardian, and many Console participants are not.
 
