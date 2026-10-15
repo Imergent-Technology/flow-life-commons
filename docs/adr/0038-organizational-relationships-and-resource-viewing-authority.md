@@ -1,6 +1,6 @@
 # ADR 0038: Organizational Relationships and Resource Viewing Authority
 
-- **Status:** Accepted (the G10 design gate, WP0, 2026-10-08). The design was remediated after an independent architecture audit and again after that remediation's focused verification, and accepted without further review. Decisions N1–N6 and the audit rulings AR1–AR10 are resolved by the product owner. Acceptance covers the design; its implementation proceeds by work package (WP1–WP6 are on `main`, WP7 is built on its branch and awaits its independent closeout review, and each package's notes are below).
+- **Status:** Accepted (the G10 design gate, WP0, 2026-10-08). The design was remediated after an independent architecture audit and again after that remediation's focused verification, and accepted without further review. Decisions N1–N6 and the audit rulings AR1–AR10 are resolved by the product owner. Acceptance covers the design. **It is implemented:** WP1–WP7 are integrated on `main` (PRs #1–#9; WP7 squash-merged as `9a79b38`, post-merge CI green), and G10 is complete as a development and integration milestone. It is **not released or deployed** (production runs v0.3.0). Each package's notes are below; the closeout, including the final verification history, is in [G10 closeout](#g10-closeout-2026-10-15).
 - **Date:** 2026-10-08. Revised four times before acceptance, recorded under *Revision history*. The earlier versions are commits `9eeb4f9`, `30a5443`, `96a01ea` and `f57e50c`.
 - **Supersedes:** none
 - **Superseded by:** none
@@ -2309,6 +2309,39 @@ The first built run's one failure was the `0ms` spelling above, deterministic on
 
 **What is not decided here.** WP7's code and browser acceptance gates now pass on this checkpoint. That is evidence for an independent verification, not an acceptance, and not a release: the owner's authorization of the Guardian capability expansion (nine capabilities for every holder of the `guardian` role), the `restore-required` rehearsal decision, the Resources host prerequisites, adoption, pull-request and post-merge CI, and a separate authorization to deploy are all still open ([runbook](../runbooks/g10-release-readiness.md)).
 
+## G10 closeout (2026-10-15)
+
+**G10 is complete as a development and integration milestone. It is not released or deployed.** Production runs v0.3.0. Every release prerequisite in the [next-release readiness](../runbooks/g10-release-readiness.md) runbook remains open, including the owner's authorization of the Guardian capability expansion (nine capabilities for every holder of the `guardian` role, measured against v0.3.0). The notes above are kept as they were written. Where one says a review, pull request or CI run is still to come, this section records what followed.
+
+**Independent verification history of WP7, in order:**
+1. **Independent Opus closeout review (2026-10-13): remediation required.** One HIGH, two MEDIUM, seven LOW and two INFORMATIONAL findings, and no authorization defect in the product code ([remediation notes](#implementation-notes-wp7-remediation-2026-10-14)).
+2. **Sonnet completed the accumulated corrections** (2026-10-14):
+   - the closeout review's remediation;
+   - the e2e stabilization;
+   - the built-assets browser acceptance the owner authorized.
+3. **A focused, independent Opus verification** then reviewed that implementation and found **three final issues**:
+   - the password-reset browser journey waited for text that was already on the page, so its second fill could race the server's refusal;
+   - wording that said the Guardian migration changes no capabilities without naming the baseline;
+   - the intermittent first render of the library's `noEditor` Vitest file.
+4. **Sonnet corrected the three at `cb34707`:**
+   - `51ec3d6`: the journey holds the first attempt and waits for the focus the refusal causes; 30 consecutive isolated runs passed;
+   - `d38eea2`: one warm-up render in `beforeAll`; under heavy load the first test failed 5 of 10 runs before and 0 of 10 after;
+   - `cb34707`: the adoption runbook, AR1, A3, M6 and the roadmap's WP2A row name the baseline: the development line's `guardian` bundle, not production v0.3.0's.
+5. **Regression tests, full local acceptance and CI passed:**
+   - local `./flow check all --pgsql` on `cb34707`: 23 of 23;
+   - local `./flow test e2e --workers=4` on the built-assets origin: 448 passed, 0 failed on its second run;
+   - PR-head CI, run `38656550748` on `cb34707`: success;
+   - after the squash merge of PR #9, post-merge CI, run `38668506906` on `9a79b38`: success.
+6. **No further independent Opus re-audit of the final three corrections took place.** They are covered by the regression evidence in step 5 only.
+
+**Browser follow-ups found in the final local acceptance.** The first four-worker run on `cb34707` passed 446 of 448. Its two failures were:
+- the Discussions journey's focus return after Escape;
+- the shell's 1023 px responsive step.
+
+Neither touches anything WP7 changed. Both are recorded in the [G6 debt register](../audits/g6/debt-register.md) (G6-D01, G6-D02), together with the Vitest cold-render history, E2E leftovers, the keep-alive gap and the absence of a GitHub browser workflow.
+
+**What comes next.** G6, the core audit and stabilization checkpoint, is the active milestone ([contract](../audits/g6/README.md)). Its audits do not repeat G10's package audits.
+
 ## Consequences
 
 **For the organization:**
@@ -2446,4 +2479,4 @@ The first built run's one failure was the `0ms` spelling above, deterministic on
 | `default_role` on a change to Inactive was unspecified | `422 default_role_not_applicable`, nothing written. Inactivation withdraws the grant automatically and never depends on the request mentioning a role | K7, Part H, *Verification matrix*, mutation checks, WP2B |
 | A future role carrying `resources.view` | Must explicitly revisit D7 and the privileged viewing contract. The G10 allowlist stays exactly `guardian-initiate`, `console.access` only | R4 |
 
-ADR 0038 is **Accepted** as a design. Nothing is implemented, and WP1 has not started.
+ADR 0038 is **Accepted** as a design. Nothing is implemented, and WP1 has not started. *(As of acceptance, 2026-10-08. The implementation followed in WP1–WP7: see the Status line and the [G10 closeout](#g10-closeout-2026-10-15).)*
