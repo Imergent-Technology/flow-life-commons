@@ -2,7 +2,7 @@
 
 - **Package:** WP1 Identity, sessions, MFA and credentials. Remediation of the [independent audit](wp1-audit.md) as ruled in the [owner's triage](wp1-triage.md).
 - **Base:** `main` at `b5d37ad2e2823e184268d6cf43ea874784d88ff0` (PR #10). **Branch:** `fix/g6-wp1-identity-session`. Local only: not pushed, no PR, nothing deployed. Production stays on v0.3.0, which has the flaw.
-- **Status:** implemented and validated; **awaiting the independent Opus verification of WP1-01** that the triage requires, and then the owner's integration decision.
+- **Status:** implemented, validated and **independently verified**: the Opus 5.5 reviewer examined the complete implementation at `dc3c6492fe0927a7505fee10e149749fd4e0bc50`, found no new BLOCKER, HIGH, MEDIUM or LOW findings, and concluded **"G6 WP1: SAFE TO PREPARE PR"** ([wp1-verification.md](wp1-verification.md); it reproduced the 17 original failures on both engines and killed five mutants of its own). The only code-level follow-up, an outdated comment on the `password/change` route (its INFO-1), is corrected in the final commit as a comment change only. The full gate and four-worker browser results in §7 are for `dc3c649`; the commits after it change only that comment and documentation. The owner decides integration.
 - **Audit file:** committed as `wp1-audit.md` from its heading (`# G6 WP1 — Identity…`) to its closing verdict line, unedited. The one-line "Written for:" hand-over note that preceded the report was addressed to the owner, not part of the report, and is not in the file.
 
 ## 1. WP1-01 (MEDIUM): what changed
@@ -112,7 +112,7 @@ The audit's other proof gaps (session-id rotation at the 202 step, breach-timeou
 
 `identity-and-access.md` (status line; the email-change row and the audit-event text marked unbuilt and CRM contact emails distinguished; the absolute-lifetime row; Phase 5 text superseded by WP1-01 kept as history and marked; a new "G6 WP1 corrections" section), ADRs 0016, 0023, 0025 (dated amendments), `mfa-recovery.md` (the "narrow window" closed by ADR 0025), `testing.md`, the OpenAPI description, and the debt register.
 
-## 10. For the independent Opus reviewer
+## 10. For the independent Opus reviewer (done: see [wp1-verification.md](wp1-verification.md))
 
 Verify, from the code at the branch head, not from this record:
 
