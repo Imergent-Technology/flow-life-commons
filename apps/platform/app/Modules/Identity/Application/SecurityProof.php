@@ -85,11 +85,7 @@ final readonly class SecurityProof
                     throw new CurrentPasswordIncorrect;
                 }
 
-                $verified = $this->verifier->verify($account, $proof, $now)
-                    ?? throw new SecondFactorRejected(SecondFactorFailure::InvalidCode, $account, $proof->method);
-                if ($verified->method === SecondFactorMethod::RecoveryCode) {
-                    $this->audit->recoveryCodeUsed($account, $verified->recoveryCodesRemaining ?? 0, 'security_verification', $client);
-                }
+                $verified = $this->confirmSecondFactor($account, $proof, $now, $client, 'security_verification');
 
                 return $work($account, $verified, $now);
             });
@@ -98,5 +94,25 @@ final readonly class SecurityProof
 
             throw $e;
         }
+    }
+
+    /**
+     * The second-factor step on its own: for a caller that owns its transaction and its own rate limit and has
+     * already locked the Account and verified the password (changing a password, which is held to a factor only
+     * while the Account has one). Call it INSIDE that transaction. It is exactly the step `run` takes: a refusal
+     * is thrown before anything is written, and a recovery code spent as the proof is recorded as spent, inside
+     * the caller's transaction, so both roll back with it. `$during` names the operation in that event.
+     *
+     * @throws SecondFactorRejected
+     */
+    public function confirmSecondFactor(Account $account, SecondFactorProof $proof, DateTimeImmutable $now, ClientContext $client, string $during): VerifiedSecondFactor
+    {
+        $verified = $this->verifier->verify($account, $proof, $now)
+            ?? throw new SecondFactorRejected(SecondFactorFailure::InvalidCode, $account, $proof->method);
+        if ($verified->method === SecondFactorMethod::RecoveryCode) {
+            $this->audit->recoveryCodeUsed($account, $verified->recoveryCodesRemaining ?? 0, $during, $client);
+        }
+
+        return $verified;
     }
 }

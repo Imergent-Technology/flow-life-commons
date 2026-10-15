@@ -183,22 +183,22 @@ it('keeps the current session alive but ROTATES it: a new id and CSRF token, and
     Console::replaying($oldCookies)->me()->assertUnauthorized();
 });
 
-it('restarts the 12-hour authentication instant, because the current password was just proved', function () {
+it('does NOT restart the 12-hour authentication instant: a password change is not a new sign-in', function () {
+    // WP1-01 (G6): the change used to re-date the session, so a stolen cookie plus the password could
+    // "change" the password to itself every 11 hours and live forever.
     $console = signedInAsAda();
-    $console->advanceWhileActive(10 * 3600);
-    $before = $console->me()->assertOk()->json('session.authenticated_at');
+    $signedInAt = $console->me()->assertOk()->json('session.authenticated_at');
+    $expiresAt = $console->me()->json('session.absolute_expires_at');
+    $console->advanceWhileActive(11 * 3600);
 
     changePasswordAs($console, Identity::PASSWORD, Passwords::STRONG)->assertNoContent();
 
+    // Rotated, and still signed in...
     $after = $console->me()->assertOk();
-    expect($after->json('session.authenticated_at'))->not->toBe($before)
-        ->and($after->json('session.authenticated_at'))->toBe(Carbon::now()->toIso8601ZuluString())
-        ->and($after->json('session.absolute_expires_at'))->toBe(Carbon::now()->addHours(12)->toIso8601ZuluString());
+    expect($after->json('session.authenticated_at'))->toBe($signedInAt)
+        ->and($after->json('session.absolute_expires_at'))->toBe($expiresAt);
 
-    // Eleven hours on is 21 hours after the original sign-in, well past the old 12-hour cap.
-    $console->advanceWhileActive(11 * 3600);
-    $console->me()->assertOk();
-    // And the new lifetime is still a lifetime: it ends 12 hours after the change.
+    // ...but only until the ORIGINAL twelve hours are up, not twelve hours from the change.
     $console->advanceWhileActive(3600 + 1);
     $console->me()->assertUnauthorized();
 });

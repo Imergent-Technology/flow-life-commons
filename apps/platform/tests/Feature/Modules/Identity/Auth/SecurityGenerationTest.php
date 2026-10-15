@@ -102,13 +102,14 @@ describe('what advances it', function () {
     });
 
     it('advances when a signed-in person changes their own password', function () {
-        [$console, $account] = Mfa::signedIn();
+        [$console, $account, $factor] = Mfa::signedIn();
         $before = generation($account->id);
 
         $console->post(Console::API.'/password/change', [
             'current_password' => Identity::PASSWORD,
             'password' => 'another entirely different passphrase',
             'password_confirmation' => 'another entirely different passphrase',
+            'code' => Totp::next($factor['secret']),
         ])->assertNoContent();
 
         expect(generation($account->id))->toBe($before + 1);
@@ -244,12 +245,13 @@ describe('a superseded session', function () {
 
 describe('the sessions that must survive', function () {
     it('keeps the caller signed in after they change their own password', function () {
-        [$console, $account] = Mfa::signedIn();
+        [$console, $account, $factor] = Mfa::signedIn();
 
         $console->post(Console::API.'/password/change', [
             'current_password' => Identity::PASSWORD,
             'password' => 'another entirely different passphrase',
             'password_confirmation' => 'another entirely different passphrase',
+            'code' => Totp::next($factor['secret']),
         ])->assertNoContent();
 
         $console->me()->assertOk();
