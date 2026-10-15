@@ -238,6 +238,20 @@ it('spends neither a code nor a recovery code when the current password is wrong
     changeWithFactor($console, ['recovery_code' => $factor['codes'][0]])->assertNoContent();
 });
 
+it('judges the factor only after the password: without the password, a code is never tested and the answer is about the password', function () {
+    // The second factor is not an oracle for someone who holds a session but not the password. With the wrong
+    // current password even a wrong code is not looked at: the answer is the password's, and no factor failure is recorded.
+    [$console, $account] = Mfa::signedIn();
+    $before = credentialState($account);
+
+    changeWithFactor($console, ['code' => '000000'], current: 'not the current password')->assertUnprocessable()
+        ->assertJsonValidationErrors(['current_password'])
+        ->assertJsonMissingValidationErrors(['code']);
+
+    expect(credentialState($account))->toBe($before)
+        ->and(Identity::events('mfa.challenge_failed'))->toBe([]);
+});
+
 it('spends nothing when the new password is refused, or the breach check is down', function () {
     [$console, $account, $factor] = Mfa::signedIn();
     $before = credentialState($account);
