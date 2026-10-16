@@ -150,6 +150,40 @@ it('reports a stateless public route that starts a session', function () {
     expect($problems)->toContain("GET api/v1/health is listed as 'stateless' but starts a session, cookies or CSRF handling");
 });
 
+it('judges an explicitly registered HEAD-only route, which no GET route covers', function () {
+    // Route::match(['HEAD'], ...) is a route of its own: nothing else checks it, so the helper must not skip it.
+    $probe = surfaceRoute(['HEAD'], 'probe');
+    $api = surfaceRoute(['HEAD'], 'api/v1/probe', ['stateful']);
+
+    $problems = RouteSurface::violations([...surfaceRegistered(), $probe, $api], RouteSurface::PUBLIC_ROUTES, RouteSurface::specPaths());
+
+    expect(RouteSurface::keys($probe))->toBe(['HEAD probe'])
+        ->and($problems)->toContain('HEAD probe is not authenticated and is not in the public list')
+        ->and($problems)->toContain('HEAD api/v1/probe is not authenticated and is not in the public list');
+});
+
+it('still skips the HEAD Laravel adds to a GET route, so nothing is reported twice', function () {
+    $implicit = surfaceRoute(['GET', 'HEAD'], 'api/v1/leak');
+    $explicit = surfaceRoute(['GET', 'HEAD', 'POST'], 'api/v1/both');
+
+    $problems = RouteSurface::violations([...surfaceRegistered(), $implicit], RouteSurface::PUBLIC_ROUTES, RouteSurface::specPaths());
+
+    expect(RouteSurface::keys($implicit))->toBe(['GET api/v1/leak'])
+        ->and(RouteSurface::keys($explicit))->toBe(['GET api/v1/both', 'POST api/v1/both'])
+        ->and($problems)->toBe(['GET api/v1/leak is not authenticated and is not in the public list']);
+});
+
+it('keeps the real route table as it was: GET routes are keyed by GET, with no HEAD key anywhere', function () {
+    $keys = [];
+    foreach (surfaceRegistered() as $route) {
+        array_push($keys, ...RouteSurface::keys($route));
+    }
+
+    expect(array_filter($keys, fn (string $key): bool => str_starts_with($key, 'HEAD ')))->toBe([])
+        ->and($keys)->toContain('GET up')
+        ->and($keys)->toContain('GET api/v1/health');
+});
+
 it('reports a stale entry in the public list', function () {
     $public = RouteSurface::PUBLIC_ROUTES + ['POST api/v1/legacy/token' => ['kind' => 'stateless', 'openapi' => 'none', 'reason' => 'Removed route']];
 

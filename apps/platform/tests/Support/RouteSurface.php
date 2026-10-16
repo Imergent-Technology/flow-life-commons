@@ -70,15 +70,18 @@ final class RouteSurface
     }
 
     /**
-     * "METHOD uri" for each method the route answers, except the HEAD Laravel adds to every GET.
+     * "METHOD uri" for each method the route answers, except the HEAD that Laravel adds to a GET route: that one is
+     * the same route as the GET and is judged with it. A route registered for HEAD alone (`Route::match(['HEAD'], ...)`)
+     * has no GET to be judged with, so its HEAD is kept.
      *
      * @return list<string>
      */
     public static function keys(Route $route): array
     {
+        $methods = Api::strings($route->methods());
         $keys = [];
-        foreach (Api::strings($route->methods()) as $method) {
-            if ($method !== 'HEAD') {
+        foreach ($methods as $method) {
+            if ($method !== 'HEAD' || ! in_array('GET', $methods, true)) {
                 $keys[] = $method.' '.$route->uri();
             }
         }
