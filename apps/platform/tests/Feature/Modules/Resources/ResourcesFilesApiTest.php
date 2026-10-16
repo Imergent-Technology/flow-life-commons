@@ -99,6 +99,29 @@ function streamed(TestResponse $response): string
     return $response->streamedContent();
 }
 
+/**
+ * Every header a response carries that could tell two answers apart: all of them, except the clock and the per-response tokens.
+ * Cookie VALUES (the session and CSRF tokens) differ on every response by design, so only their names are compared.
+ *
+ * @param  TestResponse<Response>  $response
+ * @return array<string, string>
+ */
+function filesComparableHeaders(TestResponse $response): array
+{
+    $headers = [];
+    foreach ($response->headers->allPreserveCase() as $name => $values) {
+        $key = strtolower((string) $name);
+        if ($key === 'date' || $key === 'set-cookie') {
+            continue;
+        }
+        $headers[$key] = implode(', ', Api::strings(is_array($values) ? array_values($values) : []));
+    }
+    $headers['set-cookie-names'] = implode(',', array_map(fn ($cookie) => $cookie->getName(), $response->headers->getCookies()));
+    ksort($headers);
+
+    return $headers;
+}
+
 // --- Creation and replacement -------------------------------------------------------------------------------------------------
 
 it('creates a File Card from a multipart form, ignores the type the browser claimed, and describes the file without saying where it is', function () {
@@ -366,13 +389,21 @@ it('gives every reason a reader\'s file is not theirs the SAME answer, whatever 
         'a visible File Card asked for through another visible Pack' => [$visible, $otherFile],
     ];
     $bodies = [];
+    $headers = [];
     foreach ($cases as $why => [$pack, $card]) {
         $response = $reader->get(FILES_MINE."/packs/{$pack}/cards/{$card}/file");
         expect($response->status())->toBe(404, $why);
         $bodies[$why] = (string) $response->getContent();
+        $headers[$why] = filesComparableHeaders($response);
     }
 
-    expect(array_unique($bodies))->toHaveCount(1)
+    // The body is not the only thing a reader can tell cases apart by: no header may differ either (G6 WP2, audit section I).
+    expect(array_unique($headers, SORT_REGULAR))->toHaveCount(1)
+        ->and(array_values($headers)[0])->toHaveKeys(['content-type', 'cache-control', 'x-content-type-options'])
+        ->and(array_values($headers)[0])->not->toHaveKey('content-disposition')
+        ->and(array_values($headers)[0])->not->toHaveKey('etag')
+        ->and(array_values($headers)[0])->not->toHaveKey('last-modified')
+        ->and(array_unique($bodies))->toHaveCount(1)
         ->and(json_decode(array_values($bodies)[0], true))->toBe(['message' => 'There is no such resource.', 'code' => 'resource_pack_not_found'])
         // The same Cards are management's to see, Drafts and all, and the privileged viewer\'s too: they are only not THIS reader\'s.
         ->and($console->get(FILES_MANAGE."/packs/{$visible}/cards/{$draftFile}/file")->getStatusCode())->toBe(200)
