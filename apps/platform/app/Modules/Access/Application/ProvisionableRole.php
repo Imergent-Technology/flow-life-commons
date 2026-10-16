@@ -21,6 +21,39 @@ enum ProvisionableRole: string
         };
     }
 
+    /**
+     * The provisionable role a STORED role key names, or null for any other key: unknown, retired, wrongly written, or a
+     * real role a relationship may not confer (`platform_administrator`, `guardian-full`). The read side of a sourced
+     * grant goes through this, so it honours exactly what the write side admits.
+     */
+    public static function fromRoleKey(string $roleKey): ?self
+    {
+        foreach (self::cases() as $provisionable) {
+            if ($provisionable->role()->value === $roleKey) {
+                return $provisionable;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The stored role keys a sourced grant could hold to confer the capability. Empty when no provisionable role grants it.
+     *
+     * @return list<string>
+     */
+    public static function roleKeysGranting(Capability $capability): array
+    {
+        $keys = [];
+        foreach (self::cases() as $provisionable) {
+            if ($provisionable->role()->grants($capability)) {
+                $keys[] = $provisionable->role()->value;
+            }
+        }
+
+        return $keys;
+    }
+
     /** The words an operator sees. Relationships ask for this and never for the role's capabilities. */
     public function displayName(): string
     {
