@@ -32,7 +32,25 @@ No release-time cache purge is needed for Commons in the current topology, and n
 
 ## Public, unauthenticated surface today
 
-`GET /api/v1/health` (coarse pass/fail, no versions or hostnames) and Laravel's `GET /up`, plus the credential-lifecycle endpoints that by design take no session — `POST /api/v1/invitations/accept`, `POST /api/v1/password/forgot` and `POST /api/v1/password/reset` — each rate-limited by IP and identifier, with the secret carried in the request body rather than a URL. Everything else added later must be authenticated and authorized by default; public endpoints are the exception and need a stated reason.
+Everything not on this list is authenticated by default (`auth:web`), and a route is added to the list only with a stated reason. **Exactly ten routes carry no `auth:web`.** The list is enforced by `RouteAuthenticationSurfaceTest` (G6 WP2), which walks every registered route, resolves its real middleware (aliases, groups and exclusions) and fails for an unlisted unauthenticated route, a stale entry, a route outside `/api/v1` other than `/up`, or an OpenAPI `security` declaration that disagrees. The test's `RouteSurface::PUBLIC_ROUTES` is the machine-readable form of this section.
+
+**Framework liveness.** `GET /up` answers `up` or `down` and nothing else. It sits outside `/api/v1`, runs only the global security headers, and starts no session.
+
+**Stateless public endpoints** (the `api` group only: no session, no cookie, no CSRF token). A secret in the request body is the credential, never a URL, and each is rate-limited by IP and identifier where it takes one:
+- `GET /api/v1/health`: coarse pass/fail, no versions or hostnames.
+- `POST /api/v1/invitations/accept`, `POST /api/v1/password/forgot` and `POST /api/v1/password/reset`: the credential-lifecycle endpoints that by design take no session.
+
+**Pre-authentication session endpoints** (the `stateful` group: cookie, session and CSRF apply, but deliberately **no `auth:web`**). What they need is the pending sign-in held in the session, which is not authentication ([ADR 0023](../adr/0023-multi-factor-authentication.md)), or a password that is being proved. They take no identity from the client:
+- `POST /api/v1/login`: proves the password; with a second factor due it answers `202` and establishes no session.
+- `POST /api/v1/mfa/challenge`, `POST /api/v1/mfa/enrollment` and `POST /api/v1/mfa/enrollment/confirm`: finish a sign-in whose password was proved. Without a pending sign-in they refuse.
+
+**Idempotent logout.** `POST /api/v1/logout` is on the session surface and also without `auth:web`: it ends a session if there is one and answers `204` either way, and a stale CSRF token is still refused with `419`. OpenAPI therefore documents it as *session cookie or no authentication*.
+
+**Authenticated Member self-service.** Signed in (`auth:web`, session and CSRF), and needing no Console capability: `GET /api/v1/me`, `GET /api/v1/my/membership`, `POST /api/v1/password/change`, `POST /api/v1/mfa/recovery-codes`, `POST /api/v1/mfa/authenticator`, `POST /api/v1/mfa/authenticator/confirm` and `POST /api/v1/security/verify`. The credential routes also take fresh proof in their own body.
+
+**Privileged Console administration.** Every `/api/v1/admin/...` route carries `stateful`, `auth:web` and `can:console.access`, plus exactly one catalog capability (except the four console-only reads [ADR 0038](../adr/0038-organizational-relationships-and-resource-viewing-authority.md) A6 allows), and `security.verified` where a step-up applies. This is pinned route by route by `AdministrationRoutesTest` and the module route tests.
+
+Everything else added later must be authenticated and authorized by default; public endpoints are the exception and need a stated reason, an entry in the test's list, and an OpenAPI operation that says so.
 
 ## Built from the Identity and Access design gate
 
