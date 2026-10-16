@@ -169,3 +169,30 @@ Verify from the code at the branch head, not from this record:
 7. **CRM**: the discovery test excludes only `PersonRegistration`.
 8. **Scope**: no production change besides `ProvisionableRole`, `Authorizer`, `PeopleHoldingCapability` and `CheckRelationships`, plus one comment each in `Relationships/Http/routes.php` and the OpenAPI description.
 
+
+## 12. Acceptance update (2026-10-16)
+
+**Integration.** The branch is `fix/g6-wp2-authorization-disclosure`, based on `origin/main` at `18d059e`. Its commit sequence is the five commits of §§1–9, then:
+
+| Commit | What it is |
+| --- | --- |
+| `449eb42` | The HEAD-only route-guard correction from the independent review (L1): `RouteSurface::keys` drops the `HEAD` Laravel adds to a GET route but keeps the `HEAD` of a route registered for `HEAD` alone, so such a route is judged. It also records the `cards.test` timeout of §10 under G6-D03 (I5). WP2 authorization behaviour is unchanged |
+| `6318e73` | The owner-approved G6-D03 reliability correction, **cherry-picked** from `07a677f` on `fix/g6-d03-vitest-reliability` (that branch is untouched): `maxWorkers` 8 to 4 in `apps/guardian-console/vite.config.ts`, `docs/audits/g6/d03-vitest-workers.md`, and the G6-D03 row of the debt register. It applied without conflict and changed exactly those three files. No other frontend rendering or synchronization change is part of it |
+
+**Final full gate**, run once on the integrated tree at `6318e73` with no source change between the cherry-pick and the run: `./flow check all --pgsql`, **green on the first run, "All checks passed", 1,792 s** (28 m 12 s).
+
+| Check | Result |
+| --- | --- |
+| Repo checks (compose, shellcheck, CLI, public surface, real Apache, release tooling, actionlint, WordPress companion) | green |
+| Composer manifest, Pint, Larastan (level max, tests included) | green |
+| Pest on MariaDB | **3424 passed, 26,820 assertions, 595 s** |
+| Pest on PostgreSQL | **3424 passed, 26,817 assertions, 724 s** |
+| TypeScript (strict), ESLint, Prettier | green |
+| Vitest (four workers) | **2276 passed, 89 of 89 files, 150 s** |
+| Production build, `verify:build` | green |
+
+The earlier `cards.test.tsx` accessibility timeout (§10) did not recur. No timeout was raised, no retry was used and no test was skipped. The browser suite was not run: nothing in this integration changes the Console's behaviour or the E2E infrastructure (the worker count is a Vitest setting).
+
+**Host load during the gate** (a 20-second sampler of `/proc/loadavg`, `free` and `docker stats`, 81 samples): the 1-minute load average peaked at **8.35** on the 16-logical-CPU host; available memory never fell below **3.9 GB**; swap use peaked at **143 MB** (it had been full at 4 GB in earlier sessions); the busiest neighbouring container (`portal_db`) peaked near 11% CPU. There was no meaningful contention from other projects, and no unrelated container was stopped or modified.
+
+**Still outstanding.** The independent Opus re-verification of the L1 correction (`449eb42`), and the owner's integration decision. Nothing is pushed; there is no PR; nothing is merged or deployed.
