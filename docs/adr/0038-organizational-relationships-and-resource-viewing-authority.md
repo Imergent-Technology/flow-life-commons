@@ -1210,7 +1210,9 @@ M6. **The role-key migration: `guardian` → `guardian-full`** (AR1). Built and 
   - every test that names `Role::Guardian` (about 30 files) moves to `Role::GuardianFull`;
   - the architecture tests change as A10 lists.
 - **Data, in one migration.** `UPDATE role_assignments SET role_key = 'guardian-full' WHERE role_key = 'guardian'`, in a transaction.
-  - It cannot collide with `unique(person_id, role_key)`, because no `guardian-full` row exists before it runs. The migration asserts that and refuses to run otherwise.
+  - The migration file holds this logic itself and depends on no application class, so it cannot change once shipped (G6 WP3a, decision D8). Its explicit transaction is what makes the rename atomic on MariaDB, where Laravel does not wrap a migration in one. Keys are compared exactly, in PHP.
+  - It refuses to run when an exact `guardian-full` row already exists, so it never merges into one.
+  - **Collisions (corrected 2026-10-17, G6 WP3-02).** This said the rename "cannot collide" with `unique(person_id, role_key)`. That holds for the exact key only. On MariaDB the unique key's collation treats `guardian-full` as equal to a key that differs only in case, a trailing space or an accent (`Guardian-Full`, `guardian-full `, `guardián-full`). Such a key is not `guardian-full`, so the refusal does not see it. When one Person holds both `guardian` and such a variant, MariaDB rejects the rename with a unique violation, and the transaction leaves every row as it was. PostgreSQL renames it. The v0.3.0 catalog could not create such a key, so only a manual edit could produce one. The owner kept these semantics: no collation-aware refusal, normalization or repair. The release's read-only pre-flight looks for such variants before migrating. `GuardianRoleKeyMigrationTest` pins both engines' answers.
   - It creates no row, so no one gains a role, and it leaves every other key, including `platform_administrator`, untouched.
   - It writes no security event per row. The change is a rename, identical in permissions to the development line's `guardian` (see the baseline note below), and the release notes record it. Historical `role.granted` events keep their original context (`guardian`), because the audit trail is append-only. Any screen that renders history shows a key that is no longer in the catalog as the raw key.
   - `down()` reverses the update, for a development rollback only.
@@ -1587,7 +1589,7 @@ T2. **Transactions.**
 T3. **Portability ([ADR 0005](0005-mariadb-with-postgresql-portability.md)).** No exception is needed:
 - ULIDs are generated in code.
 - States, types, field keys, role keys, decisions and grant-source types are validated strings.
-- The role-key migration (M6) is a plain `UPDATE` with a pre-check, identical on both engines.
+- The role-key migration (M6) is a plain `UPDATE` with a pre-check, identical on both engines, except for one corrupt-data case: a variant of `guardian-full` on the same Person as `guardian` (M6, corrected 2026-10-17).
 - Times are UTC `dateTime`.
 - Metadata is `text` in canonical forms.
 - Indexes are plain primary, unique and composite indexes.
