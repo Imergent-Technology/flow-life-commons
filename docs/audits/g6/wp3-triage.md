@@ -1,8 +1,8 @@
 # G6 WP3: Owner Triage Decisions
 
-**Milestone:** G6 Core Audit / Stabilization  
-**Package:** WP3, Data Integrity, Upgrade and Restore Safety  
-**Audit baseline:** `a7af9a0f25233244426daa2afadcaabbf32249b3`  
+**Milestone:** G6 Core Audit / Stabilization\
+**Package:** WP3, Data Integrity, Upgrade and Restore Safety\
+**Audit baseline:** `a7af9a0f25233244426daa2afadcaabbf32249b3`\
 **Production baseline:** v0.3.0, `2f385b79a7b83323c6f15a6685ee610ccd85b5bf`
 
 **Decision: APPROVED FOR BOUNDED REMEDIATION**
