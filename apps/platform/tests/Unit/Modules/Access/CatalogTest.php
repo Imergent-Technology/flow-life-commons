@@ -272,3 +272,51 @@ it('lets a source provision exactly guardian-initiate, and that role cannot admi
         }
     }
 });
+
+/**
+ * G6 WP2-02. The roles in `$bundles` (role key => capabilities) that grant something but not Console admission.
+ *
+ * Second-factor enforcement is tied to `console.access` (ConsoleMultiFactorPolicy), so a human role that granted
+ * `crm.people.view` without it would give a password-only session that authority through any use case. A role that
+ * grants nothing is harmless and allowed.
+ *
+ * @param  array<string, list<Capability>>  $bundles
+ * @return list<string> one sentence per offending role
+ */
+function humanRolesGrantingWithoutConsoleAccess(array $bundles): array
+{
+    $offenders = [];
+    foreach ($bundles as $key => $capabilities) {
+        if ($capabilities !== [] && ! in_array(Capability::ConsoleAccess, $capabilities, true)) {
+            $offenders[] = "role '{$key}' grants ".implode(', ', array_map(fn (Capability $capability): string => $capability->value, $capabilities)).' without console.access';
+        }
+    }
+
+    return $offenders;
+}
+
+it('grants console.access in every human role that grants any capability, so the second-factor policy covers each of them', function () {
+    // SCOPE: `Role` IS the human-role catalog. A service identity (ADR 0033) is a separate model and not a `Role`
+    // case; it is neither covered nor constrained here. If one is ever modelled as a Role case, this test must be
+    // revised on purpose in that change, with a decision of how its authentication strength is enforced (G6-D11).
+    $bundles = [];
+    foreach (Role::cases() as $role) {
+        $bundles[$role->value] = $role->capabilities();
+    }
+    $provisionable = [];
+    foreach (ProvisionableRole::cases() as $source) {
+        $provisionable[$source->role()->value] = $source->role()->capabilities();
+    }
+
+    expect($bundles)->not->toBe([])
+        ->and(humanRolesGrantingWithoutConsoleAccess($bundles))->toBe([])
+        ->and(humanRolesGrantingWithoutConsoleAccess($provisionable))->toBe([]);
+});
+
+it('judges a role bundle by that rule', function () {
+    expect(humanRolesGrantingWithoutConsoleAccess(['x' => [Capability::ViewPeople]]))->toBe(["role 'x' grants crm.people.view without console.access"])
+        ->and(humanRolesGrantingWithoutConsoleAccess(['y' => []]))->toBe([])
+        ->and(humanRolesGrantingWithoutConsoleAccess(['z' => [Capability::ConsoleAccess, Capability::ViewPeople]]))->toBe([])
+        ->and(humanRolesGrantingWithoutConsoleAccess(['w' => [Capability::ViewPeople, Capability::ManagePeople], 'ok' => [Capability::ConsoleAccess], 'none' => []]))
+        ->toBe(["role 'w' grants crm.people.view, crm.people.manage without console.access"]);
+});

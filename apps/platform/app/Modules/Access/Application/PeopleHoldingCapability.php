@@ -11,7 +11,10 @@ use App\Shared\Domain\PersonId;
 /**
  * People who currently hold a capability through an independent assignment or a sourced
  * grant (ADR 0038, M4). It names no role to its caller. An unknown stored key grants
- * nothing, so it is not a holder. Read-only, and it has no route.
+ * nothing, so it is not a holder. It agrees with the Authorizer about where a key may come
+ * from: an independent assignment counts for any role in the catalog, a sourced grant only
+ * for a ProvisionableRole (K2), so a sourced `platform_administrator` row makes no one a
+ * holder. Read-only, and it has no route.
  */
 final readonly class PeopleHoldingCapability
 {
@@ -47,7 +50,7 @@ final readonly class PeopleHoldingCapability
                 $add($person);
             }
         }
-        foreach ($this->grants->personIdsHoldingRoles($keys) as $person) {
+        foreach ($this->grants->personIdsHoldingRoles(ProvisionableRole::roleKeysGranting($capability)) as $person) {
             $add($person);
         }
 

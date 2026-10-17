@@ -2013,7 +2013,7 @@ Not designed here, and nothing is built for any of it:
 ## Implementation-time observations (not G10 scope)
 
 Recorded for the G6 audit:
-- Resources parses a stored `state` and `audience_mode` with `::from` (`DatabaseCardRepository.php:392,422,432`, `DatabasePackRepository.php:252`), so a corrupt value is a `500` rather than a fail-closed omission.
+- Resources parses a stored `state` and `audience_mode` with `::from` (`DatabaseCardRepository.php:392,422,432`, `DatabasePackRepository.php:267` (`:252` when this was written; the G6 WP2 audit re-checked it)), so a corrupt value is a `500` rather than a fail-closed omission.
 - The library's delivered file has no `available` field (ADR 0037 follow-ups).
 
 ## Implementation notes (WP4, 2026-10-12)

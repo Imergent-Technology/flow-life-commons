@@ -39,8 +39,11 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
     // Caps worker oversubscription. Each worker is a jsdom environment running whole-application tests, and the
-    // default is one per logical CPU; on an SMT host (16 threads over 8 cores) that is twice the cores, and
-    // the suite runs slower and less reliably than with one worker per physical core.
-    maxWorkers: 8,
+    // default is one per logical CPU; on an SMT host (16 threads over 8 cores) that is twice the cores. Eight
+    // workers (one per physical core) still left the host saturated by Vitest alone: with the Vitest main process
+    // and the Docker stack there is no headroom, the slowest tests ran to 3.8-5.1 s and two of three container
+    // runs failed a 1 s `findBy` or the 5 s test limit, a different test each time. Four workers finish in the same
+    // wall-clock time (about 130 s) and keep every test under about 2.5 s. Measurements: docs/audits/g6/d03-vitest-workers.md.
+    maxWorkers: 4,
   },
 })

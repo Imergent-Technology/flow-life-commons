@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Relationships\Application;
 
 use App\Modules\Access\Application\ListSourcedRoleGrants;
+use App\Modules\Access\Application\ProvisionableRole;
 use App\Modules\Access\Application\RoleGrantSourceType;
 use App\Modules\Relationships\Domain\FieldValues;
 use App\Modules\Relationships\Domain\RelationshipRepository;
@@ -73,6 +74,11 @@ final readonly class CheckRelationships
             $instance = $instances[$grant->sourceId] ?? null;
             if ($instance === null) {
                 $findings[] = "sourced grant {$grant->sourceId} has no relationship";
+                // The Authorizer honours only a provisionable role from a sourced row, so this one confers nothing. Say so,
+                // because with no relationship nothing below would notice a role a relationship can never confer.
+                if (ProvisionableRole::fromRoleKey($grant->roleKey) === null) {
+                    $findings[] = "sourced grant {$grant->sourceId} role is not provisionable";
+                }
 
                 continue;
             }

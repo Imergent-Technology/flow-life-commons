@@ -285,10 +285,17 @@ paths:
       description: >-
         Ends the session: it is invalidated and the session id and CSRF token are
         regenerated. The account and person are unchanged. Idempotent: with no
-        authenticated session it does nothing and still answers `204`. (A request whose
-        CSRF token is stale, for example after the session already lapsed, is refused
-        with `419`; the client should fetch a fresh token with `GET /me` and treat itself
-        as signed out.)
+        authenticated session it does nothing and still answers `204`.
+
+
+        Authentication is **optional** here (`security` lists the session cookie *or* no
+        authentication): the route is on the session surface (cookie and CSRF token) but
+        deliberately has no authentication requirement of its own, so signing out never fails
+        for want of a session. It is one of the ten routes the platform serves without
+        authentication, listed in the trust-boundaries documentation and pinned by a test.
+        A request whose CSRF token is stale, for example after the session already lapsed,
+        is refused with `419`; the client should fetch a fresh token with `GET /me` and
+        treat itself as signed out.
       tags: [Authentication]
       security:
         - sessionCookie: []

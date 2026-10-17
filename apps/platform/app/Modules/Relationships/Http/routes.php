@@ -24,7 +24,7 @@ use Illuminate\Support\Facades\Route;
  * so the lookup cannot be captured as a Person id.
  *
  * Recent verification follows A5, from each definition's `verification` list:
- * Guardian intake, status and deletion; every type's deletion; never a field edit.
+ * Guardian intake, status, the default-role decision and deletion; every type's deletion; never a field edit.
  * `can:guardians.manage` and `can:volunteers.manage` are step-up exemptions pinned to this module,
  * so a route under them may omit `security.verified`. The routes that still carry it are the table.
  *

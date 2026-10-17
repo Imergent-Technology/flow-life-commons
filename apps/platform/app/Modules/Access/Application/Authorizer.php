@@ -25,10 +25,14 @@ use App\Shared\Domain\Actor;
  *    effect on the very next decision, with no need to recreate the Actor or the session.
  *    Independent assignments and relationship-sourced grants are one set of roles (ADR 0038).
  *    Access does not ask Relationships whether a relationship still exists.
- * 4. **Each stored role key goes through the code-owned catalog.** A key the catalog does
- *    not know (corrupt, or a role since removed, including the retired `guardian` key)
- *    grants nothing: it fails closed, and never affects the person's other, valid roles.
- *    Two sources of one role are one capability set.
+ * 4. **Each stored role key goes through the code-owned catalog, by where it came from.** An
+ *    independent assignment may name any role in the catalog. A relationship-sourced grant
+ *    may name only a ProvisionableRole (K2), the same set the write path admits, so a row
+ *    that reached the table another way (a manual edit, a mismatched restore) confers
+ *    nothing unless it is one. A key the catalog does not know (corrupt, or a role since
+ *    removed, including the retired `guardian` key) grants nothing either: it fails
+ *    closed, and never affects the person's other, valid roles. Two sources of one role
+ *    are one capability set.
  * 5. **Default deny.** Nothing is granted unless a role in the catalog grants it.
  *
  * Nothing is cached, and nothing is ever taken from the client: capabilities in a request
@@ -61,20 +65,16 @@ final readonly class Authorizer
         }
 
         $held = [];
-        $grant = static function (string $roleKey) use (&$held): void {
-            $role = Role::tryFrom($roleKey);
-            if ($role === null) {
-                return; // unknown role key: grants nothing
-            }
-            foreach ($role->capabilities() as $capability) {
+        $grant = static function (?Role $role) use (&$held): void {
+            foreach ($role?->capabilities() ?? [] as $capability) { // null: an unknown or non-conferrable key grants nothing
                 $held[$capability->value] = $capability;
             }
         };
         foreach ($this->assignments->forPerson($current->personId) as $assignment) {
-            $grant($assignment->roleKey);
+            $grant(Role::tryFrom($assignment->roleKey));
         }
         foreach ($this->sourcedGrants->forPerson($current->personId) as $sourced) {
-            $grant($sourced->roleKey);
+            $grant(ProvisionableRole::fromRoleKey($sourced->roleKey)?->role());
         }
 
         ksort($held, SORT_STRING);

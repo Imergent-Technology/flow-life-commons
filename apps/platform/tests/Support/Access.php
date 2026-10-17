@@ -9,12 +9,14 @@ use App\Modules\Access\Application\Role;
 use App\Modules\Access\Domain\RoleAssignment;
 use App\Modules\Access\Domain\RoleAssignmentId;
 use App\Modules\Access\Domain\RoleAssignmentRepository;
+use App\Modules\Access\Domain\SourcedRoleGrantId;
 use App\Modules\Identity\Application\ActiveAccountQuery;
 use App\Modules\Identity\Domain\Account;
 use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /**
  * Fixtures for authorization tests. Role grant and revoke use cases do not exist yet (the
@@ -44,6 +46,26 @@ final class Access
             'granted_by_account_id' => null,
             'granted_at' => '2026-09-19 12:00:00',
         ]);
+    }
+
+    /**
+     * Writes a `sourced_role_grants` row exactly as given, bypassing GrantSourcedRole and the domain's key-shape check:
+     * what a manual edit, a mismatched restore or a future defect could leave behind. Returns the source id it used.
+     */
+    public static function plantSourced(PersonId $person, string $roleKey, ?string $sourceId = null): string
+    {
+        $sourceId ??= strtolower((string) Str::ulid());
+        DB::table('sourced_role_grants')->insert([
+            'id' => SourcedRoleGrantId::generate()->value,
+            'person_id' => $person->value,
+            'role_key' => $roleKey,
+            'source_type' => 'relationship',
+            'source_id' => $sourceId,
+            'granted_by_account_id' => null,
+            'granted_at' => '2026-10-09 12:00:00',
+        ]);
+
+        return $sourceId;
     }
 
     /** What revocation will do: delete the row. The port deliberately has no such method yet. */

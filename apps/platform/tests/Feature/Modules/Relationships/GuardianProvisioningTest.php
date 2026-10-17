@@ -856,6 +856,22 @@ it('reports every sourced-grant inconsistency and no field value', function (str
     'granted without a grant' => ['absent', 'is granted without a matching grant'],
 ]);
 
+it('reports a sourced grant of a role no relationship can confer even when its relationship is missing, without naming the role or repairing anything', function () {
+    $holder = Identity::savedPerson('Planted Administrator')->id->value;
+    $source = strtolower((string) Str::ulid());
+    plantRelationshipGrant($holder, $source, 'platform_administrator');
+    plantRelationshipGrant(Identity::savedPerson('Plain Orphan')->id->value, strtolower((string) Str::ulid()));
+
+    expect(Artisan::call('relationships:check'))->toBe(1);
+    $output = Artisan::output();
+
+    expect($output)->toContain("sourced grant {$source} has no relationship")
+        ->and($output)->toContain("sourced grant {$source} role is not provisionable")
+        ->and(substr_count($output, 'role is not provisionable'))->toBe(1) // the valid orphan is not accused of it
+        ->and($output)->not->toContain('platform_administrator')
+        ->and(DB::table('sourced_role_grants')->count())->toBe(2);
+});
+
 it('reports several grant findings from one read', function () {
     [$console, $admin] = Mfa::signedInAdmin();
     $person = provisionedGuardian($console, 'Several', decision: 'defer');
