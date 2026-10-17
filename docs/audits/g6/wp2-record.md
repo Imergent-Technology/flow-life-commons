@@ -1,8 +1,8 @@
 # G6 WP2 — remediation record
 
 - **Package:** WP2 Authorization, sourced grants and disclosure. Remediation of the [independent audit](wp2-audit.md) as ruled in the [owner's triage](wp2-triage.md).
-- **Base:** `main` at `18d059ec5d98f9c96147c96dea98fe754ff9db67` (PR #11, G6 WP1 squash-merged; post-merge CI run `38806979095` green). **Branch:** `fix/g6-wp2-authorization-disclosure`. Local only: not pushed, no PR, nothing deployed. Production stays on v0.3.0.
-- **Status:** implemented and validated locally; **awaiting the independent Opus verification** (§11) and the owner's integration decision. This record is evidence, not the independent review.
+- **Base:** `main` at `18d059ec5d98f9c96147c96dea98fe754ff9db67` (PR #11, G6 WP1 squash-merged; post-merge CI run `38806979095` green). **Branch:** `fix/g6-wp2-authorization-disclosure`. Local only when this record was first written; pushed for review in the pull request described in §13. Not merged, nothing deployed. Production stays on v0.3.0.
+- **Status:** implemented, validated, and **independently verified** (§13): the original review found one LOW (L1), which was corrected, and the final focused recheck found no new material finding. Awaiting the owner's integration review. This record is evidence, not the independent review.
 - **Audit and triage files:** the audit is committed as `wp2-audit.md` from its heading (`# G6 WP2: authorization…`) to its closing verdict line, unedited; the one-line "Written for:" hand-over note that preceded it was addressed to the owner and is not in the file. The owner's rulings are `wp2-triage.md`, verbatim.
 
 ## 1. What I verified in the audit before changing anything
@@ -196,3 +196,23 @@ The earlier `cards.test.tsx` accessibility timeout (§10) did not recur. No time
 **Host load during the gate** (a 20-second sampler of `/proc/loadavg`, `free` and `docker stats`, 81 samples): the 1-minute load average peaked at **8.35** on the 16-logical-CPU host; available memory never fell below **3.9 GB**; swap use peaked at **143 MB** (it had been full at 4 GB in earlier sessions); the busiest neighbouring container (`portal_db`) peaked near 11% CPU. There was no meaningful contention from other projects, and no unrelated container was stopped or modified.
 
 **Still outstanding.** The independent Opus re-verification of the L1 correction (`449eb42`), and the owner's integration decision. Nothing is pushed; there is no PR; nothing is merged or deployed.
+
+## 13. Independent verification and final status
+
+The independent Opus reviewer completed two reviews, preserved unedited and in order. Neither supersedes the other: the first found a defect, the second closes it.
+
+| Review | Reviewed | Verdict |
+| --- | --- | --- |
+| [Original verification](wp2-verification.md) | `f10e948` (five commits over `18d059e`) | The security remediation is correct (sourced grants limited to `ProvisionableRole` in both consumers, last-administrator continuity preserved, the `console.access` invariant, the Resources corruption and CRM ordering regressions all discriminating, with mutants of its own killed on both engines). **One LOW, L1:** the route guard ignored every `HEAD` method, so an unauthenticated route registered for `HEAD` alone was served (measured: 200) and the guard stayed green. `G6 WP2 SECURITY: REMEDIATION REQUIRED` (L1 only); a clean full-gate run was also required |
+| [Final focused recheck](wp2-final-recheck.md) | `09e250f` | L1 closed: the V5 (HEAD-only) and V5b (HEAD plus POST) routes are now reported by the guard; focused WP2 suites 212 passed on MariaDB and on PostgreSQL; D03 patch-identical to `07a677f`; the gate evidence agrees with the raw log; no new material finding. `G6 WP2 FINAL VERIFICATION: SAFE TO PREPARE PR` |
+
+**Disposition of L1.** Corrected at `449eb42`: `RouteSurface::keys` drops the implicit `HEAD` only for a route that also answers `GET`, with three regression tests. Test-only; no authorization behaviour changed.
+
+**Commit roles.**
+- `449eb42`: the L1 correction, and the `cards.test` timeout recorded under G6-D03 (the original review's I5).
+- `6318e73`: the owner-approved G6-D03 reliability correction (`maxWorkers` 8 to 4), cherry-picked from `07a677f`.
+- The full acceptance gate (§12) ran on the executable tree at `6318e73`: 3,424 Pest tests on each engine, 2,276 Vitest, all other checks green, 1,792 s.
+- `09e250f`: documentation only (§12). It changed `wp2-record.md` and nothing executable, so the gate result stands for it.
+- The commit that adds the two verification reports and this section is also documentation only.
+
+**Conclusion.** WP2 is independently verified and ready for integration review. Nothing has been merged, released or deployed; production remains v0.3.0. The reviewer's optional informational items (I1 the `AccountViews` over-report of a tampered row, I2 the unknown-scheme reading, I3 a file-route positive control, I4 the CRM dataset literal) remain non-blocking under the owner's ruling and are not part of this pull request.
