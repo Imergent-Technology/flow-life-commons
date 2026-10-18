@@ -146,6 +146,20 @@ final class UpgradeDatabase
         }
     }
 
+    /**
+     * Gives back the database connections this test (and the tests before it) no longer need. The backend suite runs in ONE PHP process
+     * and each test boots an application whose connections are only freed when PHP's cycle collector runs, so by the time these tests
+     * start the process can already be holding most of MariaDB's 151 connections (measured: the full MariaDB run reached "Too many
+     * connections" at the first of these tests, and later in the Apprentice suite). Each test here opens two more, so they return them.
+     */
+    public static function release(): void
+    {
+        self::restoreDefault();
+        DB::purge(self::CONNECTION);
+        DB::disconnect();
+        gc_collect_cycles();
+    }
+
     /** @return list<string> absolute paths of the 15 v0.3.0 migrations */
     public static function historicalPaths(): array
     {

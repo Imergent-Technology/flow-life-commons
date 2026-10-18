@@ -65,8 +65,13 @@ function migrationsBeforeTheRename(): array
     return array_slice(Fixture::UPGRADE_MIGRATIONS, 0, 11);
 }
 
+beforeAll(function () {
+    gc_collect_cycles(); // the earlier suites' connections (see Upgrade::release)
+});
+
 afterEach(function () {
     Upgrade::clean();
+    Upgrade::release();
 });
 
 afterAll(function () {

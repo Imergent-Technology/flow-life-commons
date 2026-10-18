@@ -118,8 +118,12 @@ beforeEach(function () {
     Upgrade::useAsDefault();
 });
 
+beforeAll(function () {
+    gc_collect_cycles(); // the earlier suites' connections (see Upgrade::release)
+});
+
 afterEach(function () {
-    Upgrade::restoreDefault();
+    Upgrade::release();
 });
 
 afterAll(function () {

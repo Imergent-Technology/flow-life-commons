@@ -16,8 +16,12 @@ function inheritedConnectionName(): string
     return config()->string('database.default');
 }
 
+beforeAll(function () {
+    gc_collect_cycles(); // the earlier suites' connections (see Upgrade::release)
+});
+
 afterEach(function () {
-    Upgrade::restoreDefault();
+    Upgrade::release();
 });
 
 it('connects to exactly flowlife_upgrade_test, and the server agrees', function () {
