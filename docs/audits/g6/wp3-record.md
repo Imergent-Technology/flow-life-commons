@@ -5,8 +5,8 @@
 
 ## WP3a — Migration freeze and immutability
 
-- **Base:** `main` at `a7af9a0f25233244426daa2afadcaabbf32249b3` (PR #12, G6 WP2 squash-merged; post-merge CI run `39031098500`, taken from the assignment and not re-queried). **Branch:** `fix/g6-wp3a-migration-freeze`. Local only: not pushed, no PR, nothing merged or deployed. Production stays on v0.3.0.
-- **Status:** implemented and validated locally. This record is the implementer's evidence. **It is not independent verification:** that is the focused Opus review the G6 contract (§5, "WP3a (D8)") requires.
+- **Base:** `main` at `a7af9a0f25233244426daa2afadcaabbf32249b3` (PR #12, G6 WP2 squash-merged; post-merge CI run `39031098500`, taken from the assignment and not re-queried). **Branch:** `fix/g6-wp3a-migration-freeze`. Pushed for review in a pull request (§14). Not merged, nothing deployed. Production stays on v0.3.0.
+- **Status:** implemented, validated, and **independently verified** ([§14](#14-independent-verification), [`wp3a-verification.md`](wp3a-verification.md)): no BLOCKER, HIGH, MEDIUM or LOW finding, and one INFORMATIONAL note, accepted. Ready for the owner's integration review. Sections 1–13 are the implementer's evidence, not the independent review.
 - **Who implemented it:** the assignment named Claude Sonnet 5.5. This session ran on **Claude Opus 5.5**. The verification should therefore be a separate session that did not write this code.
 - **Scope kept:** WP3a only. No WP3b historical upgrade suite, no WP3c rehearsal script or runbook work, no production or staging access, no release build, no change to the role catalog, the capability bundles or the rename's semantics, no CI change.
 
@@ -257,4 +257,32 @@ Each question from the assignment, with where its evidence is:
 | `d60b383` | `RenameGuardianRoleAssignments` deleted |
 | `0438a14` | `DeployedMigrationsTest` and its README entry |
 | `e4c265e` | ADR 0038 M6 and T3 corrections |
-| *closeout commit* | this record (gate outcome included); the `wp3-triage.md` hard-break reformat; debt row G6-D20 |
+| `21f45ae` | this record (gate outcome included); the `wp3-triage.md` hard-break reformat; debt row G6-D20 |
+| *verification commit* | `wp3a-verification.md`; §14 and the WP3b/WP3c dependencies below |
+
+### 14. Independent verification
+
+A separate Opus 5.5 session, which did not write this code, verified WP3a. Its report is [`wp3a-verification.md`](wp3a-verification.md), committed from its heading to its verdict; the one-line "Written for:" note addressed to the owner is omitted, as for the audits.
+
+- **Subject:** implementation HEAD `21f45ae`. The executable tree is that of the full-gate checkpoint `e4c265e` (§11); `21f45ae` changed only `docs/audits/g6/`.
+- **Engines:** disposable `mariadb:10.11.18`, production's patch level, and `postgres:16-alpine`, on a private network. `GuardianRoleKeyMigrationTest` and `DeployedMigrationsTest`: 32 passed on each (147 and 155 assertions).
+- **Migration equivalence:** a mechanical diff found the migration's methods identical to the deleted helper's apart from their signatures. The reviewer found the tests run the real file, and the E2 probe genuine.
+- **MariaDB atomicity:** on 10.11.18 the atomicity test's collision occurs, the table is left unchanged, and removing the transaction fails it with a partial rename. The test cannot pass through the refusal instead.
+- **Collation and mutants:** every case in §4 and every mutant in §5 reproduced with the same result. ML′ was confirmed equivalent.
+- **Immutability guard:** all 15 pins equal `git show v0.3.0:<path> | sha256sum`. An edit, a back-dated migration, a deletion and a rename were killed; a correctly dated migration passed.
+- **`--database`:** proven directly. `migrate --database=second` with the default connection on another database renamed and logged only on `second`. The gap §9 deferred to WP3b is closed.
+- **Gate evidence:** checked against `gate.log`, consistent; not re-run.
+- **Verdict:** **G6 WP3a VERIFICATION: SAFE TO PREPARE PR.**
+
+**I1 — INFORMATIONAL: the production pre-flight is described as if it exists.** ADR 0038 M6 and the migration's comment speak of "the release's read-only pre-flight", which is approved (WP3-10) but not written. **Owner disposition: accepted for WP3a.** The ADR and the comment are not changed for it. **WP3c must deliver the production pre-flight before release**, which keeps both sentences true.
+
+## WP3b and WP3c — pending, not yet authorized
+
+Planned by the triage and not started. What WP3a leaves to them:
+
+- **WP3c, before any release:**
+  - **The read-only production pre-flight** (WP3-10, WP3-12; owner disposition of I1): exact keys by bytes, collation-equal variants of `guardian` and `guardian-full`, the same-Person collision condition, holders by Account status, and the collations of the v0.3.0 tables and columns (§8).
+  - **The release-readiness count's MariaDB reading** (§8): the before and after counts match variants as well.
+  - **WP3-01 (MEDIUM), a mandatory release prerequisite:** the corrected in-place restore, rehearsed.
+  - The other WP3c findings as the triage rules them (WP3-04 to WP3-08, WP3-11, WP3-13).
+- **WP3b:** the historical upgrade suite as the triage describes it. `migrate --database=` is already proven (§14), so WP3b need not prove it again, though its separate database will exercise it.
