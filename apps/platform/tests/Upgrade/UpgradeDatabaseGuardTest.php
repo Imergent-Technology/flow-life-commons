@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Database\Connectors\ConnectionFactory;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Tests\Support\UpgradeDatabase as Upgrade;
 
@@ -203,4 +204,92 @@ it('refuses, from connect() itself, a connection the server puts on another data
         ->and($property->getValue())->toBe($verifiedBefore)
         ->and(Upgrade::useAsDefault(...))->toThrow(RuntimeException::class, 'The server reports database [flowlife_test]')
         ->and(DB::getDefaultConnection())->toBe($name);
+});
+
+/** Inherited configuration that makes the SERVER put the connection on `flowlife_test`, a database that exists (the K1 recipe). */
+function mismatchRecipe(string $name): void
+{
+    $driver = config()->string("database.connections.{$name}.driver");
+    config(match ($driver) {
+        'pgsql' => ["database.connections.{$name}.connect_via_database" => 'flowlife_test'],
+        'mariadb' => ["database.connections.{$name}.isolation_level" => 'READ COMMITTED; USE flowlife_test'],
+        default => throw new LogicException("No mismatch recipe for {$driver}."),
+    });
+}
+
+/**
+ * Inherited configuration that makes the SERVER put the connection on a database that does not exist, so the connection cannot be opened
+ * at all (a failure that is not a refusal: connect() must not leave its configuration behind for this one either).
+ */
+function missingDatabaseRecipe(string $name): void
+{
+    $driver = config()->string("database.connections.{$name}.driver");
+    config(match ($driver) {
+        'pgsql' => ["database.connections.{$name}.connect_via_database" => 'flowlife_no_such_database'],
+        'mariadb' => ["database.connections.{$name}.isolation_level" => 'READ COMMITTED; USE flowlife_no_such_database'],
+        default => throw new LogicException("No missing-database recipe for {$driver}."),
+    });
+}
+
+it('leaves no upgrade configuration behind when the server identity check refuses, so a bare DB::connection() cannot open it', function () {
+    // The reviewed failure (L3): the refusal purged the connection but kept `database.connections.upgrade`, so the next bare
+    // DB::connection('upgrade') built a connection from settings no check had passed. Reuses the K1 mismatch (a database that exists).
+    mismatchRecipe(inheritedConnectionName());
+
+    expect(Upgrade::connect(...))->toThrow(RuntimeException::class, 'The server reports database [flowlife_test], not flowlife_upgrade_test.');
+
+    try {
+        expect(config('database.connections.'.Upgrade::CONNECTION))->toBeNull()
+            ->and(fn () => DB::connection(Upgrade::CONNECTION))->toThrow(InvalidArgumentException::class, 'not configured')
+            ->and(array_key_exists(Upgrade::CONNECTION, DB::getConnections()))->toBeFalse();
+    } finally {
+        DB::purge(Upgrade::CONNECTION); // a failing run must not leave the unverified connection open for the next test
+    }
+});
+
+it('leaves no upgrade configuration behind when the connection cannot be opened at all', function () {
+    // A failure that is not the identity refusal (the database named by the inherited settings does not exist, so the connection cannot be
+    // opened and the check never gets an answer) takes the same path: nothing may be left configured.
+    $name = inheritedConnectionName();
+    missingDatabaseRecipe($name);
+    $property = new ReflectionProperty(Upgrade::class, 'verified');
+    $verifiedBefore = $property->getValue();
+
+    $thrown = null;
+    try {
+        Upgrade::connect();
+    } catch (Throwable $exception) {
+        $thrown = $exception;
+    }
+
+    try {
+        expect($thrown)->toBeInstanceOf(QueryException::class) // the database's own error, passed through unchanged, not a refusal message
+            ->and($thrown?->getMessage())->not->toContain('The server reports database')
+            ->and(config('database.connections.'.Upgrade::CONNECTION))->toBeNull()
+            ->and(array_key_exists(Upgrade::CONNECTION, DB::getConnections()))->toBeFalse()
+            ->and($property->getValue())->toBe($verifiedBefore)
+            ->and(fn () => DB::connection(Upgrade::CONNECTION))->toThrow(InvalidArgumentException::class, 'not configured');
+    } finally {
+        DB::purge(Upgrade::CONNECTION);
+    }
+});
+
+it('puts back the verified upgrade configuration when a later connect() is refused, and touches nothing else', function () {
+    $name = inheritedConnectionName();
+    Upgrade::connect();
+    $verified = config('database.connections.'.Upgrade::CONNECTION);
+    $property = new ReflectionProperty(Upgrade::class, 'verified');
+    expect($verified)->toBeArray()->and($property->getValue())->toBe($verified);
+
+    mismatchRecipe($name);
+    $inheritedAfterTamper = config("database.connections.{$name}");
+
+    expect(Upgrade::connect(...))->toThrow(RuntimeException::class, 'The server reports database [flowlife_test]')
+        ->and(config('database.connections.'.Upgrade::CONNECTION))->toBe($verified, 'the earlier verified settings are back, not the refused ones')
+        ->and($property->getValue())->toBe($verified)
+        ->and(config("database.connections.{$name}"))->toBe($inheritedAfterTamper, 'the inherited connection is not touched')
+        ->and(DB::getDefaultConnection())->toBe($name);
+
+    // The restored settings build a connection the server confirms, so the earlier verified connection was not lost.
+    Upgrade::assertServerDatabase(DB::connection(Upgrade::CONNECTION));
 });

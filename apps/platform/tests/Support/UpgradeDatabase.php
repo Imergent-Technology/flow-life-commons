@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use RuntimeException;
+use Throwable;
 
 /**
  * The database the historical-upgrade tests own (tests/Upgrade; G6 WP3b), and the only way they reach it.
@@ -26,9 +27,12 @@ use RuntimeException;
  * - the process is the testing environment, and its inherited default connection is a MariaDB or PostgreSQL `_test` database (the
  *   same rule tests/TestCase.php applies), so a shell with a development or production `.env` is refused;
  * - the host is one the Compose stack or a developer's own machine uses, never a remote name;
+ * - the inherited connection has no `read`, `write`, `sticky`, `direct` or `pooled` setting (refused by presence, `[]` and `null` included):
+ *   each lets Laravel send one kind of statement, DDL included, to a database or server that the checks below never asked;
  * - the database name is the constant below (tests/Upgrade/UpgradeDatabaseGuardTest pins its value), not read from configuration, and the connection's URL and socket settings are blanked,
  *   because a `DB_URL` or `DB_SOCKET` inherited from the environment could otherwise name another database or server;
- * - the SERVER, asked after connecting, reports the same database name.
+ * - the SERVER, asked after connecting (on the write side, the one that takes the DDL), reports the same database name. If it does not, or
+ *   cannot be reached, nothing stays configured: the connection is purged and the `upgrade` settings put back as they were before the call.
  *
  * Nothing here ever runs a statement on the default connection, except `useAsDefault()`, which a test calls to let the application's
  * own code (the Authorizer, the Artisan commands) read the upgraded schema; `restoreDefault()` puts it back.
@@ -105,16 +109,22 @@ final class UpgradeDatabase
         }
         self::refuseRouting($inherited);
 
+        // What the upgrade connection was configured as before this call: the settings an earlier connect() verified, or null.
+        $previous = config('database.connections.'.self::CONNECTION);
         config(['database.connections.'.self::CONNECTION => [...$inherited, 'database' => self::NAME, 'url' => null, 'unix_socket' => '']]);
         DB::purge(self::CONNECTION);
         $connection = DB::connection(self::CONNECTION);
 
         try {
             self::assertServerDatabase($connection);
-        } catch (RuntimeException $refused) {
+        } catch (Throwable $failed) {
+            // Refused (the server reports another database) or never answered (the connection cannot be opened). Either way these settings
+            // passed no check, so they must not stay configured: a bare DB::connection('upgrade') would build a connection from them. Put back
+            // what was configured before (a connection an earlier call verified stays usable; otherwise nothing is configured), and rethrow.
             DB::purge(self::CONNECTION);
+            config(['database.connections.'.self::CONNECTION => $previous]);
 
-            throw $refused;
+            throw $failed;
         }
 
         /** @var array<string, mixed> $settings */
