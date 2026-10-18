@@ -20,6 +20,11 @@ pest()->extend(ApprenticeApplication::class)->use(RefreshDatabase::class)->in('A
 // inside RefreshDatabase's wrapping transaction. They clean up after themselves.
 pest()->extend(TestCase::class)->in('Concurrency');
 
+// Upgrade tests build the v0.3.0 schema in their OWN database (flowlife_upgrade_test, Tests\Support\UpgradeDatabase) and run the later
+// migrations on it with the real runner, so they cannot sit inside RefreshDatabase's transaction or in the database the other suites keep
+// migrated. They create it, change it and drop it themselves, and touch nothing else.
+pest()->extend(TestCase::class)->in('Upgrade');
+
 // Live tests reach a REAL external service, so they are in no test suite (phpunit.xml) and never run
 // as part of ./flow test, ./flow check, CI or e2e. See tests/Live.
 pest()->extend(TestCase::class)->in('Live');
