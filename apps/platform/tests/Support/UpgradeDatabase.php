@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Support;
 
+use Illuminate\Container\Container;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Connectors\ConnectionFactory;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -65,8 +67,12 @@ final class UpgradeDatabase
 
     private static ?string $inheritedDefault = null;
 
-    /** The connection `connect()` last verified, kept so `cleanVerified()` can run in afterAll, when the application is gone. */
-    private static ?Connection $verified = null;
+    /**
+     * The settings of the connection `connect()` last verified, kept so `cleanVerified()` can run in afterAll, when the application is gone.
+     *
+     * @var array<string, mixed>|null
+     */
+    private static ?array $verified = null;
 
     /** The upgrade database, validated afresh. Throws rather than return a connection that is not exactly the intended one. */
     public static function connect(): Connection
@@ -104,18 +110,29 @@ final class UpgradeDatabase
             throw new RuntimeException('The server reports database ['.(is_string($reported) ? $reported : 'none').'], not '.self::NAME.'.');
         }
 
-        return self::$verified = $connection;
+        /** @var array<string, mixed> $settings */
+        $settings = config()->array('database.connections.'.self::CONNECTION);
+        self::$verified = $settings;
+
+        return $connection;
     }
 
     /**
-     * Drops every table in the connection `connect()` last verified. For a file's afterAll, where the application is already gone and
-     * `connect()` cannot be called again: it acts only on the object that passed those checks.
+     * Drops every table in the database `connect()` last verified. For a file's afterAll, where the application is already gone and
+     * `connect()` cannot be called again: it opens its own connection from the settings that passed those checks (the database name
+     * is checked again), because the verified connection may have been released since (`release()`).
      */
     public static function cleanVerified(): void
     {
-        if (self::$verified !== null) {
-            self::$verified->getSchemaBuilder()->dropAllTables();
+        if (self::$verified === null) {
+            return;
         }
+        if (self::$verified['database'] !== self::NAME) {
+            throw new RuntimeException('Refusing to clean database ['.(is_string(self::$verified['database']) ? self::$verified['database'] : 'unknown').'].');
+        }
+        $connection = (new ConnectionFactory(Container::getInstance()))->make(self::$verified, self::CONNECTION);
+        $connection->getSchemaBuilder()->dropAllTables();
+        $connection->disconnect();
     }
 
     /** Drops every table in the upgrade database, and nothing anywhere else. */
