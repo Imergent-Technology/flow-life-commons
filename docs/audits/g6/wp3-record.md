@@ -434,6 +434,7 @@ A1–A3 are the **case-handling regression** (A) and B1–B2 the **capability dr
 | `e6a45e7` | `afterAll` cleanup from the verified settings (**the gate's executable commit**) |
 | `ec86778`, `27bb2e6` | this section; WP3a's status |
 | `5484e96` | V1, L1, L2 remediation (§14); its gate is the one in §14 |
+| `f6c48a0` | `direct`/`pooled` refusal and the K1 test (§14.1); its gate is the one in §14.1 |
 
 ### 13. Limitations and what WP3c must still do
 
@@ -468,9 +469,60 @@ The independent Opus 5.5 verification returned REMEDIATION REQUIRED for one MEDI
 | C3 `cleanVerified` skips its name check | killed, 1 failed | killed, 1 failed |
 | **C1 `cleanVerified` skips its server check** | **survives** (58 passed) | **survives** (58 passed) |
 
-**Residual risk (C1).** `cleanVerified()`'s own call to `assertServerDatabase()` is not covered by a test. Once routing and the name are refused, a configuration whose server answer differs from its name cannot be built from the verified settings, so no genuine mismatch can reach that call. It is defence in depth behind two checks, not a tested boundary, and the check it calls is covered through `connect()` (S1, S2). Closing it would need a mock of the connection factory, which the assignment asked not to build for a LOW finding.
+**Residual risk (C1)** *(two statements in this section and in the S1/S2 rows were corrected by the second review, §14.1: S1 and S2 were killed by tests that call `assertServerDatabase()` directly and did not show that `connect()` calls it, and a server-side mismatch can be built from inherited configuration)*. `cleanVerified()`'s own call to `assertServerDatabase()` is not covered by a test. Once routing and the name are refused, a configuration whose server answer differs from its name cannot be built from the verified settings, so no genuine mismatch can reach that call. It is defence in depth behind two checks, not a tested boundary, and the check it calls is covered through `connect()` (S1, S2). Closing it would need a mock of the connection factory, which the assignment asked not to build for a LOW finding.
 
 **Gate:** `./flow check all --pgsql` at `5484e96`: all checks passed, exit 0, **3,505 backend tests on each engine** (3,491 + 14), 1,817 s; no skip, retry or timeout change; `git diff --check` clean.
+
+### 14.1 Second review: the `direct` bypass, K1 and two corrections
+
+The focused review of §14 found one more MEDIUM routing bypass (V1, continued) and one LOW coverage gap (K1). Fixed in `f6c48a0`, on top of `3bb7bc4`; test-support code only.
+
+**Corrections to §14, kept here so the earlier text stays as written:**
+1. **S1 and S2 did not show that `connect()` asks the server.** They were killed by the two tests that call `assertServerDatabase()` directly. Removing the *call* from `connect()` left all 58 tests passing. That is K1.
+2. **A server-side mismatch can be built from inherited configuration**, so §14's statement that none can be constructed was wrong for `connect()` (it stays true for `cleanVerified()`, which refuses those settings first). PostgreSQL's `connect_via_database` is the DSN's `dbname`; on MariaDB `isolation_level` is interpolated unvalidated into `SET SESSION TRANSACTION ISOLATION LEVEL %s;` and executed, so `READ COMMITTED; USE flowlife_test` moves the session. In both cases the guard must refuse before it marks the connection verified.
+
+**V1, continued: PostgreSQL `direct`.** Laravel 13.32 resolves `<connection>::direct` for migrations whenever a `direct` endpoint is configured, and merges the `direct` array over the connection (its `database` included). With `direct => ['database' => 'flowlife_test']` `connect()`'s write-side question was answered by the upgrade database, then the migrator created all 15 historical tables in `flowlife_test` while recording only `migrations` in the upgrade database (reproduced by the reviewer; not repeated here). `direct` and `pooled` are now in the refused keys, still by presence. A test with the reproduced configuration shows `migrateHistorical()`, `migratePending()` and `clean()` all refuse, no `upgrade` or `upgrade::direct` connection is registered, and the test database's tables are unchanged.
+
+**K1.** A test makes the server put `connect()` on `flowlife_test` from inherited configuration (PostgreSQL `connect_via_database`; MariaDB `isolation_level` carrying a `USE`) and requires `connect()` and `useAsDefault()` to refuse with "The server reports database [flowlife_test]", no connection registered, the default connection unchanged and the `verified` settings untouched. Only SELECTs run on the resulting connection.
+
+**Connection-routing inventory (Laravel 13.32: `ConnectionFactory`, `ConfiguresPooledConnections`, `DatabaseManager`, `Migrator`, `PostgresConnector`, `MySqlConnector`):**
+
+| Mechanism | Effect | Handling |
+| --- | --- | --- |
+| `read`, `write`, `sticky` | per-statement-type override of any key, `database` included | **Explicitly rejected** by presence, in `connect()` and `cleanVerified()` |
+| `direct`, `pooled` (PostgreSQL) | the migrator resolves `name::direct`, merged over the config | **Explicitly rejected** (`pooled` alone only warns, but belongs with `direct`) |
+| `url` (including inside `read`/`write`/`direct`) | the parsed URL replaces database and host | top level **neutralised** (`url => null`); nested ones are inside rejected keys |
+| `unix_socket` (MariaDB) | the socket replaces host and port | **Neutralised** (`''`) |
+| `host` (a string, or a list that Laravel shuffles) | which server | A list or anything off the allowlist is **rejected** (`is_string` and `HOSTS`) |
+| `database` | which database | **Neutralised**: set to the constant; the server confirms it |
+| `connect_via_database` (PostgreSQL) | the DSN's `dbname` for the base connection | **Detected** by `assertServerDatabase()`; K1 test. Not stripped, so the K1 test stays meaningful |
+| `connect_via_port` (PostgreSQL), `port` | which instance on an allowlisted host | **Detected only up to the name**: an instance there with a database called `flowlife_upgrade_test` would be accepted. Residual, below |
+| `isolation_level`, `charset`, `collation`, `timezone`, `modes`/`strict` (MariaDB), `options` init commands | SQL executed at connect time on the one connection | **Detected** by `assertServerDatabase()` for anything that changes the database; K1 test (`isolation_level`) |
+| `search_path`, `schema` (PostgreSQL) | the schema inside the verified database | **Not applicable**: it cannot leave the database; `tables()` and the snapshots read `public` |
+| `prefix` | table-name prefix | **Not applicable** to routing (the snapshots would fail loudly) |
+| a connection resolver callback | code, not configuration | **Not applicable** |
+
+No other reachable path was found that sends DDL away from the connection `assertServerDatabase()` checked once the routing keys are refused: the migrator, the schema builder and the Artisan commands all use that one registered connection.
+
+**Residual (accepted, LOW):** `port` / `connect_via_port` can name a different server on an allowlisted host; the destination would still have to be a database named exactly `flowlife_upgrade_test`. `cleanVerified()`'s own call to the server check (C1) is still not covered by a test (the reviewer accepts this as LOW once K1 is covered).
+
+**Mutations** (scratch worktree at `f6c48a0`, `tests/Upgrade` on each engine, restored after each; MariaDB and PostgreSQL gave the same counts):
+
+| Mutant | Result |
+| --- | --- |
+| K1 the `assertServerDatabase()` call removed from `connect()` | **killed**, 1 failed |
+| D1 `direct` and `pooled` removed from the refused keys | **killed**, 7 failed |
+| D2 only `direct` removed / D3 only `pooled` removed | **killed**, 4 / 3 failed |
+| R1 routing refusal disabled | **killed**, 18 failed |
+| S1 server check disabled / S2 server check asks the read side | **killed**, 3 / 1 failed |
+| G `url` / `unix_socket` not blanked | **killed**, 1 failed |
+| C1 `cleanVerified()` skips its server check | **survives** (66 passed) |
+
+With the refusal removed (D1, D2) the `direct` test lets the PostgreSQL migrator reach `flowlife_test`; it ended in an error because those tables already existed, and `flowlife_test` was afterwards checked still at 34 tables. That is luck of the destination, not a property of the test, so the mutant should not be repeated against an empty database.
+
+**Gate:** `./flow check all --pgsql` at `f6c48a0`: all checks passed, exit 0, **3,513 backend tests on each engine** (3,505 + 8; 27,283 and 27,288 assertions), 1,804 s (backend 627 s on MariaDB, 692 s on PostgreSQL); no skip, retry or timeout change; `git diff --check` clean. The four warnings in the output are the existing "use statement ... has no effect" notices in two unrelated Feature test files, present in earlier gates too. No connection exhaustion.
+
+**Tests:** the guard file now has 34 tests (it had 26); `tests/Upgrade` 66 passed (408 assertions) on MariaDB 10.11.19 and on PostgreSQL 16.15, both upgrade databases empty afterwards.
 
 ## WP3c — pending, not yet authorized
 
