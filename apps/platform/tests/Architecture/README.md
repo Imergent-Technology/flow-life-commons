@@ -29,6 +29,10 @@ rest of the suite (`./flow test backend`) and in CI.
 - `DatabasePortabilityTest.php`: bans MariaDB-only schema/SQL unless a line carries
   `// portability-exception: ADR-NNNN`. The definitive check is running the suite on
   PostgreSQL (`./flow test backend --pgsql`).
+- `DeployedMigrationsTest.php`: every migration a confirmed production release shipped keeps its
+  exact bytes (SHA-256, pinned per release from the release's tag), none is deleted, and every other
+  migration sorts after the last deployed one. It reads files only. Extend it with one block per
+  release, only after `release:show` confirms the deployment; the file says how.
 
 ## Proving a rule can fail
 
