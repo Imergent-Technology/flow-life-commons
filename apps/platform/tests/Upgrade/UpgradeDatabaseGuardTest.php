@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Illuminate\Database\Connectors\ConnectionFactory;
 use Illuminate\Support\Facades\DB;
 use Tests\Support\UpgradeDatabase as Upgrade;
 
@@ -85,3 +86,67 @@ it('puts the default connection back after use', function () {
     expect(config('database.default'))->toBe($before)
         ->and(DB::getDefaultConnection())->toBe($before);
 });
+
+it('refuses any read, write or sticky routing in the inherited connection, however empty, before a connection exists', function (string $key, mixed $value) {
+    $name = inheritedConnectionName();
+    // The case that was demonstrated: the top-level host and database pass every check, and the write side points elsewhere.
+    config(["database.connections.{$name}.{$key}" => $value]);
+
+    expect(Upgrade::connect(...))->toThrow(RuntimeException::class, "Refusing a connection with a [{$key}] setting")
+        ->and(Upgrade::clean(...))->toThrow(RuntimeException::class, "Refusing a connection with a [{$key}] setting")
+        ->and(Upgrade::useAsDefault(...))->toThrow(RuntimeException::class, "Refusing a connection with a [{$key}] setting")
+        ->and(array_key_exists(Upgrade::CONNECTION, DB::getConnections()))->toBeFalse()
+        ->and(DB::getDefaultConnection())->toBe($name);
+})->with(function () {
+    foreach (['read', 'write'] as $key) {
+        yield "{$key} naming another database" => [$key, ['database' => 'flowlife']];
+        yield "{$key} empty" => [$key, []];
+        yield "{$key} null" => [$key, null];
+    }
+    yield 'sticky true' => ['sticky', true];
+    yield 'sticky false' => ['sticky', false];
+    yield 'sticky null' => ['sticky', null];
+});
+
+it('asks the WRITE side which database it is on, and refuses a write side that is somewhere else', function () {
+    // Built without Upgrade::connect(), because connect() now refuses this shape: a connection whose top-level database is the upgrade
+    // database and whose write side is the test database. A read-side question (what the check used to ask) is answered with the upgrade
+    // database; the write side, which would take the DDL, is on flowlife_test. Nothing is run on either but a SELECT.
+    $name = inheritedConnectionName();
+    $inherited = config()->array("database.connections.{$name}");
+    $split = (new ConnectionFactory(app()))->make([...$inherited, 'database' => Upgrade::NAME, 'url' => null, 'unix_socket' => '', 'read' => ['database' => Upgrade::NAME], 'write' => ['database' => $inherited['database']]], 'split');
+    $driver = $split->getDriverName();
+    $sql = $driver === 'pgsql' ? 'select current_database()' : 'select database()';
+
+    try {
+        expect($split->scalar($sql))->toBe('flowlife_upgrade_test');
+        expect(fn () => Upgrade::assertServerDatabase($split))->toThrow(RuntimeException::class, 'The server reports database [flowlife_test], not flowlife_upgrade_test.');
+    } finally {
+        $split->disconnect();
+    }
+});
+
+it('accepts the upgrade connection and refuses any other database the server reports', function () {
+    Upgrade::assertServerDatabase(Upgrade::connect());
+
+    expect(fn () => Upgrade::assertServerDatabase(DB::connection()))->toThrow(RuntimeException::class, 'The server reports database [flowlife_test], not flowlife_upgrade_test.');
+});
+
+it('refuses to clean from settings that name routing or another database, before it connects', function (array $tamper, string $message) {
+    Upgrade::connect();
+    $property = new ReflectionProperty(Upgrade::class, 'verified');
+    $verified = $property->getValue();
+    assert(is_array($verified));
+
+    try {
+        $property->setValue(null, [...$verified, ...$tamper]);
+
+        expect(Upgrade::cleanVerified(...))->toThrow(RuntimeException::class, $message);
+    } finally {
+        $property->setValue(null, $verified);
+    }
+})->with([
+    'a write side' => [['write' => ['database' => 'flowlife_test']], 'Refusing a connection with a [write] setting'],
+    'a read side' => [['read' => []], 'Refusing a connection with a [read] setting'],
+    'another database' => [['database' => 'flowlife_test'], 'Refusing to clean database [flowlife_test]'],
+]);

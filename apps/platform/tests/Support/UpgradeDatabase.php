@@ -100,14 +100,18 @@ final class UpgradeDatabase
         if (! is_string($host) || ! in_array($host, self::HOSTS, true)) {
             throw new RuntimeException('Refusing to run destructive upgrade setup against host ['.(is_string($host) ? $host : 'unknown').']: only '.implode(', ', self::HOSTS).' are accepted.');
         }
+        self::refuseRouting($inherited);
+
         config(['database.connections.'.self::CONNECTION => [...$inherited, 'database' => self::NAME, 'url' => null, 'unix_socket' => '']]);
         DB::purge(self::CONNECTION);
         $connection = DB::connection(self::CONNECTION);
 
-        $reported = $connection->scalar($driver === 'pgsql' ? 'select current_database()' : 'select database()');
-        if ($reported !== self::NAME) {
+        try {
+            self::assertServerDatabase($connection);
+        } catch (RuntimeException $refused) {
             DB::purge(self::CONNECTION);
-            throw new RuntimeException('The server reports database ['.(is_string($reported) ? $reported : 'none').'], not '.self::NAME.'.');
+
+            throw $refused;
         }
 
         /** @var array<string, mixed> $settings */
@@ -118,28 +122,67 @@ final class UpgradeDatabase
     }
 
     /**
+     * Refuses a connection that names separate read or write servers or databases. Laravel lets `read`, `write` and `sticky` override ANY
+     * top-level key, `database` included, per statement type, so a configuration that passes every top-level check can still send DDL
+     * (the write side) to a different database than a read-only check sees. The upgrade tests need no such split, so none is accepted.
+     * Presence is tested, not truthiness: a key set to `[]`, `null` or `false` is still refused.
+     *
+     * @param  array<mixed>  $settings
+     */
+    private static function refuseRouting(array $settings): void
+    {
+        foreach (['read', 'write', 'sticky'] as $key) {
+            if (array_key_exists($key, $settings)) {
+                throw new RuntimeException("Refusing a connection with a [{$key}] setting: read/write routing could send DDL to a database the checks did not see.");
+            }
+        }
+    }
+
+    /**
+     * Asks the SERVER which database the connection's WRITE side is on, and refuses anything but `flowlife_upgrade_test`. DDL goes to the
+     * write connection, so that is the one that must be asked; a read connection can report a different database (see `refuseRouting`).
+     * Both `connect()` and `cleanVerified()` rely on this one check.
+     */
+    public static function assertServerDatabase(Connection $connection): void
+    {
+        $rows = $connection->selectFromWriteConnection($connection->getDriverName() === 'pgsql' ? 'select current_database() as name' : 'select database() as name');
+        $reported = isset($rows[0]) && is_object($rows[0]) ? ($rows[0]->name ?? null) : null;
+
+        if ($reported !== self::NAME) {
+            throw new RuntimeException('The server reports database ['.(is_string($reported) ? $reported : 'none').'], not '.self::NAME.'.');
+        }
+    }
+
+    /**
      * Drops every table in the database `connect()` last verified. For a file's afterAll, where the application is already gone and
-     * `connect()` cannot be called again: it opens its own connection from the settings that passed those checks (the database name
-     * is checked again), because the verified connection may have been released since (`release()`).
+     * `connect()` cannot be called again: it opens its own connection from the settings that passed those checks, because the verified
+     * connection may have been released since (`release()`). Those settings are checked again (no routing, the name), and then the
+     * server is asked which database the write side is on, on the very connection that then drops the tables.
      */
     public static function cleanVerified(): void
     {
-        if (self::$verified === null) {
+        $settings = self::$verified;
+        if ($settings === null) {
             return;
         }
-        if (self::$verified['database'] !== self::NAME) {
-            throw new RuntimeException('Refusing to clean database ['.(is_string(self::$verified['database']) ? self::$verified['database'] : 'unknown').'].');
+        if ($settings['database'] !== self::NAME) {
+            throw new RuntimeException('Refusing to clean database ['.(is_string($settings['database']) ? $settings['database'] : 'unknown').'].');
         }
-        $connection = (new ConnectionFactory(Container::getInstance()))->make(self::$verified, self::CONNECTION);
-        $connection->getSchemaBuilder()->dropAllTables();
-        $connection->disconnect();
+        self::refuseRouting($settings);
+
+        $connection = (new ConnectionFactory(Container::getInstance()))->make($settings, self::CONNECTION);
+        try {
+            self::assertServerDatabase($connection);
+            $connection->getSchemaBuilder()->dropAllTables();
+        } finally {
+            $connection->disconnect();
+        }
     }
 
     /** Drops every table in the upgrade database, and nothing anywhere else. */
     public static function clean(): void
     {
-        self::connect();
-        Schema::connection(self::CONNECTION)->dropAllTables();
+        self::connect()->getSchemaBuilder()->dropAllTables();
     }
 
     /**
