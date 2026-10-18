@@ -432,7 +432,8 @@ A1–A3 are the **case-handling regression** (A) and B1–B2 the **capability dr
 | `60730e3` | `docs/development/testing.md` |
 | `724a32c` | connection release |
 | `e6a45e7` | `afterAll` cleanup from the verified settings (**the gate's executable commit**) |
-| *record commit* | this section; WP3a's status |
+| `ec86778`, `27bb2e6` | this section; WP3a's status |
+| `5484e96` | V1, L1, L2 remediation (§14); its gate is the one in §14 |
 
 ### 13. Limitations and what WP3c must still do
 
@@ -442,6 +443,34 @@ A1–A3 are the **case-handling regression** (A) and B1–B2 the **capability dr
 - The upgrade runs once per file and the tests read different parts of it; a test that mutates the upgraded database would affect those after it. None does.
 - The adoption-report assertion pins the report's wording of section headings. A change to the report must update the test, which is the intent.
 - Not measured in GitHub CI; see §11.
+
+### 14. Remediation of the independent verification (V1, L1, L2)
+
+The independent Opus 5.5 verification returned REMEDIATION REQUIRED for one MEDIUM and two LOW findings in the test-support guard; everything else passed. The fix is `5484e96`, on top of `27bb2e6` (the eight earlier commits are unchanged). Test-support code only: nothing under `app/`, `database/` or `config/`.
+
+- **V1 (MEDIUM): read/write routing bypassed the guard.** Laravel lets `read`, `write` and `sticky` override any top-level key, `database` included. A connection could pass the host and name checks, the server check could ask the read side, and the DDL could go to a write side on another database. `UpgradeDatabase::connect()` now refuses any `read`, `write` or `sticky` key in the inherited connection, **by presence** (`array_key_exists`), so `[]`, `null` and `false` are refused too, before a connection to the upgrade database exists. `cleanVerified()` refuses it again.
+- **L2: `cleanVerified()` did not ask the server.** It now builds its connection from the verified settings, refuses routing and a wrong name, calls the same `assertServerDatabase()` and then drops the tables **on that same connection**, disconnecting in a `finally`.
+- **L1: the server check was not tested.** `assertServerDatabase()` is now one public method, used by both paths. It asks `selectFromWriteConnection`, the side that takes the DDL. Guard tests build a genuine mismatch with SELECTs only: a connection whose read side is the upgrade database (a read-side question answers `flowlife_upgrade_test`) and whose write side is `flowlife_test` (refused, "The server reports database [flowlife_test]"). Another test refuses the default connection and accepts the upgrade one.
+
+**Tests:** the guard file grows from 12 to 26 (14 new: 9 routing cases, 1 write-side, 1 accept/refuse, 3 cleanup refusals). `tests/Upgrade`: **58 passed (344 assertions) on MariaDB 10.11.19 and on PostgreSQL 16.15**; both databases empty afterwards.
+
+**Mutations** (scratch worktree at `5484e96`, `tests/Upgrade` run on each engine, restored and checked clean after each):
+
+| Mutant | MariaDB | PostgreSQL |
+| --- | --- | --- |
+| S1 server check disabled | killed, 2 failed | killed, 2 failed |
+| S2 server check asks the read side | killed, 1 failed | killed, 1 failed |
+| G `url`/`unix_socket` not blanked | killed, 1 failed | killed, 1 failed |
+| R1 `refuseRouting` disabled | killed, 11 failed | killed, 11 failed |
+| R2 routing refused by truthiness, not presence | killed, 7 failed | killed, 7 failed |
+| R3 `refuseRouting` call removed from `connect()` | killed, 9 failed | killed, 9 failed |
+| C2 `cleanVerified` skips the routing refusal | killed, 2 failed | killed, 2 failed |
+| C3 `cleanVerified` skips its name check | killed, 1 failed | killed, 1 failed |
+| **C1 `cleanVerified` skips its server check** | **survives** (58 passed) | **survives** (58 passed) |
+
+**Residual risk (C1).** `cleanVerified()`'s own call to `assertServerDatabase()` is not covered by a test. Once routing and the name are refused, a configuration whose server answer differs from its name cannot be built from the verified settings, so no genuine mismatch can reach that call. It is defence in depth behind two checks, not a tested boundary, and the check it calls is covered through `connect()` (S1, S2). Closing it would need a mock of the connection factory, which the assignment asked not to build for a LOW finding.
+
+**Gate:** `./flow check all --pgsql` at `5484e96`: all checks passed, exit 0, **3,505 backend tests on each engine** (3,491 + 14), 1,817 s; no skip, retry or timeout change; `git diff --check` clean.
 
 ## WP3c — pending, not yet authorized
 
