@@ -65,6 +65,9 @@ final class UpgradeDatabase
         '2026_09_23_000002_create_membership_grants_table.php',
     ];
 
+    /** Settings that send statements somewhere by type; see `refuseRouting()`. */
+    private const array ROUTING_KEYS = ['read', 'write', 'sticky', 'direct', 'pooled'];
+
     private static ?string $inheritedDefault = null;
 
     /**
@@ -122,18 +125,26 @@ final class UpgradeDatabase
     }
 
     /**
-     * Refuses a connection that names separate read or write servers or databases. Laravel lets `read`, `write` and `sticky` override ANY
-     * top-level key, `database` included, per statement type, so a configuration that passes every top-level check can still send DDL
-     * (the write side) to a different database than a read-only check sees. The upgrade tests need no such split, so none is accepted.
-     * Presence is tested, not truthiness: a key set to `[]`, `null` or `false` is still refused.
+     * Refuses a connection whose configuration routes statements by type. Laravel lets each of these override ANY top-level key, `database`
+     * included, for one kind of statement, so a configuration that passes every top-level check can still send DDL somewhere the checks never
+     * looked:
+     *
+     * - `read`, `write`, `sticky`: the read side answers the server check while the write side takes the DDL;
+     * - `direct` (with `pooled`; PostgreSQL): the migration runner resolves `<connection>::direct` whenever a direct endpoint is configured, so
+     *   migrations run through a connection the base connection's server check never touched (measured on Laravel 13.32: all 15 historical
+     *   migrations created in `flowlife_test` while only `migrations` was written to the upgrade database).
+     *
+     * The upgrade tests need none of them, so none is accepted. Presence is tested, not truthiness: a key set to `[]`, `null` or `false` is
+     * still refused. What it does NOT need to refuse (`connect_via_database`, an `isolation_level` or other setting that runs SQL at connect
+     * time, a `host` list) changes the one connection the migrator and the schema builder then use, so `assertServerDatabase()` sees it.
      *
      * @param  array<mixed>  $settings
      */
     private static function refuseRouting(array $settings): void
     {
-        foreach (['read', 'write', 'sticky'] as $key) {
+        foreach (self::ROUTING_KEYS as $key) {
             if (array_key_exists($key, $settings)) {
-                throw new RuntimeException("Refusing a connection with a [{$key}] setting: read/write routing could send DDL to a database the checks did not see.");
+                throw new RuntimeException("Refusing a connection with a [{$key}] setting: routing could send DDL to a database the checks did not see.");
             }
         }
     }

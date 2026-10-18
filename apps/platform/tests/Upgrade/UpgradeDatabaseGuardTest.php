@@ -98,11 +98,14 @@ it('refuses any read, write or sticky routing in the inherited connection, howev
         ->and(array_key_exists(Upgrade::CONNECTION, DB::getConnections()))->toBeFalse()
         ->and(DB::getDefaultConnection())->toBe($name);
 })->with(function () {
-    foreach (['read', 'write'] as $key) {
+    foreach (['read', 'write', 'direct'] as $key) {
         yield "{$key} naming another database" => [$key, ['database' => 'flowlife']];
         yield "{$key} empty" => [$key, []];
         yield "{$key} null" => [$key, null];
     }
+    yield 'pooled true' => ['pooled', true];
+    yield 'pooled false' => ['pooled', false];
+    yield 'pooled null' => ['pooled', null];
     yield 'sticky true' => ['sticky', true];
     yield 'sticky false' => ['sticky', false];
     yield 'sticky null' => ['sticky', null];
@@ -150,3 +153,54 @@ it('refuses to clean from settings that name routing or another database, before
     'a read side' => [['read' => []], 'Refusing a connection with a [read] setting'],
     'another database' => [['database' => 'flowlife_test'], 'Refusing to clean database [flowlife_test]'],
 ]);
+
+/** @return list<string> the tables in the test run's own database */
+function testDatabaseTables(): array
+{
+    $connection = DB::connection();
+    $names = array_map(
+        static fn (array $table): string => $table['name'],
+        $connection->getSchemaBuilder()->getTables($connection->getDriverName() === 'pgsql' ? 'public' : $connection->getDatabaseName()),
+    );
+    sort($names, SORT_STRING);
+
+    return $names;
+}
+
+it('refuses the PostgreSQL direct endpoint that sent migrations to another database, before any migration runs', function () {
+    // The demonstrated bypass (Laravel 13.32): `direct` naming flowlife_test. connect()'s own question was answered by the upgrade database,
+    // and the migrator then resolved `upgrade::direct` and created all 15 historical tables in flowlife_test. Refused here by the key, so
+    // nothing is created anywhere. On MariaDB the key means nothing to the driver and is refused all the same.
+    $name = inheritedConnectionName();
+    config(["database.connections.{$name}.direct" => ['database' => 'flowlife_test']]);
+    $before = testDatabaseTables();
+
+    expect(Upgrade::migrateHistorical(...))->toThrow(RuntimeException::class, 'Refusing a connection with a [direct] setting')
+        ->and(Upgrade::migratePending(...))->toThrow(RuntimeException::class, 'Refusing a connection with a [direct] setting')
+        ->and(Upgrade::clean(...))->toThrow(RuntimeException::class, 'Refusing a connection with a [direct] setting')
+        ->and(array_key_exists(Upgrade::CONNECTION, DB::getConnections()))->toBeFalse()
+        ->and(array_key_exists(Upgrade::CONNECTION.'::direct', DB::getConnections()))->toBeFalse()
+        ->and(testDatabaseTables())->toBe($before);
+});
+
+it('refuses, from connect() itself, a connection the server puts on another database, and marks nothing verified', function () {
+    // The mismatch comes from inherited configuration that runs at connect time, not from the database name (which connect() fixes):
+    // PostgreSQL's `connect_via_database` is the DSN's dbname, and on MariaDB an unvalidated `isolation_level` is executed as SQL
+    // ("SET SESSION TRANSACTION ISOLATION LEVEL %s;"), so it can carry a USE. Only SELECTs run on the connection that results. If the call
+    // to assertServerDatabase() were removed from connect(), this connection would be accepted.
+    $name = inheritedConnectionName();
+    $driver = config()->string("database.connections.{$name}.driver");
+    config(match ($driver) {
+        'pgsql' => ["database.connections.{$name}.connect_via_database" => 'flowlife_test'],
+        'mariadb' => ["database.connections.{$name}.isolation_level" => 'READ COMMITTED; USE flowlife_test'],
+        default => throw new LogicException("No mismatch recipe for {$driver}."),
+    });
+    $property = new ReflectionProperty(Upgrade::class, 'verified');
+    $verifiedBefore = $property->getValue();
+
+    expect(Upgrade::connect(...))->toThrow(RuntimeException::class, 'The server reports database [flowlife_test], not flowlife_upgrade_test.')
+        ->and(array_key_exists(Upgrade::CONNECTION, DB::getConnections()))->toBeFalse()
+        ->and($property->getValue())->toBe($verifiedBefore)
+        ->and(Upgrade::useAsDefault(...))->toThrow(RuntimeException::class, 'The server reports database [flowlife_test]')
+        ->and(DB::getDefaultConnection())->toBe($name);
+});
