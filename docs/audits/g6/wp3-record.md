@@ -314,7 +314,7 @@ A separate Opus 5.5 session, which did not write this code, verified WP3a. Its r
 
 **Two things measured on the way, kept in the code's comments:**
 - `Schema::getTables()` on MariaDB lists the tables of **every database the user can see**; `flowlife_test`'s appeared in the "upgrade" list until it was asked by schema.
-- The backend suite is **one PHP process** and MariaDB allows 151 connections. Earlier tests' connections are freed only when the cycle collector runs. The first full gate (below) reached "Too many connections" at the first upgrade test and in the Apprentice suite after it. Each test here now purges its connection, disconnects and collects, and each file collects once before it starts; the full MariaDB run then peaked at 132 sampled connections.
+- The backend suite is **one PHP process** and MariaDB allows 151 connections. Earlier tests' connections are freed only when the cycle collector runs. The first full gate (below) reached "Too many connections" at the first upgrade test and in the Apprentice suite after it. Each test here now purges its connection, disconnects and collects, and each file collects once before it starts; the full MariaDB runs then peaked at 131–132 sampled connections (sampled every 10 s).
 
 ### 3. Historical schema
 
