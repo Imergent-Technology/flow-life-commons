@@ -123,9 +123,10 @@ it('can be re-run once the refused assignment is gone: it renames and completes,
 });
 
 it('on the SAME Person, a collation-equal variant of guardian-full stops the rename on MariaDB and is renamed beside on PostgreSQL (WP3-02)', function () {
-    // Gus holds `guardian`; this gives him `Guardian-Full` too. It is not the exact key, so the migration's own check lets it through; whether the
-    // rename then collides is the engine's unique key on (person_id, role_key).
-    $before = refusedUpgradeBaseline([13 => [2, 'Guardian-Full']]);
+    // Nora holds `guardian`; this gives her `Guardian-Full` too. It is not the exact key, so the migration's own check lets it through; whether the
+    // rename then collides is the engine's unique key on (person_id, role_key). Nora's is the LAST exact `guardian` row the rename visits (ids run
+    // in order), so four others are renamed first: that is what makes a rename without its own transaction visible on MariaDB (WP3-03).
+    $before = refusedUpgradeBaseline([13 => [6, 'Guardian-Full']]);
     $failure = refusedUpgradeFailure();
     $after = Snapshot::take(Upgrade::connect());
     $driver = DB::connection(Upgrade::CONNECTION)->getDriverName();
@@ -139,12 +140,12 @@ it('on the SAME Person, a collation-equal variant of guardian-full stops the ren
             ->and(Snapshot::differences(Snapshot::expected($before, [], migrationsBeforeTheRename(), 2), $after))->toBe([])
             ->and(Schema::connection(Upgrade::CONNECTION)->hasTable('sourced_role_grants'))->toBeFalse();
     } else {
-        // PostgreSQL's key is exact: no collision, so the upgrade completes and Gus holds both keys, which differ.
+        // PostgreSQL's key is exact: no collision, so the upgrade completes and Nora holds both keys, which differ.
         expect($driver)->toBe('pgsql')
             ->and($failure)->toBeNull()
             ->and(Upgrade::ran())->toBe([...Upgrade::HISTORICAL, ...Fixture::UPGRADE_MIGRATIONS])
-            ->and(DB::connection(Upgrade::CONNECTION)->table('role_assignments')->where('person_id', Fixture::person(2))->orderBy('role_key')->pluck('role_key')->all())
-            ->toBe(['Guardian-Full', 'guardian-full', 'platform_administrator'])
+            ->and(DB::connection(Upgrade::CONNECTION)->table('role_assignments')->where('person_id', Fixture::person(6))->orderBy('role_key')->pluck('role_key')->all())
+            ->toBe(['Guardian-Full', 'guardian-full'])
             ->and(Snapshot::differences(Snapshot::expected($before, array_map(Fixture::assignment(...), Fixture::RENAMED), Fixture::UPGRADE_MIGRATIONS, 2), $after))->toBe([]);
     }
 });
