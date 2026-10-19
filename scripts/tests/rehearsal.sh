@@ -72,6 +72,12 @@ cat >"$BIN/docker" <<'FAKE'
 W="$(dirname "$0")/.world"
 printf '%s\n' "$*" >>"$W/calls"
 env | cut -d= -f1 | sort >>"$W/envnames"
+# $W/fail_when holds one glob per line; a call matching any of them fails, as a daemon that errors on one listing would.
+if [[ -f "$W/fail_when" ]]; then
+    while IFS= read -r pat; do
+        [[ -z "$pat" ]] || case "$*" in $pat) echo "fake docker: injected failure: $*" >&2; exit 1 ;; esac
+    done <"$W/fail_when"
+fi
 
 declare -A CX=(
     ['{{.Id}}']=id ['{{.Name}}']=name ['{{.Config.Image}}']=image
@@ -99,9 +105,17 @@ declare -A VX=(
 
 render() { # KIND DIR TEMPLATE
     local -n table="$1"
-    local dir="$2" out="$3" expr
+    local dir="$2" out="$3" expr value
+    # The real daemon cannot render this container template for a bind mount (a bind mount has no Name), and exits 1.
+    if [[ "$1" == CX && "$(cat "$dir/mounts" 2>/dev/null)" == *bind:* ]]; then
+        echo 'template parsing error: template: :1:402: executing "" at <.Name>: map has no entry for key "Name"' >&2
+        exit 1
+    fi
     for expr in "${!table[@]}"; do
-        out="${out//"$expr"/$(cat "$dir/${table[$expr]}" 2>/dev/null || true)}"
+        value="$(cat "$dir/${table[$expr]}" 2>/dev/null || true)"
+        # A label that is absent renders as "<no value>" for containers and networks (empty for volumes), as on the real daemon.
+        if [[ -z "$value" && "${table[$expr]}" == l_* && "$1" != VX ]]; then value='<no value>'; fi
+        out="${out//"$expr"/$value}"
     done
     if [[ "$out" == *'{{'* ]]; then echo "fake docker: unsupported template: $3" >&2; exit 97; fi
     printf '%s\n' "$out"
@@ -173,10 +187,11 @@ case "$1 ${2:-}" in
             [[ -f "$f" ]] || continue
             printf '%s' "$(sed "s/$gone,//" "$f")" >"$f"
         done ;;
-    "network rm") rm -rf "$W/n/$(lastarg "$@")" ;;
-    "volume rm") rm -rf "$W/v/$(lastarg "$@")" ;;
+    "network rm") [[ ! -e "$W/network_rm_fail" ]] || exit 1; rm -rf "$W/n/$(lastarg "$@")" ;;
+    "volume rm") [[ ! -e "$W/volume_rm_fail" ]] || exit 1; rm -rf "$W/v/$(lastarg "$@")" ;;
     "exec -i")
         id="$3"
+        [[ -n "$id" ]] || { echo "Error: No container specified" >&2; exit 1; }
         [[ -d "$W/c/$id" ]] || { echo "Error: No such container: $id" >&2; exit 1; }
         sql="$(cat)"
         case "$sql" in
@@ -284,12 +299,18 @@ for kv in id=$CID name=/$NAME_C image=$IMAGE l_ns=restore-v1 l_role=database l_t
 for kv in id=$NID name=$NAME_N internal=true driver=bridge l_ns=restore-v1 l_role=database-network l_token=\$token endpoints=$CID,; do put "\$d/n/$NID" "\${kv%%=*}" "\${kv#*=}"; done
 for kv in id=$NAME_V name=$NAME_V driver=local options=0 l_ns=restore-v1 l_role=database-data l_token=\$token; do put "\$d/v/$NAME_V" "\${kv%%=*}" "\${kv#*=}"; done
 [[ ! -e "\$d/up_extra_volume" ]] || { mkdir -p "\$d/v/extra"; for kv in id=extra name=other driver=local options=0 l_ns=restore-v1 l_role=database-data l_token=\$token; do put "\$d/v/extra" "\${kv%%=*}" "\${kv#*=}"; done; }
+[[ ! -f "\$d/up_override" ]] || while read -r kind field value; do case "\$kind" in c) put "\$d/c/$CID" "\$field" "\$value" ;; n) put "\$d/n/$NID" "\$field" "\$value" ;; v) put "\$d/v/$NAME_V" "\$field" "\$value" ;; esac; done <"\$d/up_override"
 [[ ! -e "\$d/up_extra_network" ]] || { mkdir -p "\$d/n/extra"; for kv in id=extra name=other internal=true driver=bridge l_ns=restore-v1 l_role=database-network l_token=\$token endpoints=; do put "\$d/n/extra" "\${kv%%=*}" "\${kv#*=}"; done; }
 MAKE
     touch "$W/up_creates"
     # The real rendering of the committed file is what `up` checks, so the fake hands back exactly that.
     render_committed >"$W/rendered"
 }
+
+# up_override KIND(c|n|v) FIELD VALUE: after the fake `compose up` makes its objects, one field of one of them is changed.
+up_override() { printf '%s %s %s\n' "$1" "$2" "$3" >>"$W/up_override"; }
+# inject_failure GLOB: the fake daemon fails any call whose arguments match.
+inject_failure() { printf '%s\n' "$1" >>"$W/fail_when"; }
 
 render_committed() {
     local envf="$T/render.env"
@@ -636,9 +657,12 @@ t_g4_c_privilege() { identity_case c privileged true "privileged"; identity_case
 t_g4_c_netmode() { identity_case c netmode host "network mode"; identity_case c netmode bridge "network mode"; }
 t_g4_c_networks() { identity_case c nets "$NAME_N,flowlife-platform_default," "attached to"; }
 t_g4_c_mounts() {
-    identity_case c mounts "volume:$NAME_V:/var/lib/mysql,bind::/home/me:/x," "mounts are"
+    identity_case c mounts "volume:$NAME_V:/var/lib/mysql,volume:extra-volume:/data," "mounts are"
     identity_case c mounts "volume:other-volume:/var/lib/mysql," "mounts are"
-    identity_case c mounts "bind::/var/run/docker.sock:/var/run/docker.sock," "mounts are"
+    # A bind mount (a host path, or the Docker socket) cannot be rendered by the inspect template on the real daemon, which errors; the
+    # fake does the same. The container must still not count as the rehearsal database: an unreadable container fails closed.
+    identity_case c mounts "volume:$NAME_V:/var/lib/mysql,bind::/home/me:/x," "cannot be inspected"
+    identity_case c mounts "bind::/var/run/docker.sock:/var/run/docker.sock," "cannot be inspected"
 }
 t_g4_c_token() {
     good_world
@@ -776,6 +800,7 @@ t_g5_sentinel_token() {
     put "$W" sentinel_token "$OTHER_TOKEN"
     run_script -- self-check
     expect_refused 'a sentinel from another run' "not this run's"
+    expect_lacks 'a sentinel from another run' "$OUT" 'sentinel database carries'
     good_world
     rm -f "$W/sentinel_token"
     run_script -- self-check
@@ -792,6 +817,7 @@ t_g5_sql_is_preceded_by_the_sentinel_check() {
 
 t_g5_token_format() {
     good_world
+    rm -rf "${T:?}/root"
     make_root 'not-a-token'
     run_script -- self-check
     expect_refused 'a malformed token in the state file' '32-character hex'
@@ -1033,7 +1059,8 @@ SIBLING="$(printf 'e%.0s' {1..64})"
 t_g8_cleanup_removes_exactly_the_rehearsal() {
     crowded_world
     run_script -- cleanup
-    expect_rc 'cleanup' 0
+    # The labelled sibling is not the rehearsal's, so it is kept; and a cleanup that keeps a labelled object is incomplete.
+    expect_rc 'cleanup that keeps a labelled sibling' 1
     local mutating
     mutating="$(grep -E '^(stop|rm|network rm|volume rm|compose)' "$W/calls" || true)"
     [[ "$mutating" == "$(printf 'stop -t 30 %s\nrm %s\nnetwork rm %s\nvolume rm %s' "$CID" "$CID" "$NID" "$NAME_V")" ]] || bad "unexpected mutating calls: $mutating"
@@ -1046,7 +1073,20 @@ t_g8_cleanup_removes_exactly_the_rehearsal() {
         [[ -d "$W/$keep" ]] || bad "an unrelated object was removed: $keep"
     done
     expect_has 'unknown labelled container is reported' "$OUT" "keep    container ${SIBLING:0:12}"
-    [[ ! -e "$T/root" ]] || bad 'the state directory was not removed'
+    expect_has 'the incomplete cleanup says what remains' "$ERR" "remains: container ${SIBLING:0:12}"
+    [[ -f "$T/root/compose.env" ]] || bad 'the state was discarded although a labelled object remains'
+}
+
+t_g8_unrelated_objects_do_not_block_a_complete_cleanup() {
+    crowded_world
+    rm -rf "$W/c/$SIBLING" # the labelled sibling was the only thing that is kept; the rest are unlabelled lookalikes and other projects
+    run_script -- cleanup
+    expect_rc 'cleanup beside unrelated objects' 0
+    local keep
+    for keep in "c/$FOREIGN" "n/$(printf 'c%.0s' {1..64})" "n/$(printf 'd%.0s' {1..64})" "v/portal_db_data" "v/flc-rehearsal-restore-db-data-old"; do
+        [[ -d "$W/$keep" ]] || bad "an unrelated object was removed: $keep"
+    done
+    [[ ! -e "$T/root" ]] || bad 'the state directory was not removed after a complete cleanup'
 }
 
 t_g8_dry_run_changes_nothing() {
@@ -1066,6 +1106,8 @@ t_g8_run_token_mismatch_keeps_everything() {
     run_script -- cleanup
     expect_has 'token mismatch' "$OUT" "keep    container ${CID:0:12}"
     expect_has 'token mismatch' "$OUT" 'run token differs'
+    expect_rc 'a token mismatch' 1
+    [[ -f "$T/root/compose.env" ]] || bad 'the state was discarded although every object was kept'
     [[ -d "$W/c/$CID" ]] || bad 'a container carrying another run token was removed'
     [[ -d "$W/n/$NID" ]] || bad 'the network of a kept container was removed'
     [[ -d "$W/v/$NAME_V" ]] || bad 'the volume of a kept container was removed'
@@ -1092,6 +1134,7 @@ t_g8_stale_does_not_widen_identity() {
     rm -rf "$T/root"
     add_container "$CID" "image=mariadb:11.4.13"
     run_script -- cleanup --stale
+    expect_rc 'stale with a wrong image' 1
     expect_has 'stale with a wrong image' "$OUT" "keep    container ${CID:0:12}"
     [[ -d "$W/c/$CID" ]] || bad '--stale removed a container whose identity did not verify'
 }
@@ -1101,6 +1144,7 @@ t_g8_foreign_container_on_our_network() {
     add_container "$FOREIGN" "name=/intruder" "l_ns=" "nets=$NAME_N,"
     add_network "$NID" "endpoints=$CID,$FOREIGN,"
     run_script -- cleanup
+    expect_rc 'a foreign container on the network' 1
     expect_has 'foreign endpoint' "$OUT" "keep    network ${NID:0:12}"
     [[ -d "$W/n/$NID" ]] || bad 'a network with a foreign container attached was removed'
     [[ -d "$W/c/$FOREIGN" ]] || bad 'the foreign container was removed'
@@ -1111,6 +1155,7 @@ t_g8_volume_in_use_by_a_foreign_container() {
     good_world
     add_container "$FOREIGN" "name=/intruder" "l_ns=" "mounts=volume:$NAME_V:/data,"
     run_script -- cleanup
+    expect_rc 'a volume used by a foreign container' 1
     expect_has 'volume in use' "$OUT" 'keep    volume'
     [[ -d "$W/v/$NAME_V" ]] || bad 'a volume used by a foreign container was removed'
 }
@@ -1165,6 +1210,7 @@ t_g8_reverify_container() {
     good_world
     printf 'printf "%%s" /someone-else >"%s/c/%s/name"\n' "$W" "$CID" >"$W/hook_inspect_c"
     run_script -- cleanup
+    expect_rc 'a container that changed after it was classified' 1
     [[ -d "$W/c/$CID" ]] || bad 'a container that stopped matching after it was classified was removed'
     expect_has 'changed container' "$OUT" 'changed since it was checked'
     [[ "$(calls)" != *" rm $CID"* ]] || bad 'rm was called on a container that no longer verified'
@@ -1174,6 +1220,7 @@ t_g8_reverify_network() {
     good_world
     printf 'printf "%%s" false >"%s/n/%s/internal"\n' "$W" "$NID" >"$W/hook_inspect_n"
     run_script -- cleanup
+    expect_rc 'a network that changed after it was classified' 1
     [[ -d "$W/n/$NID" ]] || bad 'a network that stopped matching after it was classified was removed'
     [[ "$(calls)" != *"network rm"* ]] || bad 'network rm was called on a network that no longer verified'
 }
@@ -1182,8 +1229,314 @@ t_g8_reverify_volume() {
     good_world
     printf 'printf "%%s" nfs >"%s/v/%s/driver"\n' "$W" "$NAME_V" >"$W/hook_inspect_v"
     run_script -- cleanup
+    expect_rc 'a volume that changed after it was classified' 1
     [[ -d "$W/v/$NAME_V" ]] || bad 'a volume that stopped matching after it was classified was removed'
     [[ "$(calls)" != *"volume rm"* ]] || bad 'volume rm was called on a volume that no longer verified'
+}
+
+# --- tests: remediation of the independent review (partial cleanup, call sites, failed listings, fidelity) --------------------------------
+
+mutating_calls() { grep -E '^(stop|rm|network rm|volume rm|compose .* up )' "$W/calls" || true; }
+
+# A cleanup that cannot finish says so, keeps its state, and finishes normally once the cause is gone (no --stale involved).
+t_g8_incomplete_cleanup_keeps_state_and_can_be_retried() {
+    good_world
+    add_container "$FOREIGN" "name=/intruder" "l_ns=" "nets=$NAME_N," "mounts=volume:$NAME_V:/data,"
+    add_network "$NID" "endpoints=$CID,$FOREIGN,"
+    run_script -- cleanup
+    expect_rc 'a cleanup obstructed by a foreign container' 1
+    expect_has 'the container is removed' "$OUT" "removed container ${CID:0:12}"
+    expect_has 'the network is reported' "$OUT" "keep    network ${NID:0:12}"
+    expect_has 'the volume is reported' "$OUT" 'keep    volume'
+    expect_has 'incomplete is stated' "$ERR" 'cleanup is NOT complete: 2 rehearsal-labelled object(s) remain'
+    expect_has 'the network remains' "$ERR" "remains: network ${NID:0:12}: container ${FOREIGN:0:12} that is not ours is attached"
+    expect_has 'the volume remains' "$ERR" "remains: volume $NAME_V"
+    expect_has 'the way on is stated' "$ERR" 'then run: restore-rehearsal.sh cleanup'
+    expect_lacks 'no removal is reported for the state' "$OUT" 'removed state directory'
+    [[ ! -d "$W/c/$CID" && -d "$W/n/$NID" && -d "$W/v/$NAME_V" && -d "$W/c/$FOREIGN" ]] || bad 'the first attempt did not leave exactly the network, the volume and the intruder'
+    [[ -f "$T/root/compose.env" ]] || bad 'the state was discarded although labelled objects remain'
+
+    # Still obstructed: the same outcome, and nothing more is removed.
+    : >"$W/calls"
+    run_script -- cleanup
+    expect_rc 'a retry while still obstructed' 1
+    [[ -z "$(mutating_calls)" ]] || bad "a retry while obstructed removed something: $(mutating_calls)"
+    [[ -f "$T/root/compose.env" ]] || bad 'the state was discarded by a retry that could not finish'
+
+    # The obstruction goes; a plain cleanup (no --stale) completes what is left, although the container is already gone.
+    rm -rf "${W:?}/c/$FOREIGN"
+    put "$W/n/$NID" endpoints ''
+    : >"$W/calls"
+    run_script -- cleanup
+    expect_rc 'the retry once the obstruction is gone' 0
+    expect_has 'the network is removed' "$OUT" "removed network ${NID:0:12}"
+    expect_has 'the volume is removed' "$OUT" "removed volume $NAME_V"
+    expect_has 'the state is removed last' "$OUT" 'removed state directory'
+    [[ ! -d "$W/n/$NID" && ! -d "$W/v/$NAME_V" && ! -e "$T/root" ]] || bad 'the retry did not finish the cleanup'
+    expect_lacks 'no --stale was needed' "$(calls)" 'stale'
+}
+
+# remove_state removes the three files it wrote and rmdirs; it must never remove anything else (the state directory may hold evidence).
+t_g8_state_removal_is_never_recursive() {
+    good_world
+    mkdir "$T/root/evidence"
+    printf 'x' >"$T/root/evidence/f"
+    printf 'precious' >"$T/root/notes.txt"
+    run_script -- cleanup
+    expect_rc 'cleanup with other files in the state directory' 0
+    expect_has 'the directory is kept, and says why' "$ERR" 'holds other files and was kept'
+    [[ -f "$T/root/evidence/f" && -f "$T/root/notes.txt" ]] || bad 'a file this script did not write was removed'
+    [[ ! -e "$T/root/compose.env" && ! -e "$T/root/run.lock" && ! -e "$T/root/.flc-rehearsal-root" ]] || bad 'the files this script wrote were left behind'
+}
+
+# Each kind of failed removal is reported as what remains, keeps the state, and is finished by a plain retry.
+t_g8_failed_removals_are_reported_and_retried() {
+    local flag kind remains
+    for flag in rm_fail network_rm_fail volume_rm_fail; do
+        good_world
+        : >"$W/$flag"
+        run_script -- cleanup
+        expect_rc "cleanup with $flag" 1
+        case "$flag" in
+            rm_fail) kind=container; remains="remains: container ${CID:0:12}: could not be removed" ;;
+            network_rm_fail) kind=network; remains="remains: network ${NID:0:12}: could not be removed" ;;
+            volume_rm_fail) kind=volume; remains="remains: volume $NAME_V: could not be removed" ;;
+        esac
+        expect_has "$kind removal failure is named" "$ERR" "$remains"
+        expect_has "$kind removal failure says the cleanup is incomplete" "$ERR" 'cleanup is NOT complete'
+        [[ -f "$T/root/compose.env" ]] || bad "the state was discarded after a failed $kind removal"
+        rm -f "${W:?}/$flag"
+        run_script -- cleanup
+        expect_rc "the retry after a failed $kind removal" 0
+        [[ ! -d "$W/c/$CID" && ! -d "$W/n/$NID" && ! -d "$W/v/$NAME_V" && ! -e "$T/root" ]] || bad "the retry after a failed $kind removal did not finish"
+    done
+}
+
+t_g8_bind_mounted_container_is_kept() {
+    good_world
+    add_container "$CID" "mounts=volume:$NAME_V:/var/lib/mysql,bind::/home/me:/x,"
+    run_script -- cleanup
+    expect_rc 'cleanup with a container the template cannot render' 1
+    expect_has 'unreadable container' "$OUT" "keep    container ${CID:0:12}: cannot be inspected"
+    [[ -z "$(mutating_calls)" ]] || bad "a container that could not be verified led to removals: $(mutating_calls)"
+    [[ -d "$W/c/$CID" && -d "$W/n/$NID" && -d "$W/v/$NAME_V" && -f "$T/root/compose.env" ]] || bad 'something was removed on the strength of an unreadable container'
+}
+
+# --- cleanup applies the state-directory rules itself ---
+
+t_g3_cleanup_root_path_rules() {
+    local r
+    for r in 'relative/path' '/' "$T/home" "$T/a/../b"; do
+        new_world
+        run_script FLC_REHEARSAL_ROOT="$r" -- cleanup --dry-run
+        [[ "$RC" == 3 ]] || bad "cleanup accepted the state directory '$r' (exit $RC)"
+        assert_no_docker_call "cleanup with root '$r'"
+    done
+    new_world
+    run_script FLC_REHEARSAL_ROOT='relative/path' -- cleanup --dry-run
+    expect_refused 'relative root' 'not an absolute path'
+    new_world
+    run_script FLC_REHEARSAL_ROOT='/' -- cleanup --dry-run
+    expect_refused 'filesystem root' 'not an acceptable location'
+    new_world
+    mkdir -p "$T/elsewhere"
+    ln -s "$T/elsewhere" "$T/linkroot"
+    run_script FLC_REHEARSAL_ROOT="$T/linkroot" -- cleanup --dry-run
+    expect_refused 'symlinked root' 'symbolic link'
+    rm -f "$T/linkroot"
+}
+
+t_g3_cleanup_root_must_be_ours() {
+    # In every case the world holds a complete rehearsal whose token matches the compose.env in the directory; none of it may be touched
+    # on the strength of a directory that is not provably this script's.
+    local case_name needle
+    for case_name in marker mode owner file; do
+        good_world
+        case "$case_name" in
+            marker) rm -f "$T/root/.flc-rehearsal-root"; needle='marker missing' ;;
+            mode) chmod 755 "$T/root"; needle='not private' ;;
+            owner) printf '%%u|/root|99999\n' >"$T/stat-override"; needle='not owned by you' ;;
+            file) rm -rf "${T:?}/root"; printf 'x' >"$T/root"; needle='not a directory' ;;
+        esac
+        run_script -- cleanup
+        expect_refused "cleanup with a state directory failing on '$case_name'" "$needle"
+        [[ -z "$(mutating_calls)" ]] || bad "cleanup ($case_name) removed objects despite the state directory: $(mutating_calls)"
+        [[ -d "$W/c/$CID" && -d "$W/n/$NID" && -d "$W/v/$NAME_V" ]] || bad "cleanup ($case_name) removed rehearsal objects"
+        [[ ! -e "$T/root/run.lock" ]] || bad "cleanup ($case_name) created a lock file in a directory that is not its own"
+    done
+}
+
+# --- up applies the inherited-environment refusal itself ---
+
+t_g2_applies_to_up() {
+    local var
+    for var in COMPOSE_FILE DB_HOST; do
+        new_world
+        enable_up
+        run_script "$var=do-not-print-this-value" -- up
+        expect_refused "up with $var" "$var"
+        expect_lacks "up with $var" "$ERR$OUT" 'do-not-print-this-value'
+        assert_no_docker_call "up with $var"
+        [[ ! -e "$T/root" ]] || bad "up with $var created the state directory"
+    done
+}
+
+# --- up verifies what it started before it writes to the server ---
+
+# up_identity_case DESC NEEDLE KIND FIELD VALUE: the fake `compose up` makes one object wrong; up must refuse before creating the sentinel.
+up_identity_case() {
+    new_world
+    enable_up
+    up_override "$3" "$4" "$5"
+    run_script -- up
+    expect_refused "$1" "$2"
+    expect_lacks "$1" "$OUT" 'Ready.'
+    if [[ -f "$W/sql.log" ]] && grep -q SENTINEL "$W/sql.log"; then bad "$1: the sentinel was created before the identity was verified"; fi
+}
+t_g4_up_container_identity() {
+    up_identity_case 'a container with another image' 'is not the rehearsal database' c image mariadb:11.4.13
+    up_identity_case 'a privileged container' 'is not the rehearsal database' c privileged true
+    up_identity_case 'a container with another run token' 'run token differs' c l_token "$OTHER_TOKEN"
+}
+t_g4_up_network_identity() {
+    up_identity_case 'a network that is not internal' "the network is not the rehearsal's" n internal false
+    up_identity_case 'a network with a foreign container attached' 'is attached' n endpoints "$CID,$FOREIGN,"
+}
+t_g4_up_volume_identity() {
+    up_identity_case 'a volume with driver options' "the volume is not the rehearsal's" v options 1
+    up_identity_case 'a volume of another driver' 'plain local volume' v driver nfs
+}
+t_g4_up_server_version() {
+    new_world
+    enable_up
+    put "$W" version '10.11.19-MariaDB-ubu2204'
+    run_script -- up
+    expect_refused 'a server reporting another version' 'not 10.11.18'
+    if [[ -f "$W/sql.log" ]] && grep -q SENTINEL "$W/sql.log"; then bad 'the sentinel was created on a server of the wrong version'; fi
+}
+
+# --- the SQL entry point verifies the container and the server itself, in a shell that verified nothing before ---
+
+t_g5_sql_verifies_container_identity() {
+    good_world
+    add_container "$CID" "image=mariadb:11.4.13"
+    # A CID left over from an earlier verification must not stand in for verifying now.
+    run_fn "CID=$CID; echo 'SELECT 1;' | guarded_sql '$T/root' flc_rehearsal_app"
+    expect_refused 'SQL against a container that is not the rehearsal database' 'is not the rehearsal database'
+    [[ ! -s "$W/sql.log" ]] || bad 'SQL reached a container whose identity did not verify'
+}
+t_g5_sql_verifies_server_version() {
+    good_world
+    put "$W" version '11.4.13-MariaDB'
+    run_fn "echo 'SELECT 1;' | guarded_sql '$T/root' flc_rehearsal_app"
+    expect_refused 'SQL against a server of the wrong version' 'not 10.11.18'
+    [[ ! -s "$W/sql.log" ]] || bad 'SQL reached a server of the wrong version'
+}
+
+# --- a listing that failed is not an empty inventory ---
+
+LISTINGS=(
+    'ps -aq --no-trunc --filter label=io.flowlife*'
+    'network ls -q --no-trunc --filter label=io.flowlife*'
+    'volume ls -q --filter label=io.flowlife*'
+    'ps -a --no-trunc --filter name=*'
+    'network ls --no-trunc --filter name=*'
+    'volume ls --filter name=*'
+    'ps -aq --no-trunc --filter label=com.docker.compose.project=*'
+)
+
+t_g9_listing_failure_up() {
+    local glob
+    for glob in "${LISTINGS[@]}"; do
+        new_world
+        enable_up
+        inject_failure "$glob"
+        run_script -- up
+        expect_refused "up when '$glob' fails" 'could not list'
+        [[ -z "$(mutating_calls)" ]] || bad "up when '$glob' fails went on to change something: $(mutating_calls)"
+        [[ ! -e "$T/root/compose.env" ]] || bad "up when '$glob' fails wrote credentials"
+    done
+}
+t_g9_listing_failure_self_check() {
+    local glob
+    for glob in "${LISTINGS[@]}"; do
+        good_world
+        inject_failure "$glob"
+        run_script -- self-check
+        expect_refused "self-check when '$glob' fails" 'could not list'
+    done
+}
+t_g9_listing_failure_cleanup() {
+    local glob
+    for glob in "${LISTINGS[@]}"; do
+        good_world
+        inject_failure "$glob"
+        run_script -- cleanup
+        expect_refused "cleanup when '$glob' fails" 'could not list'
+        [[ -z "$(mutating_calls)" ]] || bad "cleanup when '$glob' fails removed something: $(mutating_calls)"
+        [[ -f "$T/root/compose.env" && -d "$W/c/$CID" ]] || bad "cleanup when '$glob' fails changed the state or the objects"
+    done
+}
+t_g9_listing_failure_before_sql() {
+    good_world
+    inject_failure 'ps -aq --no-trunc --filter label=io.flowlife*'
+    run_fn "echo 'SELECT 1;' | guarded_sql '$T/root' flc_rehearsal_app"
+    expect_refused 'SQL when the container cannot be listed' 'could not list'
+    [[ ! -s "$W/sql.log" ]] || bad 'SQL was sent although the container could not be found'
+}
+t_g8_volume_users_listing_failure() {
+    good_world
+    inject_failure 'ps -aq --no-trunc --filter volume=*'
+    run_fn "volume_identity_problem $NAME_V $TOKEN '$CID,'"
+    [[ "$RC" == 1 ]] || bad "a volume whose users cannot be listed was accepted (exit $RC)"
+    expect_has 'unlistable users' "$OUT" 'cannot be listed'
+    good_world
+    inject_failure 'ps -aq --no-trunc --filter volume=*'
+    run_script -- cleanup
+    expect_rc 'cleanup when the volume users cannot be listed' 1
+    [[ -d "$W/v/$NAME_V" ]] || bad 'a volume was removed although its users could not be listed'
+    expect_has 'the volume remains' "$ERR" "remains: volume $NAME_V"
+}
+
+# --- the fake daemon is faithful where the script's safety depends on it ---
+
+t_fake_daemon_fidelity() {
+    good_world
+    add_container "$CID" "l_ns="
+    run_fn "dkr inspect --type container --format \"\$CONTAINER_FMT\" $CID"
+    expect_has 'an absent label renders as the real daemon renders it' "$OUT" '<no value>'
+    run_fn "container_identity_problem $CID $TOKEN"
+    expect_has 'an absent label is not the rehearsal label' "$OUT" 'lacks the'
+    RC=0
+    "$BIN/docker" exec -i '' sh -c true </dev/null >/dev/null 2>&1 || RC=$?
+    [[ "$RC" != 0 ]] || bad 'the fake daemon accepts an exec with no container id'
+}
+
+# --- a malformed state file: why cleanup refuses, and the way on that keeps the evidence ---
+
+t_g5_malformed_state_recovery_path() {
+    good_world
+    rm -rf "${T:?}/root"
+    make_root 'not-a-token'
+    local before
+    before="$(<"$T/root/compose.env")"
+    run_script -- cleanup --stale
+    expect_refused 'cleanup --stale with a malformed state file' '32-character hex'
+    expect_has 'evidence' "$ERR" 'cp -p'
+    expect_has 'never edited' "$ERR" 'never edits, discards or rebuilds'
+    expect_has 'the way on' "$ERR" 'compose.env.unreadable'
+    expect_has 'the way on' "$ERR" 'cleanup --dry-run --stale'
+    [[ -z "$(mutating_calls)" ]] || bad 'objects were removed on the strength of a malformed state file'
+    [[ "$(<"$T/root/compose.env")" == "$before" ]] || bad 'the malformed state file was altered'
+    # Follow the instructions: move it aside, review, clean up. The moved file is evidence and stays.
+    mv "$T/root/compose.env" "$T/root/compose.env.unreadable"
+    run_script -- cleanup --dry-run --stale
+    expect_rc 'dry run after moving the file aside' 0
+    expect_has 'the list' "$OUT" "would remove container ${CID:0:12}"
+    run_script -- cleanup --stale
+    expect_rc 'cleanup --stale after moving the file aside' 0
+    [[ ! -d "$W/c/$CID" && ! -d "$W/n/$NID" && ! -d "$W/v/$NAME_V" ]] || bad 'the recovery path did not remove the verified objects'
+    [[ -f "$T/root/compose.env.unreadable" && "$(<"$T/root/compose.env.unreadable")" == "$before" ]] || bad 'the moved-aside evidence was lost or altered'
 }
 
 # --- the registry: which tests prove which guard ---------------------------------------------------------------------------------------------
@@ -1196,6 +1549,7 @@ declare -A GUARD_TESTS=(
     [G1-endpoint]='t_g1_endpoint'
     [G1-reachable]='t_g1_reachable'
     [G2-env]='t_g2_environment t_g2_applies_to_cleanup'
+    [G2-up]='t_g2_applies_to_up'
     [G3-env-mode]='t_g3_compose_env_mode'
     [G3-no-dotenv]='t_g3_dotenv_beside_compose'
     [G3-home]='t_g3_home_unset'
@@ -1206,6 +1560,8 @@ declare -A GUARD_TESTS=(
     [G3-root-marker]='t_g3_root_must_be_ours'
     [G3-root-mode]='t_g3_root_must_be_ours'
     [G3-root-owner]='t_g3_root_must_be_ours'
+    [G3-cleanup-validate]='t_g3_cleanup_root_path_rules'
+    [G3-cleanup-owner]='t_g3_cleanup_root_must_be_ours'
     [G4-c-name]='t_g4_c_name'
     [G4-c-image]='t_g4_c_image'
     [G4-c-label]='t_g4_c_label'
@@ -1229,6 +1585,10 @@ declare -A GUARD_TESTS=(
     [G8-volume-in-use]='t_g8_volume_in_use t_g8_volume_in_use_by_a_foreign_container'
     [G4-version]='t_g4_version_is_asked_of_the_server'
     [G4-single]='t_g4_single_container'
+    [G4-up-container]='t_g4_up_container_identity'
+    [G4-up-network]='t_g4_up_network_identity'
+    [G4-up-volume]='t_g4_up_volume_identity'
+    [G4-up-version]='t_g4_up_server_version'
     [G4-up-one-network]='t_g4_up_one_network_and_volume'
     [G4-up-one-volume]='t_g4_up_one_volume'
     [G4-pol-internal]='t_g4_pol_internal'
@@ -1241,6 +1601,9 @@ declare -A GUARD_TESTS=(
     [G4-pol-net-name]='t_g4_pol_net_name'
     [G4-pol-vol-name]='t_g4_pol_vol_name'
     [G5-token]='t_g5_sentinel_token t_g5_sql_is_preceded_by_the_sentinel_check'
+    [G5-sql-container]='t_g5_sql_verifies_container_identity'
+    [G5-sql-version]='t_g5_sql_verifies_server_version'
+    [G5-sql-sentinel]='t_g5_sql_is_preceded_by_the_sentinel_check'
     [G5-token-format]='t_g5_token_format'
     [G5-create-format]='t_g5_token_format'
     [G6-allowlist]='t_g6_allowlist'
@@ -1248,10 +1611,13 @@ declare -A GUARD_TESTS=(
     [G7-prune-dry-run]='t_g7_prune_dry_run'
     [G7-prune-options]='t_g7_prune_options'
     [G8-state-required]='t_g8_without_state_a_stale_flag_is_required'
+    [G8-incomplete]='t_g8_incomplete_cleanup_keeps_state_and_can_be_retried t_g8_cleanup_removes_exactly_the_rehearsal'
+    [G8-volume-users-list]='t_g8_volume_users_listing_failure'
     [G8-reverify-container]='t_g8_reverify_container'
     [G8-reverify-network]='t_g8_reverify_network'
     [G8-reverify-volume]='t_g8_reverify_volume'
     [G9-lock]='t_g9_lock'
+    [G9-inventory]='t_g9_listing_failure_up t_g9_listing_failure_self_check t_g9_listing_failure_cleanup t_g9_listing_failure_before_sql'
     [G9-state]='t_g9_stale_state_file'
     [G9-labelled]='t_g9_labelled_leftovers'
     [G9-lookalikes]='t_g9_lookalikes_by_name'

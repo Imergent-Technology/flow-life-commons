@@ -26,8 +26,10 @@
 #   G6  SQL runs only against a fixed allowlist of database names
 #   G7  artisan commands are denied unless listed; Resource pruning is allowed only as an exact `--dry-run`
 #   G8  cleanup removes only objects whose complete identity verifies, by exact ID or name, re-checked before each removal; no prune,
-#       no wildcard, no `compose down`; unknown objects are reported and kept
-#   G9  one run at a time (flock), and a leftover, partial or foreign project makes `up` refuse with recovery instructions
+#       no wildcard, no `compose down`; unknown objects are reported and kept, and a cleanup that leaves any labelled object says so,
+#       keeps its state file and exits 1
+#   G9  one run at a time (flock), a leftover, partial or foreign project makes `up` refuse with recovery instructions, and a Docker
+#       listing that fails is a refusal, never an empty inventory
 #
 # Exit status: 0 success; 1 a failure; 3 a safeguard refused; 64 usage.
 set -Eeuo pipefail
@@ -83,9 +85,10 @@ Usage: restore-rehearsal.sh <command>
 
   up            Start the isolated MariaDB 10.11.18 (internal network, nothing published to the host) and verify it.
   self-check    Read-only. Verify the environment and, if a rehearsal project exists, its complete identity.
-  cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. --stale is
-                needed only when the private state file is gone (the run token then cannot be checked): review the
-                --dry-run list first.
+  cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
+                labelled is kept or cannot be removed, cleanup says what remains, keeps its state file and exits 1; run
+                it again once the cause is gone. --stale is needed only when the private state file is gone (the run
+                token then cannot be checked): review the --dry-run list first.
 
 Local only. It never talks to production or staging, reads no application .env, and has no restore command. Notes:
 docs/development/restore-rehearsal.md
@@ -196,7 +199,7 @@ state_token() {
     local root="$1" token
     [[ -f "$root/compose.env" ]] || return 1
     token="$(grep -E '^REHEARSAL_RUN_TOKEN=' "$root/compose.env" | tail -n 1 | cut -d= -f2-)" || token=''
-    [[ "$token" =~ ^[0-9a-f]{32}$ ]] || refuse "the run token in '$root/compose.env' is not a 32-character hex value." # guard:G5-token-format
+    [[ "$token" =~ ^[0-9a-f]{32}$ ]] || refuse "the run token in '$root/compose.env' is not a 32-character hex value, so nothing can be checked against it and nothing was changed. The script never edits, discards or rebuilds that file. If you want to keep it as evidence, copy it elsewhere (cp -p). To recover, move it aside inside the state directory (mv '$root/compose.env' '$root/compose.env.unreadable'), then review: restore-rehearsal.sh cleanup --dry-run --stale ; and only if the list is the rehearsal's: restore-rehearsal.sh cleanup --stale. The moved-aside file keeps the state directory in place." # guard:G5-token-format
     printf '%s' "$token"
 }
 
@@ -238,7 +241,7 @@ compose_policy_problem() {
 # prints nothing and returns 0 when its identity is complete. TOKEN is compared when given.
 container_identity_problem() {
     local id="$1" token="${2:-}" out
-    out="$(dkr inspect --type container --format "$CONTAINER_FMT" "$id" 2>/dev/null)" || { echo "cannot be inspected"; return 1; }
+    out="$(dkr inspect --type container --format "$CONTAINER_FMT" "$id" 2>/dev/null)" || { echo "cannot be inspected (a missing container, or one the inspect template cannot render, such as a bind-mounted one, is not the rehearsal database)"; return 1; }
     local name image l_ns l_role l_token ports privileged capadd netmode networks mounts
     IFS='|' read -r _ name image l_ns l_role l_token ports privileged capadd netmode networks mounts <<<"$out"
     [[ "$name" == "/$CONTAINER_NAME" ]] || { echo "its name is '$name', not '/$CONTAINER_NAME'"; return 1; } # guard:G4-c-name
@@ -276,7 +279,7 @@ network_identity_problem() {
 # volume_identity_problem NAME TOKEN ALLOWED_USERS: containers other than ALLOWED_USERS (comma-separated full IDs) using the volume make
 # it not ours to remove.
 volume_identity_problem() {
-    local name="$1" token="${2:-}" allowed="${3:-}" out user
+    local name="$1" token="${2:-}" allowed="${3:-}" out user users='' users_failed=0
     out="$(dkr volume inspect --format "$VOLUME_FMT" "$name" 2>/dev/null)" || { echo "cannot be inspected"; return 1; }
     local v_name driver options l_ns l_role l_token
     IFS='|' read -r v_name driver options l_ns l_role l_token <<<"$out"
@@ -284,9 +287,11 @@ volume_identity_problem() {
     [[ "$driver" == local && "$options" == 0 ]] || { echo "it is not a plain local volume (it carries driver options such as a host path)"; return 1; } # guard:G4-v-options
     [[ "$l_ns" == "$LABEL_NS_VALUE" && "$l_role" == database-data ]] || { echo "its labels are not this script's"; return 1; } # guard:G4-v-label
     [[ -z "$token" || "$l_token" == "$token" ]] || { echo "its run token differs from this state directory's"; return 1; } # guard:G4-v-token
+    users="$(dkr ps -aq --no-trunc --filter "volume=$name")" || users_failed=1
+    [[ $users_failed == 0 ]] || { echo "the containers using it cannot be listed"; return 1; } # guard:G8-volume-users-list
     while IFS= read -r user; do
         [[ -z "$user" || ",$allowed," == *",$user,"* ]] || { echo "container ${user:0:12} that is not ours uses it"; return 1; } # guard:G8-volume-in-use
-    done < <(dkr ps -aq --no-trunc --filter "volume=$name")
+    done <<<"$users"
     return 0
 }
 
@@ -300,22 +305,37 @@ labelled_volumes() { dkr volume ls -q --filter "$(label_filter)"; }
 
 in_list() { [[ -n "$2" ]] && grep -Fxq -- "$1" <<<"$2"; }
 
+# inventory VAR WHAT COMMAND [ARGS...]: runs an enumeration and stores its output in VAR, or refuses. A listing that failed is not an
+# empty listing, and a failure inside $(...), a pipeline or a process substitution does not reliably stop a script that relies on
+# `set -e`, so every enumeration whose emptiness would be read as "nothing there" goes through here, in the main shell.
+inventory() {
+    local inv_var="$1" inv_what="$2" inv_out='' inv_status=0
+    shift 2
+    inv_out="$("$@")" || inv_status=$?
+    ((inv_status == 0)) || refuse "Docker could not list $inv_what (status $inv_status). An unreadable inventory is not an empty one; nothing was changed." # guard:G9-inventory
+    printf -v "$inv_var" '%s' "$inv_out"
+}
+
 # Objects of the project's exact names or Compose project that do NOT carry the rehearsal label (the three arguments are the labelled
 # containers, networks and volumes, one per line). For detection and reporting only: they are never selected for removal.
 foreign_lookalikes() {
-    local labelled_c="${1:-}" labelled_n="${2:-}" labelled_v="${3:-}" id name
+    local labelled_c="${1:-}" labelled_n="${2:-}" labelled_v="${3:-}" id name listing
+    listing="$(dkr ps -a --no-trunc --filter "name=$CONTAINER_NAME" --format '{{.ID}} {{.Names}}')" || return 1
     while read -r id name; do
         if [[ "$name" == "$CONTAINER_NAME" || "$name" == "/$CONTAINER_NAME" ]] && ! in_list "$id" "$labelled_c"; then say "container ${id:0:12} named $CONTAINER_NAME"; fi
-    done < <(dkr ps -a --no-trunc --filter "name=$CONTAINER_NAME" --format '{{.ID}} {{.Names}}')
+    done <<<"$listing"
+    listing="$(dkr network ls --no-trunc --filter "name=$NETWORK_NAME" --format '{{.ID}} {{.Name}}')" || return 1
     while read -r id name; do
         if [[ "$name" == "$NETWORK_NAME" ]] && ! in_list "$id" "$labelled_n"; then say "network ${id:0:12} named $NETWORK_NAME"; fi
-    done < <(dkr network ls --no-trunc --filter "name=$NETWORK_NAME" --format '{{.ID}} {{.Name}}')
+    done <<<"$listing"
+    listing="$(dkr volume ls --filter "name=$VOLUME_NAME" --format '{{.Name}}')" || return 1
     while read -r name; do
         if [[ "$name" == "$VOLUME_NAME" ]] && ! in_list "$name" "$labelled_v"; then say "volume named $VOLUME_NAME"; fi
-    done < <(dkr volume ls --filter "name=$VOLUME_NAME" --format '{{.Name}}')
+    done <<<"$listing"
+    listing="$(dkr ps -aq --no-trunc --filter "label=com.docker.compose.project=$PROJECT")" || return 1
     while read -r id; do
         if [[ -n "$id" ]] && ! in_list "$id" "$labelled_c"; then say "container ${id:0:12} in Compose project $PROJECT"; fi
-    done < <(dkr ps -aq --no-trunc --filter "label=com.docker.compose.project=$PROJECT")
+    done <<<"$listing"
 }
 
 # --- sentinel and guarded SQL (G5, G6) ------------------------------------------------------------------------------------------------
@@ -347,7 +367,7 @@ target_allowed() {
 resolve_project_container() {
     local root="$1" token ids
     token="$(state_token "$root")" || refuse "there is no state file in '$root'; nothing to verify against."
-    ids="$(labelled_containers)"
+    inventory ids 'the labelled containers' labelled_containers
     [[ -n "$ids" && "$ids" != *$'\n'* ]] || refuse "expected exactly one rehearsal container, found $(grep -c . <<<"$ids" || true)." # guard:G4-single
     local why
     why="$(container_identity_problem "$ids" "$token")" || refuse "the container ${ids:0:12} is not the rehearsal database: $why."
@@ -366,10 +386,10 @@ sentinel_problem() {
 assert_sql_target() {
     local root="$1" db="$2" token why
     target_allowed "$db" || refuse "'$db' is not one of the rehearsal's databases (${ALLOWED_TARGETS[*]})." # guard:G6-allowlist
-    resolve_project_container "$root"
+    resolve_project_container "$root" # guard:G5-sql-container
     token="$(state_token "$root")"
-    why="$(server_version_problem "$CID")" || refuse "$why."
-    why="$(sentinel_problem "$CID" "$token")" || refuse "$why."
+    why="$(server_version_problem "$CID")" || refuse "$why." # guard:G5-sql-version
+    why="$(sentinel_problem "$CID" "$token")" || refuse "$why." # guard:G5-sql-sentinel
 }
 
 # SQL on stdin, against one allowlisted database, after assert_sql_target.
@@ -428,17 +448,20 @@ on_up_exit() {
 
 # G9: anything left from an earlier run, partial or whole, or anything of ours-by-name that is not ours, stops `up`.
 refuse_if_stale() {
-    local root="$1" leftovers
+    local root="$1" leftovers lc ln lv
     [[ ! -e "$root/compose.env" ]] || refuse "a previous run left its state in '$root'. Run: restore-rehearsal.sh cleanup --dry-run, then cleanup." # guard:G9-state
-    leftovers="$( (labelled_containers; labelled_networks; labelled_volumes) | tr '\n' ' ')"
+    inventory lc 'the labelled containers' labelled_containers
+    inventory ln 'the labelled networks' labelled_networks
+    inventory lv 'the labelled volumes' labelled_volumes
+    leftovers="$(printf '%s %s %s' "$lc" "$ln" "$lv" | tr '\n' ' ')"
     [[ -z "${leftovers// /}" ]] || refuse "objects from an earlier run exist (${leftovers:0:120}...). Run: restore-rehearsal.sh cleanup --dry-run, then cleanup." # guard:G9-labelled
-    leftovers="$(foreign_lookalikes '' '' '')"
+    inventory leftovers 'the objects named like the rehearsal' foreign_lookalikes '' '' ''
     [[ -z "$leftovers" ]] || refuse "objects with the rehearsal's names or Compose project exist that this script cannot prove it created: $(tr '\n' ';' <<<"$leftovers") They are left alone. Remove them yourself if they are yours." # guard:G9-lookalikes
 }
 
 cmd_up() {
     [[ $# -eq 0 ]] || { usage >&2; exit 64; }
-    verify_clean_environment
+    verify_clean_environment # guard:G2-up
     local root
     root="$(root_dir)"
     validate_root_path "$root"
@@ -459,15 +482,15 @@ cmd_up() {
     say "Starting the isolated MariaDB (project $PROJECT; image pulls use the Docker daemon, the database network has no route out) ..."
     compose up -d --wait
 
-    resolve_project_container "$root"
+    resolve_project_container "$root" # guard:G4-up-container
     local nets vols
-    nets="$(labelled_networks)"
-    vols="$(labelled_volumes)"
+    inventory nets 'the labelled networks' labelled_networks
+    inventory vols 'the labelled volumes' labelled_volumes
     [[ -n "$nets" && "$nets" != *$'\n'* ]] || refuse "expected exactly one rehearsal network." # guard:G4-up-one-network
     [[ -n "$vols" && "$vols" != *$'\n'* ]] || refuse "expected exactly one rehearsal volume." # guard:G4-up-one-volume
-    why="$(network_identity_problem "$nets" "$token" "$CID")" || refuse "the network is not the rehearsal's: $why."
-    why="$(volume_identity_problem "$vols" "$token" "$CID")" || refuse "the volume is not the rehearsal's: $why."
-    why="$(server_version_problem "$CID")" || refuse "$why."
+    why="$(network_identity_problem "$nets" "$token" "$CID")" || refuse "the network is not the rehearsal's: $why." # guard:G4-up-network
+    why="$(volume_identity_problem "$vols" "$token" "$CID")" || refuse "the volume is not the rehearsal's: $why." # guard:G4-up-volume
+    why="$(server_version_problem "$CID")" || refuse "$why." # guard:G4-up-version
     create_sentinel "$CID" "$token"
     why="$(sentinel_problem "$CID" "$token")" || refuse "$why."
     printf 'SELECT 1;\n' | guarded_sql "$root" "$APP_DB" >/dev/null
@@ -491,10 +514,10 @@ cmd_self_check() {
     ok_line "no inherited database, application or Compose override"
     ok_line "Docker daemon is local (default context, unix socket)"
     local containers networks volumes lookalikes
-    containers="$(labelled_containers)"
-    networks="$(labelled_networks)"
-    volumes="$(labelled_volumes)"
-    lookalikes="$(foreign_lookalikes "$containers" "$networks" "$volumes")"
+    inventory containers 'the labelled containers' labelled_containers
+    inventory networks 'the labelled networks' labelled_networks
+    inventory volumes 'the labelled volumes' labelled_volumes
+    inventory lookalikes 'the objects named like the rehearsal' foreign_lookalikes "$containers" "$networks" "$volumes"
     if [[ -z "$containers$networks$volumes$lookalikes" ]]; then
         if [[ -e "$root/compose.env" ]]; then fail "a state file exists in '$root' but no rehearsal objects do: a previous run was interrupted. Run: restore-rehearsal.sh cleanup"; fi
         ok_line "no rehearsal project is present"
@@ -523,8 +546,16 @@ cmd_self_check() {
     ok_line "the allowlist refuses a development database name"
 }
 
+# Every labelled object that cleanup leaves behind, and why. A cleanup that leaves any is incomplete: it keeps its state, exits non-zero,
+# and can be run again once the obstruction is gone.
+REMAINING=()
+retain() {
+    say "keep    $1"
+    REMAINING+=("$1")
+}
+
 # cleanup: classify every candidate, then remove only the ones whose complete identity verifies, each re-verified just before it is
-# removed. What does not verify is reported and kept.
+# removed. What does not verify is reported and kept, and the cleanup then reports itself incomplete.
 cmd_cleanup() {
     local dry=0 stale=0 arg
     for arg in "$@"; do
@@ -537,83 +568,91 @@ cmd_cleanup() {
     verify_clean_environment
     local root have_root=0 token=''
     root="$(root_dir)"
-    validate_root_path "$root"
+    validate_root_path "$root" # guard:G3-cleanup-validate
     verify_local_daemon
     if [[ -e "$root" ]]; then
-        verify_root_ownership "$root"
+        verify_root_ownership "$root" # guard:G3-cleanup-owner
         have_root=1
         acquire_lock "$root"
         if [[ -f "$root/compose.env" ]]; then token="$(state_token "$root")"; fi
     fi
 
     local containers networks volumes
-    containers="$(labelled_containers)"
-    networks="$(labelled_networks)"
-    volumes="$(labelled_volumes)"
+    inventory containers 'the labelled containers' labelled_containers
+    inventory networks 'the labelled networks' labelled_networks
+    inventory volumes 'the labelled volumes' labelled_volumes
     if [[ -n "$containers$networks$volumes" && -z "$token" ]]; then
         [[ $stale == 1 ]] || refuse "objects carrying the rehearsal label exist but there is no state file, so their run token cannot be checked. Review them with: restore-rehearsal.sh cleanup --dry-run --stale ; then, if they are yours: restore-rehearsal.sh cleanup --stale" # guard:G8-state-required
     fi
 
-    local owned_containers=() owned_networks=() owned_volumes=() kept=0 id why owned_ids=''
+    local owned_containers=() owned_networks=() owned_volumes=() id why owned_ids=''
     for id in $containers; do
         if why="$(container_identity_problem "$id" "$token")"; then
             owned_containers+=("$id")
             owned_ids+="$id,"
         else
-            say "keep    container ${id:0:12}: $why"
-            kept=$((kept + 1))
+            retain "container ${id:0:12}: $why"
         fi
     done
     for id in $networks; do
         if why="$(network_identity_problem "$id" "$token" "$owned_ids")"; then owned_networks+=("$id"); else
-            say "keep    network ${id:0:12}: $why"
-            kept=$((kept + 1))
+            retain "network ${id:0:12}: $why"
         fi
     done
     for id in $volumes; do
         if why="$(volume_identity_problem "$id" "$token" "$owned_ids")"; then owned_volumes+=("$id"); else
-            say "keep    volume $id: $why"
-            kept=$((kept + 1))
+            retain "volume $id: $why"
         fi
     done
     local lookalikes
-    lookalikes="$(foreign_lookalikes "$containers" "$networks" "$volumes")"
+    inventory lookalikes 'the objects named like the rehearsal' foreign_lookalikes "$containers" "$networks" "$volumes"
     if [[ -n "$lookalikes" ]]; then
         say "note    not the rehearsal's (no label), so never selected for removal: $(tr '\n' ';' <<<"$lookalikes")"
     fi
 
-    local failures=0
     for id in "${owned_containers[@]}"; do
         if [[ $dry == 1 ]]; then say "would remove container ${id:0:12} ($CONTAINER_NAME)"; continue; fi
-        why="$(container_identity_problem "$id" "$token")" || { say "keep    container ${id:0:12}: changed since it was checked: $why"; kept=$((kept + 1)); continue; } # guard:G8-reverify-container
+        why="$(container_identity_problem "$id" "$token")" || { retain "container ${id:0:12}: changed since it was checked: $why"; continue; } # guard:G8-reverify-container
         if dkr stop -t 30 "$id" >/dev/null && dkr rm "$id" >/dev/null; then say "removed container ${id:0:12}"; else
             warn "container ${id:0:12} could not be removed"
-            failures=$((failures + 1))
+            REMAINING+=("container ${id:0:12}: could not be removed")
         fi
     done
     for id in "${owned_networks[@]}"; do
         if [[ $dry == 1 ]]; then say "would remove network ${id:0:12} ($NETWORK_NAME)"; continue; fi
-        why="$(network_identity_problem "$id" "$token" '')" || { say "keep    network ${id:0:12}: $why"; kept=$((kept + 1)); continue; } # guard:G8-reverify-network
+        why="$(network_identity_problem "$id" "$token" '')" || { retain "network ${id:0:12}: $why"; continue; } # guard:G8-reverify-network
         if dkr network rm "$id" >/dev/null; then say "removed network ${id:0:12}"; else
             warn "network ${id:0:12} could not be removed"
-            failures=$((failures + 1))
+            REMAINING+=("network ${id:0:12}: could not be removed")
         fi
     done
     for id in "${owned_volumes[@]}"; do
         if [[ $dry == 1 ]]; then say "would remove volume $id"; continue; fi
-        why="$(volume_identity_problem "$id" "$token" '')" || { say "keep    volume $id: $why"; kept=$((kept + 1)); continue; } # guard:G8-reverify-volume
+        why="$(volume_identity_problem "$id" "$token" '')" || { retain "volume $id: $why"; continue; } # guard:G8-reverify-volume
         if dkr volume rm "$id" >/dev/null; then say "removed volume $id"; else
             warn "volume $id could not be removed"
-            failures=$((failures + 1))
+            REMAINING+=("volume $id: could not be removed")
         fi
     done
 
-    if [[ $dry == 0 && $have_root == 1 ]]; then
-        if ((failures > 0)); then warn "some objects remain; the state file is kept so cleanup can be run again"; else remove_state "$root"; fi
+    local incomplete=0
+    ((${#REMAINING[@]} == 0)) || incomplete=1 # guard:G8-incomplete
+    if [[ $dry == 1 ]]; then
+        if ((incomplete)); then say "${#REMAINING[@]} object(s) would be kept because they are not provably the rehearsal's; a real cleanup would then report itself incomplete and keep its state file."; fi
+    elif ((incomplete)); then
+        warn "cleanup is NOT complete: ${#REMAINING[@]} rehearsal-labelled object(s) remain."
+        for id in "${REMAINING[@]}"; do warn "  remains: $id"; done
+        if ((have_root)); then
+            warn "The state file (which holds the run token) was kept, so a normal cleanup can finish once the cause is gone. --stale is not needed for that."
+        else
+            warn "There is no state file to keep. Review what remains with: restore-rehearsal.sh cleanup --dry-run --stale"
+        fi
+        warn "Remove the cause listed above yourself (this script will not remove what it cannot prove is its own), then run: restore-rehearsal.sh cleanup"
+        exit 1
+    elif ((have_root)); then
+        remove_state "$root"
     fi
-    if ((kept > 0)); then say "$kept object(s) were kept because they are not provably the rehearsal's."; fi
-    if [[ -z "${owned_containers[*]}${owned_networks[*]}${owned_volumes[*]}" && $kept -eq 0 ]]; then say "nothing of the rehearsal's was found."; fi
-    ((failures == 0)) || exit 1
+    if [[ -z "${owned_containers[*]}${owned_networks[*]}${owned_volumes[*]}" && $incomplete -eq 0 ]]; then say "nothing of the rehearsal's was found."; fi
 }
 
 # Removes the files this script wrote, by name, and the directory if that leaves it empty. Never recursive, never a glob.
