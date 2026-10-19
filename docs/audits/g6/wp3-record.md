@@ -294,7 +294,7 @@ A separate Opus 5.5 session, which did not write this code, verified WP3a. Its r
 | `tests/Support/HistoricalSnapshot.php`, `HistoricalRun.php` | Row and structure snapshots of the 16 tables, the expected-after construction, and the comparison. |
 | `tests/Upgrade/HistoricalUpgradeTest.php` | The successful upgrade, run once for the file; 29 tests. |
 | `tests/Upgrade/RefusedUpgradeTest.php` | The refused upgrades, each on its own historical database; 3 tests. |
-| `tests/Upgrade/UpgradeDatabaseGuardTest.php` | The safeguards; 12 tests. |
+| `tests/Upgrade/UpgradeDatabaseGuardTest.php` | The safeguards; 37 tests (12 when first written; §14 to §14.3 added the rest). |
 | `phpunit.xml`, `tests/Pest.php` | An `Upgrade` suite, extended with `TestCase` and **not** `RefreshDatabase`, as `Concurrency` is. |
 | `docs/development/testing.md` | A paragraph on the suite and its database. |
 
@@ -305,8 +305,9 @@ A separate Opus 5.5 session, which did not write this code, verified WP3a. Its r
 - requires the testing environment;
 - requires the inherited default connection to be MariaDB or PostgreSQL on a `*_test` database that is not the upgrade database (the rule `tests/TestCase.php` already applies), so a shell carrying a development or production `.env` is refused;
 - requires the host to be `mariadb`, `postgres`, `localhost`, `127.0.0.1` or `::1`;
+- **refuses any inherited `read`, `write`, `sticky`, `direct` or `pooled` key, by presence** (§14, §14.1), because each overrides the database or server for one kind of statement;
 - fixes the database to the constant `flowlife_upgrade_test`, and **blanks the inherited `url` and `unix_socket`**, which could otherwise name another database or server;
-- asks the server which database it is on (`select database()` / `select current_database()`) and refuses a different answer, before any DDL.
+- asks the server's **write side** which database it is on (`select database()` / `select current_database()`) and refuses a different answer, before any DDL. A refused or failed check leaves nothing configured: the `upgrade` connection is purged and its configuration put back as it was before the call (§14.3).
 
 `clean()` runs before the first build and `afterAll` drops the tables again (`cleanVerified()`, which opens a connection from the settings that passed these checks and checks the name once more); a refused-upgrade test also cleans after each test. After every run in this package both databases were checked empty (`show tables`: none; `\dt`: none). The default connection is switched to the upgrade database only inside `useAsDefault()` / `restoreDefault()`, so the application's own code (the Authorizer, the Artisan commands) can read the upgraded schema.
 
@@ -436,7 +437,9 @@ A1–A3 are the **case-handling regression** (A) and B1–B2 the **capability dr
 | `5484e96` | V1, L1, L2 remediation (§14); its gate is the one in §14 |
 | `f6c48a0` | `direct`/`pooled` refusal and the K1 test (§14.1); its gate is the one in §14.1 |
 | `95dfcf4` | §14.1 |
-| *this commit* | §14.2 and the debt rows; documentation only |
+| `03d7834` | §14.2 and the debt rows; documentation only |
+| `ebc15e8` | L3 (a refused check leaves no configuration behind) and its tests; §14.3 and the corrections it lists |
+| *this commit* | §14.4: the DSN residual described accurately, and the review sequence; documentation only |
 
 ### 13. Limitations and what WP3c must still do
 
@@ -471,17 +474,17 @@ The independent Opus 5.5 verification returned REMEDIATION REQUIRED for one MEDI
 | C3 `cleanVerified` skips its name check | killed, 1 failed | killed, 1 failed |
 | **C1 `cleanVerified` skips its server check** | **survives** (58 passed) | **survives** (58 passed) |
 
-**Residual risk (C1)** *(two statements in this section and in the S1/S2 rows were corrected by the second review, §14.1: S1 and S2 were killed by tests that call `assertServerDatabase()` directly and did not show that `connect()` calls it, and a server-side mismatch can be built from inherited configuration)*. `cleanVerified()`'s own call to `assertServerDatabase()` is not covered by a test. Once routing and the name are refused, a configuration whose server answer differs from its name cannot be built from the verified settings, so no genuine mismatch can reach that call. It is defence in depth behind two checks, not a tested boundary, and the check it calls is covered through `connect()` (S1, S2). Closing it would need a mock of the connection factory, which the assignment asked not to build for a LOW finding.
+**Residual risk (C1)** *(two statements in this section and in the S1/S2 rows were corrected by the second review, §14.1: S1 and S2 were killed by tests that call `assertServerDatabase()` directly and did not show that `connect()` calls it, and a server-side mismatch can be built from inherited configuration)*. `cleanVerified()`'s own call to `assertServerDatabase()` is not covered by a test. Once routing and the name are refused, a configuration whose server answer differs from its name cannot be built from the verified settings, so no genuine mismatch can reach that call. It is defence in depth behind two checks, not a tested boundary, and the check it calls is covered through `connect()` (S1, S2). *(Corrected by §14.3: the original sentence here said closing it would need a mock of the connection factory. It does not. The check can be exercised with reflection, by setting `UpgradeDatabase::$verified` to settings that name a disposable database that exists, so the server answer differs from the name, and requiring `cleanVerified()` to refuse. It was left uncovered as LOW debt, G6-D22, not because a mock is required.)*
 
 **Gate:** `./flow check all --pgsql` at `5484e96`: all checks passed, exit 0, **3,505 backend tests on each engine** (3,491 + 14), 1,817 s; no skip, retry or timeout change; `git diff --check` clean.
 
 ### 14.1 Second review: the `direct` bypass, K1 and two corrections
 
-The focused review of §14 found one more MEDIUM routing bypass (V1, continued) and one LOW coverage gap (K1). Fixed in `f6c48a0`, on top of `3bb7bc4`; test-support code only.
+A re-verification of §14 (`3bb7bc4`) found one more MEDIUM routing bypass (V1, continued) and one LOW coverage gap (K1); the review sequence is in §14.4. Fixed in `f6c48a0`, on top of `3bb7bc4`; test-support code only.
 
 **Corrections to §14, kept here so the earlier text stays as written:**
 1. **S1 and S2 did not show that `connect()` asks the server.** They were killed by the two tests that call `assertServerDatabase()` directly. Removing the *call* from `connect()` left all 58 tests passing. That is K1.
-2. **A server-side mismatch can be built from inherited configuration**, so §14's statement that none can be constructed was wrong for `connect()` (*corrected by §14.2:* `cleanVerified()` does not itself reject `connect_via_database` or `isolation_level`; it relies on its settings having been marked verified only after `connect()` had checked the actual server database, and it refuses routing keys and a wrong name). PostgreSQL's `connect_via_database` is the DSN's `dbname`; on MariaDB `isolation_level` is interpolated unvalidated into `SET SESSION TRANSACTION ISOLATION LEVEL %s;` and executed, so `READ COMMITTED; USE flowlife_test` moves the session. In both cases the guard must refuse before it marks the connection verified.
+2. **A server-side mismatch can be built from inherited configuration**, so §14's statement that none can be constructed was wrong for `connect()`. `cleanVerified()` is different, and §14.1 first said otherwise: it does **not** reject `connect_via_database`, `isolation_level` or any other setting that moves the session; it refuses only the routing keys and a wrong `database`. It is safe because its settings are the ones `connect()` stored, and `connect()` stores them only after the server confirmed the database. PostgreSQL's `connect_via_database` is the DSN's `dbname`; on MariaDB `isolation_level` is interpolated unvalidated into `SET SESSION TRANSACTION ISOLATION LEVEL %s;` and executed, so `READ COMMITTED; USE flowlife_test` moves the session. In both cases the guard must refuse before it marks the connection verified.
 
 **V1, continued: PostgreSQL `direct`.** Laravel 13.32 resolves `<connection>::direct` for migrations whenever a `direct` endpoint is configured, and merges the `direct` array over the connection (its `database` included). With `direct => ['database' => 'flowlife_test']` `connect()`'s write-side question was answered by the upgrade database, then the migrator created all 15 historical tables in `flowlife_test` while recording only `migrations` in the upgrade database (reproduced by the reviewer; not repeated here). `direct` and `pooled` are now in the refused keys, still by presence. A test with the reproduced configuration shows `migrateHistorical()`, `migratePending()` and `clean()` all refuse, no `upgrade` or `upgrade::direct` connection is registered, and the test database's tables are unchanged.
 
@@ -494,11 +497,11 @@ The focused review of §14 found one more MEDIUM routing bypass (V1, continued) 
 | `read`, `write`, `sticky` | per-statement-type override of any key, `database` included | **Explicitly rejected** by presence, in `connect()` and `cleanVerified()` |
 | `direct`, `pooled` (PostgreSQL) | the migrator resolves `name::direct`, merged over the config | **Explicitly rejected** (`pooled` alone only warns, but belongs with `direct`) |
 | `url` (including inside `read`/`write`/`direct`) | the parsed URL replaces database and host | top level **neutralised** (`url => null`); nested ones are inside rejected keys |
-| `unix_socket` (MariaDB) | the socket replaces host and port | **Neutralised** (`''`) |
-| `host` (a string, or a list that Laravel shuffles) | which server | A list or anything off the allowlist is **rejected** (`is_string` and `HOSTS`) |
+| `unix_socket` (MariaDB) | the socket replaces host and port | **Neutralised** (`''`). *Observed (§14.3):* blanking does not remove the default socket. With `host=localhost` PHP's MySQL driver connects through its default Unix socket and ignores the port (a failing probe reports "No such file or directory" for `localhost` and "Connection refused" for `127.0.0.1` on the same port), so on a machine with a local MariaDB `localhost` reaches whatever listens on that socket. `localhost` is allowlisted and the server check must still report `flowlife_upgrade_test`; PostgreSQL's `localhost` is TCP |
+| `host` (a string, or a list that Laravel shuffles) | which server | A list or anything off the allowlist is **rejected** (`is_string` and `HOSTS`). The comparison is exact, so the `host` setting itself cannot carry DSN text. **That does not constrain the host the driver dials** *(corrected by §14.4)*: other settings are interpolated into the DSN as text and can override it (next rows), and on MariaDB `localhost` uses the default Unix socket (previous rows). The allowlist bounds the configured `host` string, not the destination |
 | `database` | which database | **Neutralised**: set to the constant; the server confirms it |
 | `connect_via_database` (PostgreSQL) | the DSN's `dbname` for the base connection | **Detected** by `assertServerDatabase()`; K1 test. Not stripped, so the K1 test stays meaningful |
-| `connect_via_port` (PostgreSQL), `port` | which instance on an allowlisted host *(corrected by §14.2: or, through a crafted string, which host)* | **Detected only up to the name**: a server with a database called `flowlife_upgrade_test` would be accepted. Residual, below and §14.2 |
+| DSN-interpolated settings: `port`, `connect_via_port`, `sslmode`, `keepalives_idle` (PostgreSQL); `port` (MariaDB). More of the same pattern are listed below | which server, **and, through a crafted string, which host**; not only a port *(widened by §14.4; earlier rows said `port` and `connect_via_port` only)* | Laravel 13.32 interpolates these into the DSN as text, without quoting or validation, so a value that carries `;host=...` overrides the configured host (the later `host` wins). *Confirmed by the final independent verification:* on PostgreSQL `port`, `connect_via_port`, `sslmode` and `keepalives_idle` accept DSN text capable of redirecting the effective connection host; on MariaDB the verified vector is `port`. *Reproduced here (§14.3), both engines:* `port` = `3306;host=nohost.invalid` (MariaDB) and `5432;host=nohost.invalid` (PostgreSQL, where Laravel appends the port last) make the driver resolve `nohost.invalid`. *Same pattern, not individually tested:* PostgreSQL `sslcert`, `sslkey`, `sslrootcert`, `keepalives`, `keepalives_interval` and `keepalives_count` are also interpolated unquoted. **Detected only up to the name**: a server with a database called exactly `flowlife_upgrade_test` would be accepted. Residual, below, §14.2, §14.3 and §14.4 |
 | `isolation_level`, `charset`, `collation`, `timezone`, `modes`/`strict` (MariaDB), `options` init commands | SQL executed at connect time on the one connection | **Detected** by `assertServerDatabase()` for anything that changes the database; K1 test (`isolation_level`) |
 | `search_path`, `schema` (PostgreSQL) | the schema inside the verified database | **Not applicable**: it cannot leave the database; `tables()` and the snapshots read `public` |
 | `prefix` | table-name prefix | **Not applicable** to routing (the snapshots would fail loudly) |
@@ -506,7 +509,7 @@ The focused review of §14 found one more MEDIUM routing bypass (V1, continued) 
 
 No other reachable path was found that sends DDL away from the connection `assertServerDatabase()` checked once the routing keys are refused: the migrator, the schema builder and the Artisan commands all use that one registered connection.
 
-**Residual (accepted, LOW)** *(wording corrected by §14.2)*: `port` / `connect_via_port` can name a different server on an allowlisted host; the destination would still have to be a database named exactly `flowlife_upgrade_test`. `cleanVerified()`'s own call to the server check (C1) is still not covered by a test (the reviewer accepts this as LOW once K1 is covered).
+**Residual (accepted, LOW):** the host the driver dials is **not reliably constrained by the host allowlist**. Several settings are interpolated into the DSN as text (the row above lists them: on PostgreSQL at least `port`, `connect_via_port`, `sslmode` and `keepalives_idle`, and by the same pattern six more; on MariaDB `port`), so a crafted value can redirect the connection to **any** host, not only to another server on an allowlisted one; and on MariaDB `localhost` can use the default Unix socket even with `unix_socket` blanked. Earlier wording here named `port` and `connect_via_port` only (§14.2 widened it once, §14.4 again). The destination would still have to report a database named exactly `flowlife_upgrade_test`. `cleanVerified()`'s own call to the server check (C1) is still not covered by a test (the reviewer accepts this as LOW once K1 is covered).
 
 **Mutations** (scratch worktree at `f6c48a0`, `tests/Upgrade` on each engine, restored after each; MariaDB and PostgreSQL gave the same counts):
 
@@ -528,15 +531,69 @@ With the refusal removed (D1, D2) the `direct` test lets the PostgreSQL migrator
 
 ### 14.2 Final verification: two corrections and the owner's deferrals
 
-The independent Opus 5.5 verification of §14.1 returned SAFE FOR PR PREPARATION, with two inaccuracies in §14.1 and some LOW findings. No code changed after `f6c48a0`; its gate (§14.1) stays applicable.
+The independent Opus 5.5 verification of §14.1 (`95dfcf4`) found two inaccuracies in §14.1 and some LOW findings. *(Corrected by §14.4: this line first said the verification returned SAFE FOR PR PREPARATION. That verdict belongs to the earlier verification of `3bb7bc4`, which a re-verification then superseded. The verification of `95dfcf4` returned SAFE AFTER BOUNDED REMEDIATION, as §14.3 records.)* No code changed after `f6c48a0` until `ebc15e8` (§14.3); its gate (§14.1) stays applicable to everything else.
 
 **Corrections:**
 1. **`cleanVerified()` and mismatching settings.** §14.1 said a server-side mismatch "stays" impossible for `cleanVerified()` because it "refuses those settings first". It does not reject `connect_via_database` or `isolation_level`. It opens its connection from the settings that `connect()` stored, and `connect()` stores them only after `assertServerDatabase()` has confirmed the actual server database; it then refuses routing keys and a wrong name itself, and (C1) calls the server check again, which no test covers.
-2. **The port residual is wider than §14.1 said.** `port` and `connect_via_port` are interpolated into the DSN as text. A crafted value can carry a `;host=` segment and redirect the connection to an entirely different host, not merely to another server on an allowlisted host. The server check still has to report a database called exactly `flowlife_upgrade_test`, so the destination must have a database of that name, but the host allowlist does not bound it.
+2. **The port residual is wider than §14.1 said.** `port` and `connect_via_port` are interpolated into the DSN as text. A crafted value can carry a `;host=` segment and redirect the connection to an entirely different host, not merely to another server on an allowlisted host. The server check still has to report a database called exactly `flowlife_upgrade_test`, so the destination must have a database of that name, but the host allowlist does not bound it. *(Widened once more by §14.4: the same holds for PostgreSQL `sslmode` and `keepalives_idle`, confirmed, and six further interpolated settings, not individually tested; and on MariaDB `localhost` can use the default socket.)*
 
 **Owner's decision: both are deferred as LOW debt, and no further remediation is authorized for WP3b:**
-- numeric validation of `port` and `connect_via_port` ([G6-D21](debt-register.md));
+- validation of the settings that are interpolated into the DSN, `port` and `connect_via_port` among them (originally recorded as numeric validation of those two; scope widened by §14.4; [G6-D21](debt-register.md));
 - mutation coverage for the server check in `cleanVerified()` (C1, [G6-D22](debt-register.md)).
+
+### 14.3 Review closeout: L3, observed behaviours and record corrections
+
+The independent Opus 5.5 verification of `95dfcf4` returned SAFE AFTER BOUNDED REMEDIATION with no Critical, High or Medium finding. It reproduced the `direct` bypass under mutation and ran 66 tests (408 assertions) on each engine. Test-support code and this record only; nothing under `app/`, `database/` or `config/`.
+
+**L3: a refused check left the unverified configuration behind.** `connect()` wrote `database.connections.upgrade` before asking the server, and on a refusal purged the connection but kept the configuration. A later bare `DB::connection('upgrade')` (the read-only helpers `ran()`, `batches()` and `tables()` do this) then built a connection from settings that no check had passed, against the wrong database. Now `connect()` remembers what `upgrade` was configured as before the call and, when the server check throws, purges the connection and **puts that back**: nothing is configured if nothing was verified before, and the settings an earlier call verified are intact if there were any. It catches `Throwable` and rethrows the same exception, so a refusal still reads "The server reports database [...]" and a connection that cannot be opened still surfaces the database's own error. The inherited connection, `$verified` and the default connection are not touched.
+
+**Tests (three, in `UpgradeDatabaseGuardTest`):** after the K1 mismatch the `upgrade` configuration is `null`, no connection is registered and a bare `DB::connection('upgrade')` throws "not configured"; the same when the connection cannot be opened (a database that does not exist, so the check gets no answer); and after a first successful `connect()`, a later refused one leaves the earlier verified settings in place and the restored settings still build a connection the server confirms. They fail before the fix and pass after it, on both engines (3 failed on MariaDB and on PostgreSQL against the unfixed `connect()`).
+
+**Tests and results:** the guard file has 37 tests (34 + 3). `tests/Upgrade`: **69 passed (429 assertions) on MariaDB 10.11.19 and on PostgreSQL 16.15**. `flowlife_test` kept its 34 tables on both engines and both upgrade databases were empty before and after, including after the mutation runs. The full gate was not repeated: the only code that changed is the test-support door and its guard file, which nothing outside `tests/Upgrade` uses; the §14.1 gate (3,513 tests per engine) covers everything else, and the suite would now count three more.
+
+**Mutations** (scratch copy of the working tree, `tests/Upgrade` on each engine, same counts on both):
+
+| Mutant | Result |
+| --- | --- |
+| L3 the configuration is not put back after a failed check | **killed**, 3 failed |
+| L3 `catch (RuntimeException)` instead of `Throwable` | survives (69 passed); **equivalent for configured failures**: Laravel's `QueryException` and PDO's exception are both `RuntimeException`s, so only an `Error` would differ and configuration cannot produce one. Kept as `Throwable` so no failure can leave the configuration behind |
+| K1 the `assertServerDatabase()` call removed from `connect()` | **killed**, 4 failed (the three new tests also depend on it) |
+| D1 `direct` and `pooled` removed from the refused keys | **killed**, 7 failed |
+| D2 only `direct` removed / D3 only `pooled` removed | **killed**, 4 / 3 failed |
+
+With D1 and D2 the PostgreSQL `direct` test reaches `flowlife_test`, as noted in §14.1; its 34 tables were unchanged afterwards because they already existed. The mutant must not be repeated against an empty `flowlife_test`.
+
+**Observed behaviours behind the corrections above** (probes that only open connections to hosts that refuse or do not exist; nothing was written): MariaDB `host=localhost` uses PHP's default Unix socket and ignores the port, `127.0.0.1` uses TCP; a `port` value carrying `;host=...` makes the driver resolve the later host on MariaDB (`mysql:host=mariadb;port=3306;host=nohost.invalid`) and on PostgreSQL (`pgsql:host=postgres;dbname=x;port=5432;host=nohost.invalid`, which is where Laravel puts the port).
+
+**Corrections made in this commit:** the test count in §1 (12 to 37); the §2 safeguard list (routing keys, write-side question, failed check leaves nothing configured); the C1 sentence in §14 (a mock is not required); the `cleanVerified()` statement in §14.1 correction 2 (it refuses routing keys and a wrong name, not every setting that moves a session); the `unix_socket`, `host` and `port` rows and the residual in §14.1 (the default-socket and DSN behaviours above, and that a crafted `port` can name any host, not only an allowlisted one). §11 and the earlier gate figures are historical and unchanged.
+
+**Accepted residual risks (LOW, no further WP3b remediation authorized):**
+- **DSN text in several settings** (the reviewer's L1) can redirect the connection to any host; the host allowlist does not reliably constrain the dialled host (the list of settings is in §14.4, which supersedes the earlier wording that named only `port` and `connect_via_port`). The destination must still report a database named exactly `flowlife_upgrade_test`. Validation of all the interpolated settings is [G6-D21](debt-register.md); a general DSN-validation redesign is out of scope.
+- **`cleanVerified()`'s own server check** (C1) is not covered by a test. [G6-D22](debt-register.md); the reflection approach in §14 would cover it.
+- **`localhost` on MariaDB reaches the default Unix socket**, not the configured port; the server check still has to report `flowlife_upgrade_test`.
+
+### 14.4 Final verification of `ebc15e8`: the DSN residual and the review sequence
+
+The final independent Opus 5.5 verification of `ebc15e8` verified the L3 correction, all 69 tests (429 assertions) on each engine and the database-isolation guarantees, and returned REMEDIATION REQUIRED **solely** because this record described the accepted DSN residual too narrowly. Documentation only: no implementation code or test changed, and the verified code at `ebc15e8` is unchanged. The risk stays an **accepted LOW residual** (no further WP3b remediation is authorized and no DSN validation is implemented).
+
+**What the evidence is.**
+- **PostgreSQL:** `port`, `connect_via_port`, `sslmode` and `keepalives_idle` were each independently confirmed to accept DSN text capable of redirecting the effective connection host.
+- **PostgreSQL, same pattern, not individually tested:** Laravel 13.32 also interpolates `sslcert`, `sslkey`, `sslrootcert`, `keepalives`, `keepalives_interval` and `keepalives_count` without quoting.
+- **MariaDB:** the verified DSN-injection vector is `port`. `localhost` can use the default Unix socket even with `unix_socket` blanked.
+- **Consequence:** the dialled host is not reliably constrained by the host allowlist. Server-side identity verification still requires the destination database to be named exactly `flowlife_upgrade_test`.
+
+**Corrections made in this commit:** the §14.1 `host` row (the allowlist bounds the configured string, not the destination) and the DSN-settings row (all the settings above, with which are confirmed and which are not), the §14.1 and §14.3 residual paragraphs, the §14.2 deferral line, and the debt row [G6-D21](debt-register.md) (its remediation now covers every DSN-interpolated field, not numeric port validation alone).
+
+**Review sequence.** The record's earlier text blurred two verdicts, so the sequence is set out here once. Each row is a verdict on the commit shown; a later row does not erase an earlier one.
+
+| Commit reviewed | Verdict | Outcome |
+| --- | --- | --- |
+| `27bb2e6` (original audit) | REMEDIATION REQUIRED | V1 (MEDIUM), L1, L2: fixed in `5484e96` (§14) |
+| `3bb7bc4` (focused verification of §14) | SAFE FOR PR PREPARATION | Superseded: a re-verification of the same commit reproduced the `direct` bypass; fixed in `f6c48a0` with K1 (§14.1) |
+| `95dfcf4` (verification of §14.1) | SAFE AFTER BOUNDED REMEDIATION; no Critical, High or Medium finding | L3 and record corrections: `03d7834` (§14.2) and `ebc15e8` (§14.3) |
+| `ebc15e8` (final verification) | REMEDIATION REQUIRED, for this record only | This commit (§14.4) |
+
+**Attribution corrected.** §14.2 said the verification of §14.1 returned SAFE FOR PR PREPARATION. That verdict is the one on `3bb7bc4`; the verification of `95dfcf4`, the commit that records §14.1, returned SAFE AFTER BOUNDED REMEDIATION. §14.2 now says so, and §14.1 now credits the `direct` bypass to a re-verification of §14, not to the focused review that returned SAFE FOR PR PREPARATION. §14.2's findings and the owner's deferrals are unchanged.
 
 ## WP3c — pending, not yet authorized
 
