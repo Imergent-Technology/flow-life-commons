@@ -1,6 +1,6 @@
 # G6 WP3 — remediation record
 
-- **Package:** WP3 Data integrity, upgrade and restore safety. Remediation of the [independent audit](wp3-audit.md) as ruled in the [owner's triage](wp3-triage.md). The triage authorizes the three work units separately: **WP3a** and **WP3b** are recorded below. **WP3c is planned and not yet authorized**; its section is left for that work.
+- **Package:** WP3 Data integrity, upgrade and restore safety. Remediation of the [independent audit](wp3-audit.md) as ruled in the [owner's triage](wp3-triage.md). The triage authorizes the three work units separately: **WP3a** and **WP3b** are recorded below. **WP3c is planned and only its slice 1 (the isolation foundation of the local recovery rehearsal) has been done**; that slice is recorded in its own section at the end, and the rest of WP3c is not yet authorized.
 - **Audit and triage files:** the audit is committed as `wp3-audit.md` from its heading (`# G6 WP3 — Data integrity…`) to its closing verdict line, unedited. The one-line "Written for:" hand-over note that preceded it was addressed to the owner, so it is not in the file (as for [WP2](wp2-record.md)). The owner's rulings are `wp3-triage.md`, verbatim in content. Its three header lines first ended in two spaces (Markdown hard line breaks), which `git diff --check` reports as trailing whitespace. At the owner's direction they now end in a backslash, CommonMark's other hard line break. The rendered text is the same and no word changed. (`wp2-triage.md`, already on `main`, keeps its two-space form.)
 
 ## WP3a — Migration freeze and immutability
@@ -595,9 +595,9 @@ The final independent Opus 5.5 verification of `ebc15e8` verified the L3 correct
 
 **Attribution corrected.** §14.2 said the verification of §14.1 returned SAFE FOR PR PREPARATION. That verdict is the one on `3bb7bc4`; the verification of `95dfcf4`, the commit that records §14.1, returned SAFE AFTER BOUNDED REMEDIATION. §14.2 now says so, and §14.1 now credits the `direct` bypass to a re-verification of §14, not to the focused review that returned SAFE FOR PR PREPARATION. §14.2's findings and the owner's deferrals are unchanged.
 
-## WP3c — pending, not yet authorized
+## WP3c — remaining work: slice 1 is complete; the restoration slices are pending and not yet authorized
 
-Planned by the triage and not started. What WP3a and WP3b leave to it:
+Planned by the triage. Its slice 1, the isolation foundation, is done and recorded in [the section below](#wp3c-slice-1--isolation-foundation-closeout); the later slices (the historical upgrade and restore rehearsal, the corrected in-place restore, the production pre-flight, and the runbook and release documentation) have not started and are not yet authorized. What WP3a and WP3b leave to it:
 
 - **WP3c, before any release:**
   - **The read-only production pre-flight** (WP3-10, WP3-12; owner disposition of I1): exact keys by bytes, collation-equal variants of `guardian` and `guardian-full`, the same-Person collision condition, holders by Account status, and the collations of the v0.3.0 tables and columns (§8).
@@ -605,3 +605,60 @@ Planned by the triage and not started. What WP3a and WP3b leave to it:
   - **WP3-01 (MEDIUM), a mandatory release prerequisite:** the corrected in-place restore, rehearsed.
   - The other WP3c findings as the triage rules them (WP3-04 to WP3-08, WP3-11, WP3-13).
   - What WP3b deliberately does not cover (see its section): the real v0.3.0 application, backup and restore, an in-place rollback, MySQL/MariaDB patch level 10.11.18, and a stopped upgrade's recovery on a host.
+
+## WP3c slice 1 — isolation foundation: closeout
+
+The isolated, locally run MariaDB environment that the recovery rehearsal will use, and the safeguards that make it safe to build on ([`docs/development/restore-rehearsal.md`](../../development/restore-rehearsal.md)). It seeds nothing, installs nothing and restores nothing; there is no restore, drop or reset command in it. **No production or staging system was accessed, and no backup or restoration was performed**: everything ran on a local Docker daemon with a database that holds only a sentinel. Slice 1 is therefore not a restore rehearsal and does not show that WP3-01 is fixed.
+
+### Commits and verification chain
+
+- **Base:** `b629a6a` (G6 WP3b, PR #14). **Branch:** `feat/g6-wp3c-s1-rehearsal-foundation`. The branch was deliberately not rebased onto later `main` while it was reviewed and exercised, so that the reviewed baseline stayed fixed.
+- `397f5e7`: the slice (a script, its Compose file, a guard-test suite with a mutation matrix, and registration in `./flow check repo`).
+- Independent safety review of `397f5e7`: **REMEDIATION REQUIRED**. No path was found for `up`, `cleanup` or `cleanup --stale` to select an unrelated Docker object. Two MEDIUM findings: a cleanup that kept objects removed its state and exited 0; and the mutation matrix proved the marked safeguard lines but not that each safeguard was *called* (11 of 24 independent call-site mutants survived).
+- `41cf727`: both MEDIUM findings and the LOW findings that were in scope closed. A cleanup that keeps or cannot remove a labelled object names it, keeps the state directory (the run token) and exits 1, and a plain retry finishes the job; a failed Docker listing is a refusal and never an empty inventory; 13 call-site safeguards gained markers and behavioural tests; the fake daemon was made faithful where safety depends on it; a malformed `compose.env` is explained and never edited.
+- Independent re-verification of the delta: **SAFE FOR FIRST LIVE LIFECYCLE TEST**. Both MEDIUM findings closed.
+- **Accepted residuals** (documented under *Limits* in the development note): a stopped container attached to the rehearsal network is not listed in the network's `.Containers`, so the foreign-attachment check cannot see it (low impact: only the network is affected, and a volume used by any container is still seen); Slice 2 must send only fixed, validated SQL, and the Artisan wrapper must validate full argument sets before any migration runs; the image is pinned by tag, not digest (the server version is checked separately); `stat -c` is GNU-specific; the lock file is unlinked while held (a negligible race).
+- The closeout commit (the one that adds this section) closed the remaining LOW findings: `self-check`'s network and volume verification calls are now marked and mutation-tested; a dry run against a complete project is proved to change no Docker object, state file, content or permission (only the lock file is touched, because the script opens it to take the lock); and `remove_state` now looks before it deletes: if the state directory holds any entry the script did not write it removes **nothing**, keeps the marker and run token, names the entries and exits 1, where it had deleted the marker first and left a directory the script no longer recognised. It still never removes what it did not write. **Accepted residual:** the scan happens before the removal, so an unexpected write by the same user in the instant after it can still make the final `rmdir` fail. Cleanup then exits 1 having already removed the marker; the objects are gone, but the directory is no longer recognised as the script's, the new entry is left untouched, and there is no automatic recovery: it has to be dealt with by hand.
+
+### The first live lifecycle, at `41cf727`
+
+One controlled lifecycle on the local Docker daemon (default context, the local unix socket), on 2026-10-19, from a scrubbed environment (`env -i` with only `PATH` and `HOME`). `cleanup --stale`, the historical upgrade and restore, and every failure-injection were out of scope and not run.
+
+| Step | Command | Exit | Time | Outcome |
+|---|---|---|---|---|
+| 1 | `self-check` | 0 | n/r | "no rehearsal project is present" |
+| 2 | `cleanup --dry-run` | 0 | 1.8 s | nothing found; no state directory created |
+| 3 | `up` | 0 | 30.3 s, including the first pull | `Ready.`; server 10.11.18; run token verified |
+| 4 | independent read-only inspection | — | — | below |
+| 5 | `self-check` (running) | 0 | 3.4 s | all nine checks `ok` |
+| 6 | `cleanup --dry-run` | 0 | 2.3 s | exactly the three rehearsal objects; no `keep` or `note`; nothing removed |
+| 7 | `cleanup` | 0 | 4.5 s | container, network, volume and state directory removed |
+| 8 | final inventory | — | — | no rehearsal object or state left |
+
+(n/r: the timer was not yet working for step 1, which was fixed from step 2 on.)
+
+**Isolation observed** on the real objects, not through the script:
+
+- **Server:** `10.11.18-MariaDB-ubu2204` (asked of the server, not inferred from the tag), utf8mb4 / `utf8mb4_unicode_ci` / `+00:00`. The image `mirror.gcr.io/library/mariadb:10.11.18` resolved to `sha256:8020e05c4c498d06c87f0a1db010eb79bd6f8fb30e9b763d4690c34ce1e61008`. The container was healthy with no restarts.
+- **Exactly one** container, one network and one volume carried the rehearsal label; all three carried the Compose project `flc-rehearsal-restore`.
+- **No published ports:** zero port bindings and an empty `docker port` (3306 was exposed only). The one host listener on 3306 belonged to another project's container.
+- **Network:** a bridge with `Internal: true`, only the rehearsal container attached. Inside the container there was no default route, and a connection to a public address failed with "Network is unreachable".
+- **Mounts:** the single named volume at `/var/lib/mysql`. No bind mounts, no Docker socket, not privileged, no added capabilities, devices or security options, restart policy `no`. The volume was a plain `local` volume with no driver options, used by that container only.
+- **Sentinel:** the run token held in the sentinel database matched the token on the container, network and volume labels and in the state file (compared without printing it); the sentinel had one row; `flc_rehearsal_app` answered through the guarded path.
+- **State:** the directory was mode 700 and the credentials file and marker mode 600. A dry run left their contents, sizes and modes unchanged.
+
+**Cleanup:** the script reported removing the container, network and volume and then the state directory, and the daemon's events recorded the same stop, destroy and unmount sequence for the rehearsal objects only. Afterwards no object carried the label or the name, the state directory was absent, and all 27 containers present before the run were present with the same identity, state, start time and restart count. The pulled MariaDB image stays in the local image cache; that is not a cleanup defect.
+
+### Concurrent activity and the limits of the evidence
+
+An unrelated process named `hostparity-smoke` was creating and removing its own containers (an `alpine` `sleep` decoy and a `mariadb:11.4.13` smoke container) and anonymous volumes on the same daemon, on the default bridge. It began after the pre-run check found the daemon idle. None of it was labelled, attached to the rehearsal network or using its volume. Two volumes that existed before the run were destroyed by that activity, about 25 seconds before `cleanup` began; the rehearsal's events during its own cleanup show only its own objects being stopped or destroyed, and Docker does not remove a volume in use. It is recorded here as observed external activity, not as an effect of the rehearsal.
+
+The daemon's event buffer only reached back to about a minute after `up` had finished (it was filled by the external activity), so events cover the final `self-check`, the dry run and `cleanup` but not the creation phase. `up` is evidenced by the script's output and by the before/during inventory difference (exactly the three rehearsal objects and the image, plus that external activity).
+
+### Validation of this closeout
+
+At the closeout commit the guard suite ran 115 tests and 84 of 84 mutants were caught; ShellCheck 0.11.0 was clean on the repository's file list; the rehearsal Compose file renders. The full repository gate was not run, because parts of it create real Docker resources; the static checks it makes for this change were run independently. No further live lifecycle was run: the closeout changes touch only the end of `cleanup` (what it does with a state directory that holds other entries), test code and documentation, not startup, targeting or the removal of Docker objects. The normal successful path through that end (the directory holds only the script's own three files) is unchanged and covered by the suite; the next live cycle will exercise it for real.
+
+### What is kept, and where
+
+The live run's evidence (each command's stdout, stderr, exit status and timing; the before, during and after inventories; the event stream; the read-only inspection output) is kept **privately, outside the repository**, and is not committed. It contains no credential and no run token. No password, run token or environment file is recorded here.

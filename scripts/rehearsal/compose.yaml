@@ -1,0 +1,69 @@
+# G6 WP3c: the isolated MariaDB the local recovery rehearsal runs against.
+#
+# NOT the development stack (../../compose.yaml) and not a profile of it. Driven only by restore-rehearsal.sh, which
+# generates every ${REHEARSAL_*} value per run into a private env file and refuses to run if any of them, or any
+# COMPOSE_*, DB_*, MYSQL_*, MARIADB_*, APP_* variable, is already set in the caller's environment.
+#
+# What this file promises, and what scripts/tests/rehearsal.sh pins by rendering it with `docker compose config`:
+#
+# - One service, on one network that is `internal: true`. Nothing is published to the host (no `ports`), there is no
+#   `network_mode`, no bind mount, no Docker socket, no `env_file`, no privileged mode and no added capability.
+# - Every object's name is a literal below, not derived from the Compose project name, so that the script's identity
+#   checks and its cleanup compare against exactly what this file declares.
+# - Every object carries the labels below. The script treats a label as a claim to be verified against the rest of the
+#   object's identity (name, image, network, mounts), never as proof of ownership on its own.
+# - The image is pinned to production's MariaDB patch version. The script also asks the running server for its version,
+#   because a tag names an image and says nothing certain about what that image runs.
+#
+# Dependency acquisition (Composer) is deliberately not here. It needs the network, this network has none, and it must
+# not be given any: a later slice does it in a separate step with no database credentials and no route to this network.
+
+name: flc-rehearsal-restore
+
+services:
+  mariadb:
+    image: mirror.gcr.io/library/mariadb:10.11.18
+    container_name: flc-rehearsal-restore-mariadb
+    # Same server settings as the development database, so collation behaviour matches (utf8mb4_unicode_ci, UTC).
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+    environment:
+      MARIADB_ROOT_PASSWORD: ${REHEARSAL_DB_ROOT_PASSWORD:?generated per run by restore-rehearsal.sh}
+      MARIADB_DATABASE: flc_rehearsal_app
+      MARIADB_USER: flc_rehearsal
+      MARIADB_PASSWORD: ${REHEARSAL_DB_APP_PASSWORD:?generated per run by restore-rehearsal.sh}
+    networks:
+      - rehearsal-db
+    volumes:
+      - rehearsal-db-data:/var/lib/mysql
+    labels:
+      io.flowlife.rehearsal: restore-v1
+      io.flowlife.rehearsal.role: database
+      io.flowlife.rehearsal.run-token: ${REHEARSAL_RUN_TOKEN:?generated per run by restore-rehearsal.sh}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+
+networks:
+  rehearsal-db:
+    name: flc-rehearsal-restore-db
+    # No route out and no route in from the host: the whole point of the rehearsal's isolation.
+    internal: true
+    labels:
+      io.flowlife.rehearsal: restore-v1
+      io.flowlife.rehearsal.role: database-network
+      io.flowlife.rehearsal.run-token: ${REHEARSAL_RUN_TOKEN:?generated per run by restore-rehearsal.sh}
+
+volumes:
+  rehearsal-db-data:
+    name: flc-rehearsal-restore-db-data
+    labels:
+      io.flowlife.rehearsal: restore-v1
+      io.flowlife.rehearsal.role: database-data
+      io.flowlife.rehearsal.run-token: ${REHEARSAL_RUN_TOKEN:?generated per run by restore-rehearsal.sh}

@@ -111,6 +111,10 @@ The lazy-loaded editor is proved at three layers, because a source assertion alo
 
 `scripts/tests/cli.sh` covers `./flow` dispatch and the `./flow ci` contract. It stubs `gh` on `PATH`, so it asserts which `gh` command each subcommand delegates to — plus the guards — without needing the GitHub CLI, credentials or network. It also asserts two architectural properties: that `require_gh` is referenced only by `scripts/commands/ci.sh`, and that `ci.sh` depends on neither Docker nor a set-up environment.
 
+## The recovery rehearsal's guard tests
+
+`scripts/tests/rehearsal.sh` covers the isolation foundation of the local recovery rehearsal ([G6 WP3c](restore-rehearsal.md)). It runs the script against a fake `docker` and creates no container, network, volume or database, and it mutates each marked safeguard in a scratch copy to prove a test fails without it. It is part of `./flow check repo`.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on pushes to `main`, on pull requests (docs-only changes are skipped), and on manual dispatch, cancels superseded runs on the same ref, uses Linux runners, resolves development images from Google's public cache / GHCR so shared runner IPs do not receive anonymous Docker Hub 429s, caches the PHP image layers, and runs `./flow setup --skip-build` then `./flow check --pgsql`. See also [Docker environment](docker.md#ci-parity). No deployment happens from CI.

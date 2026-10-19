@@ -58,11 +58,13 @@ cmd_check() {
 
 check_repo() {
     run_check "Compose configuration is valid" dc --profile '*' config --quiet
+    run_check "Rehearsal compose configuration is valid" rehearsal_compose_valid
     run_check "Shell scripts (shellcheck)" shellcheck_scripts
     run_check "./flow CLI behaviour" bash "$FLOW_ROOT/scripts/tests/cli.sh"
     run_check "Production public surface (Apache/Caddy contract)" bash "$FLOW_ROOT/scripts/tests/public-surface.sh"
     run_check "Production public surface under real Apache" bash "$FLOW_ROOT/scripts/tests/apache-surface.sh"
     run_check "./flow release tooling" bash "$FLOW_ROOT/scripts/tests/release.sh"
+    run_check "Recovery rehearsal isolation guards (fake daemon, with mutation matrix)" bash "$FLOW_ROOT/scripts/tests/rehearsal.sh"
     run_check "GitHub workflows (actionlint)" actionlint_workflows
     run_check "WordPress companion PHP syntax" lint_wordpress_companion
     run_check "WordPress companion holds no Commons authority (Phase 1)" wordpress_companion_boundary
@@ -94,8 +96,20 @@ shellcheck_scripts() {
     (
         cd "$FLOW_ROOT" &&
             docker run --rm --user "$(id -u):$(id -g)" -v "$FLOW_ROOT:/mnt:ro" -w /mnt \
-                mirror.gcr.io/koalaman/shellcheck:v0.11.0 -x flow scripts/lib/*.sh scripts/commands/*.sh scripts/tests/*.sh
+                mirror.gcr.io/koalaman/shellcheck:v0.11.0 -x flow scripts/lib/*.sh scripts/commands/*.sh scripts/rehearsal/*.sh scripts/tests/*.sh
     )
+}
+
+# The recovery rehearsal's own compose file (G6 WP3c), which is not part of the development stack. Placeholder credentials stand in for the
+# per-run values restore-rehearsal.sh generates; this renders the file and starts nothing.
+rehearsal_compose_valid() {
+    local env_file status=0
+    env_file="$(mktemp)"
+    printf 'REHEARSAL_DB_ROOT_PASSWORD=x\nREHEARSAL_DB_APP_PASSWORD=y\nREHEARSAL_RUN_TOKEN=0123456789abcdef0123456789abcdef\n' >"$env_file"
+    docker compose -p flc-rehearsal-restore --project-directory "$FLOW_ROOT/scripts/rehearsal" -f "$FLOW_ROOT/scripts/rehearsal/compose.yaml" \
+        --env-file "$env_file" config --quiet || status=$?
+    rm -f "$env_file"
+    return "$status"
 }
 
 actionlint_workflows() {
