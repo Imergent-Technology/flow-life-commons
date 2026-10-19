@@ -199,7 +199,7 @@ state_token() {
     local root="$1" token
     [[ -f "$root/compose.env" ]] || return 1
     token="$(grep -E '^REHEARSAL_RUN_TOKEN=' "$root/compose.env" | tail -n 1 | cut -d= -f2-)" || token=''
-    [[ "$token" =~ ^[0-9a-f]{32}$ ]] || refuse "the run token in '$root/compose.env' is not a 32-character hex value, so nothing can be checked against it and nothing was changed. The script never edits, discards or rebuilds that file. If you want to keep it as evidence, copy it elsewhere (cp -p). To recover, move it aside inside the state directory (mv '$root/compose.env' '$root/compose.env.unreadable'), then review: restore-rehearsal.sh cleanup --dry-run --stale ; and only if the list is the rehearsal's: restore-rehearsal.sh cleanup --stale. The moved-aside file keeps the state directory in place." # guard:G5-token-format
+    [[ "$token" =~ ^[0-9a-f]{32}$ ]] || refuse "the run token in '$root/compose.env' is not a 32-character hex value, so nothing can be checked against it and nothing was changed. The script never edits, discards or rebuilds that file. If you want to keep it as evidence, copy it elsewhere (cp -p). To recover, move it out of the state directory to a place of your choosing (for example mv '$root/compose.env' <a directory outside $root>/compose.env.unreadable), then review: restore-rehearsal.sh cleanup --dry-run --stale ; and only if the list is the rehearsal's: restore-rehearsal.sh cleanup --stale. A file left inside the state directory would keep it in place." # guard:G5-token-format
     printf '%s' "$token"
 }
 
@@ -531,10 +531,10 @@ cmd_self_check() {
     resolve_project_container "$root"
     ok_line "container ${CID:0:12} is the rehearsal database (name, image, labels, network, mounts, no published ports, run token)"
     [[ -n "$networks" && "$networks" != *$'\n'* ]] || refuse "expected exactly one rehearsal network."
-    why="$(network_identity_problem "$networks" "$token" "$CID")" || refuse "the network is not the rehearsal's: $why."
+    why="$(network_identity_problem "$networks" "$token" "$CID")" || refuse "the network is not the rehearsal's: $why." # guard:G4-selfcheck-network
     ok_line "network is internal and holds only the rehearsal database"
     [[ -n "$volumes" && "$volumes" != *$'\n'* ]] || refuse "expected exactly one rehearsal volume."
-    why="$(volume_identity_problem "$volumes" "$token" "$CID")" || refuse "the volume is not the rehearsal's: $why."
+    why="$(volume_identity_problem "$volumes" "$token" "$CID")" || refuse "the volume is not the rehearsal's: $why." # guard:G4-selfcheck-volume
     ok_line "volume is a plain local volume used only by the rehearsal database"
     why="$(server_version_problem "$CID")" || refuse "$why."
     ok_line "the server itself reports MariaDB 10.11.18"
@@ -650,19 +650,35 @@ cmd_cleanup() {
         warn "Remove the cause listed above yourself (this script will not remove what it cannot prove is its own), then run: restore-rehearsal.sh cleanup"
         exit 1
     elif ((have_root)); then
-        remove_state "$root"
+        remove_state "$root" || exit 1
     fi
     if [[ -z "${owned_containers[*]}${owned_networks[*]}${owned_volumes[*]}" && $incomplete -eq 0 ]]; then say "nothing of the rehearsal's was found."; fi
 }
 
-# Removes the files this script wrote, by name, and the directory if that leaves it empty. Never recursive, never a glob.
+# Removes the files this script wrote, by name, and the directory if that leaves it empty. Never recursive, never a glob over what is
+# removed. Nothing is removed unless every entry in the directory is one of the three files this script wrote: a directory that holds
+# anything else keeps its marker, its run token and its lock file, so it stays a state directory this script recognises and cleanup can
+# be run again once the other entries are dealt with. Returns 1 when it could not finish.
 remove_state() {
-    local root="$1" file
+    local root="$1" file entry name known unexpected=()
     verify_root_ownership "$root"
+    for entry in "$root"/* "$root"/.[!.]* "$root"/..?*; do
+        [[ -e "$entry" || -L "$entry" ]] || continue
+        name="${entry##*/}"
+        known=0
+        for file in compose.env run.lock "$ROOT_MARKER_NAME"; do
+            if [[ "$name" == "$file" && -f "$entry" && ! -L "$entry" ]]; then known=1; fi
+        done
+        if [[ $known == 0 ]]; then unexpected+=("$name"); fi
+    done
+    ((${#unexpected[@]} == 0)) || { warn "the objects are gone, but the state directory $root holds entries this script did not write (${unexpected[*]}); nothing in it was removed, and its marker and run token were kept. Deal with those entries yourself (this script never removes what it did not write), then run: restore-rehearsal.sh cleanup"; return 1; } # guard:G8-state-entries
     for file in compose.env run.lock "$ROOT_MARKER_NAME"; do
         if [[ -f "$root/$file" && ! -L "$root/$file" ]]; then rm -f -- "${root:?}/$file"; fi
     done
-    if rmdir -- "$root" 2>/dev/null; then say "removed state directory $root"; else warn "state directory $root holds other files and was kept"; fi
+    if rmdir -- "$root" 2>/dev/null; then say "removed state directory $root"; else
+        warn "state directory $root gained entries while it was being emptied and was kept; nothing but the files this script wrote was removed"
+        return 1
+    fi
 }
 
 main() {

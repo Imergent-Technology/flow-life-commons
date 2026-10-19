@@ -48,6 +48,17 @@ for tool in bash env cat grep awk tr od id mktemp mv chmod rm rmdir mkdir dirnam
 done
 REAL_STAT="$(command -v stat)"
 
+# rm, except that a test can ask for an entry to appear in the state directory just before run.lock is removed (a race the real
+# thing leaves to chance): $T/rm-race present means "create $T/root/late-file first".
+REAL_RM="$(command -v rm)"
+"$REAL_RM" -f "$BIN/rm"
+cat >"$BIN/rm" <<STUB
+#!/usr/bin/env bash
+if [[ -f "$T/rm-race" && "\$*" == *run.lock* ]]; then printf late >"$T/root/late-file"; fi
+exec "$REAL_RM" "\$@"
+STUB
+chmod +x "$BIN/rm"
+
 # stat, except where a test has asked for a different answer (the owner and mode checks cannot otherwise be made to fail by a user
 # who owns everything they create): $T/stat-override holds lines `<format>|<path suffix>|<answer>`.
 cat >"$BIN/stat" <<STUB
@@ -234,7 +245,7 @@ new_world() {
     put "$W" context default
     put "$W" endpoint 'unix:///var/run/docker.sock'
     put "$W" version '10.11.18-MariaDB-ubu2204'
-    rm -rf "${T:?}/root" "${T:?}/home" "${T:?}/stat-override"
+    rm -rf "${T:?}/root" "${T:?}/home" "${T:?}/stat-override" "${T:?}/rm-race"
     mkdir -p "$T/home"
     unset WORLD_ENV
 }
@@ -1276,17 +1287,107 @@ t_g8_incomplete_cleanup_keeps_state_and_can_be_retried() {
     expect_lacks 'no --stale was needed' "$(calls)" 'stale'
 }
 
-# remove_state removes the three files it wrote and rmdirs; it must never remove anything else (the state directory may hold evidence).
-t_g8_state_removal_is_never_recursive() {
+# remove_state removes the three files it wrote and rmdirs. If the directory holds anything else it removes nothing at all, so the marker
+# and run token survive and the directory stays one this script recognises; and it never removes what it did not write.
+t_g8_state_with_other_entries_is_kept_whole() {
     good_world
     mkdir "$T/root/evidence"
     printf 'x' >"$T/root/evidence/f"
     printf 'precious' >"$T/root/notes.txt"
+    printf 'h' >"$T/root/.hidden"
+    ln -s "$T/root/notes.txt" "$T/root/link"
+    local env_before marker_before
+    env_before="$(<"$T/root/compose.env")"
+    marker_before="$(<"$T/root/.flc-rehearsal-root")"
+    local attempt
+    for attempt in first retry; do
+        run_script -- cleanup
+        expect_rc "cleanup ($attempt) with other entries in the state directory" 1
+        expect_has "the entries are named ($attempt)" "$ERR" 'evidence'
+        expect_has "the entries are named ($attempt)" "$ERR" 'notes.txt'
+        expect_has "dotfiles are named ($attempt)" "$ERR" '.hidden'
+        expect_has "links are named ($attempt)" "$ERR" 'link'
+        expect_has "the reason is stated ($attempt)" "$ERR" 'nothing in it was removed, and its marker and run token were kept'
+        expect_lacks "no removal is reported ($attempt)" "$OUT" 'removed state directory'
+        [[ -f "$T/root/compose.env" && "$(<"$T/root/compose.env")" == "$env_before" && "$("$REAL_STAT" -c %a "$T/root/compose.env")" == 600 ]] || bad "compose.env was removed or changed ($attempt)"
+        [[ -f "$T/root/.flc-rehearsal-root" && "$(<"$T/root/.flc-rehearsal-root")" == "$marker_before" ]] || bad "the marker was removed or changed ($attempt)"
+        [[ -f "$T/root/evidence/f" && -f "$T/root/notes.txt" && -f "$T/root/.hidden" && -L "$T/root/link" ]] || bad "an entry this script did not write was removed ($attempt)"
+        [[ ! -d "$W/c/$CID" && ! -d "$W/n/$NID" && ! -d "$W/v/$NAME_V" ]] || bad "the objects were not removed before the state was considered ($attempt)"
+    done
+    # A known name that is not a plain file (a symlink) is not this script's either.
+    rm -rf "${T:?}/root/evidence" "${T:?}/root/notes.txt" "${T:?}/root/.hidden" "${T:?}/root/link"
+    printf 'keep' >"$T/elsewhere-target"
+    rm -f "${T:?}/root/run.lock"
+    ln -s "$T/elsewhere-target" "$T/root/run.lock"
     run_script -- cleanup
-    expect_rc 'cleanup with other files in the state directory' 0
-    expect_has 'the directory is kept, and says why' "$ERR" 'holds other files and was kept'
-    [[ -f "$T/root/evidence/f" && -f "$T/root/notes.txt" ]] || bad 'a file this script did not write was removed'
-    [[ ! -e "$T/root/compose.env" && ! -e "$T/root/run.lock" && ! -e "$T/root/.flc-rehearsal-root" ]] || bad 'the files this script wrote were left behind'
+    expect_rc 'cleanup with a symlink where the lock file should be' 1
+    [[ -f "$T/elsewhere-target" && -f "$T/root/compose.env" ]] || bad 'a symlinked lock file led to a removal'
+    # Once the directory holds only what this script wrote, a plain cleanup finishes.
+    rm -f "${T:?}/root/run.lock" "${T:?}/elsewhere-target"
+    run_script -- cleanup
+    expect_rc 'cleanup once only the script'"'"'s own files remain' 0
+    expect_has 'the state is removed last' "$OUT" 'removed state directory'
+    [[ ! -e "$T/root" ]] || bad 'the state directory was not removed once it held only the script'"'"'s own files'
+}
+
+# An entry that appears after the check, while the files are being removed, is still never removed.
+t_g8_state_removal_race_is_never_recursive() {
+    good_world
+    : >"$T/rm-race"
+    run_script -- cleanup
+    expect_rc 'an entry appears while the state is being removed' 1
+    expect_has 'the directory is kept, and says why' "$ERR" 'gained entries while it was being emptied'
+    [[ -f "$T/root/late-file" ]] || bad 'an entry that appeared during the removal was deleted'
+    [[ -d "$T/root" ]] || bad 'the state directory was removed although it held another entry'
+}
+
+# A dry run against a complete, valid project changes nothing: not a Docker object, not the state files, not their permissions.
+# (The lock file is the one thing the script touches: it opens it to take the lock.)
+t_g8_dry_run_preserves_a_complete_project() {
+    good_world
+    snapshot() {
+        local f
+        (cd "$W" && for f in $(find c n v -type f | sort); do printf '%s=%s\n' "$f" "$(<"$f")"; done)
+        (cd "$T/root" && shopt -s dotglob nullglob && for f in *; do [[ "$f" == run.lock ]] || printf '%s %s %s\n' "$f" "$("$REAL_STAT" -c %a "$f")" "$(<"$f")"; done)
+        "$REAL_STAT" -c '%a %U' "$T/root"
+    }
+    local before after
+    before="$(snapshot)"
+    run_script -- cleanup --dry-run
+    expect_rc 'a dry run against a complete project' 0
+    after="$(snapshot)"
+    [[ "$before" == "$after" ]] || bad 'a dry run changed a Docker object, a state file, its content or its permissions'
+    expect_has 'the container is listed' "$OUT" "would remove container ${CID:0:12}"
+    expect_has 'the network is listed' "$OUT" "would remove network ${NID:0:12}"
+    expect_has 'the volume is listed' "$OUT" "would remove volume $NAME_V"
+    expect_lacks 'nothing is kept or noted' "$OUT" 'keep '
+    assert_read_only 'a dry run of a complete project'
+    [[ "$("$REAL_STAT" -c %a "$T/root/compose.env")" == 600 && "$("$REAL_STAT" -c %a "$T/root")" == 700 ]] || bad 'a dry run changed the secret-file or directory permissions'
+}
+
+# self-check verifies the network and the volume itself, not only the container.
+t_g4_selfcheck_verifies_network() {
+    good_world
+    add_network "$NID" "internal=false"
+    run_script -- self-check
+    expect_refused 'self-check with a network that is not internal' "the network is not the rehearsal's"
+    expect_lacks 'self-check with a network that is not internal' "$OUT" 'network is internal'
+    good_world
+    add_container "$FOREIGN" "name=/intruder" "l_ns=" "nets=$NAME_N,"
+    add_network "$NID" "endpoints=$CID,$FOREIGN,"
+    run_script -- self-check
+    expect_refused 'self-check with a foreign container on the network' 'is attached'
+}
+t_g4_selfcheck_verifies_volume() {
+    good_world
+    add_volume "$NAME_V" "options=1"
+    run_script -- self-check
+    expect_refused 'self-check with a volume that has driver options' "the volume is not the rehearsal's"
+    expect_lacks 'self-check with a volume that has driver options' "$OUT" 'volume is a plain local volume'
+    good_world
+    add_container "$FOREIGN" "name=/intruder" "l_ns=" "mounts=volume:$NAME_V:/data,"
+    run_script -- self-check
+    expect_refused 'self-check with a volume used by a foreign container' 'that is not ours uses it'
 }
 
 # Each kind of failed removal is reported as what remains, keeps the state, and is finished by a plain retry.
@@ -1525,18 +1626,21 @@ t_g5_malformed_state_recovery_path() {
     expect_has 'evidence' "$ERR" 'cp -p'
     expect_has 'never edited' "$ERR" 'never edits, discards or rebuilds'
     expect_has 'the way on' "$ERR" 'compose.env.unreadable'
+    expect_has 'the way on' "$ERR" 'outside'
     expect_has 'the way on' "$ERR" 'cleanup --dry-run --stale'
     [[ -z "$(mutating_calls)" ]] || bad 'objects were removed on the strength of a malformed state file'
     [[ "$(<"$T/root/compose.env")" == "$before" ]] || bad 'the malformed state file was altered'
-    # Follow the instructions: move it aside, review, clean up. The moved file is evidence and stays.
-    mv "$T/root/compose.env" "$T/root/compose.env.unreadable"
+    # Follow the instructions: move it out of the state directory, review, clean up. The moved file is evidence and stays.
+    mkdir "$T/evidence-out"
+    mv "$T/root/compose.env" "$T/evidence-out/compose.env.unreadable"
     run_script -- cleanup --dry-run --stale
     expect_rc 'dry run after moving the file aside' 0
     expect_has 'the list' "$OUT" "would remove container ${CID:0:12}"
     run_script -- cleanup --stale
-    expect_rc 'cleanup --stale after moving the file aside' 0
+    expect_rc 'cleanup --stale after moving the file out' 0
     [[ ! -d "$W/c/$CID" && ! -d "$W/n/$NID" && ! -d "$W/v/$NAME_V" ]] || bad 'the recovery path did not remove the verified objects'
-    [[ -f "$T/root/compose.env.unreadable" && "$(<"$T/root/compose.env.unreadable")" == "$before" ]] || bad 'the moved-aside evidence was lost or altered'
+    [[ -f "$T/evidence-out/compose.env.unreadable" && "$(<"$T/evidence-out/compose.env.unreadable")" == "$before" ]] || bad 'the moved-out evidence was lost or altered'
+    [[ ! -e "$T/root" ]] || bad 'the state directory was kept although it held only the script'"'"'s own files'
 }
 
 # --- the registry: which tests prove which guard ---------------------------------------------------------------------------------------------
@@ -1589,6 +1693,8 @@ declare -A GUARD_TESTS=(
     [G4-up-network]='t_g4_up_network_identity'
     [G4-up-volume]='t_g4_up_volume_identity'
     [G4-up-version]='t_g4_up_server_version'
+    [G4-selfcheck-network]='t_g4_selfcheck_verifies_network'
+    [G4-selfcheck-volume]='t_g4_selfcheck_verifies_volume'
     [G4-up-one-network]='t_g4_up_one_network_and_volume'
     [G4-up-one-volume]='t_g4_up_one_volume'
     [G4-pol-internal]='t_g4_pol_internal'
@@ -1613,6 +1719,7 @@ declare -A GUARD_TESTS=(
     [G8-state-required]='t_g8_without_state_a_stale_flag_is_required'
     [G8-incomplete]='t_g8_incomplete_cleanup_keeps_state_and_can_be_retried t_g8_cleanup_removes_exactly_the_rehearsal'
     [G8-volume-users-list]='t_g8_volume_users_listing_failure'
+    [G8-state-entries]='t_g8_state_with_other_entries_is_kept_whole'
     [G8-reverify-container]='t_g8_reverify_container'
     [G8-reverify-network]='t_g8_reverify_network'
     [G8-reverify-volume]='t_g8_reverify_volume'
