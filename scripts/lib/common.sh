@@ -114,6 +114,11 @@ ensure_postgres() {
 
 # The test databases are separate from the development database so that
 # RefreshDatabase can never touch development data (see tests/TestCase.php).
+#
+# Two per engine: `flowlife_test` for the whole suite, and `flowlife_upgrade_test` for the historical-upgrade tests
+# (apps/platform/tests/Upgrade; G6 WP3b). Those tests build the v0.3.0 schema, which cannot happen inside RefreshDatabase's
+# transaction or in a database the other suites have already migrated, so they get one of their own that nothing else touches.
+# The names are fixed here and again in tests/Support/UpgradeDatabase.php, which refuses to clean any other.
 ensure_mariadb_test_db() {
     # The single quotes are deliberate: $MARIADB_ROOT_PASSWORD expands inside the
     # container, so the password never appears on this host's command line.
@@ -121,14 +126,18 @@ ensure_mariadb_test_db() {
     dcq exec -T mariadb sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"' >/dev/null <<'SQL'
 CREATE DATABASE IF NOT EXISTS flowlife_test;
 GRANT ALL PRIVILEGES ON flowlife_test.* TO 'flowlife'@'%';
+CREATE DATABASE IF NOT EXISTS flowlife_upgrade_test;
+GRANT ALL PRIVILEGES ON flowlife_upgrade_test.* TO 'flowlife'@'%';
 SQL
 }
 
 ensure_postgres_test_db() {
-    local exists
-    exists="$(dcq --profile postgres exec -T postgres psql -U flowlife -d flowlife -tAc \
-        "SELECT 1 FROM pg_database WHERE datname='flowlife_test'")"
-    if [[ "$exists" != "1" ]]; then
-        dcq --profile postgres exec -T postgres createdb -U flowlife flowlife_test
-    fi
+    local name exists
+    for name in flowlife_test flowlife_upgrade_test; do
+        exists="$(dcq --profile postgres exec -T postgres psql -U flowlife -d flowlife -tAc \
+            "SELECT 1 FROM pg_database WHERE datname='$name'")"
+        if [[ "$exists" != "1" ]]; then
+            dcq --profile postgres exec -T postgres createdb -U flowlife "$name"
+        fi
+    done
 }

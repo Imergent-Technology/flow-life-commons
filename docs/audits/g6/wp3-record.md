@@ -1,12 +1,12 @@
 # G6 WP3 — remediation record
 
-- **Package:** WP3 Data integrity, upgrade and restore safety. Remediation of the [independent audit](wp3-audit.md) as ruled in the [owner's triage](wp3-triage.md). The triage authorizes the three work units separately: **WP3a** is recorded below. **WP3b and WP3c are planned and not yet authorized**; their sections are left for that work.
+- **Package:** WP3 Data integrity, upgrade and restore safety. Remediation of the [independent audit](wp3-audit.md) as ruled in the [owner's triage](wp3-triage.md). The triage authorizes the three work units separately: **WP3a** and **WP3b** are recorded below. **WP3c is planned and not yet authorized**; its section is left for that work.
 - **Audit and triage files:** the audit is committed as `wp3-audit.md` from its heading (`# G6 WP3 — Data integrity…`) to its closing verdict line, unedited. The one-line "Written for:" hand-over note that preceded it was addressed to the owner, so it is not in the file (as for [WP2](wp2-record.md)). The owner's rulings are `wp3-triage.md`, verbatim in content. Its three header lines first ended in two spaces (Markdown hard line breaks), which `git diff --check` reports as trailing whitespace. At the owner's direction they now end in a backslash, CommonMark's other hard line break. The rendered text is the same and no word changed. (`wp2-triage.md`, already on `main`, keeps its two-space form.)
 
 ## WP3a — Migration freeze and immutability
 
-- **Base:** `main` at `a7af9a0f25233244426daa2afadcaabbf32249b3` (PR #12, G6 WP2 squash-merged; post-merge CI run `39031098500`, taken from the assignment and not re-queried). **Branch:** `fix/g6-wp3a-migration-freeze`. Pushed for review in a pull request (§14). Not merged, nothing deployed. Production stays on v0.3.0.
-- **Status:** implemented, validated, and **independently verified** ([§14](#14-independent-verification), [`wp3a-verification.md`](wp3a-verification.md)): no BLOCKER, HIGH, MEDIUM or LOW finding, and one INFORMATIONAL note, accepted. Ready for the owner's integration review. Sections 1–13 are the implementer's evidence, not the independent review.
+- **Base:** `main` at `a7af9a0f25233244426daa2afadcaabbf32249b3` (PR #12, G6 WP2 squash-merged; post-merge CI run `39031098500`, taken from the assignment and not re-queried). **Branch:** `fix/g6-wp3a-migration-freeze`. **Integrated:** squash-merged to `main` as `95bcd841ebb144ba5b4bb3c333ab90286064f8ee` (PR #13); post-merge CI run `39098496073`, taken from the WP3b assignment and not re-queried. Nothing deployed. Production stays on v0.3.0.
+- **Status:** implemented, validated, and **independently verified** ([§14](#14-independent-verification), [`wp3a-verification.md`](wp3a-verification.md)): no BLOCKER, HIGH, MEDIUM or LOW finding, and one INFORMATIONAL note, accepted. Integrated (see Base). Sections 1–13 are the implementer's evidence, not the independent review.
 - **Who implemented it:** the assignment named Claude Sonnet 5.5. This session ran on **Claude Opus 5.5**. The verification should therefore be a separate session that did not write this code.
 - **Scope kept:** WP3a only. No WP3b historical upgrade suite, no WP3c rehearsal script or runbook work, no production or staging access, no release build, no change to the role catalog, the capability bundles or the rename's semantics, no CI change.
 
@@ -276,13 +276,275 @@ A separate Opus 5.5 session, which did not write this code, verified WP3a. Its r
 
 **I1 — INFORMATIONAL: the production pre-flight is described as if it exists.** ADR 0038 M6 and the migration's comment speak of "the release's read-only pre-flight", which is approved (WP3-10) but not written. **Owner disposition: accepted for WP3a.** The ADR and the comment are not changed for it. **WP3c must deliver the production pre-flight before release**, which keeps both sentences true.
 
-## WP3b and WP3c — pending, not yet authorized
+## WP3b — Historical upgrade tests
 
-Planned by the triage and not started. What WP3a leaves to them:
+- **Base:** `main` at `95bcd841ebb144ba5b4bb3c333ab90286064f8ee` (WP3a, PR #13; post-merge CI run `39098496073`, taken from the assignment and not re-queried). **Branch:** `feat/g6-wp3b-historical-upgrade-tests`, local only. No push, pull request, merge or deployment. Production stays on v0.3.0 (`2f385b79a7b83323c6f15a6685ee610ccd85b5bf`).
+- **Status:** implemented and validated; **awaiting independent verification**. Everything below is the implementer's evidence.
+- **Who implemented it:** Claude Sonnet 5.5, the model the assignment named. Verification should be a separate session.
+- **Scope kept:** WP3b only. No change to any migration, the role catalog, the capability bundles, the rename's refusal policy, CI settings or required checks, `app/`, or the audit, triage or WP3a verification records. No production or staging access, no restore rehearsal, no WP3c work.
+- **Executable commit of the gate:** `e6a45e7e888255b8577b3f73dd64cb6d7d7d6beb`. The commits after it change only `docs/audits/g6/`.
+
+### 1. What was built
+
+| File | Role |
+| --- | --- |
+| `scripts/lib/common.sh` | `ensure_mariadb_test_db` and `ensure_postgres_test_db` also create `flowlife_upgrade_test` (MariaDB: with the same grant). `./flow test`, `./flow check`, `./flow setup` and CI therefore get it from the functions they already call. No new service. |
+| `tests/Support/UpgradeDatabase.php` | The only door to that database: builds the connection, validates it, cleans it, runs the real migration runner on it, reads it back. |
+| `tests/Support/HistoricalFixture.php` | The v0.3.0 rows, as literal inserts. Also the literal lists of the 14 pending migrations, the 18 new tables, and the ten Guardian capabilities. |
+| `tests/Support/HistoricalSnapshot.php`, `HistoricalRun.php` | Row and structure snapshots of the 16 tables, the expected-after construction, and the comparison. |
+| `tests/Upgrade/HistoricalUpgradeTest.php` | The successful upgrade, run once for the file; 29 tests. |
+| `tests/Upgrade/RefusedUpgradeTest.php` | The refused upgrades, each on its own historical database; 3 tests. |
+| `tests/Upgrade/UpgradeDatabaseGuardTest.php` | The safeguards; 12 tests. |
+| `phpunit.xml`, `tests/Pest.php` | An `Upgrade` suite, extended with `TestCase` and **not** `RefreshDatabase`, as `Concurrency` is. |
+| `docs/development/testing.md` | A paragraph on the suite and its database. |
+
+### 2. Isolation and safeguards
+
+`flowlife_test` is unchanged and nothing else uses `flowlife_upgrade_test`. Every statement that creates or drops anything goes through a named connection, `upgrade`, built in `UpgradeDatabase::connect()`, which on **every call**:
+
+- requires the testing environment;
+- requires the inherited default connection to be MariaDB or PostgreSQL on a `*_test` database that is not the upgrade database (the rule `tests/TestCase.php` already applies), so a shell carrying a development or production `.env` is refused;
+- requires the host to be `mariadb`, `postgres`, `localhost`, `127.0.0.1` or `::1`;
+- fixes the database to the constant `flowlife_upgrade_test`, and **blanks the inherited `url` and `unix_socket`**, which could otherwise name another database or server;
+- asks the server which database it is on (`select database()` / `select current_database()`) and refuses a different answer, before any DDL.
+
+`clean()` runs before the first build and `afterAll` drops the tables again (`cleanVerified()`, which opens a connection from the settings that passed these checks and checks the name once more); a refused-upgrade test also cleans after each test. After every run in this package both databases were checked empty (`show tables`: none; `\dt`: none). The default connection is switched to the upgrade database only inside `useAsDefault()` / `restoreDefault()`, so the application's own code (the Authorizer, the Artisan commands) can read the upgraded schema.
+
+`UpgradeDatabaseGuardTest` damages each safeguard (a development, production-looking, suffixed or upgrade-named inherited database; three hosts; a production environment; a URL and a socket that name another database; a refused `useAsDefault`) and requires the refusal before a connection to the upgrade database exists. Planting the URL mutant (leaving `url` and `unix_socket` unblanked) fails the URL test on both engines.
+
+**Two things measured on the way, kept in the code's comments:**
+- `Schema::getTables()` on MariaDB lists the tables of **every database the user can see**; `flowlife_test`'s appeared in the "upgrade" list until it was asked by schema.
+- The backend suite is **one PHP process** and MariaDB allows 151 connections. Earlier tests' connections are freed only when the cycle collector runs. The first full gate (below) reached "Too many connections" at the first upgrade test and in the Apprentice suite after it. Each test here now purges its connection, disconnects and collects, and each file collects once before it starts; the full MariaDB runs then peaked at 131–132 sampled connections (sampled every 10 s).
+
+### 3. Historical schema
+
+`migrateHistorical()` runs `migrate --database=upgrade --realpath` with exactly the 15 pinned file paths. `historicalPaths()` refuses unless those are the **first 15** migrations in the directory in the Migrator's order. `DeployedMigrationsTest` pins their bytes against the `v0.3.0` tag. The test asserts:
+
+- the 15 migrations are recorded, all in batch 1;
+- exactly the 16 expected tables exist (the 15 and `migrations`), and nothing later.
+
+### 4. Fixture matrix (literal rows, fixed lower-case ULIDs, no application code)
+
+Thirteen Persons; eleven Accounts (nine active, one invited, one disabled); twelve role assignments:
+
+| Person | Account | Stored role keys |
+| --- | --- | --- |
+| 1 Ada | active | `platform_administrator` |
+| 2 Gus | active | `guardian`, `platform_administrator` |
+| 3 Guy | active | `guardian` |
+| 4 Ines | invited | `guardian` |
+| 5 Dora | disabled | `guardian` |
+| 6 Nora | none | `guardian` |
+| 7–10 | active | `Guardian`, `GUARDIAN`, `guardian ` (trailing space), `guardián`, one Person each |
+| 11 | active | `Guardian-Full` (a destination-key variant, another Person) |
+| 12 Mina | active | none |
+| 13 Walt | none | none |
+
+Also: four invitations (pending, lapsed, two accepted; both channels); two password-reset tokens; security-generation values 1–4; three raw `sessions` rows (two signed in, one guest; non-ASCII content); three TOTP factors (two enrolled, one used and one never; one still pending); five recovery-code digests, one used; five membership grants (open-ended, bounded to 2099, expired, revoked, two sources); eight security events with actors, subjects, IPs and JSON contexts. `cache`, `jobs` and the other queue tables are empty and are snapshotted as empty.
+
+Created at run time and never committed: password hashes, the TOTP secret and its ciphertext (the framework encrypter, the test key), recovery-code and invitation digests. Each variant is on its **own** Person because MariaDB's unique key on `(person_id, role_key)` folds case, trailing space and accent; on PostgreSQL it does not.
+
+*Interpretation:* "a sole platform administrator" and "another administrator" cannot both hold literally, so Ada is administrator only and Gus is administrator and Guardian. Only keys v0.3.0 could write are used, plus the variants a VARCHAR can hold ([audit §G](wp3-audit.md#g-wp3b-readiness)).
+
+### 5. Snapshot assertions
+
+`HistoricalSnapshot::take()` reads every row of the 16 tables as stored, ordered by primary key, before and after, on the same engine; nothing is normalised. `expected()` builds the "before" with **only** the allowed changes, each named by the test: the five role assignments listed in `RENAMED` (written out; a separate test checks the list against the rows whose key is `=== 'guardian'` in PHP) become `guardian-full`, and the 14 migrations are appended to `migrations` (batch 2). `differences()` requires the "after" to equal that, row for row and column for column. Result: no difference, on both engines. Also asserted:
+
+- the 14 tables other than `role_assignments` and `migrations` are identical, one by one, so a failure names the table; `sessions` also compared by SHA-256 of id and payload;
+- for the roles, a literal map of all twelve assignment ids to their key after the upgrade, and the Person, granter and timestamp of each unchanged;
+- TOTP and recovery-code tables unchanged, the stored secret of Account 1 **decrypts with the application's own cipher to the secret enrolled**, the pending enrolment still pending, the used recovery code still the one used;
+- the historical tables' columns, indexes and foreign keys identical before and after, the six foreign keys and the two named `role_assignments` indexes listed literally.
+
+### 6. Post-upgrade schema
+
+- `Upgrade::pendingNames()` equals a literal list of the **14** migrations; the recorded set is the 15 plus those 14 = **29**, batches 1 and 2.
+- The 18 new tables are listed literally (34 tables in all) and every one has 0 rows. `person_relationships`, `sourced_role_grants` and `contact_profiles` each have a foreign key to `people`.
+- Adding a migration later fails these assertions until it is listed in `HistoricalFixture::UPGRADE_MIGRATIONS` and `NEW_TABLES`. That is intended: it is the prompt to check the new migration against historical data.
+
+### 7. Capability matrix and stored roles vs authority
+
+`GUARDIAN_BUNDLE` is the runbook's ten capabilities, written out and **not** derived from `Role::GuardianFull->capabilities()` or `organizationalBundle()`. Each Account's authority is what the real `Authorizer` decides on the upgraded database:
+
+| Account | Stored key afterwards | Authority |
+| --- | --- | --- |
+| Guy (active) | `guardian-full` | exactly the ten |
+| Ada, Gus (active admins; Gus also Guardian) | `platform_administrator` (+ `guardian-full`) | the whole catalog (also 18 literal ids; includes `guardians.manage`, which the bundle lacks) |
+| Ines (invited), Dora (disabled) | `guardian-full` | **nothing** |
+| Nora (no Account) | `guardian-full` | nothing; no Account, no sessions |
+| the five variants (active) | unchanged | **nothing** |
+| Mina (no role) | none | nothing |
+
+No `person_relationships`, `sourced_role_grants` or membership row is created, and no security event is written (the 8 events are identical).
+
+### 8. Diagnostics
+
+- `relationships:check` run for real: exit 0, "Relationships are consistent with their definitions."
+- `relationships:guardian-adoption-report` run for real: exit 0. "Console access without a Guardian relationship" lists **exactly** Ada, Gus, Guy, Ines, Dora and Nora, in that order: the invited, disabled and Account-less holders are present, as the audit predicted. The Account and console-access sections say `none`, and the closing check is consistent. The report writes nothing: every row of every table is identical after it.
+
+### 9. Refused upgrades (`RefusedUpgradeTest`)
+
+Each builds its own v0.3.0 database, loads the fixture and plants an extra assignment.
+
+1. **An exact `guardian-full` on another Person.** The runner throws the migration's `RuntimeException` ("Refusing to rename role key guardian to guardian-full: a guardian-full assignment already exists."). Recorded: the 15 and the **11** that ran before the rename; **not** the rename, and not the two after it (26 in all, batches 1 and 2). All five `guardian` rows are still `guardian`, no historical row changed (the only difference is the 11 records), `person_relationships` exists, `sourced_role_grants` and the `contact_methods` provenance column do not. **Same on both engines.**
+2. **Re-run after the offending row is removed:** it completes, records the remaining three in batch 3 (29 in all), renames exactly the five, and nothing earlier runs twice.
+3. **WP3-02, the engine difference.** Nora holds `guardian` and, planted, `Guardian-Full`. The migration's own check passes (not the exact key). **MariaDB:** the unique key rejects the rename (`UniqueConstraintViolationException`), every row is as it was, the rename is not recorded (26 recorded), `sourced_role_grants` does not exist. **PostgreSQL:** no collision; the upgrade completes (29), and Nora holds `Guardian-Full` and `guardian-full`. Her row is the **last** exact `guardian` the rename visits, so four are renamed before the failure on MariaDB, which is what makes a missing transaction visible there.
+
+The refusal policy is untouched.
+
+### 10. Mutation evidence
+
+Planted in a scratch detached worktree of the branch (the shared checkout was never edited), the whole `tests/Upgrade` directory run on both engines, restored with `git checkout` and checked clean after each. The matrix was measured at `db24a36`; the commits after it changed only connection release and cleanup in the support class and the files' hooks.
+
+| Mutant | MariaDB | PostgreSQL |
+| --- | --- | --- |
+| **A1** exactness check dropped (`if (true)`) | **killed**, 31 failed: the refusal fires on the `Guardian-Full` variant, so the whole upgrade is refused | survives (44 passed): PostgreSQL's SQL is already exact |
+| **A2** PHP check accepts a case-insensitive `guardian` | **killed**, 7 failed: `Guardian` and `GUARDIAN` are renamed and gain the bundle | survives |
+| **A3** SQL `lower(role_key)` for `guardian`, PHP check bypassed | **killed**, 9 failed | **killed**, 8 failed |
+| **B1** `guardians.view` removed from the Guardian bundle | **killed**, 1 failed (the literal ten) | **killed**, 1 failed |
+| **B2** `guardians.manage` added to the bundle | **killed**, 1 failed | **killed**, 1 failed |
+| **D1** a later migration deletes one security event | **killed**, 3 failed | **killed**, 4 failed |
+| **D2** the rename also moves `granted_at` | **killed**, 3 failed | **killed**, 4 failed |
+| **MR** refusal removed from `up()` | **killed**, 2 failed | **killed**, 2 failed |
+| **MT** transaction removed from `up()` | **killed**, 1 failed (the WP3-02 case: a partial rename) | survives: PostgreSQL wraps the migration itself |
+| **F1** the fixture loses a security event | **killed**, 3 failed (the fixture's own count) | **killed**, 3 failed |
+| **G** `url` / `unix_socket` not blanked | **killed**, 1 failed | **killed**, 1 failed |
+
+A1–A3 are the **case-handling regression** (A) and B1–B2 the **capability drift** (B) the assignment named: A is caught on MariaDB, as predicted, and only an SQL-level mutant (A3) reaches PostgreSQL; B is caught on both. The two engine-specific survivors (A1, A2 and MT on PostgreSQL) are the audit's stated expectation, not a gap.
+
+**Negative control for a missing historical row:** eight cases damage the real upgraded snapshot (a Person missing, a security event missing, a variant renamed as if exact, an exact key not renamed, a recovery-code digest changed, a timestamp moved, a row appearing, a migration unrecorded) and the comparison must name each. F1 shows the fixture itself is pinned: it cannot lose a row unnoticed.
+
+### 11. Results and gates
+
+- **Focused:** `tests/Upgrade`: **44 passed (261 assertions) on MariaDB 10.11.19 and on PostgreSQL 16.15**, exit 0, both databases empty afterwards.
+- **`./flow check all --pgsql` at `e6a45e7`: all checks passed, exit 0**, no skipped test, no changed timeout, no retry. Pint and Larastan (level max, tests included) clean; **3,491 passed on each engine** (27,136 assertions on MariaDB, 27,141 on PostgreSQL), 44 more than WP3a's 3,447; Vitest unchanged; the whole gate took 1,934 s.
+- **The first gate run failed** (at the executable state `60730e3`): 24 MariaDB tests, `SQLSTATE[HY000] [1040] Too many connections`, in the upgrade tests and the Apprentice suite after them; PostgreSQL passed. The cause is §2's connection finding. A second attempt at the fix then exited 2 with every test passing: releasing the connection left the file's `afterAll` unable to drop the tables. Both are fixed (`724a32c`, `e6a45e7`) and the gate above is the third run.
+- `git diff --check origin/main..HEAD`: clean. `git diff --stat`: 11 files, all under `scripts/lib/`, `apps/platform/tests/`, `apps/platform/phpunit.xml` and `docs/`. No change under `app/`, `database/`, `config/` or `.github/`.
+- **Runtime.** Summed test time of the `Upgrade` suite inside the full run: **13 s on MariaDB, 8 s on PostgreSQL**; standalone (including boot) it is 34–38 s and 11–16 s. The backend runs took 685 s and 708 s, against WP3a's 712 s and 816 s: within run-to-run noise, so no increase is measurable. WP3a's CI job took 20 m 19 s against the 25-minute limit and the 22-minute review threshold; this package has not been measured in CI. **No CI setting was changed.**
+- No browser E2E was run: nothing in the Console or the E2E implementation changed.
+
+### 12. Commits
+
+| Commit | Content |
+| --- | --- |
+| `cad6a3b` | the dedicated database, `UpgradeDatabase`, the guard test, `phpunit.xml`, `Pest.php`, `common.sh` |
+| `813bc8d` | fixture, snapshot, the successful and refused upgrade tests |
+| `db24a36` | the same-Person case moved to the last exact row |
+| `60730e3` | `docs/development/testing.md` |
+| `724a32c` | connection release |
+| `e6a45e7` | `afterAll` cleanup from the verified settings (**the gate's executable commit**) |
+| `ec86778`, `27bb2e6` | this section; WP3a's status |
+| `5484e96` | V1, L1, L2 remediation (§14); its gate is the one in §14 |
+| `f6c48a0` | `direct`/`pooled` refusal and the K1 test (§14.1); its gate is the one in §14.1 |
+| `95dfcf4` | §14.1 |
+| *this commit* | §14.2 and the debt rows; documentation only |
+
+### 13. Limitations and what WP3c must still do
+
+- This is the **development** behaviour on the **current framework** running the real v0.3.0 migration files. It does not run the v0.3.0 application, and it does not authorize the nine-capability expansion for production.
+- No backup, restore, in-place rollback or partial-failure recovery on a host is exercised. Scenario 9.1 shows the *database* is left consistent and re-runnable; it does not show that a production host's recovery procedure works (WP3-01 and the rest of WP3c).
+- Run on MariaDB 10.11.19 (production: 10.11.18, [G6-D09](debt-register.md)) and PostgreSQL 16.15.
+- The upgrade runs once per file and the tests read different parts of it; a test that mutates the upgraded database would affect those after it. None does.
+- The adoption-report assertion pins the report's wording of section headings. A change to the report must update the test, which is the intent.
+- Not measured in GitHub CI; see §11.
+
+### 14. Remediation of the independent verification (V1, L1, L2)
+
+The independent Opus 5.5 verification returned REMEDIATION REQUIRED for one MEDIUM and two LOW findings in the test-support guard; everything else passed. The fix is `5484e96`, on top of `27bb2e6` (the eight earlier commits are unchanged). Test-support code only: nothing under `app/`, `database/` or `config/`.
+
+- **V1 (MEDIUM): read/write routing bypassed the guard.** Laravel lets `read`, `write` and `sticky` override any top-level key, `database` included. A connection could pass the host and name checks, the server check could ask the read side, and the DDL could go to a write side on another database. `UpgradeDatabase::connect()` now refuses any `read`, `write` or `sticky` key in the inherited connection, **by presence** (`array_key_exists`), so `[]`, `null` and `false` are refused too, before a connection to the upgrade database exists. `cleanVerified()` refuses it again.
+- **L2: `cleanVerified()` did not ask the server.** It now builds its connection from the verified settings, refuses routing and a wrong name, calls the same `assertServerDatabase()` and then drops the tables **on that same connection**, disconnecting in a `finally`.
+- **L1: the server check was not tested.** `assertServerDatabase()` is now one public method, used by both paths. It asks `selectFromWriteConnection`, the side that takes the DDL. Guard tests build a genuine mismatch with SELECTs only: a connection whose read side is the upgrade database (a read-side question answers `flowlife_upgrade_test`) and whose write side is `flowlife_test` (refused, "The server reports database [flowlife_test]"). Another test refuses the default connection and accepts the upgrade one.
+
+**Tests:** the guard file grows from 12 to 26 (14 new: 9 routing cases, 1 write-side, 1 accept/refuse, 3 cleanup refusals). `tests/Upgrade`: **58 passed (344 assertions) on MariaDB 10.11.19 and on PostgreSQL 16.15**; both databases empty afterwards.
+
+**Mutations** (scratch worktree at `5484e96`, `tests/Upgrade` run on each engine, restored and checked clean after each):
+
+| Mutant | MariaDB | PostgreSQL |
+| --- | --- | --- |
+| S1 server check disabled | killed, 2 failed | killed, 2 failed |
+| S2 server check asks the read side | killed, 1 failed | killed, 1 failed |
+| G `url`/`unix_socket` not blanked | killed, 1 failed | killed, 1 failed |
+| R1 `refuseRouting` disabled | killed, 11 failed | killed, 11 failed |
+| R2 routing refused by truthiness, not presence | killed, 7 failed | killed, 7 failed |
+| R3 `refuseRouting` call removed from `connect()` | killed, 9 failed | killed, 9 failed |
+| C2 `cleanVerified` skips the routing refusal | killed, 2 failed | killed, 2 failed |
+| C3 `cleanVerified` skips its name check | killed, 1 failed | killed, 1 failed |
+| **C1 `cleanVerified` skips its server check** | **survives** (58 passed) | **survives** (58 passed) |
+
+**Residual risk (C1)** *(two statements in this section and in the S1/S2 rows were corrected by the second review, §14.1: S1 and S2 were killed by tests that call `assertServerDatabase()` directly and did not show that `connect()` calls it, and a server-side mismatch can be built from inherited configuration)*. `cleanVerified()`'s own call to `assertServerDatabase()` is not covered by a test. Once routing and the name are refused, a configuration whose server answer differs from its name cannot be built from the verified settings, so no genuine mismatch can reach that call. It is defence in depth behind two checks, not a tested boundary, and the check it calls is covered through `connect()` (S1, S2). Closing it would need a mock of the connection factory, which the assignment asked not to build for a LOW finding.
+
+**Gate:** `./flow check all --pgsql` at `5484e96`: all checks passed, exit 0, **3,505 backend tests on each engine** (3,491 + 14), 1,817 s; no skip, retry or timeout change; `git diff --check` clean.
+
+### 14.1 Second review: the `direct` bypass, K1 and two corrections
+
+The focused review of §14 found one more MEDIUM routing bypass (V1, continued) and one LOW coverage gap (K1). Fixed in `f6c48a0`, on top of `3bb7bc4`; test-support code only.
+
+**Corrections to §14, kept here so the earlier text stays as written:**
+1. **S1 and S2 did not show that `connect()` asks the server.** They were killed by the two tests that call `assertServerDatabase()` directly. Removing the *call* from `connect()` left all 58 tests passing. That is K1.
+2. **A server-side mismatch can be built from inherited configuration**, so §14's statement that none can be constructed was wrong for `connect()` (*corrected by §14.2:* `cleanVerified()` does not itself reject `connect_via_database` or `isolation_level`; it relies on its settings having been marked verified only after `connect()` had checked the actual server database, and it refuses routing keys and a wrong name). PostgreSQL's `connect_via_database` is the DSN's `dbname`; on MariaDB `isolation_level` is interpolated unvalidated into `SET SESSION TRANSACTION ISOLATION LEVEL %s;` and executed, so `READ COMMITTED; USE flowlife_test` moves the session. In both cases the guard must refuse before it marks the connection verified.
+
+**V1, continued: PostgreSQL `direct`.** Laravel 13.32 resolves `<connection>::direct` for migrations whenever a `direct` endpoint is configured, and merges the `direct` array over the connection (its `database` included). With `direct => ['database' => 'flowlife_test']` `connect()`'s write-side question was answered by the upgrade database, then the migrator created all 15 historical tables in `flowlife_test` while recording only `migrations` in the upgrade database (reproduced by the reviewer; not repeated here). `direct` and `pooled` are now in the refused keys, still by presence. A test with the reproduced configuration shows `migrateHistorical()`, `migratePending()` and `clean()` all refuse, no `upgrade` or `upgrade::direct` connection is registered, and the test database's tables are unchanged.
+
+**K1.** A test makes the server put `connect()` on `flowlife_test` from inherited configuration (PostgreSQL `connect_via_database`; MariaDB `isolation_level` carrying a `USE`) and requires `connect()` and `useAsDefault()` to refuse with "The server reports database [flowlife_test]", no connection registered, the default connection unchanged and the `verified` settings untouched. Only SELECTs run on the resulting connection.
+
+**Connection-routing inventory (Laravel 13.32: `ConnectionFactory`, `ConfiguresPooledConnections`, `DatabaseManager`, `Migrator`, `PostgresConnector`, `MySqlConnector`):**
+
+| Mechanism | Effect | Handling |
+| --- | --- | --- |
+| `read`, `write`, `sticky` | per-statement-type override of any key, `database` included | **Explicitly rejected** by presence, in `connect()` and `cleanVerified()` |
+| `direct`, `pooled` (PostgreSQL) | the migrator resolves `name::direct`, merged over the config | **Explicitly rejected** (`pooled` alone only warns, but belongs with `direct`) |
+| `url` (including inside `read`/`write`/`direct`) | the parsed URL replaces database and host | top level **neutralised** (`url => null`); nested ones are inside rejected keys |
+| `unix_socket` (MariaDB) | the socket replaces host and port | **Neutralised** (`''`) |
+| `host` (a string, or a list that Laravel shuffles) | which server | A list or anything off the allowlist is **rejected** (`is_string` and `HOSTS`) |
+| `database` | which database | **Neutralised**: set to the constant; the server confirms it |
+| `connect_via_database` (PostgreSQL) | the DSN's `dbname` for the base connection | **Detected** by `assertServerDatabase()`; K1 test. Not stripped, so the K1 test stays meaningful |
+| `connect_via_port` (PostgreSQL), `port` | which instance on an allowlisted host *(corrected by §14.2: or, through a crafted string, which host)* | **Detected only up to the name**: a server with a database called `flowlife_upgrade_test` would be accepted. Residual, below and §14.2 |
+| `isolation_level`, `charset`, `collation`, `timezone`, `modes`/`strict` (MariaDB), `options` init commands | SQL executed at connect time on the one connection | **Detected** by `assertServerDatabase()` for anything that changes the database; K1 test (`isolation_level`) |
+| `search_path`, `schema` (PostgreSQL) | the schema inside the verified database | **Not applicable**: it cannot leave the database; `tables()` and the snapshots read `public` |
+| `prefix` | table-name prefix | **Not applicable** to routing (the snapshots would fail loudly) |
+| a connection resolver callback | code, not configuration | **Not applicable** |
+
+No other reachable path was found that sends DDL away from the connection `assertServerDatabase()` checked once the routing keys are refused: the migrator, the schema builder and the Artisan commands all use that one registered connection.
+
+**Residual (accepted, LOW)** *(wording corrected by §14.2)*: `port` / `connect_via_port` can name a different server on an allowlisted host; the destination would still have to be a database named exactly `flowlife_upgrade_test`. `cleanVerified()`'s own call to the server check (C1) is still not covered by a test (the reviewer accepts this as LOW once K1 is covered).
+
+**Mutations** (scratch worktree at `f6c48a0`, `tests/Upgrade` on each engine, restored after each; MariaDB and PostgreSQL gave the same counts):
+
+| Mutant | Result |
+| --- | --- |
+| K1 the `assertServerDatabase()` call removed from `connect()` | **killed**, 1 failed |
+| D1 `direct` and `pooled` removed from the refused keys | **killed**, 7 failed |
+| D2 only `direct` removed / D3 only `pooled` removed | **killed**, 4 / 3 failed |
+| R1 routing refusal disabled | **killed**, 18 failed |
+| S1 server check disabled / S2 server check asks the read side | **killed**, 3 / 1 failed |
+| G `url` / `unix_socket` not blanked | **killed**, 1 failed |
+| C1 `cleanVerified()` skips its server check | **survives** (66 passed) |
+
+With the refusal removed (D1, D2) the `direct` test lets the PostgreSQL migrator reach `flowlife_test`; it ended in an error because those tables already existed, and `flowlife_test` was afterwards checked still at 34 tables. That is luck of the destination, not a property of the test, so the mutant should not be repeated against an empty database.
+
+**Gate:** `./flow check all --pgsql` at `f6c48a0`: all checks passed, exit 0, **3,513 backend tests on each engine** (3,505 + 8; 27,283 and 27,288 assertions), 1,804 s (backend 627 s on MariaDB, 692 s on PostgreSQL); no skip, retry or timeout change; `git diff --check` clean. The four warnings in the output are the existing "use statement ... has no effect" notices in two unrelated Feature test files, present in earlier gates too. No connection exhaustion.
+
+**Tests:** the guard file now has 34 tests (it had 26); `tests/Upgrade` 66 passed (408 assertions) on MariaDB 10.11.19 and on PostgreSQL 16.15, both upgrade databases empty afterwards.
+
+### 14.2 Final verification: two corrections and the owner's deferrals
+
+The independent Opus 5.5 verification of §14.1 returned SAFE FOR PR PREPARATION, with two inaccuracies in §14.1 and some LOW findings. No code changed after `f6c48a0`; its gate (§14.1) stays applicable.
+
+**Corrections:**
+1. **`cleanVerified()` and mismatching settings.** §14.1 said a server-side mismatch "stays" impossible for `cleanVerified()` because it "refuses those settings first". It does not reject `connect_via_database` or `isolation_level`. It opens its connection from the settings that `connect()` stored, and `connect()` stores them only after `assertServerDatabase()` has confirmed the actual server database; it then refuses routing keys and a wrong name itself, and (C1) calls the server check again, which no test covers.
+2. **The port residual is wider than §14.1 said.** `port` and `connect_via_port` are interpolated into the DSN as text. A crafted value can carry a `;host=` segment and redirect the connection to an entirely different host, not merely to another server on an allowlisted host. The server check still has to report a database called exactly `flowlife_upgrade_test`, so the destination must have a database of that name, but the host allowlist does not bound it.
+
+**Owner's decision: both are deferred as LOW debt, and no further remediation is authorized for WP3b:**
+- numeric validation of `port` and `connect_via_port` ([G6-D21](debt-register.md));
+- mutation coverage for the server check in `cleanVerified()` (C1, [G6-D22](debt-register.md)).
+
+## WP3c — pending, not yet authorized
+
+Planned by the triage and not started. What WP3a and WP3b leave to it:
 
 - **WP3c, before any release:**
   - **The read-only production pre-flight** (WP3-10, WP3-12; owner disposition of I1): exact keys by bytes, collation-equal variants of `guardian` and `guardian-full`, the same-Person collision condition, holders by Account status, and the collations of the v0.3.0 tables and columns (§8).
   - **The release-readiness count's MariaDB reading** (§8): the before and after counts match variants as well.
   - **WP3-01 (MEDIUM), a mandatory release prerequisite:** the corrected in-place restore, rehearsed.
   - The other WP3c findings as the triage rules them (WP3-04 to WP3-08, WP3-11, WP3-13).
-- **WP3b:** the historical upgrade suite as the triage describes it. `migrate --database=` is already proven (§14), so WP3b need not prove it again, though its separate database will exercise it.
+  - What WP3b deliberately does not cover (see its section): the real v0.3.0 application, backup and restore, an in-place rollback, MySQL/MariaDB patch level 10.11.18, and a stopped upgrade's recovery on a host.
