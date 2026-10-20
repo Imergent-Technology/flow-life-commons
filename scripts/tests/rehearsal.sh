@@ -786,12 +786,37 @@ t_g4_pol_name() { policy_case 'container name' 's/^    container_name: .*/    co
 t_g4_pol_net_name() { policy_case 'network name' 's/^    name: flc-rehearsal-restore-db$/    name: flowlife-platform_default/' 'network name is not'; }
 t_g4_pol_vol_name() { policy_case 'volume name' 's/^    name: flc-rehearsal-restore-db-data$/    name: flowlife-platform_mariadb-data/' 'volume name is not'; }
 
+# Each generated value is required on its own. Compose reports only the first missing variable it meets, and which one that is is not
+# specified (the same commit has failed in CI naming a different one each time), so each case supplies the other two and asserts that the
+# one withheld is the one named. A fully supplied control shows the file renders, so the refusals are about the missing variable.
 t_compose_requires_generated_values() {
     [[ -n "$REAL_DOCKER" ]] || { bad 'the real docker CLI is needed'; return 0; }
-    local out
-    out="$("$REAL_DOCKER" compose -p flc-rehearsal-restore --project-directory "$SRC" -f "$SRC/compose.yaml" --env-file /dev/null config 2>&1 || true)"
-    expect_has 'unset credentials' "$out" 'required variable'
-    expect_has 'unset token' "$out" 'REHEARSAL_RUN_TOKEN'
+    local var supplied other out rc=0
+    local all=(REHEARSAL_DB_ROOT_PASSWORD REHEARSAL_DB_APP_PASSWORD REHEARSAL_RUN_TOKEN)
+    local envf="$T/required-vars.env"
+    # Test-only placeholders, and an environment holding nothing but what the real CLI needs to run.
+    compose_with() { env -i PATH="$PATH" HOME="${HOME:-/nonexistent}" "$REAL_DOCKER" compose -p flc-rehearsal-restore --project-directory "$SRC" -f "$SRC/compose.yaml" --env-file "$envf" config 2>&1; }
+
+    printf '%s=placeholder-root\n%s=placeholder-app\n%s=%s\n' "${all[0]}" "${all[1]}" "${all[2]}" "$TOKEN" >"$envf"
+    rc=0
+    out="$(compose_with)" || rc=$?
+    [[ "$rc" == 0 ]] || bad "the compose file did not render with every generated value supplied (exit $rc): ${out:0:300}"
+
+    for var in "${all[@]}"; do
+        : >"$envf"
+        for supplied in "${all[@]}"; do
+            [[ "$supplied" == "$var" ]] && continue
+            if [[ "$supplied" == REHEARSAL_RUN_TOKEN ]]; then printf '%s=%s\n' "$supplied" "$TOKEN" >>"$envf"; else printf '%s=placeholder\n' "$supplied" >>"$envf"; fi
+        done
+        rc=0
+        out="$(compose_with)" || rc=$?
+        [[ "$rc" != 0 ]] || bad "$var withheld: the compose file rendered anyway"
+        expect_has "$var withheld" "$out" "required variable $var is missing a value"
+        for other in "${all[@]}"; do
+            [[ "$other" == "$var" ]] && continue
+            expect_lacks "$var withheld (reports only the withheld one)" "$out" "required variable $other"
+        done
+    done
 }
 
 t_up_refuses_an_unsafe_rendering_before_creating_anything() {
