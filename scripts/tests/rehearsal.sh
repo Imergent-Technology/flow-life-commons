@@ -236,7 +236,7 @@ case "$1 ${2:-}" in
                     cat "$W/app_identity" 2>/dev/null || echo 'flc_rehearsal@%'
                     if [[ -f "$W/app_grants" ]]; then cat "$W/app_grants"; else
                         echo "GRANT USAGE ON *.* TO \`flc_rehearsal\`@\`%\` IDENTIFIED BY PASSWORD '*0123456789ABCDEF0123456789ABCDEF01234567'"
-                        echo "GRANT ALL PRIVILEGES ON \`flc\\_rehearsal\\_app\`.* TO \`flc_rehearsal\`@\`%\`"
+                        printf '%s\n' 'GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_app`.* TO `flc_rehearsal`@`%`'
                     fi
                     echo ;;
                 *'flc_rehearsal_identity.run_token'*) [[ -f "$W/app_sees_sentinel" ]] || { echo 'ERROR 1142 (42000): SELECT command denied' >&2; exit 1; }; cat "$W/sentinel_token"; echo ;;
@@ -2087,7 +2087,8 @@ t_g10_prepare_happy_path() {
     expect_has 'current commit' "$(cat "$W/gitcalls")" "archive --format=tar $HEAD_SHA apps/platform"
     expect_has 'historical stdin' "$(cat "$W/stdin.1")" "GIT-ARCHIVE $HIST apps/platform"
     expect_has 'current stdin' "$(cat "$W/stdin.2")" "GIT-ARCHIVE $HEAD_SHA apps/platform"
-    expect_has 'harness' "$(tar -tf "$W/stdin.3" | tr '\n' ' ')" 'db-ping.php probe.php'
+    # Composer (steps 3 and 4, the only ones with a route out) runs before the harness is copied in (step 5, stdin.5 below).
+    expect_has 'harness' "$(tar -tf "$W/stdin.5" | tr '\n' ' ')" 'db-ping.php probe.php'
     creates="$(grep -E '^create ' "$W/calls")"
     [[ "$(grep -c . <<<"$creates")" == 5 ]] || bad "expected five preparation containers, got: $creates"
     i=0
@@ -2100,7 +2101,7 @@ t_g10_prepare_happy_path() {
         expect_lacks "step $i" "$line" ' -e '
         expect_lacks "step $i" "$line" 'DB_PASSWORD'
         [[ -z "$(cat "$W/create_password_seen.$i")" ]] || bad "step $i: a password reached the preparation docker client"
-        if ((i <= 3)); then expect_has "step $i" "$line" '--network none'; else expect_has "step $i" "$line" '--network bridge'; fi
+        if ((i == 3 || i == 4)); then expect_has "step $i" "$line" '--network bridge'; else expect_has "step $i" "$line" '--network none'; fi
     done <<<"$creates"
     for line in historical current; do
         expect_has "composer $line" "$creates" "composer install --no-dev --no-scripts --no-interaction --no-progress --prefer-dist --optimize-autoloader --working-dir=/var/www/html/$line"
@@ -2189,7 +2190,7 @@ t_g12_account_identity_and_grants() {
         [[ "$RC" == 1 ]] || bad "$1: expected a reported problem, got $RC"
         expect_has "$1" "$OUT" "$2"
     }
-    local db='GRANT ALL PRIVILEGES ON `flc\_rehearsal\_app`.* TO `flc_rehearsal`@`%`' usage='GRANT USAGE ON *.* TO `flc_rehearsal`@`%`'
+    local db='GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_app`.* TO `flc_rehearsal`@`%`' usage='GRANT USAGE ON *.* TO `flc_rehearsal`@`%`'
     good_world
     run_fn "app_account_problem $CID"
     expect_rc 'the account as MariaDB creates it' 0
@@ -2228,6 +2229,49 @@ t_g12_restricted_client_and_guarded_path() {
     [[ "$line" == *'--user mysql'* ]] || bad 'the client does not run as a non-root operating-system user'
     run_fn "printf 'SELECT 1;\\n' | guarded_app_sql '$T/root' flowlife"
     expect_refused 'a development database name' 'not one of the rehearsal'
+}
+
+# The grant line exactly as the real client prints it: the entrypoint escapes the underscores (`flc\_rehearsal\_app`) and --batch doubles each
+# backslash. This is the regression test for the defect the review found: a comparison against single backslashes never matched.
+# shellcheck disable=SC2016 # grant text contains literal backticks
+t_g12_grant_escaping_matches_batch_output() {
+    local usage='GRANT USAGE ON *.* TO `flc_rehearsal`@`%` IDENTIFIED BY PASSWORD '"'"'*0123456789ABCDEF0123456789ABCDEF01234567'"'"''
+    local batch='GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_app`.* TO `flc_rehearsal`@`%`'
+    local single='GRANT ALL PRIVILEGES ON `flc\_rehearsal\_app`.* TO `flc_rehearsal`@`%`'
+    good_world
+    # The fake's default output is the --batch form: two backslashes before each underscore.
+    run_fn "printf 'SELECT 1;\\n' | guarded_app_sql '$T/root' flc_rehearsal_app"
+    expect_rc 'the default (--batch) grants' 0
+    good_world; printf '%s\n%s\n' "$usage" "$batch" >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_rc 'the correctly escaped grant' 0
+    expect_lacks 'no problem reported' "$OUT" 'beyond'
+    # Anything that is not exactly that line still refuses.
+    good_world; printf '%s\n%s\n' "$usage" "$single" >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_has 'a single-backslash line is not what --batch prints' "$OUT" 'beyond'
+    good_world; printf '%s\n%s WITH GRANT OPTION\n' "$usage" "$batch" >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_has 'the escaped grant with grant option' "$OUT" 'beyond'
+    good_world; printf '%s\n%s\n%s\n' "$usage" "$batch" 'GRANT SELECT ON `flc\\_rehearsal\\_identity`.* TO `flc_rehearsal`@`%`' >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_has 'the escaped grant plus the sentinel database' "$OUT" 'beyond'
+    good_world; printf '%s\n%s\n' "$usage" 'GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_%`.* TO `flc_rehearsal`@`%`' >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_has 'an escaped wildcard database' "$OUT" 'beyond'
+}
+
+t_g10_cleanup_dry_run_names_each_container_by_its_verified_identity() {
+    src_world
+    add_ephemeral "$RID" runner
+    add_ephemeral "$PID_" prepare
+    put "$W/n/$NID" endpoints "$CID,$RID,"
+    run_script -- cleanup --dry-run
+    expect_rc 'dry run' 0
+    expect_has 'the runner' "$OUT" "would remove container ${RID:0:12} ($NAME_R)"
+    expect_has 'the preparation container' "$OUT" "would remove container ${PID_:0:12} ($NAME_P)"
+    expect_has 'the database' "$OUT" "would remove container ${CID:0:12} ($NAME_C)"
+    [[ -d "$W/c/$RID" && -d "$W/c/$PID_" && -d "$W/c/$CID" ]] || bad 'a dry run removed a container'
 }
 
 t_g12_there_is_no_root_fallback() {
@@ -2381,7 +2425,6 @@ t_static_substrate() {
     fi
     # compose.yaml gains nothing for this slice: still one service, one network, one volume.
     grep -q 'runner\|prepare' "$SRC/compose.yaml" && bad 'compose.yaml mentions the runner or preparation container'
-    [[ "$(grep -c '^  [a-z-]*:$' "$SRC/compose.yaml")" -ge 1 ]] || true
 }
 HARNESS_FILES_EXPECTED=(db-ping.php probe.php)
 
@@ -2504,8 +2547,8 @@ declare -A GUARD_TESTS=(
     [G11-artisan-policy]='t_g11_artisan_policy_is_applied_to_the_built_vector'
     [G12-before-run]='t_g12_run_checks_the_account_first'
     [G12-before-sql]='t_g12_there_is_no_root_fallback t_g12_restricted_client_and_guarded_path'
-    [G12-grants]='t_g12_account_identity_and_grants'
-    [G12-grants-complete]='t_g12_account_identity_and_grants'
+    [G12-grants]='t_g12_account_identity_and_grants t_g12_grant_escaping_matches_batch_output'
+    [G12-grants-complete]='t_g12_account_identity_and_grants t_g12_grant_escaping_matches_batch_output'
     [G12-identity]='t_g12_account_identity_and_grants'
     [G12-one-account]='t_g12_account_identity_and_grants'
     [G12-probe-sandbox]='t_g12_probe_refuses_what_it_finds'

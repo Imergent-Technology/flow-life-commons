@@ -79,7 +79,9 @@ readonly ROOT_MARKER_TEXT='restore-rehearsal-v1'
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
-# and each was run against a real container, network and volume on this Docker version while this slice was written.
+# and each Slice 1 template (CONTAINER_FMT, NETWORK_FMT, VOLUME_FMT) was run against a real container, network and volume on this Docker
+# version while that slice was written. The Slice 2.1 templates (EPHEMERAL_FMT, ROLE_FMT) have NOT been run against a live daemon yet:
+# the fake daemon models them, and the first live run (L1) is where they are confirmed.
 # shellcheck disable=SC2016 # Go template text for `docker inspect`, not shell expansions
 readonly CONTAINER_FMT='{{.Id}}|{{.Name}}|{{.Config.Image}}|{{index .Config.Labels "io.flowlife.rehearsal"}}|{{index .Config.Labels "io.flowlife.rehearsal.role"}}|{{index .Config.Labels "io.flowlife.rehearsal.run-token"}}|{{len .HostConfig.PortBindings}}|{{.HostConfig.Privileged}}|{{json .HostConfig.CapAdd}}|{{.HostConfig.NetworkMode}}|{{range $k,$v := .NetworkSettings.Networks}}{{$k}},{{end}}|{{range .Mounts}}{{.Type}}:{{.Name}}:{{.Destination}},{{end}}'
 # shellcheck disable=SC2016 # Go template text for `docker network inspect`, not shell expansions
@@ -622,8 +624,10 @@ mariadb_app() {
 readonly APP_GRANT_USAGE='GRANT USAGE ON *.* TO `flc_rehearsal`@`%`'
 # shellcheck disable=SC2016 # as above
 readonly APP_GRANT_DB='GRANT ALL PRIVILEGES ON `flc_rehearsal_app`.* TO `flc_rehearsal`@`%`'
+# MariaDB's entrypoint escapes the underscores (`flc\_rehearsal\_app`) and the client's --batch output doubles each backslash, so the
+# line arrives with two. (--raw would print one; --batch stays, because it also escapes newlines and tabs in values.)
 # shellcheck disable=SC2016 # as above
-readonly APP_GRANT_DB_ESCAPED='GRANT ALL PRIVILEGES ON `flc\_rehearsal\_app`.* TO `flc_rehearsal`@`%`'
+readonly APP_GRANT_DB_ESCAPED='GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_app`.* TO `flc_rehearsal`@`%`'
 
 # The account the client actually became, and what it may do. Root only counts the matching accounts; the account describes itself.
 # Authentication hashes are cut from every line before it is compared, so they are never compared, printed or logged.
@@ -844,6 +848,15 @@ cleanup_container_problem() {
     esac
 }
 
+# The name of a container that cleanup_container_problem has just verified: the check requires exactly the name of its role.
+verified_container_name() {
+    case "$(dkr inspect --type container --format "$ROLE_FMT" "$1" 2>/dev/null)" in
+        runner) printf '%s' "$RUNNER_NAME" ;;
+        prepare) printf '%s' "$PREPARE_NAME" ;;
+        *) printf '%s' "$CONTAINER_NAME" ;;
+    esac
+}
+
 cleanup_volume_problem() {
     if [[ "$1" == "$SRC_VOLUME_NAME" ]]; then source_volume_identity_problem "$@"; else volume_identity_problem "$@"; fi
 }
@@ -913,7 +926,7 @@ cmd_cleanup() {
     fi
 
     for id in "${owned_containers[@]}"; do
-        if [[ $dry == 1 ]]; then say "would remove container ${id:0:12} ($CONTAINER_NAME)"; continue; fi
+        if [[ $dry == 1 ]]; then say "would remove container ${id:0:12} ($(verified_container_name "$id"))"; continue; fi
         why="$(cleanup_container_problem "$id" "$token")" || { retain "container ${id:0:12}: changed since it was checked: $why"; continue; } # guard:G8-reverify-container
         if dkr stop -t 30 "$id" >/dev/null && dkr rm "$id" >/dev/null; then say "removed container ${id:0:12}"; else
             warn "container ${id:0:12} could not be removed"
@@ -1070,18 +1083,20 @@ cmd_prepare() {
             sh -c 'mkdir -p "$1/storage" "$1/bootstrap/cache" && tar -x -C "$1" --strip-components=2 --no-same-owner' sh "$SRC_MOUNT/$version"
         note "$version: archived from $commit"
     done
-    local file
-    # shellcheck disable=SC2016 # as above
-    (cd "$SCRIPT_DIR/php" && tar -c -- "${HARNESS_FILES[@]}") | prepare_run "$token" none 1 \
-        sh -c 'mkdir -p "$1" && tar -x -C "$1" --no-same-owner' sh "$SRC_MOUNT/harness"
-    for file in "${HARNESS_FILES[@]}"; do note "harness: $file"; done
-
     # Dependency acquisition: the only step with a route out, and it has no database credentials and no route to the database network.
     # The flags are the ones the release build uses (scripts/lib/release.sh); each tree installs from its own composer.lock.
     for version in historical current; do
         prepare_run "$token" bridge 0 composer install --no-dev --no-scripts --no-interaction --no-progress --prefer-dist --optimize-autoloader --working-dir="$SRC_MOUNT/$version"
         note "$version: composer install finished"
     done
+    # The harness goes in last, after the only step that runs third-party code with a route out, so nothing Composer ran can have
+    # written to it.
+    local file
+    # shellcheck disable=SC2016 # as above
+    (cd "$SCRIPT_DIR/php" && tar -c -- "${HARNESS_FILES[@]}") | prepare_run "$token" none 1 \
+        sh -c 'mkdir -p "$1" && tar -x -C "$1" --no-same-owner' sh "$SRC_MOUNT/harness"
+    for file in "${HARNESS_FILES[@]}"; do note "harness: $file"; done
+
     PREPARE_RECOVERY=0
     say "Prepared. Source volume $SRC_VOLUME_NAME (mounted read-only into the runner)."
 }
