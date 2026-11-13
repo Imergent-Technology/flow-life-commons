@@ -143,23 +143,20 @@ function tableLines(string $kind, array $rows): string
 }
 
 /**
- * The names of every table in the connected database, sorted. On MariaDB this is information_schema, which also lists views, so a view is
- * an unexpected name rather than something a plain table listing would hide. Any other driver (a local check of this harness on SQLite)
- * uses the schema builder.
+ * The names of every table in the connected database, sorted. This is information_schema, which also lists views, so a view is an
+ * unexpected name rather than something a plain table listing would hide. MariaDB is the only database the rehearsal runs against: any other
+ * driver is refused, not approximated.
  *
  * @return list<string>
  */
 function tableNames(ConnectionInterface $db): array
 {
+    if (! in_array($db->getDriverName(), ['mariadb', 'mysql'], true)) {
+        throw new HarnessRefusal('the rehearsal runs only against MariaDB (the connection uses the "'.$db->getDriverName().'" driver)');
+    }
     $names = [];
-    if (in_array($db->getDriverName(), ['mariadb', 'mysql'], true)) {
-        foreach ($db->select('select table_name as name from information_schema.tables where table_schema = database() order by table_name') as $row) {
-            $names[] = (string) $row->name;
-        }
-    } else {
-        foreach ($db->getSchemaBuilder()->getTables() as $table) {
-            $names[] = (string) $table['name'];
-        }
+    foreach ($db->select('select table_name as name from information_schema.tables where table_schema = database() order by table_name') as $row) {
+        $names[] = (string) $row->name;
     }
     sort($names, SORT_STRING);
 
