@@ -14,16 +14,23 @@
 #   restore-rehearsal.sh upgrade      (2.2A) run the current migrations, judge the result, add one synthetic post-upgrade marker
 #   restore-rehearsal.sh reproduce-wp3-01
 #                                     (2.2A) DEMONSTRATE the audited defect: load the dump over the upgraded database without clearing it
+#   restore-rehearsal.sh restore-historical
+#                                     (slice 2.2B) the corrected restore: clear exactly the 34 tables, load the verified dump, verify the result
+#   restore-rehearsal.sh verify-signin
+#                                     (2.2B) the restored v0.3.0 application signs the administrator in with password and TOTP; nothing changes
+#   restore-rehearsal.sh reupgrade    (2.2B) the current application's migrations on the restored database, judged against the first upgrade
 #
 # WHAT THIS IS. A rehearsal environment for proving, with synthetic data on a local machine, that the organization can recover
 # v0.3.0 after an unsuccessful upgrade (docs/audits/g6/README.md, WP3c). Slice 1 is the isolated database server and the checks that
-# make it safe to build on; slice 2.1 adds the disposable PHP runner; slice 2.2A adds the first half of the recovery cycle.
+# make it safe to build on; slice 2.1 adds the disposable PHP runner; slice 2.2A adds the first half of the recovery cycle; slice 2.2B the second.
 #
 # WHAT THIS IS NOT. A general restore or backup tool, and not an automatic rollback. There is no command that takes a file, a database
 # name or a statement from the caller, and none may be added without the owner's decision (the runbooks say ./flow has no
 # backup/restore either, and this script is deliberately not a ./flow command). The statements that change the rehearsal database are
-# exactly these: the application's own migrations, the fixed fixture and marker helper, and the loading of the one dump this script
-# took, by `reproduce-wp3-01`, which exists to show a defect and is not a restoration. The corrected restore is slice 2.2B.
+# exactly these: the application's own migrations, the fixed fixture and marker helper, the loading of the one dump this script took by
+# `reproduce-wp3-01` (which exists to show a defect and is not a restoration), and, in `restore-historical`, the DROP TABLE of exactly the 34
+# tables this script names followed by the loading of that same dump. `restore-historical` takes no argument, no file and no database, works
+# only on the allowlisted rehearsal database, and is not a restore tool for anything else.
 # It has no production connectivity, reads no application .env, holds no host credentials and uses no production data.
 #
 # THE SAFEGUARDS. Each is one line carrying a `# guard:<ID>` marker, because scripts/tests/rehearsal.sh deletes each marked line in
@@ -60,6 +67,13 @@
 #       a manifest that agrees with the snapshot, and the dump's byte count and SHA-256 re-verified before it is loaded
 #   G16 the WP3-01 demonstration loads only that verified dump, only into the verified upgraded rehearsal database, only after the
 #       backup's keyring is shown to be present, and succeeds only if the newer tables remain (the table-inventory equality fails)
+#
+#   G17 the corrected restore clears and loads only after every precondition holds, established by SQL alone (no application is started
+#       against a schema that may be inconsistent): the verified backup and manifest, the keyring, the exact 34-table inventory of plain tables
+#       with no view, trigger, routine or event, and one of the two states the earlier stages leave; it clears only the tables it names,
+#       confirms they are gone, re-verifies the dump, and then requires the restored database to equal the original snapshot
+#   G18 the restored application signs in over its real HTTP stack, and the database after is exactly what it was
+#   G19 the re-upgrade starts from the verified restored state and must give the first upgrade's inventory, data and structure, with no marker
 #
 # Exit status: 0 success; 1 a failure; 3 a safeguard refused; 64 usage.
 set -Eeuo pipefail
@@ -104,8 +118,13 @@ readonly RELEASE_VERSION='v0.3.0'
 readonly SNAPSHOT_FILE='historical.snapshot'
 readonly DUMP_FILE='historical.dump.sql'
 readonly MANIFEST_FILE='historical.manifest.json'
+readonly PREPARED_FILE='prepared.source'      # slice 2.2B: what `prepare` put in the source volume (the two commits, the helper scripts' digests)
+readonly UPGRADED_FILE='upgraded.structure'   # slice 2.2B: the structure digests of the 34 tables after the first upgrade, for the re-upgrade to equal
+# The sha256 of an empty row list as the harness digests it: what every transient table must show after a restore.
+EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
+readonly EMPTY_DIGEST
 # Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
-readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE")
+readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE")
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
@@ -155,7 +174,7 @@ Usage: restore-rehearsal.sh <command>
   run <historical|current> <command>
                 Run one approved Artisan command (about, migrate, migrate:status, relationships:check, release:show,
                 resources:assets:prune) or helper (helper:db-ping, helper:fixture-load, helper:snapshot,
-                helper:post-upgrade-mark) in a disposable PHP runner. The script supplies every option.
+                helper:post-upgrade-mark, helper:sign-in) in a disposable PHP runner. The script supplies every option.
   probe         Check the runner and the restricted SQL client are isolated as intended. Read-only.
   baseline      Build the v0.3.0 schema with the v0.3.0 application in the empty rehearsal database, load the synthetic
                 v0.3.0 fixture, and record a snapshot of it.
@@ -164,6 +183,11 @@ Usage: restore-rehearsal.sh <command>
   reproduce-wp3-01
                 Demonstrate the audited WP3-01 defect: load the dump over the upgraded database WITHOUT clearing it, and
                 require that the newer tables remain. This is not a restoration.
+  restore-historical
+                The corrected restore. From the upgraded or the WP3-01 state only: clear exactly the 34 tables, load the
+                verified dump, and require the 16 historical tables, the original rows and structure, and no marker.
+  verify-signin The restored v0.3.0 application signs the administrator in (password, then TOTP) and shows /me; rolled back.
+  reupgrade     Run the current migrations on the restored database and judge the result against the first upgrade.
   cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
                 labelled is kept or cannot be removed, cleanup says what remains, keeps its state file and exits 1; run
                 it again once the cause is gone. --stale is needed only when the private state file is gone (the run
@@ -761,9 +785,10 @@ runner_command() {
         helper:fixture-load) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" fixture-load) ;;
         helper:snapshot) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" snapshot) ;;
         helper:post-upgrade-mark) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" mark) ;;
+        helper:sign-in) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" signin) ;;
         *) ;;
     esac
-    ((${#RUN_CMD[@]} > 0)) || refuse "'$name' is not a command the rehearsal runs. Approved: ${ARTISAN_ALLOWED[*]} helper:db-ping helper:fixture-load helper:snapshot helper:post-upgrade-mark." # guard:G11-allowlist
+    ((${#RUN_CMD[@]} > 0)) || refuse "'$name' is not a command the rehearsal runs. Approved: ${ARTISAN_ALLOWED[*]} helper:db-ping helper:fixture-load helper:snapshot helper:post-upgrade-mark helper:sign-in." # guard:G11-allowlist
     if [[ "${RUN_CMD[1]:-}" == artisan ]]; then
         why="$(artisan_problem "${RUN_CMD[@]:2}")" || refuse "$why." # guard:G11-artisan-policy
     fi
@@ -1189,6 +1214,16 @@ cmd_prepare() {
     (cd "$SCRIPT_DIR/php" && tar -c -- "${HARNESS_FILES[@]}") | prepare_run "$token" none 1 \
         sh -c 'mkdir -p "$1" && tar -x -C "$1" --no-same-owner' sh "$SRC_MOUNT/harness"
     for file in "${HARNESS_FILES[@]}"; do note "harness: $file"; done
+    # What is in the volume must be what is in this checkout: the digests are taken inside the volume, by a container with no network,
+    # and compared with the ones taken here. Only then is the source recorded, for every later stage to compare with what it finds.
+    local host_sums volume_sums
+    host_sums="$(cd "$SCRIPT_DIR/php" && sha256sum -- "${HARNESS_FILES[@]}")"
+    # shellcheck disable=SC2016 # the snippet runs in the container; its arguments follow it
+    capture volume_sums 'checking the helper scripts in the source volume' prepare_run "$token" none 0 \
+        sh -c 'cd "$1" && shift && exec sha256sum -- "$@"' sh "$SRC_MOUNT/harness" "${HARNESS_FILES[@]}"
+    [[ "$volume_sums" == "$host_sums" ]] || refuse "the helper scripts in the source volume are not the ones in this checkout (their digests differ). Nothing was recorded. Run: restore-rehearsal.sh cleanup, then up and prepare again." # guard:G10-harness-verified
+    write_state_file "$PREPARED_FILE" "$(prepared_source_text "$historical" "$current")"
+    note "recorded: both commits and the digests of ${#HARNESS_FILES[@]} helper scripts ($PREPARED_FILE)"
 
     PREPARE_RECOVERY=0
     say "Prepared. Source volume $SRC_VOLUME_NAME (mounted read-only into the runner)."
@@ -1329,6 +1364,29 @@ require_source_commits() {
     [[ -z "$dirty" ]] || refuse "the working tree has uncommitted or untracked changes under $APP_TREE or scripts/rehearsal ($(grep -c . <<<"$dirty") entries). prepare archives commits, so the rehearsal would not be running what you are looking at. Commit or stash them, then run cleanup, up, prepare and the stage again." # guard:G13-clean-checkout
 }
 
+# The text `prepare` records and every stage re-derives: the two commits the source volume was archived from, and the digest of each helper
+# script as it is in this checkout. A stage compares what it derives NOW with what was recorded THEN, so a source that has gone stale (HEAD
+# moved, a helper edited) is refused instead of run.
+prepared_source_text() { # HISTORICAL_COMMIT CURRENT_COMMIT
+    printf 'prepared-v1\nhistorical=%s\ncurrent=%s\n' "$1" "$2"
+    (cd "$SCRIPT_DIR/php" && sha256sum -- "${HARNESS_FILES[@]}") | sed 's/^/harness /'
+}
+
+# G13: every stage starts here. The historical commit is the exact one and the checkout is clean (require_source_commits), and what `prepare`
+# recorded is what this checkout is now: the historical commit, the current commit (HEAD) and every helper script. A docs-only commit after
+# `prepare` moves HEAD and so also needs a new `prepare`: the rehearsal says what it ran, and it ran HEAD as it was.
+require_prepared_source() {
+    local recorded current
+    require_source_commits
+    state_file_ok "$PREPARED_FILE" || refuse "'$PREPARED_FILE' is missing from the state directory, or is not a private file of this script's: prepare has not finished, or the state is not intact. Run: restore-rehearsal.sh prepare. Nothing was changed." # guard:G13-prepared-recorded
+    recorded="$(<"$ROOT/$PREPARED_FILE")"
+    current="$(verified_commit HEAD)" || refuse "HEAD is not a commit."
+    [[ "$(sed -n 's/^historical=//p' <<<"$recorded")" == "$HISTORICAL_COMMIT" ]] || refuse "the source volume was not archived from the historical commit $HISTORICAL_COMMIT. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-historical
+    [[ "$(sed -n 's/^current=//p' <<<"$recorded")" == "$current" ]] || refuse "HEAD is not the commit the source volume was archived from (it was $(sed -n 's/^current=\(.\{12\}\).*/\1/p' <<<"$recorded")): the prepared source is stale. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-current
+    [[ "$(grep '^harness ' <<<"$recorded")" == "$(prepared_source_text "$HISTORICAL_COMMIT" "$current" | grep '^harness ')" ]] || refuse "a helper script in scripts/rehearsal/php is not the one that was copied into the source volume: the prepared source is stale. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-harness
+    [[ "$recorded" == "$(prepared_source_text "$HISTORICAL_COMMIT" "$current")" ]] || refuse "'$PREPARED_FILE' is not exactly what prepare writes. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-exact
+}
+
 # --- state files: what one stage leaves for the next ---------------------------------------------------------------------------------
 
 # write_state_file NAME CONTENT: a private (mode 600) file in the state directory, written whole or not at all.
@@ -1383,31 +1441,63 @@ fixture_problem() {
     return 0
 }
 
-# digest_differences A B (table lines each): the tables whose row count or digest differ.
+# digest_differences A B (lines each, `<name> <rows> <digest>` or `<name> <digest>`): the names whose line differs, that are in only one of
+# the two, or both. A name missing from B is a difference, not an omission: a durable table that vanished must not read as "nothing differs".
 digest_differences() {
-    awk 'NR == FNR { want[$1] = $2 " " $3; next } want[$1] != $2 " " $3 { print $1 }' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+    awk 'NR == FNR { want[$1] = $2 " " $3; next }
+         { seen[$1] = 1; if (!($1 in want) || want[$1] != $2 " " $3) print $1 }
+         END { for (n in want) if (n != "" && !(n in seen)) print n }' <(printf '%s\n' "$1") <(printf '%s\n' "$2") | grep -v '^$' | LC_ALL=C sort -u || true
 }
 
-# restore_state_differences BEFORE NOW (table lines each): the tables that are not what a restore of the two-pass dump leaves: each durable
-# table exactly as the snapshot has it, each transient table empty. (Used by the WP3-01 demonstration, and by the corrected restore.)
-restore_state_differences() {
+# The same lines with every transient table as the EMPTY table (zero rows and the digest of none). The three states the rehearsal compares:
+#   ORIGINAL   the snapshot taken after the fixture was loaded: durable tables, and the transient ones with their fixture rows (sessions, reset tokens)
+#   RESTORED   the original with every transient table emptied: what the two-pass dump (structure everywhere, rows for durable tables only) restores
+#   UPGRADED   the `upgrade` lines of the snapshot: the original with the renamed roles and the 29-entry ledger; a database restored and THEN upgraded
+#              is those lines with the transient tables emptied, because the restore emptied them and no upgrade fills them
+# Nothing is compared across states except through this function, so a database is never judged against a snapshot of another moment.
+emptied_transients() { # TABLE_LINES
     local name rows digest
-    declare -A before=()
-    while read -r name rows digest; do before["$name"]="$rows $digest"; done <<<"$1"
     while read -r name rows digest; do
-        if in_array "$name" "${TRANSIENT_TABLES[@]}"; then
-            [[ "$rows" == 0 ]] || printf '%s\n' "$name"
-        else
-            [[ "${before[$name]:-}" == "$rows $digest" ]] || printf '%s\n' "$name"
-        fi
-    done <<<"$2"
+        [[ -n "$name" ]] || continue
+        if in_array "$name" "${TRANSIENT_TABLES[@]}"; then printf '%s 0 %s\n' "$name" "$EMPTY_DIGEST"; else printf '%s %s %s\n' "$name" "$rows" "$digest"; fi
+    done <<<"$1"
+}
+
+# restore_state_differences ORIGINAL NOW: the tables that are not what a restore of the two-pass dump leaves: each durable table exactly as in
+# the original snapshot, each transient table empty. (The WP3-01 demonstration and the corrected restore both use it.)
+restore_state_differences() {
+    digest_differences "$(emptied_transients "$1")" "$2"
+}
+
+# structure_lines TEXT NAMES: the `structure <table> <digest>` lines of the harness's output as `<table> <digest>`, sorted: exactly one for each
+# table in NAMES (one per line) and no other, or a refusal.
+structure_lines() {
+    local k name digest extra lines='' names
+    while IFS=' ' read -r k name digest extra; do
+        [[ "$k" == structure ]] || continue
+        [[ -z "$extra" && "$name" =~ ^[a-z0-9_]+$ && "$digest" =~ ^[0-9a-f]{64}$ ]] || refuse "a 'structure' line of the snapshot is malformed."
+        lines+="$name $digest"$'\n'
+    done <<<"$1"
+    lines="${lines%$'\n'}"
+    names="$(cut -d' ' -f1 <<<"$lines" | LC_ALL=C sort)"
+    [[ "$names" == "$2" ]] || refuse "the structure lines are not exactly one for each expected table (a table whose structure could not be read is a refusal, never a missing line)." # guard:G13-structure-complete
+    printf '%s' "$(LC_ALL=C sort <<<"$lines")"
+}
+
+# run_snapshot TREE VAR: the application's own snapshot helper in that tree, its whole output in VAR. A helper that did not say it finished
+# is refused: output that stopped part-way is not an empty snapshot.
+run_snapshot() {
+    local snap_text
+    run_helper "$1" helper:snapshot snap_text
+    grep -Fxq 'snapshot:complete=ok' <<<"$snap_text" || refuse "the snapshot helper did not report snapshot:complete=ok: its output is incomplete, and an incomplete snapshot is refused, never read as empty." # guard:G13-snapshot-reported
+    printf -v "$2" '%s' "$snap_text"
 }
 
 # require_database_matches_snapshot TREE SNAPSHOT_TABLE_LINES: a fresh snapshot, taken by the application's own runner, must equal the one the
 # backup describes. Nothing may have changed the database since.
 require_database_matches_snapshot() {
     local out now diff
-    run_helper "$1" helper:snapshot out
+    run_snapshot "$1" out
     capture now 'validating the current snapshot' table_lines table "$out"
     diff="$(digest_differences "$2" "$now")"
     [[ -z "$diff" ]] || refuse "the database no longer equals the snapshot the backup describes (changed: $(tr '\n' ' ' <<<"$diff"))." # guard:G13-snapshot-matches
@@ -1435,6 +1525,14 @@ keys_problem() {
     [[ "$reported_current" == "$CURRENT_FP" ]] || { echo "the key the application used is not the one this run generated (the fingerprints differ)"; return 1; } # guard:G14-keys-agree
     [[ "$reported_previous" == "$PREVIOUS_FP" ]] || { echo "the previous keys the application holds are not the one this run generated"; return 1; } # guard:G14-previous-agree
     return 0
+}
+
+# keyring_problem: the live keyring (the two keys of this run, as fingerprints) must hold every key fingerprint the backup's manifest requires,
+# or nothing may be changed: data encrypted under a key that is not in the ring could not be read again. Needs load_keyring and a manifest.
+keyring_problem() {
+    local missing
+    missing="$(keyring_missing "$(printf '%s\n%s\n' "$(manifest_value "$ROOT/$MANIFEST_FILE" current_key_fingerprint)" "$(manifest_names "$ROOT/$MANIFEST_FILE" previous_key_fingerprints)")" "$(printf '%s\n%s\n' "$CURRENT_FP" "$PREVIOUS_FP")")"
+    [[ -z "$missing" ]] || { echo "the live keyring lacks a key fingerprint the backup requires ($(tr '\n' ' ' <<<"$missing"))"; return 1; }
 }
 
 # --- the dump (G12, G15) --------------------------------------------------------------------------------------------------------------------
@@ -1570,11 +1668,13 @@ dump_matches_manifest() {
     return 0
 }
 
-# require_backup: the backup an earlier stage took is present, intact and this run's. Sets SNAPSHOT_TEXT and SNAPSHOT_TABLES.
+# require_backup: the backup an earlier stage took is present, intact and this run's. Sets SNAPSHOT_TEXT, SNAPSHOT_TABLES (the ORIGINAL state's
+# table lines) and SNAPSHOT_STRUCTURE (the 16 tables' structure digests).
 require_backup() {
     local why
     read_state_file SNAPSHOT_TEXT "$SNAPSHOT_FILE"
     capture SNAPSHOT_TABLES 'validating the snapshot' table_lines table "$SNAPSHOT_TEXT"
+    capture SNAPSHOT_STRUCTURE 'validating the snapshot structure' structure_lines "$SNAPSHOT_TEXT" "$(historical_inventory)"
     { state_file_ok "$DUMP_FILE" && state_file_ok "$MANIFEST_FILE"; } || refuse "there is no complete backup in the state directory (take-backup has not finished). Nothing was changed." # guard:G13-backup-required
     why="$(manifest_problem "$ROOT/$MANIFEST_FILE" "$SNAPSHOT_TABLES")" || refuse "the manifest cannot be relied on: $why."
     why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump cannot be relied on: $why."
@@ -1586,8 +1686,8 @@ require_backup() {
 cmd_baseline() {
     [[ $# -eq 0 ]] || { usage >&2; exit 64; }
     preflight
-    require_source_commits
-    local existing migrated fixture_out table_text upgrade_text why content
+    require_prepared_source
+    local existing migrated fixture_out table_text upgrade_text struct_text why content
     capture existing 'reading the table inventory' db_inventory
     [[ -z "$existing" ]] || refuse "the rehearsal database already holds $(grep -c . <<<"$existing") table(s). The baseline builds the v0.3.0 schema in an EMPTY database. The rehearsal is disposable: run cleanup, then up and prepare, then baseline." # guard:G13-empty-target
     STAGE=baseline
@@ -1602,11 +1702,12 @@ cmd_baseline() {
     grep -Fxq 'fixture:complete=ok' <<<"$fixture_out" || refuse "the fixture helper did not report fixture:complete=ok." # guard:G13-fixture-reported
     capture table_text 'validating the snapshot' table_lines table "$fixture_out"
     capture upgrade_text 'validating the expected-upgrade digests' table_lines upgrade "$fixture_out"
+    capture struct_text 'validating the structure digests' structure_lines "$fixture_out" "$(historical_inventory)"
     why="$(fixture_problem "$table_text")" || refuse "the fixture is incomplete: $why."
     load_keyring
     why="$(keys_problem "$fixture_out")" || refuse "$why."
-    content="snapshot-v1"$'\n'"$(grep -E '^key:(current|previous)=[0-9a-f]{16}$' <<<"$fixture_out")"$'\n'
-    content+="$(awk '{ print "table " $0 }' <<<"$table_text")"$'\n'"$(awk '{ print "upgrade " $0 }' <<<"$upgrade_text")"
+    content="snapshot-v2"$'\n'"$(grep -E '^key:(current|previous)=[0-9a-f]{16}$' <<<"$fixture_out")"$'\n'
+    content+="$(awk '{ print "table " $0 }' <<<"$table_text")"$'\n'"$(awk '{ print "upgrade " $0 }' <<<"$upgrade_text")"$'\n'"$(awk '{ print "structure " $0 }' <<<"$struct_text")"
     write_state_file "$SNAPSHOT_FILE" "$content"
     say "ok   the fixture is complete: $(grep -c . <<<"$table_text") tables, $FIXTURE_PEOPLE people"
     say "ok   the encryption keys the application used are the ones this run generated (fingerprints $CURRENT_FP current, $PREVIOUS_FP previous)"
@@ -1617,6 +1718,7 @@ cmd_take_backup() {
     [[ $# -eq 0 ]] || { usage >&2; exit 64; }
     preflight
     local snapshot table_text dump_tmp version taken sha bytes why
+    require_prepared_source
     read_state_file snapshot "$SNAPSHOT_FILE"
     capture table_text 'validating the snapshot' table_lines table "$snapshot"
     [[ ! -e "$ROOT/$DUMP_FILE" && ! -e "$ROOT/$MANIFEST_FILE" ]] || refuse "a backup already exists in the state directory and is never overwritten. The rehearsal is disposable: run cleanup, then up, prepare, baseline and take-backup." # guard:G15-no-overwrite
@@ -1647,7 +1749,8 @@ cmd_take_backup() {
 cmd_upgrade() {
     [[ $# -eq 0 ]] || { usage >&2; exit 64; }
     preflight
-    local migrated now_out now_table upgrade_lines diff marked
+    local migrated now_out now_table now_struct upgrade_lines diff marked
+    require_prepared_source
     require_backup
     require_inventory "$(historical_inventory)" 'the 16 tables of the v0.3.0 schema' # guard:G13-upgrade-from-historical
     require_database_matches_snapshot historical "$SNAPSHOT_TABLES"
@@ -1659,12 +1762,15 @@ cmd_upgrade() {
     printf '%s\n' "$migrated"
     require_inventory "$(upgraded_inventory)" 'the 34 tables of the current schema' # guard:G13-upgrade-inventory
     say "ok   the database holds exactly the 34 tables of the current schema (16 historical, 18 newer)"
-    run_helper current helper:snapshot now_out
+    run_snapshot current now_out
     capture now_table 'validating the post-upgrade snapshot' table_lines table "$now_out"
+    capture now_struct 'validating the post-upgrade structure' structure_lines "$now_out" "$(upgraded_inventory)"
     capture upgrade_lines 'validating the expected-upgrade digests' table_lines upgrade "$SNAPSHOT_TEXT"
     diff="$(digest_differences "$upgrade_lines" "$now_table")"
     [[ -z "$diff" ]] || refuse "the upgrade did not leave the data as expected (changed other than as expected: $(tr '\n' ' ' <<<"$diff"))." # guard:G13-upgrade-data
     say "ok   every v0.3.0 table is as expected after the upgrade (role keys renamed, the 14 migrations recorded, everything else untouched)"
+    write_state_file "$UPGRADED_FILE" "upgraded-structure-v1"$'\n'"$(awk '{ print "structure " $0 }' <<<"$now_struct")"
+    say "ok   the structure of the 34 tables is recorded, for the re-upgrade after a restore to equal"
     run_helper current helper:post-upgrade-mark marked
     grep -Fxq 'marker:written=ok' <<<"$marked" || refuse "the marker helper did not report marker:written=ok." # guard:G13-marker
     say "ok   one synthetic post-upgrade Person and CRM profile written (so recovery can tell the upgraded state from the historical one)"
@@ -1678,11 +1784,11 @@ readonly COUNTS_SQL='SELECT (SELECT COUNT(*) FROM people), (SELECT COUNT(*) FROM
 cmd_reproduce_wp3_01() {
     [[ $# -eq 0 ]] || { usage >&2; exit 64; }
     preflight
-    local counts people profiles ledger orphans missing diff inventory_after after_out after_table bad_tables why
+    local counts people profiles ledger orphans diff inventory_after after_out after_table bad_tables why
+    require_prepared_source
     require_backup
     load_keyring
-    missing="$(keyring_missing "$(printf '%s\n%s\n' "$(manifest_value "$ROOT/$MANIFEST_FILE" current_key_fingerprint)" "$(manifest_names "$ROOT/$MANIFEST_FILE" previous_key_fingerprints)")" "$(printf '%s\n%s\n' "$CURRENT_FP" "$PREVIOUS_FP")")"
-    [[ -z "$missing" ]] || refuse "the live keyring lacks a key fingerprint the backup requires ($(tr '\n' ' ' <<<"$missing")). Nothing was changed." # guard:G16-keyring-present
+    why="$(keyring_problem)" || refuse "$why. Nothing was changed." # guard:G16-keyring-present
     require_inventory "$(upgraded_inventory)" 'the 34 tables of the upgraded schema (this demonstration starts from an upgraded database)' # guard:G16-upgraded-inventory
     capture counts 'reading the upgraded state' app_query "$COUNTS_SQL"
     IFS=$'\t' read -r people profiles ledger orphans <<<"$counts"
@@ -1704,12 +1810,148 @@ cmd_reproduce_wp3_01() {
     IFS=$'\t' read -r people profiles ledger orphans <<<"$counts"
     [[ "$people" == "$FIXTURE_PEOPLE" && "$profiles" == 1 && "$ledger" == 15 && "$orphans" == 1 ]] || fail "UNEXPECTED: after the load the state is people $people, contact_profiles $profiles, migrations $ledger, profiles without a Person $orphans; WP3-01 predicts $FIXTURE_PEOPLE, 1, 15, 1."
     say "ok   the post-upgrade CRM profile survives with no Person behind it, and the ledger says 15 migrations while 34 tables exist"
-    run_helper current helper:snapshot after_out
+    run_snapshot current after_out
     capture after_table 'validating the snapshot after the load' table_lines table "$after_out"
     bad_tables="$(restore_state_differences "$SNAPSHOT_TABLES" "$after_table")"
     [[ -z "$bad_tables" ]] || fail "UNEXPECTED: the historical tables are not as the dump should leave them (differ: $(tr '\n' ' ' <<<"$bad_tables"))."
     say "ok   and yet the 16 historical tables match the pre-upgrade snapshot (durable tables identical, transient tables empty): a check of those alone would pass"
     say "WP3-01 reproduced. The database is now in the defective state; the corrected restore (slice 2.2B) starts from here, or run cleanup."
+}
+
+# --- slice 2.2B: the corrected restore, the sign-in, and the re-upgrade ------------------------------------------------------------------------
+
+# G17. What the corrected restore may start from, and nothing else: the exact 34-table schema, as plain tables only, with the one of two states
+# the earlier stages leave: the upgraded database (14 Persons, the marker profile, 29 migrations) or what `reproduce-wp3-01` makes of it (13
+# Persons, the marker profile left without its Person, 15 migrations). It is established by SQL alone: a database in the second state has the
+# newer tables and the older ledger, a state no application can be expected to boot against, so nothing here starts one.
+require_restore_start() {
+    local counts kinds objects
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the upgraded schema (the corrected restore starts from the upgraded or the WP3-01 state and from nothing else)' # guard:G17-start-inventory
+    capture kinds 'reading the table types' app_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$APP_DB' AND table_type <> 'BASE TABLE';"
+    [[ "$kinds" == 0 ]] || refuse "the rehearsal database holds $kinds object(s) that are not plain tables (a view, a sequence or a system-versioned table). The restore clears only what it can name, and does not widen that to them. Nothing was changed." # guard:G17-object-types
+    capture objects 'reading the triggers, routines and events' app_query "SELECT (SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = '$APP_DB'), (SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema = '$APP_DB'), (SELECT COUNT(*) FROM information_schema.events WHERE event_schema = '$APP_DB');"
+    [[ "$objects" == $'0\t0\t0' ]] || refuse "the rehearsal database holds a trigger, a routine or an event (triggers, routines, events: ${objects//$'\t'/, }). The restore clears tables only. Nothing was changed." # guard:G17-no-other-objects
+    capture counts 'reading the state to restore from' app_query "$COUNTS_SQL"
+    [[ "$counts" == "$((FIXTURE_PEOPLE + 1))"$'\t1\t29\t0' || "$counts" == "$FIXTURE_PEOPLE"$'\t1\t15\t1' ]] || refuse "the database is neither the post-upgrade state nor the state reproduce-wp3-01 leaves (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0 or $FIXTURE_PEOPLE, 1, 15, 1). Nothing was changed." # guard:G17-start-state
+}
+
+# The statement that clears the application schema: DROP TABLE for exactly the 34 tables of the verified inventory, named from this script's
+# own lists (never from what the database returned), with foreign keys off for the one session that runs it. There is no IF EXISTS, so a table
+# that is not there is a failure, and no DROP DATABASE: the database, its grants and its sentinel are not touched.
+clear_statement() {
+    local names='' table
+    for table in $(upgraded_inventory); do names+="${names:+, }\`$table\`"; done
+    printf 'SET FOREIGN_KEY_CHECKS=0;\nDROP TABLE %s;\nSET FOREIGN_KEY_CHECKS=1;\n' "$names"
+}
+
+# verify_restored_state: the database is exactly what a restore of the dump must leave, judged by the historical application's own snapshot
+# against the ORIGINAL snapshot (see emptied_transients for the three states): the 16 tables and nothing else, the migration ledger the 15
+# migrations of v0.3.0, every durable table identical row for row, every transient table present and empty, the structure of every table the
+# one it had, and the post-upgrade marker gone. Needs require_backup.
+verify_restored_state() {
+    local out table_text struct_text diff name
+    require_inventory "$(historical_inventory)" 'the 16 tables of the v0.3.0 schema, with no table of the upgrade left' # guard:G17-restored-inventory
+    run_snapshot historical out
+    capture table_text 'validating the restored snapshot' table_lines table "$out"
+    capture struct_text 'validating the restored structure' structure_lines "$out" "$(historical_inventory)"
+    diff="$(restore_state_differences "$SNAPSHOT_TABLES" "$table_text")"
+    [[ -z "$diff" ]] || refuse "the database is not what the dump should have restored (differs from the snapshot: $(tr '\n' ' ' <<<"$diff"))." # guard:G17-restored-data
+    diff="$(digest_differences "$SNAPSHOT_STRUCTURE" "$struct_text")"
+    [[ -z "$diff" ]] || refuse "the structure of the restored tables is not the original's (differs: $(tr '\n' ' ' <<<"$diff"))." # guard:G17-restored-structure
+    [[ "$(awk '$1 == "migrations" { print $2 }' <<<"$table_text")" == 15 ]] || refuse "the migration ledger is not the 15 migrations v0.3.0 shipped." # guard:G17-restored-ledger
+    [[ "$(awk '$1 == "people" { print $2 }' <<<"$table_text")" == "$FIXTURE_PEOPLE" ]] || refuse "the Persons are not the fixture's $FIXTURE_PEOPLE: the post-upgrade marker Person is still there." # guard:G17-marker-gone
+    for name in "${HISTORICAL_TABLES[@]}"; do
+        in_array "$name" "${TRANSIENT_TABLES[@]}" || [[ "$name" == migrations ]] || note "$name: $(awk -v n="$name" '$1 == n { print $2 }' <<<"$table_text") rows, identical to the snapshot"
+    done
+}
+
+# verify_signin: the restored v0.3.0 application signs the administrator in over its real HTTP stack, with the password and then the TOTP code
+# (whose secret was enrolled under the PREVIOUS key), and the database afterwards is exactly what it was. Needs require_backup.
+verify_signin() {
+    local out lines diff expected
+    run_helper historical helper:sign-in out
+    for expected in signin:enrolment-needs-previous-key=ok signin:password=ok signin:second-factor=ok signin:me=ok signin:rolled-back=ok signin:complete=ok; do
+        grep -Fxq "$expected" <<<"$out" || refuse "the sign-in helper did not report $expected." # guard:G18-signin-lines
+    done
+    capture lines 'validating the table digests after the sign-in' table_lines table "$out"
+    diff="$(restore_state_differences "$SNAPSHOT_TABLES" "$lines")"
+    [[ -z "$diff" ]] || refuse "signing in changed the database (differs from the restored state: $(tr '\n' ' ' <<<"$diff"))." # guard:G18-signin-unchanged
+    say "ok   the restored v0.3.0 application accepted the administrator's password, then an authenticator code whose secret needs the previous key, then showed /me"
+    say "ok   the sign-in was rolled back, and the database after it is exactly what it was before"
+}
+
+cmd_restore_historical() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local why
+    require_backup
+    load_keyring
+    why="$(keyring_problem)" || refuse "$why. Nothing was changed." # guard:G17-keyring-present
+    require_restore_start
+    why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump is not the one the manifest describes ($why). Nothing was changed." # guard:G17-dump-verified
+    say "ok   every precondition holds: this run's sentinel and account, the verified backup and keyring, and a schema of exactly the 34 plain tables"
+
+    STAGE=restore-historical
+    trap on_stage_exit EXIT
+    say "Clearing the application schema (DROP TABLE for exactly the 34 tables, nothing else) ..."
+    guarded_app_sql "$ROOT" "$APP_DB" <<<"$(clear_statement)" >/dev/null || fail "the application schema could not be cleared" # (a here-string, not a pipe: a refusal inside a pipe would end only the pipe's subshell)
+    require_inventory '' 'empty: the intended tables are all gone' # guard:G17-cleared
+    say "ok   the rehearsal database holds no table"
+    why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump is not the one the manifest describes ($why); it is not loaded." # guard:G17-import-verified-dump
+    say "Loading the verified historical dump ..."
+    guarded_app_sql "$ROOT" "$APP_DB" <"$ROOT/$DUMP_FILE" >/dev/null || fail "the dump could not be loaded"
+    verify_restored_state
+    say "ok   the 16 tables of v0.3.0 and no other; the ledger is the 15 migrations of v0.3.0; the post-upgrade marker Person and profile are gone"
+    say "ok   every durable table equals the pre-upgrade snapshot (the administrator, role assignments, MFA factors, recovery codes and membership grants included), and every transient table is present and empty"
+    say "ok   the structure of all 16 tables is the original's"
+    say "Restored. Next: restore-rehearsal.sh verify-signin"
+}
+
+cmd_verify_signin() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    require_backup
+    verify_restored_state
+    say "ok   the database is exactly the restored historical state"
+    verify_signin
+    say "Sign-in verified. Next: restore-rehearsal.sh reupgrade"
+}
+
+cmd_reupgrade() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local migrated out now_table now_struct upgraded_structure expected_lines diff counts
+    require_backup
+    read_state_file upgraded_structure "$UPGRADED_FILE"
+    capture upgraded_structure 'validating the recorded upgrade structure' structure_lines "$upgraded_structure" "$(upgraded_inventory)"
+    verify_restored_state
+    verify_signin
+    say "ok   the database is the verified restored historical state, and its application signs in"
+
+    STAGE=reupgrade
+    trap on_stage_exit EXIT
+    say "Upgrading again with the current application's migrations (the 14 after v0.3.0) ..."
+    run_helper current migrate migrated
+    printf '%s\n' "$migrated"
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the current schema' # guard:G19-inventory
+    say "ok   the database holds exactly the 34 tables of the current schema (the duplicate-table failure of WP3-01 did not occur)"
+    run_snapshot current out
+    capture now_table 'validating the re-upgrade snapshot' table_lines table "$out"
+    capture now_struct 'validating the re-upgrade structure' structure_lines "$out" "$(upgraded_inventory)"
+    capture expected_lines 'validating the expected-upgrade digests' table_lines upgrade "$SNAPSHOT_TEXT"
+    diff="$(digest_differences "$(emptied_transients "$expected_lines")" "$now_table")"
+    [[ -z "$diff" ]] || refuse "the re-upgrade did not leave the data as expected (changed other than as expected: $(tr '\n' ' ' <<<"$diff"))." # guard:G19-data
+    say "ok   every v0.3.0 table is as expected: role keys renamed, the ledger the 29 migrations, every durable record preserved, transient tables empty"
+    diff="$(digest_differences "$upgraded_structure" "$now_struct")"
+    [[ -z "$diff" ]] || refuse "the structure after the re-upgrade is not the structure after the first upgrade (differs: $(tr '\n' ' ' <<<"$diff"))." # guard:G19-structure
+    say "ok   the structure of all 34 tables equals the structure after the first upgrade"
+    capture counts 'reading the re-upgraded state' app_query "$COUNTS_SQL"
+    [[ "$counts" == "$FIXTURE_PEOPLE"$'\t0\t29\t0' ]] || refuse "the re-upgraded database is not the expected one (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $FIXTURE_PEOPLE, 0, 29, 0): the post-upgrade marker came back." # guard:G19-marker-absent
+    say "ok   no post-upgrade marker: $FIXTURE_PEOPLE Persons, no CRM profile"
+    say "Re-upgraded. The cycle is complete: baseline, backup, upgrade, WP3-01 reproduced, restore, sign-in, re-upgrade."
 }
 
 main() {
@@ -1725,6 +1967,9 @@ main() {
         take-backup) shift; cmd_take_backup "$@" ;;
         upgrade) shift; cmd_upgrade "$@" ;;
         reproduce-wp3-01) shift; cmd_reproduce_wp3_01 "$@" ;;
+        restore-historical) shift; cmd_restore_historical "$@" ;;
+        verify-signin) shift; cmd_verify_signin "$@" ;;
+        reupgrade) shift; cmd_reupgrade "$@" ;;
         help | -h | --help) usage ;;
         *) usage >&2; exit 64 ;;
     esac

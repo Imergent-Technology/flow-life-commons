@@ -256,6 +256,13 @@ case "$1 ${2:-}" in
                     printf '%s' "$sql" >"$W/import.sql"; printf 'IMPORT args=[%s]\n' "${*:10}" >>"$W/appsql.log"
                     [[ ! -f "$W/import_fail" ]] || { echo 'ERROR 1050 (42S01): the fake load failed' >&2; exit 1; }
                     if [[ -f "$W/on_import" ]]; then bash "$W/on_import"; fi ;;
+                *"table_type <> 'BASE TABLE'"*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/nonbase" 2>/dev/null || echo 0 ;;
+                *'information_schema.triggers'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/other_objects" 2>/dev/null || printf '0\t0\t0\n' ;;
+                *'DROP TABLE `'*) # slice 2.2B: clearing the schema. Logged whole; the helpers that had run by now are recorded; the world may change as it would
+                    printf '%s' "$sql" >"$W/clear.sql"; printf 'CLEAR args=[%s]\n' "${*:10}" >>"$W/appsql.log"
+                    if [[ -f "$W/runs" ]]; then cp "$W/runs" "$W/runs_at_clear"; else : >"$W/runs_at_clear"; fi
+                    [[ ! -f "$W/clear_fail" ]] || { echo 'ERROR 1051 (42S02): the fake clear failed' >&2; exit 1; }
+                    if [[ -f "$W/on_clear" ]]; then bash "$W/on_clear"; else : >"$W/inventory"; fi ;;
                 *'information_schema.tables'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/inventory" 2>/dev/null; echo ;;
                 *'SELECT (SELECT COUNT(*) FROM people)'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/counts" 2>/dev/null; echo ;;
                 *'SELECT CURRENT_USER();'*)
@@ -371,11 +378,14 @@ case "$1 ${2:-}" in
         [[ ! -e "$W/start_fail" ]] || exit "$(cat "$W/start_fail")"
         # Slice 2.2A: which helper this is (by its command and tree), what it prints (out_<key>), what it changes in the world afterwards
         # (after_<key>, a script) and whether it fails (fail_<key>, an exit status). The order of the helpers is recorded in $W/runs.
+        # (Slice 2.2B adds the keys signin and harness_sums, the digests of the helper scripts as the volume holds them.)
         cmd="$(cat "$W/c/$id/cmd" 2>/dev/null)"; wd="$(cat "$W/c/$id/workdir" 2>/dev/null)"; key=''
         case "$cmd" in
             *'rehearse.php fixture-load'*) key=fixture_load ;;
             *'rehearse.php snapshot'*) key="snapshot_${wd##*/}" ;;
             *'rehearse.php mark'*) key=mark ;;
+            *'rehearse.php signin'*) key=signin ;;
+            *' exec sha256sum -- '*) key=harness_sums ;;
             *' migrate --force'*) key="migrate_${wd##*/}" ;;
         esac
         [[ -z "$key" ]] || printf '%s\n' "$key" >>"$W/runs"
@@ -601,7 +611,8 @@ t_surface_no_restore_command() {
     run_script -- --help
     expect_rc help 0
     expect_has help "$OUT" 'cleanup'
-    expect_lacks help "$OUT" $'\n  restore'
+    expect_lacks help "$OUT" $'\n  restore '
+    expect_has help "$OUT" 'restore-historical'
 }
 
 t_static_no_application_env() {
@@ -1879,14 +1890,24 @@ t_g5_malformed_state_recovery_path() {
 # --- tests: slice 2.1, the PHP execution substrate -------------------------------------------------------------------------------------
 
 # A world with the verified PHP image and both commits, with (src_world) or without the prepared source volume.
+# The helper scripts' digests as a container would print them (`sha256sum` of each file of the harness directory under test).
+harness_sums() { (cd "$SUT/php" && sha256sum -- db-ping.php probe.php rehearse.php); }
+# What `prepare` records, for a state directory that has been prepared: the two commits and each helper script's digest.
+prepared_text() { printf 'prepared-v1\nhistorical=%s\ncurrent=%s\n' "$HIST" "$HEAD_SHA"; harness_sums | sed 's/^/harness /'; }
+put_prepared_source() {
+    prepared_text >"$T/root/prepared.source"
+    chmod 600 "$T/root/prepared.source"
+}
 prep_world() {
     good_world
     put "$W" image_id "$IMG_ID"
     printf '%s %s\nHEAD %s\n' "$HIST" "$HIST" "$HEAD_SHA" >"$W/commits"
+    harness_sums >"$W/out_harness_sums"
 }
 src_world() {
     prep_world
     add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source
+    put_prepared_source
 }
 
 # add_ephemeral ID ROLE [field=value ...]: a runner or preparation container as `docker create` makes it from this script's arguments.
@@ -1970,7 +1991,7 @@ t_g11_fixed_argument_vectors() {
         [relationships:check]='php artisan relationships:check' [release:show]='php artisan release:show'
         [resources:assets:prune]='php artisan resources:assets:prune --dry-run' [helper:db-ping]='php /var/www/html/harness/db-ping.php'
         [helper:fixture-load]='php /var/www/html/harness/rehearse.php fixture-load' [helper:snapshot]='php /var/www/html/harness/rehearse.php snapshot'
-        [helper:post-upgrade-mark]='php /var/www/html/harness/rehearse.php mark'
+        [helper:post-upgrade-mark]='php /var/www/html/harness/rehearse.php mark' [helper:sign-in]='php /var/www/html/harness/rehearse.php signin'
     )
     for name in "${!want[@]}"; do
         src_world
@@ -2148,7 +2169,7 @@ t_g10_prepare_happy_path() {
     # Composer (steps 3 and 4, the only ones with a route out) runs before the harness is copied in (step 5, stdin.5 below).
     expect_has 'harness' "$(tar -tf "$W/stdin.5" | tr '\n' ' ')" 'db-ping.php probe.php'
     creates="$(grep -E '^create ' "$W/calls")"
-    [[ "$(grep -c . <<<"$creates")" == 5 ]] || bad "expected five preparation containers, got: $creates"
+    [[ "$(grep -c . <<<"$creates")" == 6 ]] || bad "expected six preparation containers, got: $creates"
     i=0
     while IFS= read -r line; do
         i=$((i + 1))
@@ -2164,7 +2185,31 @@ t_g10_prepare_happy_path() {
     for line in historical current; do
         expect_has "composer $line" "$creates" "composer install --no-dev --no-scripts --no-interaction --no-progress --prefer-dist --optimize-autoloader --working-dir=/var/www/html/$line"
     done
+    # Slice 2.2B: the helper scripts are digested INSIDE the volume (the sixth container, after the harness is copied in), and what prepare
+    # records is the two commits and those digests, in a private file.
+    expect_has 'the volume check' "$(tail -n 1 <<<"$creates")" 'exec sha256sum -- "$@" sh /var/www/html/harness db-ping.php probe.php rehearse.php'
+    expect_has 'recorded' "$OUT" 'recorded: both commits'
+    [[ "$("$REAL_STAT" -c %a "$T/root/prepared.source")" == 600 ]] || bad 'prepared.source is not mode 600'
+    [[ "$(<"$T/root/prepared.source")" == "$(prepared_text)" ]] || bad "prepared.source is not exactly the two commits and the helper digests: $(<"$T/root/prepared.source")"
     no_secret_anywhere prepare
+}
+
+# G10: what is in the volume must be what is in this checkout, and nothing is recorded otherwise.
+t_g10_prepare_verifies_the_harness_in_the_volume() {
+    prep_world
+    harness_sums | sed 's/^[0-9a-f]\{64\}/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' >"$W/out_harness_sums"
+    run_script -- prepare
+    expect_refused 'a helper script in the volume that is not the checkout' 'helper scripts in the source volume are not the ones in this checkout'
+    [[ ! -e "$T/root/prepared.source" ]] || bad 'the source was recorded although the volume was not verified'
+    prep_world
+    harness_sums | head -n 2 >"$W/out_harness_sums"
+    run_script -- prepare
+    expect_refused 'a volume that holds fewer helper scripts' 'not the ones in this checkout'
+    prep_world
+    printf '5\n' >"$W/fail_harness_sums"
+    run_script -- prepare
+    expect_rc 'a digest container that fails' 5
+    [[ ! -e "$T/root/prepared.source" ]] || bad 'the source was recorded although the check failed'
 }
 
 t_g10_prepare_uses_only_verified_commits() {
@@ -2478,19 +2523,33 @@ rows_of() {
     esac
 }
 fake_digest() { printf '%s' "$1" | sha256sum | cut -c1-64; }
-table_block() { # KIND SEED: one line per v0.3.0 table, as the harness prints them
+table_block() { # KIND SEED: one line per v0.3.0 table, as the harness prints them (a table with no rows has the digest of none)
     local t
-    for t in "${HIST_TABLES[@]}"; do printf '%s %s %s %s\n' "$1" "$t" "$(rows_of "$t")" "$(fake_digest "$t$2")"; done
+    for t in "${HIST_TABLES[@]}"; do
+        if [[ "$(rows_of "$t")" == 0 ]]; then printf '%s %s 0 %s\n' "$1" "$t" "$EMPTY_DIGEST"; else printf '%s %s %s %s\n' "$1" "$t" "$(rows_of "$t")" "$(fake_digest "$t$2")"; fi
+    done
 }
+EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)" # the harness's digest of no rows
 restored_block() { # the snapshot's durable tables as they were, the transient ones empty: what a restore of the two-pass dump leaves
     local t rows
     for t in "${HIST_TABLES[@]}"; do
         rows="$(rows_of "$t")"
-        if [[ " ${TRANSIENT[*]} " == *" $t "* ]]; then printf 'table %s 0 %s\n' "$t" "$(fake_digest empty)"; else printf 'table %s %s %s\n' "$t" "$rows" "$(fake_digest "${t}before")"; fi
+        if [[ " ${TRANSIENT[*]} " == *" $t "* ]]; then printf 'table %s 0 %s\n' "$t" "$EMPTY_DIGEST"; else printf 'table %s %s %s\n' "$t" "$rows" "$(fake_digest "${t}before")"; fi
     done
 }
-fixture_output() { printf 'key:current=%s\nkey:previous=%s\n' "$FP_CUR" "$FP_PREV"; table_block table before; table_block upgrade after; echo 'fixture:complete=ok'; }
-snapshot_output() { table_block table "$1"; echo 'snapshot:complete=ok'; } # SEED
+reupgraded_block() { # the upgrade's expected lines for a database that was restored first: the durable tables as the upgrade leaves them, the transient ones empty
+    local t
+    for t in "${HIST_TABLES[@]}"; do
+        if [[ " ${TRANSIENT[*]} " == *" $t "* ]]; then printf 'table %s 0 %s\n' "$t" "$EMPTY_DIGEST"; else printf 'table %s %s %s\n' "$t" "$(rows_of "$t")" "$(fake_digest "${t}after")"; fi
+    done
+}
+structure_block() { # KIND (hist: the 16 tables, up: the 34): the structure digest of each, as the harness prints them
+    local t
+    for t in $(if [[ "$1" == up ]]; then up_names; else hist_names; fi); do printf 'structure %s %s\n' "$t" "$(fake_digest "struct-$t-$1")"; done
+}
+signin_output() { printf 'signin:enrolment-needs-previous-key=ok\nsignin:password=ok\nsignin:second-factor=ok\nsignin:me=ok\nsignin:rolled-back=ok\n'; restored_block; echo 'signin:complete=ok'; }
+fixture_output() { printf 'key:current=%s\nkey:previous=%s\n' "$FP_CUR" "$FP_PREV"; table_block table before; table_block upgrade after; structure_block hist; echo 'fixture:complete=ok'; }
+snapshot_output() { table_block table "$1"; structure_block "${2:-hist}"; echo 'snapshot:complete=ok'; } # SEED [hist|up]
 hist_names() { printf '%s\n' "${HIST_TABLES[@]}"; }
 up_names() { printf '%s\n' "${HIST_TABLES[@]}" "${NEWER_TABLES[@]}"; }
 put_dumps() { # the two passes as mariadb-dump writes their parts that the script reads
@@ -2527,6 +2586,7 @@ ensure_cache() { # runs baseline and take-backup once, and keeps the three state
     CACHE_READY=1
 }
 install_state() { local f; for f in "$@"; do cp -p "$T/cache/historical.$f" "$T/root/historical.$f"; done; } # snapshot dump.sql manifest.json
+install_upgraded_structure() { { echo 'upgraded-structure-v1'; structure_block up; } >"$T/root/upgraded.structure"; chmod 600 "$T/root/upgraded.structure"; }
 # A world for each later stage, with the state its predecessors left. Call ensure_cache BEFORE (it builds worlds of its own).
 backup_world() { baseline_world; hist_names >"$W/inventory"; install_state snapshot; }
 upgrade_world() {
@@ -2535,7 +2595,7 @@ upgrade_world() {
     up_names >"$W/up.inv"
     snapshot_output before >"$W/out_snapshot_historical"
     printf 'cp "%s/up.inv" "%s/inventory"\n' "$W" "$W" >"$W/after_migrate_current"
-    snapshot_output after >"$W/out_snapshot_current"
+    snapshot_output after up >"$W/out_snapshot_current"
     echo 'marker:written=ok' >"$W/out_mark"
     install_state snapshot dump.sql manifest.json
 }
@@ -2947,7 +3007,7 @@ t_g13_upgrade_results() {
     run_script -- upgrade
     expect_refused 'a 35-table result' 'extra surprise'
     upgrade_world
-    snapshot_output after | sed 's/^\(table role_assignments [0-9]* \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' >"$W/out_snapshot_current"
+    snapshot_output after up | sed 's/^\(table role_assignments [0-9]* \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' >"$W/out_snapshot_current"
     run_script -- upgrade
     expect_refused 'a role assignment table that is not as the upgrade should leave it' 'did not leave the data as expected'
     expect_has 'the table is named' "$ERR" 'role_assignments'
@@ -3077,11 +3137,408 @@ t_g16_the_load_is_guarded() {
     no_dump_or_import 'an over-privileged account'
 }
 
+# --- slice 2.2B: the corrected restore, the sign-in and the re-upgrade ---
+
+# The database as `reproduce-wp3-01` leaves it (34 tables, 13 Persons, the marker profile without its Person, 15 migrations), with the state the
+# earlier stages leave in the state directory. Loading the dump leaves the 16 tables as the ORIGINAL had them with the transient ones empty, and
+# the helpers answer as the restored v0.3.0 application.
+restore_world() {
+    stage_world
+    up_names >"$W/inventory"
+    up_names >"$W/up.inv"
+    hist_names >"$W/hist.inv"
+    printf '13\t1\t15\t1\n' >"$W/counts"
+    printf 'cp "%s/hist.inv" "%s/inventory"\n' "$W" "$W" >"$W/on_import"
+    { restored_block; structure_block hist; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_historical"
+    signin_output >"$W/out_signin"
+    install_state snapshot dump.sql manifest.json
+    install_upgraded_structure
+}
+# The restored database, for verify-signin and reupgrade, and what the current application's migration and snapshot then show.
+restored_world() {
+    restore_world
+    hist_names >"$W/inventory"
+    printf 'cp "%s/up.inv" "%s/inventory"\nprintf "13\\t0\\t29\\t0\\n" >"%s/counts"\n' "$W" "$W" "$W" >"$W/after_migrate_current"
+    { reupgraded_block; structure_block up; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
+}
+no_clear_or_import() { [[ ! -e "$W/clear.sql" && ! -e "$W/import.sql" ]] || bad "$1: the schema was cleared or a dump was loaded"; }
+restore_refused() { # DESC NEEDLE: the restore refuses, and nothing was cleared or loaded
+    run_script -- restore-historical
+    expect_refused "$1" "$2"
+    no_clear_or_import "$1"
+}
+
+t_g17_restore_happy_path() {
+    local clear names inv clr imp line
+    ensure_cache
+    restore_world
+    run_script -- restore-historical
+    expect_rc restore 0
+    expect_has 'summary' "$OUT" 'Restored'
+    expect_has 'the marker is gone' "$OUT" 'marker Person and profile are gone'
+    expect_has 'durable tables' "$OUT" 'every durable table equals the pre-upgrade snapshot'
+    expect_has 'transient tables' "$OUT" 'every transient table is present and empty'
+    # What was cleared: exactly the 34 tables, by name, in one DROP, foreign keys off for that session, and nothing else.
+    clear="$(<"$W/clear.sql")"
+    # shellcheck disable=SC2016 # the backticks are the table quoting in the statement
+    names="$(grep -o '`[a-z_]*`' <<<"$clear" | tr -d '`' | LC_ALL=C sort)"
+    [[ "$names" == "$(up_names | LC_ALL=C sort)" ]] || bad "the cleared tables are not exactly the 34 tables: $(tr '\n' ' ' <<<"$names")"
+    [[ "$(grep -c 'DROP' <<<"$clear")" == 1 ]] || bad 'more than one DROP in the clearing statement'
+    for line in 'IF EXISTS' 'DATABASE' 'SCHEMA' '*' 'LIKE' 'TRUNCATE' 'DELETE'; do expect_lacks "the clearing statement has no $line" "$clear" "$line"; done
+    expect_has 'foreign keys off for the one session' "$clear" 'SET FOREIGN_KEY_CHECKS=0;'
+    [[ "$(<"$T/root/historical.dump.sql")" == "$(<"$W/import.sql")" ]] || bad 'what was loaded is not exactly the verified dump'
+    # In order: the inventory is read, the schema is cleared (as the application account, in the one database), then the dump is loaded, and no
+    # application helper has run before the clearing: nothing started against the inconsistent schema.
+    inv="$(grep -n 'information_schema.tables' "$W/appsql.log" | head -n 1 | cut -d: -f1)"
+    clr="$(grep -n '^CLEAR' "$W/appsql.log" | cut -d: -f1)"
+    imp="$(grep -n '^IMPORT' "$W/appsql.log" | cut -d: -f1)"
+    [[ -n "$inv" && -n "$clr" && -n "$imp" && "$inv" -lt "$clr" && "$clr" -lt "$imp" ]] || bad "the inventory, the clear and the load did not happen in that order ($inv, $clr, $imp)"
+    expect_has 'the clear was by the application account in the one database' "$(grep '^CLEAR' "$W/appsql.log")" 'CLEAR args=[-D flc_rehearsal_app]'
+    expect_has 'the load was by the application account in the one database' "$(grep '^IMPORT' "$W/appsql.log")" 'IMPORT args=[-D flc_rehearsal_app]'
+    [[ ! -s "$W/runs_at_clear" ]] || bad "a helper had run before the schema was cleared: $(tr '\n' ' ' <"$W/runs_at_clear")"
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical ' ]] || bad "the only helper should be the historical snapshot after the load: $(tr '\n' ' ' <"$W/runs")"
+    # Nothing but the application account changed the database; no root statement, no other docker mutation.
+    if [[ -f "$W/sql.log" ]] && grep -qE 'DROP|INSERT|CREATE TABLE' "$W/sql.log"; then bad 'a root statement changed the schema'; fi
+    ! grep -qE '^(volume rm|network rm|stop|compose)' "$W/calls" || bad 'the restore removed or recreated an object'
+    [[ "$(grep -E '^exec' "$W/calls" | grep -vc '^exec -i ')" == 0 ]] || bad 'an exec that is not the SQL client was made'
+    only_database_left restore
+    no_secret_anywhere restore
+}
+
+t_g17_starts_from_the_upgraded_state_too() {
+    ensure_cache
+    restore_world
+    printf '14\t1\t29\t0\n' >"$W/counts"
+    run_script -- restore-historical
+    expect_rc 'a restore from the upgraded state' 0
+}
+
+# G17: nothing is cleared or loaded unless every precondition holds.
+t_g17_preconditions() {
+    ensure_cache
+    restore_world; hist_names >"$W/inventory"
+    restore_refused 'the 16-table historical schema (nothing to restore from)' 'not exactly the 34 tables'
+    restore_world; { up_names; echo surprise; } >"$W/inventory"
+    restore_refused 'an unexpected table' 'extra surprise'
+    restore_world; grep -v '^sourced_role_grants$' "$W/up.inv" >"$W/inventory"
+    restore_refused 'a missing table' 'missing sourced_role_grants'
+    restore_world; echo 1 >"$W/nonbase"
+    restore_refused 'a view among the tables' 'not plain tables'
+    restore_world; printf '1\t0\t0\n' >"$W/other_objects"
+    restore_refused 'a trigger' 'a trigger, a routine or an event'
+    restore_world; printf '0\t0\t1\n' >"$W/other_objects"
+    restore_refused 'an event' 'a trigger, a routine or an event'
+    restore_world; printf '14\t0\t29\t0\n' >"$W/counts"
+    restore_refused 'a state that is neither the upgraded nor the WP3-01 one' 'neither the post-upgrade state'
+    restore_world; printf '13\t1\t29\t0\n' >"$W/counts"
+    restore_refused 'a state that mixes the two' 'neither the post-upgrade state'
+    no_helper_ran 'a refused restore'
+    # The server and the account are verified before anything.
+    restore_world; put "$W" sentinel_token "$OTHER_TOKEN"
+    restore_refused 'a server that is not this run' 'sentinel'
+    restore_world; printf '%s\n' "$GRANT_GLOBAL_ALL" >"$W/app_grants"
+    restore_refused 'an over-privileged account' 'beyond the rehearsal database'
+}
+
+t_g17_backup_and_keys() {
+    local ring
+    ensure_cache
+    restore_world
+    run_fn "keyring_fingerprint $FP_CUR $FP_FF"; ring="$OUT"
+    restore_world
+    sed -i "s/\"previous_key_fingerprints\": \\[\"$FP_PREV\"\\]/\"previous_key_fingerprints\": [\"$FP_FF\"]/; s/\"keyring_fingerprint\": \"[0-9a-f]*\"/\"keyring_fingerprint\": \"$ring\"/" "$T/root/historical.manifest.json"
+    restore_refused 'a backup that requires a key the live ring lacks' "lacks a key fingerprint the backup requires ($FP_FF"
+    restore_world; printf 'x' >>"$T/root/historical.dump.sql"
+    restore_refused 'a corrupted dump' 'the dump cannot be relied on'
+    restore_world; sed -i 's/"run_token_fingerprint": "[0-9a-f]*"/"run_token_fingerprint": "0000000000000000"/' "$T/root/historical.manifest.json"
+    restore_refused "another run's manifest" "not this run's"
+    restore_world; rm -f "$T/root/historical.snapshot"
+    restore_refused 'no snapshot' 'stage that writes it has not been run'
+    restore_world; rm -f "$T/root/historical.manifest.json"
+    restore_refused 'no manifest' 'no complete backup'
+    restore_world; sed -i 's/"commit": "[0-9a-f]*"/"commit": "'"$(printf 'a%.0s' {1..40})"'"/' "$T/root/historical.manifest.json"
+    restore_refused 'a backup of another release' 'not for the historical commit'
+    no_helper_ran 'a refused restore'
+}
+
+t_g17_the_dump_is_reverified() {
+    ensure_cache
+    # Changed (in place, to the same size) after the backup was checked and before the schema is cleared.
+    restore_world
+    printf "sed -i '0,/VALUES (1)/s//VALUES (2)/' '%s/root/historical.dump.sql'\n" "$T" >"$W/hook_app_sql"
+    restore_refused 'a dump changed before the schema is cleared' 'is not the one the manifest describes'
+    # Changed after the schema was cleared: nothing is loaded, and the cleared state is reported honestly.
+    restore_world
+    printf 'sed -i "0,/VALUES (1)/s//VALUES (2)/" "%s/root/historical.dump.sql"\n: >"%s/inventory"\n' "$T" "$W" >"$W/on_clear"
+    run_script -- restore-historical
+    expect_refused 'a dump changed after the schema was cleared' 'it is not loaded'
+    [[ ! -e "$W/import.sql" ]] || bad 'a dump that no longer matched its manifest was loaded'
+    expect_has 'recovery is named' "$ERR" 'cleanup'
+}
+
+t_g17_outcomes() {
+    ensure_cache
+    restore_world; touch "$W/clear_fail"
+    run_script -- restore-historical
+    expect_rc 'a clear that fails' 1
+    expect_has 'what failed' "$ERR" 'could not be cleared'
+    expect_has 'recovery is named' "$ERR" 'cleanup'
+    [[ ! -e "$W/import.sql" ]] || bad 'a dump was loaded after the clear failed'
+    restore_world; printf 'true\n' >"$W/on_clear" # the tables are all still there after the "clear"
+    run_script -- restore-historical
+    expect_refused 'tables that remain after the clear' 'not exactly empty'
+    [[ ! -e "$W/import.sql" ]] || bad 'a dump was loaded over tables that remained'
+    restore_world; touch "$W/import_fail"
+    run_script -- restore-historical
+    expect_rc 'a load that fails' 1
+    expect_has 'what failed' "$ERR" 'could not be loaded'
+    restore_world; printf 'cp "%s/up.inv" "%s/inventory"\n' "$W" "$W" >"$W/on_import" # the newer tables are still there after the load
+    run_script -- restore-historical
+    expect_refused 'newer tables that remain after the load' 'not exactly the 16 tables'
+    expect_has 'the newer tables are named' "$ERR" 'extra contact_profiles'
+    restore_world; { restored_block | sed 's/^\(table people [0-9]* \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/'; structure_block hist; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_historical"
+    run_script -- restore-historical
+    expect_refused 'a durable table that was not restored' 'differs from the snapshot'
+    expect_has 'the table is named' "$ERR" 'people'
+    # The ORIGINAL transient rows are not the restored state: a restore that left the sessions in place is refused.
+    restore_world; { table_block table before; structure_block hist; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_historical"
+    run_script -- restore-historical
+    expect_refused 'transient tables that still hold their original rows' 'differs from the snapshot'
+    expect_has 'the sessions are named' "$ERR" 'sessions'
+    expect_has 'the reset tokens are named' "$ERR" 'password_reset_tokens'
+    restore_world; { restored_block; structure_block hist | sed 's/^\(structure accounts \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/'; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_historical"
+    run_script -- restore-historical
+    expect_refused 'a structure that is not the original' 'structure of the restored tables'
+    expect_has 'the table is named' "$ERR" 'accounts'
+    restore_world; { restored_block; structure_block hist; } >"$W/out_snapshot_historical"
+    run_script -- restore-historical
+    expect_refused 'a snapshot that did not say it finished' 'snapshot:complete=ok'
+    restore_world; { restored_block; structure_block hist | head -n 15; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_historical"
+    run_script -- restore-historical
+    expect_refused 'a structure line missing' 'structure lines are not exactly'
+    restore_world; { restored_block | grep -v '^table accounts '; structure_block hist; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_historical"
+    run_script -- restore-historical
+    expect_refused 'a durable table missing from the snapshot' 'not exactly one for each of the 16'
+    restore_world; printf '4\n' >"$W/fail_snapshot_historical"
+    run_script -- restore-historical
+    expect_rc 'a snapshot helper that fails' 4
+}
+
+# The explicit semantic checks, which the digests would otherwise be the only protection for: the snapshot is altered to say 16 migrations and 14
+# Persons and the restored state to equal it, so only the named checks can refuse.
+t_g17_semantic_checks() {
+    ensure_cache
+    restore_world
+    sed -i 's/^table migrations 15 /table migrations 16 /' "$T/root/historical.snapshot" "$W/out_snapshot_historical"
+    run_script -- restore-historical
+    expect_refused 'a ledger that is not the 15 migrations of v0.3.0' 'not the 15 migrations'
+    restore_world
+    sed -i 's/^table people 13 /table people 14 /' "$T/root/historical.snapshot" "$W/out_snapshot_historical"
+    run_script -- restore-historical
+    expect_refused 'a Person left over from the upgraded state' 'marker Person is still there'
+}
+
+t_g18_signin() {
+    local creates line
+    ensure_cache
+    restored_world
+    run_script -- verify-signin
+    expect_rc verify-signin 0
+    expect_has 'the sign-in' "$OUT" "accepted the administrator's password, then an authenticator code whose secret needs the previous key"
+    expect_has 'rolled back' "$OUT" 'rolled back, and the database after it is exactly what it was before'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical signin ' ]] || bad "the helpers were not the check of the restored state and then the sign-in: $(tr '\n' ' ' <"$W/runs")"
+    creates="$(grep -E '^create ' "$W/calls")"
+    [[ "$(grep -c -- '--workdir /var/www/html/historical' <<<"$creates")" == 2 && "$(grep -c -- '--workdir /var/www/html/current' <<<"$creates")" == 0 ]] || bad 'the sign-in was not run by the HISTORICAL application only'
+    expect_has 'the helper' "$creates" ' php /var/www/html/harness/rehearse.php signin'
+    no_clear_or_import verify-signin
+    only_database_left verify-signin
+    no_secret_anywhere verify-signin
+    # The database must be the restored one first.
+    restored_world; up_names >"$W/inventory"
+    run_script -- verify-signin
+    expect_refused 'a database that is not restored' 'not exactly the 16 tables'
+    no_helper_ran 'a database that is not restored'
+    restored_world; { table_block table before; structure_block hist; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_historical"
+    run_script -- verify-signin
+    expect_refused 'a database with the original transient rows' 'differs from the snapshot'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical ' ]] || bad 'a sign-in was attempted against a database that was not the restored one'
+    for line in signin:enrolment-needs-previous-key=ok signin:password=ok signin:second-factor=ok signin:me=ok signin:rolled-back=ok signin:complete=ok; do
+        restored_world
+        grep -vxF "$line" "$W/out_signin" >"$W/out_signin.new"; mv "$W/out_signin.new" "$W/out_signin"
+        run_script -- verify-signin
+        expect_refused "a sign-in that did not report $line" "did not report $line"
+    done
+    restored_world; signin_output | sed 's/^\(table people [0-9]* \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' >"$W/out_signin"
+    run_script -- verify-signin
+    expect_refused 'a sign-in that changed the database' 'signing in changed the database'
+    expect_has 'the table is named' "$ERR" 'people'
+    restored_world; printf '3\n' >"$W/fail_signin"
+    run_script -- verify-signin
+    expect_rc 'a sign-in the application refused' 3
+    expect_has 'what failed' "$ERR" "'helper:sign-in' in the historical tree failed"
+}
+
+t_g19_reupgrade() {
+    local creates
+    ensure_cache
+    restored_world
+    run_script -- reupgrade
+    expect_rc reupgrade 0
+    expect_has 'the cycle' "$OUT" 'The cycle is complete'
+    expect_has 'no duplicate-table failure' "$OUT" 'duplicate-table failure of WP3-01 did not occur'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical signin migrate_current snapshot_current ' ]] || bad "the helpers did not run in the expected order: $(tr '\n' ' ' <"$W/runs")"
+    creates="$(grep -E '^create ' "$W/calls")"
+    [[ "$(grep -c -- '--workdir /var/www/html/historical' <<<"$creates")" == 2 && "$(grep -c -- '--workdir /var/www/html/current' <<<"$creates")" == 2 ]] || bad 'the runners were not two historical (the checks before) and two current'
+    expect_has 'the migration' "$creates" ' php artisan migrate --force --no-interaction'
+    no_clear_or_import reupgrade
+    only_database_left reupgrade
+    no_secret_anywhere reupgrade
+}
+
+t_g19_preconditions() {
+    ensure_cache
+    restored_world; up_names >"$W/inventory"
+    run_script -- reupgrade
+    expect_refused 'a database that is not restored (it is the 34-table one)' 'not exactly the 16 tables'
+    no_helper_ran 'a database that is not restored'
+    restored_world; rm -f "$T/root/upgraded.structure"
+    run_script -- reupgrade
+    expect_refused 'no record of the first upgrade' 'stage that writes it has not been run'
+    no_helper_ran 'no record of the first upgrade'
+    restored_world; { echo 'upgraded-structure-v1'; structure_block up | head -n 30; } >"$T/root/upgraded.structure"
+    run_script -- reupgrade
+    expect_refused 'a record of the first upgrade that lacks tables' 'structure lines are not exactly'
+    restored_world; { table_block table before; structure_block hist; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_historical"
+    run_script -- reupgrade
+    expect_refused 'a database that was not restored (the original transient rows)' 'differs from the snapshot'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical ' ]] || bad 'a migration ran although the database was not the restored one'
+    restored_world; printf '3\n' >"$W/fail_signin"
+    run_script -- reupgrade
+    expect_rc 'a restored application that cannot sign in' 3
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical signin ' ]] || bad 'a migration ran although the restored application could not sign in'
+}
+
+t_g19_results() {
+    ensure_cache
+    restored_world; grep -v '^sourced_role_grants$' "$W/up.inv" >"$W/up.inv.new"; mv "$W/up.inv.new" "$W/up.inv"
+    run_script -- reupgrade
+    expect_refused 'a 33-table result' 'not exactly the 34 tables'
+    expect_has 'the missing table is named' "$ERR" 'missing sourced_role_grants'
+    restored_world; { up_names; echo surprise; } >"$W/up.inv"
+    run_script -- reupgrade
+    expect_refused 'a 35-table result' 'extra surprise'
+    restored_world; { reupgraded_block | sed 's/^\(table role_assignments [0-9]* \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/'; structure_block up; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
+    run_script -- reupgrade
+    expect_refused 'role assignments that are not as the upgrade should leave them' 'did not leave the data as expected'
+    expect_has 'the table is named' "$ERR" 'role_assignments'
+    # The restored database had empty transient tables; one that holds the ORIGINAL rows again is not what the re-upgrade should leave.
+    restored_world; { table_block upgrade after | sed 's/^upgrade/table/'; structure_block up; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
+    run_script -- reupgrade
+    expect_refused 'transient tables that regained their original rows' 'did not leave the data as expected'
+    expect_has 'the sessions are named' "$ERR" 'sessions'
+    restored_world; { reupgraded_block; structure_block up | sed 's/^\(structure accounts \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/'; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
+    run_script -- reupgrade
+    expect_refused 'a structure that is not the first upgrade'"'"'s' 'not the structure after the first upgrade'
+    expect_has 'the table is named' "$ERR" 'accounts'
+    restored_world; printf 'cp "%s/up.inv" "%s/inventory"\nprintf "13\\t1\\t29\\t0\\n" >"%s/counts"\n' "$W" "$W" "$W" >"$W/after_migrate_current"
+    run_script -- reupgrade
+    expect_refused 'a marker that came back' 'marker came back'
+    restored_world; printf '5\n' >"$W/fail_migrate_current"
+    run_script -- reupgrade
+    expect_rc 'a migration that fails' 5
+    expect_has 'recovery is named' "$ERR" 'cleanup'
+    restored_world; { reupgraded_block; structure_block up; } >"$W/out_snapshot_current"
+    run_script -- reupgrade
+    expect_refused 'a snapshot that did not say it finished' 'snapshot:complete=ok'
+}
+
+# G13: every stage runs only against the source `prepare` recorded.
+t_g13_prepared_source() {
+    local c
+    ensure_cache
+    for c in baseline take-backup upgrade reproduce-wp3-01 restore-historical verify-signin reupgrade; do
+        restore_world; rm -f "$T/root/prepared.source"
+        run_script -- "$c"
+        expect_refused "$c without a record of the prepared source" 'prepare has not finished'
+        no_helper_ran "$c without a record"; no_clear_or_import "$c without a record"
+        restore_world; printf 'HEAD %s\n%s %s\n' "$(printf 'c%.0s' {1..40})" "$HIST" "$HIST" >"$W/commits"
+        run_script -- "$c"
+        expect_refused "$c after HEAD moved" 'prepared source is stale'
+        no_helper_ran "$c after HEAD moved"; no_clear_or_import "$c after HEAD moved"
+    done
+    restore_world; chmod 644 "$T/root/prepared.source"
+    run_script -- restore-historical
+    expect_refused 'a record that is not private' 'prepare has not finished'
+    restore_world; sed -i "s/^historical=.*/historical=$(printf 'a%.0s' {1..40})/" "$T/root/prepared.source"
+    run_script -- restore-historical
+    expect_refused 'a source archived from another historical commit' 'not archived from the historical commit'
+    restore_world; sed -i 's/^harness [0-9a-f]\{64\}/harness ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' "$T/root/prepared.source"
+    run_script -- restore-historical
+    expect_refused 'a helper script that is not the one that was copied in' 'helper script in scripts/rehearsal/php'
+    restore_world; sed -i '$d' "$T/root/prepared.source"
+    run_script -- restore-historical
+    expect_refused 'a record that lacks a helper' 'helper script in scripts/rehearsal/php'
+    restore_world; sed -i 's/^prepared-v1$/prepared-v0/' "$T/root/prepared.source"
+    run_script -- restore-historical
+    expect_refused 'a record in another format' 'not exactly what prepare writes'
+    restore_world; printf 'extra\n' >>"$T/root/prepared.source"
+    run_script -- restore-historical
+    expect_refused 'a record with something added' 'not exactly what prepare writes'
+    no_clear_or_import 'a stale record'
+    # The checkout must also be clean and the historical commit exact: what is recorded is only part of it.
+    restore_world; printf ' M apps/platform/composer.json\n' >"$W/git_status"
+    run_script -- restore-historical
+    expect_refused 'an unclean checkout' 'uncommitted or untracked'
+}
+
+# The three states a snapshot can be compared as, and the comparison that cannot overlook a missing record.
+t_g13_snapshot_semantics() {
+    local original restored name
+    original="$(table_block table before | sed 's/^table //')"
+    run_fn "emptied_transients '$original'"
+    restored="$OUT"
+    for name in "${TRANSIENT[@]}"; do expect_has "the transient table $name is emptied" "$restored" "$name 0 $EMPTY_DIGEST"; done
+    expect_has 'a durable table is untouched' "$restored" "accounts 11 $(fake_digest accountsbefore)"
+    expect_has 'the ledger is untouched' "$restored" "migrations 15 $(fake_digest migrationsbefore)"
+    # A restore of the dump is the original with the transient tables emptied, and is judged as such.
+    run_fn "restore_state_differences '$original' '$restored'"; [[ -z "$OUT" ]] || bad "a correct restore differs from the original: $OUT"
+    # The original itself is NOT the restored state: the two tables that had fixture rows still hold them.
+    run_fn "restore_state_differences '$original' '$original'"
+    [[ "$OUT" == $'password_reset_tokens\nsessions' ]] || bad "the original snapshot judged as a restore should differ in exactly the sessions and reset tokens, not '$OUT'"
+    # A durable table missing from the later one, or present only there, is a difference, never an omission.
+    run_fn "digest_differences '$original' '$(grep -v '^accounts ' <<<"$original")'"; [[ "$OUT" == accounts ]] || bad "a durable table missing from the restored snapshot read as '$OUT', not as a difference"
+    run_fn "digest_differences '$original' '$original
+surprise 1 $(fake_digest x)'"; [[ "$OUT" == surprise ]] || bad "a table present only in the later snapshot read as '$OUT'"
+    # shellcheck disable=SC2001 # a line-anchored substitution on a multi-line value
+    run_fn "digest_differences '$original' '$(sed 's/^people 13 /people 12 /' <<<"$original")'"; [[ "$OUT" == people ]] || bad "a changed row count read as '$OUT'"
+    run_fn "digest_differences '$original' '$original'"; [[ -z "$OUT" ]] || bad "identical snapshots differ: $OUT"
+    # Structure lines: exactly the expected tables, each with a digest.
+    run_fn "structure_lines '$(structure_block hist)' '$(hist_names | LC_ALL=C sort)'"; expect_rc 'a complete structure' 0
+    run_fn "structure_lines '$(structure_block hist | head -n 15)' '$(hist_names | LC_ALL=C sort)'"; expect_refused 'a structure line missing' 'structure lines are not exactly'
+    run_fn "structure_lines '$(structure_block up)' '$(hist_names | LC_ALL=C sort)'"; expect_refused 'a structure line too many' 'structure lines are not exactly'
+    run_fn "structure_lines 'structure accounts nothex' 'accounts'"; expect_refused 'a malformed digest' 'malformed'
+}
+
+# G13: a snapshot helper that did not say it finished is not an empty snapshot.
+t_g13_snapshot_must_be_reported() {
+    ensure_cache
+    backup_world
+    { snapshot_output before | grep -v '^snapshot:complete=ok$'; } >"$W/out_snapshot_historical"
+    run_script -- take-backup
+    expect_refused 'a snapshot that did not say it finished' 'snapshot:complete=ok'
+    [[ ! -e "$T/root/historical.dump.sql" ]] || bad 'a backup was taken from a snapshot that did not finish'
+    baseline_world
+    fixture_output | grep -v '^structure accounts ' >"$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a fixture whose structure is incomplete' 'structure lines are not exactly'
+    [[ ! -e "$T/root/historical.snapshot" ]] || bad 'a snapshot was written for an incomplete structure'
+}
+
 # --- the command surface ---
 
 t_g13_commands_take_no_arguments() {
     local c
-    for c in baseline take-backup upgrade reproduce-wp3-01; do
+    for c in baseline take-backup upgrade reproduce-wp3-01 restore-historical verify-signin reupgrade; do
         good_world
         run_script -- "$c" /tmp/other.sql
         expect_rc "$c with an argument" 64
@@ -3090,13 +3547,13 @@ t_g13_commands_take_no_arguments() {
         expect_rc "$c with a database" 64
     done
     run_script -- --help
-    for c in baseline take-backup upgrade reproduce-wp3-01; do expect_has 'usage' "$OUT" "$c"; done
+    for c in baseline take-backup upgrade reproduce-wp3-01 restore-historical verify-signin reupgrade; do expect_has 'usage' "$OUT" "$c"; done
     expect_has 'usage names the defect' "$OUT" 'not a restoration'
 }
 
 t_g2_stage_commands_refuse_inherited_variables() {
     local c
-    for c in baseline take-backup upgrade reproduce-wp3-01; do
+    for c in baseline take-backup upgrade reproduce-wp3-01 restore-historical verify-signin reupgrade; do
         src_world
         run_script DB_HOST=elsewhere -- "$c"
         expect_refused "$c with DB_HOST" 'DB_HOST'
@@ -3112,12 +3569,13 @@ t_cleanup_removes_the_stage_files() {
     ensure_cache
     good_world
     install_state snapshot dump.sql manifest.json
+    put_prepared_source; install_upgraded_structure
     run_script -- cleanup --dry-run
     expect_rc 'dry run' 0
     [[ -e "$T/root/historical.dump.sql" ]] || bad 'a dry run removed the dump'
     run_script -- cleanup
     expect_rc 'cleanup' 0
-    [[ ! -e "$T/root" ]] || bad 'cleanup left the state directory although it held only files this script wrote'
+    [[ ! -e "$T/root" ]] || bad 'cleanup left the state directory although it held only files this script wrote (the prepared-source record and the upgrade structure included)'
     good_world
     install_state snapshot dump.sql manifest.json
     printf 'mine\n' >"$T/root/notes.txt"
@@ -3168,6 +3626,17 @@ t_static_the_harness_and_the_script_agree() {
     expect_rc 'the harness lines parse as the script reads them' 0
     [[ "$(grep -c . <<<"$OUT")" == 16 ]] || bad 'the script did not read 16 lines from the harness output'
     expect_has 'the digest of no rows' "$php_lines" "$(printf '[]' | sha256sum | cut -c1-64)"
+    # Slice 2.2B. The digest is of the values as text, so a driver that gives 3 or '3' does not make two application trees disagree, while NULL,
+    # a changed value and a lost row still do. The base32 encoder against the RFC 4648 vector (the string 12345678901234567890 is the RFC 6238 secret).
+    [[ "$(php -r "require '$SRC/php/rehearse.php'; echo rowsDigest([['a' => 3, 'b' => null]]) === rowsDigest([['a' => '3', 'b' => null]]) ? 'same' : 'differ', ' ', rowsDigest([['a' => 3]]) === rowsDigest([['a' => null]]) ? 'same' : 'differ', ' ', rowsDigest([['a' => 3]]) === rowsDigest([['a' => 4]]) ? 'same' : 'differ', ' ', rowsDigest([['a' => 3]]) === rowsDigest([]) ? 'same' : 'differ';")" == 'same differ differ differ' ]] || bad 'the row digest does not treat 3 and '"'"'3'"'"' alike and NULL, another value and a lost row differently'
+    [[ "$(php -r "require '$SRC/php/rehearse.php'; echo base32('12345678901234567890'), ' ', base32(str_repeat(chr(0), 20));")" == 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' ]] || bad 'the base32 encoder does not match the RFC 4648 vector'
+    [[ "$(php -r "require '$SRC/php/rehearse.php'; echo strlen(keyBytes('$KEY_CUR'));")" == 32 ]] || bad 'keyBytes does not return 32 bytes'
+    # Every line the script requires of the sign-in is one the harness prints, and the helper is the one the script runs.
+    run_fn 'declare -f verify_signin'
+    while IFS= read -r line; do
+        grep -qF "echo \"$line\\n\"" "$SRC/php/rehearse.php" || bad "the script requires $line of the sign-in, which rehearse.php never prints"
+    done < <(grep -o 'signin:[a-z-]*=ok' <<<"$OUT" | sort -u)
+    grep -q "'signin' => 'actionSignin'" "$SRC/php/rehearse.php" || bad 'rehearse.php has no signin action'
 }
 
 
@@ -3367,6 +3836,33 @@ declare -A GUARD_TESTS=(
     [G16-upgraded-state]='t_g16_preconditions'
     [G16-import-verified-dump]='t_g16_import_is_reverified'
     [G16-defect-reproduced]='t_g16_unexpected_outcomes'
+    [G10-harness-verified]='t_g10_prepare_verifies_the_harness_in_the_volume'
+    [G13-prepared-recorded]='t_g13_prepared_source'
+    [G13-prepared-historical]='t_g13_prepared_source'
+    [G13-prepared-current]='t_g13_prepared_source'
+    [G13-prepared-harness]='t_g13_prepared_source'
+    [G13-prepared-exact]='t_g13_prepared_source'
+    [G13-snapshot-reported]='t_g13_snapshot_must_be_reported'
+    [G13-structure-complete]='t_g13_snapshot_must_be_reported t_g13_snapshot_semantics'
+    [G17-keyring-present]='t_g17_backup_and_keys'
+    [G17-start-inventory]='t_g17_preconditions'
+    [G17-object-types]='t_g17_preconditions'
+    [G17-no-other-objects]='t_g17_preconditions'
+    [G17-start-state]='t_g17_preconditions'
+    [G17-dump-verified]='t_g17_the_dump_is_reverified'
+    [G17-cleared]='t_g17_outcomes'
+    [G17-import-verified-dump]='t_g17_the_dump_is_reverified'
+    [G17-restored-inventory]='t_g17_outcomes'
+    [G17-restored-data]='t_g17_outcomes'
+    [G17-restored-structure]='t_g17_outcomes'
+    [G17-restored-ledger]='t_g17_semantic_checks'
+    [G17-marker-gone]='t_g17_semantic_checks'
+    [G18-signin-lines]='t_g18_signin'
+    [G18-signin-unchanged]='t_g18_signin'
+    [G19-inventory]='t_g19_results'
+    [G19-data]='t_g19_results'
+    [G19-structure]='t_g19_results'
+    [G19-marker-absent]='t_g19_results'
 )
 
 # --- running -------------------------------------------------------------------------------------------------------------------------------------
