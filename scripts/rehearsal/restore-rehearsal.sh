@@ -9,13 +9,21 @@
 #   restore-rehearsal.sh run <historical|current> <command>
 #                                     run one approved Artisan command or fixed helper in the disposable PHP runner
 #   restore-rehearsal.sh probe        fixed isolation probe: no external network, app account cannot see the sentinel, client sandbox
+#   restore-rehearsal.sh baseline     (slice 2.2A) build the v0.3.0 schema with the v0.3.0 application, load the synthetic fixture, snapshot it
+#   restore-rehearsal.sh take-backup  (2.2A) the documented two-pass dump of that database, and its manifest
+#   restore-rehearsal.sh upgrade      (2.2A) run the current migrations, judge the result, add one synthetic post-upgrade marker
+#   restore-rehearsal.sh reproduce-wp3-01
+#                                     (2.2A) DEMONSTRATE the audited defect: load the dump over the upgraded database without clearing it
 #
 # WHAT THIS IS. A rehearsal environment for proving, with synthetic data on a local machine, that the organization can recover
-# v0.3.0 after an unsuccessful upgrade (docs/audits/g6/README.md, WP3c). This slice creates only the isolated database server and
-# the checks that make it safe to build on. It seeds nothing, restores nothing and installs nothing.
+# v0.3.0 after an unsuccessful upgrade (docs/audits/g6/README.md, WP3c). Slice 1 is the isolated database server and the checks that
+# make it safe to build on; slice 2.1 adds the disposable PHP runner; slice 2.2A adds the first half of the recovery cycle.
 #
-# WHAT THIS IS NOT. A restore tool. There is no restore, drop, reset or production command here, and none may be added without the
-# owner's decision (the runbooks say ./flow has no backup/restore either, and this script is deliberately not a ./flow command).
+# WHAT THIS IS NOT. A general restore or backup tool, and not an automatic rollback. There is no command that takes a file, a database
+# name or a statement from the caller, and none may be added without the owner's decision (the runbooks say ./flow has no
+# backup/restore either, and this script is deliberately not a ./flow command). The statements that change the rehearsal database are
+# exactly these: the application's own migrations, the fixed fixture and marker helper, and the loading of the one dump this script
+# took, by `reproduce-wp3-01`, which exists to show a defect and is not a restoration. The corrected restore is slice 2.2B.
 # It has no production connectivity, reads no application .env, holds no host credentials and uses no production data.
 #
 # THE SAFEGUARDS. Each is one line carrying a `# guard:<ID>` marker, because scripts/tests/rehearsal.sh deletes each marked line in
@@ -43,6 +51,16 @@
 #   G12 application-user SQL: restricted client (sandbox, no local infile, non-root, no root password in its environment, no pager or
 #       editor), the account's identity and grants verified before every use, and never a fallback to root
 #
+#   G13 the stages of the first half of the cycle each start from the state the previous one left, checked against the database and the
+#       state directory themselves (never a flag): verified commits and a clean checkout, an empty target, the exact 16-table
+#       historical schema, a complete fixture, a database that still equals its snapshot, the exact 34-table upgraded schema
+#   G14 encryption keys are per-run synthetic values in the private state file, validated before use and handed to the runner only
+#       through its environment; the manifest holds fingerprints, never keys, and they must agree with what the application used
+#   G15 the backup is checked before anything relies on it: every table's structure, rows for durable tables only, no database named,
+#       a manifest that agrees with the snapshot, and the dump's byte count and SHA-256 re-verified before it is loaded
+#   G16 the WP3-01 demonstration loads only that verified dump, only into the verified upgraded rehearsal database, only after the
+#       backup's keyring is shown to be present, and succeeds only if the newer tables remain (the table-inventory equality fails)
+#
 # Exit status: 0 success; 1 a failure; 3 a safeguard refused; 64 usage.
 set -Eeuo pipefail
 
@@ -68,20 +86,31 @@ readonly EPHEMERAL_USER='33:33'               # www-data in the PHP image
 readonly APP_USER='flc_rehearsal'
 readonly APP_TREE='apps/platform'
 readonly HISTORICAL_COMMIT='2f385b79a7b83323c6f15a6685ee610ccd85b5bf' # v0.3.0, what production runs
-readonly HARNESS_FILES=(db-ping.php probe.php)
-# Not a secret: the rehearsal's data is synthetic and the runner has no route anywhere. Laravel only needs some valid key.
-readonly PLACEHOLDER_APP_KEY='base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+readonly HARNESS_FILES=(db-ping.php probe.php rehearse.php)
 readonly EPHEMERAL_MEMORY=1073741824
 readonly EPHEMERAL_NANOCPUS=1000000000
 readonly EPHEMERAL_PIDS=256
 readonly ROOT_MARKER_NAME='.flc-rehearsal-root'
 readonly ROOT_MARKER_TEXT='restore-rehearsal-v1'
+
+# Slice 2.2A. The 16 tables v0.3.0's 15 migrations make (`migrations` included), the 18 the 14 later migrations add (34 together), and the
+# seven the backup keeps the structure of and none of the rows (deployment runbook, "Taking a backup"). scripts/tests/rehearsal.sh pins
+# each list against the support classes the PHP harness reads (HistoricalSnapshot::TABLES, HistoricalFixture::NEW_TABLES) and the runbook.
+readonly HISTORICAL_TABLES=(account_invitations account_recovery_codes account_totp_factors accounts cache cache_locks failed_jobs job_batches jobs membership_grants migrations password_reset_tokens people role_assignments security_events sessions)
+readonly NEWER_TABLES=(contact_interactions contact_methods contact_profiles contact_tag_assignments contact_tags discussion_messages discussions person_relationship_field_values person_relationship_role_provisions person_relationship_status_changes person_relationships resource_assets resource_card_audiences resource_cards resource_categories resource_pack_audiences resource_packs sourced_role_grants)
+readonly TRANSIENT_TABLES=(cache cache_locks failed_jobs job_batches jobs password_reset_tokens sessions)
+readonly FIXTURE_PEOPLE=13 # the fixture's Persons (HistoricalFixture::load); the harness checks every table's count, this is the one stated here
+readonly RELEASE_VERSION='v0.3.0'
+readonly SNAPSHOT_FILE='historical.snapshot'
+readonly DUMP_FILE='historical.dump.sql'
+readonly MANIFEST_FILE='historical.manifest.json'
+# Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
+readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE")
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
-# and each Slice 1 template (CONTAINER_FMT, NETWORK_FMT, VOLUME_FMT) was run against a real container, network and volume on this Docker
-# version while that slice was written. The Slice 2.1 templates (EPHEMERAL_FMT, ROLE_FMT) have NOT been run against a live daemon yet:
-# the fake daemon models them, and the first live run (L1) is where they are confirmed.
+# and each was run against a real container, network and volume on a live daemon: the Slice 1 templates (CONTAINER_FMT, NETWORK_FMT,
+# VOLUME_FMT) while that slice was written, the Slice 2.1 templates (EPHEMERAL_FMT, ROLE_FMT) in the first live validation, L1.
 # shellcheck disable=SC2016 # Go template text for `docker inspect`, not shell expansions
 readonly CONTAINER_FMT='{{.Id}}|{{.Name}}|{{.Config.Image}}|{{index .Config.Labels "io.flowlife.rehearsal"}}|{{index .Config.Labels "io.flowlife.rehearsal.role"}}|{{index .Config.Labels "io.flowlife.rehearsal.run-token"}}|{{len .HostConfig.PortBindings}}|{{.HostConfig.Privileged}}|{{json .HostConfig.CapAdd}}|{{.HostConfig.NetworkMode}}|{{range $k,$v := .NetworkSettings.Networks}}{{$k}},{{end}}|{{range .Mounts}}{{.Type}}:{{.Name}}:{{.Destination}},{{end}}'
 # shellcheck disable=SC2016 # Go template text for `docker network inspect`, not shell expansions
@@ -125,8 +154,16 @@ Usage: restore-rehearsal.sh <command>
                 volume, and install each tree's Composer dependencies in a container with no database access.
   run <historical|current> <command>
                 Run one approved Artisan command (about, migrate, migrate:status, relationships:check, release:show,
-                resources:assets:prune) or helper:db-ping in a disposable PHP runner. The script supplies every option.
+                resources:assets:prune) or helper (helper:db-ping, helper:fixture-load, helper:snapshot,
+                helper:post-upgrade-mark) in a disposable PHP runner. The script supplies every option.
   probe         Check the runner and the restricted SQL client are isolated as intended. Read-only.
+  baseline      Build the v0.3.0 schema with the v0.3.0 application in the empty rehearsal database, load the synthetic
+                v0.3.0 fixture, and record a snapshot of it.
+  take-backup   Take the documented two-pass dump of that database (as the application account) and write its manifest.
+  upgrade       Run the current migrations, judge the result against the snapshot, and add one synthetic marker.
+  reproduce-wp3-01
+                Demonstrate the audited WP3-01 defect: load the dump over the upgraded database WITHOUT clearing it, and
+                require that the newer tables remain. This is not a restoration.
   cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
                 labelled is kept or cannot be removed, cleanup says what remains, keeps its state file and exits 1; run
                 it again once the cause is gone. --stale is needed only when the private state file is gone (the run
@@ -219,8 +256,12 @@ acquire_lock() {
 
 random_hex() { od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
 
+# A synthetic Laravel encryption key: `base64:` and 32 random bytes (the AES-256-CBC key length the application's config uses).
+random_key() { printf 'base64:%s' "$(head -c 32 /dev/urandom | base64 | tr -d '\n')"; }
+
 # G3: new credentials and a new run token every run, written once to a private file, never printed. compose.yaml has no env_file and
-# no ${VAR} that this file does not define; nothing is read from the application's .env or the development .env.
+# no ${VAR} that this file does not define; nothing is read from the application's .env or the development .env. The two encryption
+# keys (slice 2.2A) are synthetic and per run, so no key is ever shared between runs or taken from anywhere; compose.yaml does not use them.
 write_credentials() {
     local root="$1" tmp
     [[ ! -e "$SCRIPT_DIR/.env" ]] || refuse "a .env file sits beside the compose file ($SCRIPT_DIR/.env); Compose would load it. Remove it." # guard:G3-no-dotenv
@@ -230,6 +271,8 @@ write_credentials() {
         printf 'REHEARSAL_DB_ROOT_PASSWORD=%s\n' "$(random_hex 24)"
         printf 'REHEARSAL_DB_APP_PASSWORD=%s\n' "$(random_hex 24)"
         printf 'REHEARSAL_RUN_TOKEN=%s\n' "$(random_hex 16)"
+        printf 'REHEARSAL_APP_KEY=%s\n' "$(random_key)"
+        printf 'REHEARSAL_APP_PREVIOUS_KEY=%s\n' "$(random_key)"
     ) >"$tmp"
     chmod 600 -- "$tmp"
     mv -- "$tmp" "$root/compose.env"
@@ -247,6 +290,40 @@ state_token() {
 
 compose() {
     dkr compose -p "$PROJECT" --project-directory "$SCRIPT_DIR" -f "$COMPOSE_FILE_PATH" --env-file "$(root_dir)/compose.env" "$@"
+}
+
+# --- G14: encryption keys and their fingerprints ----------------------------------------------------------------------------------------
+
+# A key in the form Laravel reads: `base64:` and exactly 32 bytes.
+key_form_ok() {
+    [[ "$1" =~ ^base64:[A-Za-z0-9+/]{43}=$ ]] && [[ "$(printf '%s' "${1#base64:}" | base64 -d 2>/dev/null | wc -c | tr -d ' ')" == 32 ]]
+}
+
+# state_key ROOT NAME: one of this run's synthetic keys from the private state file, validated before it is placed anywhere.
+state_key() {
+    local root="$1" name="$2" key
+    key="$(grep -E "^${name}=" "$root/compose.env" 2>/dev/null | tail -n 1 | cut -d= -f2-)" || key=''
+    key_form_ok "$key" || refuse "the encryption key $name in '$root/compose.env' is missing or is not a base64: key of 32 bytes. A state directory from before slice 2.2A has none: run cleanup, then up again." # guard:G14-key-format
+    printf '%s' "$key"
+}
+
+# The fingerprint of one key, as the deployment runbook defines it: sha256("flc-key-v1|" + the key's decoded 32 bytes), first 16 hex characters.
+key_fingerprint() {
+    { printf 'flc-key-v1|'; printf '%s' "${1#base64:}" | base64 -d; } | sha256sum | cut -c1-16
+}
+
+# The fingerprint of a keyring: sha256("flc-ring-v1|" + the sorted, de-duplicated key fingerprints joined by commas), first 16 hex characters.
+keyring_fingerprint() { # FINGERPRINT...
+    printf 'flc-ring-v1|%s' "$(printf '%s\n' "$@" | LC_ALL=C sort -u | tr '\n' ',' | sed 's/,$//')" | sha256sum | cut -c1-16
+}
+
+# keyring_missing REQUIRED LIVE: the required key fingerprints (one per line) that are not among the live ones (one per line). A live ring
+# that holds every required fingerprint, and more, is the normal state after a rotation; any required fingerprint missing is a stop.
+keyring_missing() {
+    local required="$1" live="$2" fingerprint
+    while IFS= read -r fingerprint; do
+        [[ -z "$fingerprint" ]] || in_list "$fingerprint" "$live" || printf '%s\n' "$fingerprint"
+    done <<<"$required"
 }
 
 # --- G4: the rendered Compose file honours the isolation policy ------------------------------------------------------------------------
@@ -395,6 +472,8 @@ mariadb_root() {
     # shellcheck disable=SC2016 # the password expands inside the container, so it never appears on this host's command line
     dkr exec -i "$cid" sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" --batch --skip-column-names "$@"' sh "$@"
 }
+
+server_version_text() { printf 'SELECT VERSION();\n' | mariadb_root "$1" 2>/dev/null; }
 
 server_version_problem() {
     local cid="$1" version
@@ -555,13 +634,16 @@ app_password() {
     printf '%s' "$password"
 }
 
-# The dedicated launcher: docker with ONLY what it needs to find the local daemon, plus DB_PASSWORD for `-e DB_PASSWORD` (a name, so the
-# value is never an argument to any process). `env -i NAME=value` would put the value on a command line, so the environment is built by
-# unsetting everything else in a subshell and exporting the one value. Used only to create the runner; nothing else gets the password.
+# The dedicated launcher: docker with ONLY what it needs to find the local daemon, plus DB_PASSWORD, APP_KEY and APP_PREVIOUS_KEYS for
+# `-e NAME` (names, so no value is ever an argument to any process). `env -i NAME=value` would put the value on a command line, so the
+# environment is built by unsetting everything else in a subshell and exporting the values. Used only to create the runner; nothing
+# else gets the password or the keys.
 launch_docker() {
-    local root="$1" password
+    local root="$1" password key previous
     shift
     password="$(app_password "$root")" || exit 3 # a failure inside a command substitution under `||` would not stop the script by itself
+    key="$(state_key "$root" REHEARSAL_APP_KEY)" || exit 3
+    previous="$(state_key "$root" REHEARSAL_APP_PREVIOUS_KEY)" || exit 3
     (
         local name
         for name in $(compgen -e); do
@@ -572,6 +654,8 @@ launch_docker() {
         done
         export LANG=C
         export DB_PASSWORD="$password"
+        export APP_KEY="$key"
+        export APP_PREVIOUS_KEYS="$previous"
         exec docker "$@"
     )
 }
@@ -674,9 +758,12 @@ runner_command() {
         migrate) RUN_CMD=(php artisan migrate --force --no-interaction) ;;
         resources:assets:prune) RUN_CMD=(php artisan resources:assets:prune --dry-run) ;;
         helper:db-ping) RUN_CMD=(php "$SRC_MOUNT/harness/db-ping.php") ;;
+        helper:fixture-load) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" fixture-load) ;;
+        helper:snapshot) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" snapshot) ;;
+        helper:post-upgrade-mark) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" mark) ;;
         *) ;;
     esac
-    ((${#RUN_CMD[@]} > 0)) || refuse "'$name' is not a command the rehearsal runs. Approved: ${ARTISAN_ALLOWED[*]} helper:db-ping." # guard:G11-allowlist
+    ((${#RUN_CMD[@]} > 0)) || refuse "'$name' is not a command the rehearsal runs. Approved: ${ARTISAN_ALLOWED[*]} helper:db-ping helper:fixture-load helper:snapshot helper:post-upgrade-mark." # guard:G11-allowlist
     if [[ "${RUN_CMD[1]:-}" == artisan ]]; then
         why="$(artisan_problem "${RUN_CMD[@]:2}")" || refuse "$why." # guard:G11-artisan-policy
     fi
@@ -698,6 +785,8 @@ run_in_runner() {
     why="$(source_volume_identity_problem "$SRC_VOLUME_NAME" "$token" '')" || refuse "the source volume is not the rehearsal's (has 'prepare' been run?): $why." # guard:G10-run-volume
     resolve_php_image
     app_password "$root" >/dev/null # refuses a malformed password here, in this shell, before anything is created
+    state_key "$root" REHEARSAL_APP_KEY >/dev/null # and a missing or malformed key, for the same reason
+    state_key "$root" REHEARSAL_APP_PREVIOUS_KEY >/dev/null
     id="$(create_verified "$root" "$token" runner "$NETWORK_NAME" launch_docker -- \
         --network "$NETWORK_NAME" \
         --mount "type=volume,source=$SRC_VOLUME_NAME,target=$SRC_MOUNT,readonly" \
@@ -707,9 +796,10 @@ run_in_runner() {
         --tmpfs "$SRC_MOUNT/current/storage:rw,noexec,nosuid,size=64m,uid=33,gid=33" \
         --tmpfs "$SRC_MOUNT/current/bootstrap/cache:rw,noexec,nosuid,size=16m,uid=33,gid=33" \
         --workdir "$SRC_MOUNT/$workdir" \
-        -e APP_ENV=production -e APP_DEBUG=false -e "APP_KEY=$PLACEHOLDER_APP_KEY" \
+        -e APP_ENV=production -e APP_DEBUG=false \
         -e LOG_CHANNEL=stderr -e CACHE_STORE=array -e SESSION_DRIVER=array -e QUEUE_CONNECTION=sync \
         -e DB_CONNECTION=mariadb -e "DB_HOST=$CONTAINER_NAME" -e DB_PORT=3306 -e "DB_DATABASE=$APP_DB" -e "DB_USERNAME=$APP_USER" -e DB_PASSWORD \
+        -e APP_KEY -e APP_PREVIOUS_KEYS \
         "$PHP_IMAGE_ID" \
         sh -c 'mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs 2>/dev/null; exec "$@"' sh "$@")" || exit "$?"
     start_and_remove "$id"
@@ -970,8 +1060,8 @@ cmd_cleanup() {
     if [[ -z "${owned_containers[*]}${owned_networks[*]}${owned_volumes[*]}" && $incomplete -eq 0 ]]; then say "nothing of the rehearsal's was found."; fi
 }
 
-# Removes the files this script wrote, by name, and the directory if that leaves it empty. Never recursive, never a glob over what is
-# removed. Nothing is removed unless every entry in the directory is one of the three files this script wrote: a directory that holds
+# Removes the files this script wrote, by name (STATE_FILES), and the directory if that leaves it empty. Never recursive, never a glob over
+# what is removed. Nothing is removed unless every entry in the directory is one of the files this script wrote: a directory that holds
 # anything else keeps its marker, its run token and its lock file, so it stays a state directory this script recognises and cleanup can
 # be run again once the other entries are dealt with. Returns 1 when it could not finish.
 remove_state() {
@@ -981,15 +1071,18 @@ remove_state() {
         [[ -e "$entry" || -L "$entry" ]] || continue
         name="${entry##*/}"
         known=0
-        for file in compose.env run.lock "$ROOT_MARKER_NAME"; do
+        for file in "${STATE_FILES[@]}"; do
             if [[ "$name" == "$file" && -f "$entry" && ! -L "$entry" ]]; then known=1; fi
         done
         if [[ $known == 0 ]]; then unexpected+=("$name"); fi
     done
     ((${#unexpected[@]} == 0)) || { warn "the objects are gone, but the state directory $root holds entries this script did not write (${unexpected[*]}); nothing in it was removed, and its marker and run token were kept. Deal with those entries yourself (this script never removes what it did not write), then run: restore-rehearsal.sh cleanup"; return 1; } # guard:G8-state-entries
-    for file in compose.env run.lock "$ROOT_MARKER_NAME"; do
+    # The marker goes last: a directory kept because of something else must stay one this script recognises.
+    for file in "${STATE_FILES[@]}"; do
+        [[ "$file" != "$ROOT_MARKER_NAME" ]] || continue
         if [[ -f "$root/$file" && ! -L "$root/$file" ]]; then rm -f -- "${root:?}/$file"; fi
     done
+    if [[ -f "$root/$ROOT_MARKER_NAME" && ! -L "$root/$ROOT_MARKER_NAME" ]]; then rm -f -- "${root:?}/$ROOT_MARKER_NAME"; fi
     if rmdir -- "$root" 2>/dev/null; then say "removed state directory $root"; else
         warn "state directory $root gained entries while it was being emptied and was kept; nothing but the files this script wrote was removed"
         return 1
@@ -1132,6 +1225,493 @@ cmd_probe() {
     say "Probe passed."
 }
 
+# --- slice 2.2A: the historical baseline, its backup, the upgrade, and the WP3-01 defect ---------------------------------------------------
+
+# capture VAR WHAT COMMAND...: stores the command's standard output in VAR. A command that fails ends the script with its own status (a
+# refusal stays a refusal) after saying what failed, because a failure inside $(...) does not stop a script that relies on `set -e`.
+capture() {
+    local cap_var="$1" cap_what="$2" cap_out='' cap_rc=0
+    shift 2
+    cap_out="$("$@")" || cap_rc=$?
+    if ((cap_rc != 0)); then
+        warn "$cap_what failed (status $cap_rc)"
+        exit "$cap_rc"
+    fi
+    printf -v "$cap_var" '%s' "$cap_out"
+}
+
+in_array() { # NEEDLE ELEMENT...
+    local needle="$1" element
+    shift
+    for element in "$@"; do
+        if [[ "$element" == "$needle" ]]; then return 0; fi
+    done
+    return 1
+}
+
+sorted_list() { printf '%s\n' "$@" | LC_ALL=C sort; }
+historical_inventory() { sorted_list "${HISTORICAL_TABLES[@]}"; }
+upgraded_inventory() { sorted_list "${HISTORICAL_TABLES[@]}" "${NEWER_TABLES[@]}"; }
+durable_inventory() { set_minus "$(historical_inventory)" "$(sorted_list "${TRANSIENT_TABLES[@]}")"; }
+
+# set_minus A B: the lines of A (one name per line) that are not lines of B.
+set_minus() {
+    [[ -n "$1" ]] || return 0
+    if [[ -z "$2" ]]; then
+        printf '%s\n' "$1"
+        return 0
+    fi
+    printf '%s\n' "$1" | grep -Fxv -f <(printf '%s\n' "$2") || true
+}
+
+# inventory_difference EXPECTED ACTUAL (each one table name per line): `missing NAME` for an expected table that is absent, `extra NAME` for a
+# present table that is not expected. Nothing is printed when the two are the same set. This is the table-inventory equality the WP3-01
+# demonstration expects to FAIL and the corrected restore (slice 2.2B) will require to hold.
+inventory_difference() {
+    local name
+    while IFS= read -r name; do
+        [[ -z "$name" ]] || printf 'missing %s\n' "$name"
+    done < <(set_minus "$1" "$2")
+    while IFS= read -r name; do
+        [[ -z "$name" ]] || printf 'extra %s\n' "$name"
+    done < <(set_minus "$2" "$1")
+}
+
+# One fixed statement as the application account, through every check of the guarded path (G5, G6, G12). Nothing here takes SQL from
+# whoever runs the script: every caller below passes a literal statement.
+app_query() { # STATEMENT
+    printf '%s\n' "$1" | guarded_app_sql "$ROOT" "$APP_DB"
+}
+
+# The sorted names of every table in the rehearsal database, one per line, from the server. A query that fails is a refusal and never an
+# empty inventory; a name this script does not recognise as a plain table name is a refusal too.
+db_inventory() {
+    local out name
+    capture out 'reading the rehearsal database inventory' app_query "SELECT table_name FROM information_schema.tables WHERE table_schema = '$APP_DB' ORDER BY table_name;"
+    while IFS= read -r name; do
+        [[ -z "$name" || "$name" =~ ^[a-z0-9_]+$ ]] || refuse "the database inventory holds a name this script does not accept ('${name:0:40}')."
+    done <<<"$out"
+    LC_ALL=C sort <<<"$out" | grep -v '^$' || true
+}
+
+# require_inventory EXPECTED WHAT: refuses unless the database holds exactly the expected tables.
+require_inventory() {
+    local actual diff
+    capture actual 'reading the table inventory' db_inventory
+    diff="$(inventory_difference "$1" "$actual")"
+    [[ -z "$diff" ]] || refuse "the rehearsal database is not exactly $2 ($(tr '\n' ';' <<<"$diff"))."
+}
+
+# run_helper TREE NAME VAR: one approved command in a disposable runner, its standard output stored in VAR. A failed or refused helper ends
+# the script with the helper's own status.
+run_helper() {
+    local tree="$1" name="$2" var="$3"
+    runner_command "$name"
+    capture "$var" "'$name' in the $tree tree" run_in_runner "$ROOT" "$tree" "${RUN_CMD[@]}"
+}
+
+STAGE=''
+on_stage_exit() {
+    local status=$?
+    if ((status != 0)); then
+        warn "$STAGE did not finish. The rehearsal database may be partly changed and nothing was removed. The rehearsal is disposable: run"
+        warn "  restore-rehearsal.sh cleanup --dry-run ; cleanup ; then up, prepare and the stages again."
+    fi
+}
+
+# G13: the commits the rehearsal means, and the checkout they are compared with. `prepare` archives COMMITS, never the working tree, so a
+# working tree that differs from them would be a rehearsal of code nobody is looking at.
+require_source_commits() {
+    local historical dirty
+    historical="$(verified_commit "$HISTORICAL_COMMIT")" || refuse "the historical commit $HISTORICAL_COMMIT (v0.3.0, what production runs) is not in this clone. Nothing was substituted. Fetch it yourself (git fetch origin $HISTORICAL_COMMIT), then run the stage again." # guard:G13-commit-present
+    [[ "$historical" == "$HISTORICAL_COMMIT" ]] || refuse "the historical commit resolved to '$historical', not $HISTORICAL_COMMIT." # guard:G13-commit-exact
+    dirty="$(gitq status --porcelain -- "$APP_TREE" scripts/rehearsal)" || fail "git could not report the state of the working tree"
+    [[ -z "$dirty" ]] || refuse "the working tree has uncommitted or untracked changes under $APP_TREE or scripts/rehearsal ($(grep -c . <<<"$dirty") entries). prepare archives commits, so the rehearsal would not be running what you are looking at. Commit or stash them, then run cleanup, up, prepare and the stage again." # guard:G13-clean-checkout
+}
+
+# --- state files: what one stage leaves for the next ---------------------------------------------------------------------------------
+
+# write_state_file NAME CONTENT: a private (mode 600) file in the state directory, written whole or not at all.
+write_state_file() {
+    local name="$1" content="$2" tmp
+    tmp="$(umask 077 && mktemp -- "$ROOT/.${name}.XXXXXX")"
+    (
+        umask 077
+        printf '%s\n' "$content" >"$tmp"
+    )
+    chmod 600 -- "$tmp"
+    mv -- "$tmp" "$ROOT/$name"
+}
+
+# state_file_ok NAME: a regular, private file this script wrote (not a symlink, not group- or world-readable).
+state_file_ok() {
+    [[ -f "$ROOT/$1" && ! -L "$ROOT/$1" && "$(stat -c %a -- "$ROOT/$1")" == 600 ]]
+}
+
+# read_state_file VAR NAME: the content of a file an earlier stage wrote, or a refusal that names the stage to run first.
+read_state_file() {
+    state_file_ok "$2" || refuse "'$2' is missing from the state directory, or is not a private file of this script's: the stage that writes it has not been run, or the state is not intact. Run the stages in order (baseline, take-backup, upgrade, reproduce-wp3-01); nothing was changed." # guard:G13-previous-stage
+    printf -v "$1" '%s' "$(<"$ROOT/$2")"
+}
+
+# --- the snapshot: what the database was, as digests, never as rows --------------------------------------------------------------------------
+
+# table_lines KIND TEXT: the `KIND <table> <rows> <digest>` lines of the harness's output, validated and sorted, as `<table> <rows> <digest>`.
+# Exactly one for each of the 16 v0.3.0 tables or a refusal: a snapshot with a table missing, repeated or malformed is not an empty one and
+# is not equal to anything.
+table_lines() {
+    local kind="$1" text="$2" k name rows digest extra lines='' names
+    while IFS=' ' read -r k name rows digest extra; do
+        [[ "$k" == "$kind" ]] || continue
+        [[ -z "$extra" && "$name" =~ ^[a-z_]+$ && "$rows" =~ ^[0-9]+$ && "$digest" =~ ^[0-9a-f]{64}$ ]] || refuse "a '$kind' line of the snapshot is malformed."
+        lines+="$name $rows $digest"$'\n'
+    done <<<"$text"
+    lines="${lines%$'\n'}"
+    names="$(cut -d' ' -f1 <<<"$lines" | LC_ALL=C sort)"
+    [[ "$names" == "$(historical_inventory)" ]] || refuse "the snapshot's '$kind' lines are not exactly one for each of the 16 v0.3.0 tables (a failed query or an absent table is a refusal, never an empty snapshot)." # guard:G13-snapshot-complete
+    printf '%s' "$(LC_ALL=C sort <<<"$lines")"
+}
+
+# fixture_problem TABLE_LINES: what a complete fixture must show here. (The harness has already checked every table's row count against the
+# written-out counts; this states the Persons, which the owner named, and that every durable table holds something to back up.)
+fixture_problem() {
+    local name rows
+    while read -r name rows _; do
+        [[ "$name" != people || "$rows" == "$FIXTURE_PEOPLE" ]] || { echo "people holds $rows rows, not the fixture's $FIXTURE_PEOPLE"; return 1; } # guard:G13-fixture-people
+        in_array "$name" "${TRANSIENT_TABLES[@]}" || [[ "$rows" != 0 ]] || { echo "the durable table $name is empty"; return 1; } # guard:G13-fixture-durable
+    done <<<"$1"
+    return 0
+}
+
+# digest_differences A B (table lines each): the tables whose row count or digest differ.
+digest_differences() {
+    awk 'NR == FNR { want[$1] = $2 " " $3; next } want[$1] != $2 " " $3 { print $1 }' <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+
+# restore_state_differences BEFORE NOW (table lines each): the tables that are not what a restore of the two-pass dump leaves: each durable
+# table exactly as the snapshot has it, each transient table empty. (Used by the WP3-01 demonstration, and by the corrected restore.)
+restore_state_differences() {
+    local name rows digest
+    declare -A before=()
+    while read -r name rows digest; do before["$name"]="$rows $digest"; done <<<"$1"
+    while read -r name rows digest; do
+        if in_array "$name" "${TRANSIENT_TABLES[@]}"; then
+            [[ "$rows" == 0 ]] || printf '%s\n' "$name"
+        else
+            [[ "${before[$name]:-}" == "$rows $digest" ]] || printf '%s\n' "$name"
+        fi
+    done <<<"$2"
+}
+
+# require_database_matches_snapshot TREE SNAPSHOT_TABLE_LINES: a fresh snapshot, taken by the application's own runner, must equal the one the
+# backup describes. Nothing may have changed the database since.
+require_database_matches_snapshot() {
+    local out now diff
+    run_helper "$1" helper:snapshot out
+    capture now 'validating the current snapshot' table_lines table "$out"
+    diff="$(digest_differences "$2" "$now")"
+    [[ -z "$diff" ]] || refuse "the database no longer equals the snapshot the backup describes (changed: $(tr '\n' ' ' <<<"$diff"))." # guard:G13-snapshot-matches
+}
+
+# --- G14: the keyring ------------------------------------------------------------------------------------------------------------------------
+
+# load_keyring: this run's two keys, from the state file, as fingerprints in CURRENT_FP, PREVIOUS_FP and RING_FP. The keys themselves are
+# never kept in a variable beyond this function and never printed.
+load_keyring() {
+    local current previous
+    capture current 'reading the current encryption key' state_key "$ROOT" REHEARSAL_APP_KEY
+    capture previous 'reading the previous encryption key' state_key "$ROOT" REHEARSAL_APP_PREVIOUS_KEY
+    CURRENT_FP="$(key_fingerprint "$current")"
+    PREVIOUS_FP="$(key_fingerprint "$previous")"
+    RING_FP="$(keyring_fingerprint "$CURRENT_FP" "$PREVIOUS_FP")"
+}
+
+# keys_problem TEXT: the key fingerprints the application itself reported (`key:current=`, `key:previous=`) must be those of the keys this
+# script generated, or the manifest would claim keys the data was not encrypted with. Needs load_keyring first.
+keys_problem() {
+    local reported_current reported_previous
+    reported_current="$(sed -n 's/^key:current=\([0-9a-f]\{16\}\)$/\1/p' <<<"$1")"
+    reported_previous="$(sed -n 's/^key:previous=\([0-9a-f]\{16\}\)$/\1/p' <<<"$1" | LC_ALL=C sort)"
+    [[ "$reported_current" == "$CURRENT_FP" ]] || { echo "the key the application used is not the one this run generated (the fingerprints differ)"; return 1; } # guard:G14-keys-agree
+    [[ "$reported_previous" == "$PREVIOUS_FP" ]] || { echo "the previous keys the application holds are not the one this run generated"; return 1; } # guard:G14-previous-agree
+    return 0
+}
+
+# --- the dump (G12, G15) --------------------------------------------------------------------------------------------------------------------
+
+# The application account's dump client, run in the database container as the non-root `mysql` user with the same environment scrubbing as
+# mariadb_app (no root password, no other password variable, the application password read inside the container and handed over as MYSQL_PWD,
+# no editor, no pager). Read-only by nature. Options and the database are chosen by the callers below, never by whoever runs the script.
+mariadb_dump_app() {
+    local cid="$1"
+    shift
+    # shellcheck disable=SC2016 # expands inside the container: neither password appears on this host's command line
+    dkr exec --user mysql "$cid" sh -c 'MYSQL_PWD="$MARIADB_PASSWORD" exec env -u MARIADB_ROOT_PASSWORD -u MYSQL_ROOT_PASSWORD -u MARIADB_PASSWORD -u MYSQL_PASSWORD EDITOR=/bin/false VISUAL=/bin/false PAGER=cat MYSQL_PAGER=cat mariadb-dump --no-defaults --protocol=tcp --host=127.0.0.1 --user=flc_rehearsal "$@"' sh "$@"
+}
+
+# guarded_app_dump ROOT DB OPTIONS...: every check the SQL path makes, then the account's own, then the dump of that one allowlisted database.
+guarded_app_dump() {
+    local root="$1" db="$2" why
+    shift 2
+    assert_sql_target "$root" "$db"
+    why="$(app_account_problem "$CID")" || refuse "$why. This script never falls back to root." # guard:G12-before-dump
+    mariadb_dump_app "$CID" "$@" "$db"
+}
+
+# take_dump FILE: the deployment runbook's two-pass dump (section 5), as the application account. Pass 1 is the structure of every table, with
+# the DROP TABLE IF EXISTS before each CREATE; pass 2 is the rows of the durable tables only, so the transient tables come back empty.
+take_dump() {
+    local out="$1" table ignore=()
+    for table in "${TRANSIENT_TABLES[@]}"; do ignore+=("--ignore-table=$APP_DB.$table"); done
+    guarded_app_dump "$ROOT" "$APP_DB" --no-data --no-tablespaces >"$out" || { warn "the structure pass of the dump failed"; return 1; }
+    guarded_app_dump "$ROOT" "$APP_DB" --no-create-info --single-transaction --quick --no-tablespaces "${ignore[@]}" >>"$out" || { warn "the data pass of the dump failed"; return 1; }
+}
+
+# dump_problem FILE: what the backup contract requires of the dump itself. It is read for table names only, never judged as SQL: this is a
+# check that the two passes did what the runbook says, not a parser.
+dump_problem() {
+    local file="$1" drops creates inserts all
+    all="$(historical_inventory)"
+    creates="$(sed -n 's/^CREATE TABLE \x60\([a-z0-9_]*\)\x60 (.*$/\1/p' "$file" | LC_ALL=C sort)"
+    drops="$(sed -n 's/^DROP TABLE IF EXISTS \x60\([a-z0-9_]*\)\x60;$/\1/p' "$file" | LC_ALL=C sort)"
+    inserts="$(sed -n 's/^INSERT INTO \x60\([a-z0-9_]*\)\x60 VALUES .*$/\1/p' "$file" | LC_ALL=C sort -u)"
+    [[ "$creates" == "$all" ]] || { echo "it does not create exactly the 16 v0.3.0 tables"; return 1; } # guard:G15-schema-all
+    [[ "$drops" == "$all" ]] || { echo "it does not drop exactly the 16 tables it creates"; return 1; } # guard:G15-schema-drops
+    [[ "$inserts" == "$(durable_inventory)" ]] || { echo "it carries rows for other than exactly the durable tables (a transient table's rows, or a durable table's absence)"; return 1; } # guard:G15-data-durable-only
+    ! grep -Eq '^(USE |CREATE DATABASE)' "$file" || { echo "it names a database"; return 1; } # guard:G15-no-database
+    return 0
+}
+
+# --- the manifest ------------------------------------------------------------------------------------------------------------------------
+
+json_list() { # NAME... -> ["a", "b"]
+    local out='' name
+    for name in "$@"; do out+="${out:+, }\"$name\""; done
+    printf '[%s]' "$out"
+}
+
+# The fingerprint of the run token (the manifest never holds the token): it binds a manifest to the run that wrote it.
+token_fingerprint() { printf 'flc-run-v1|%s' "$1" | sha256sum | cut -c1-16; }
+
+# manifest_text DUMP_SHA256 DUMP_BYTES SERVER_VERSION TAKEN_AT TOKEN_FINGERPRINT: the runbook's manifest (deployment runbook, "The manifest"),
+# with no key, password, token or secret in it: fingerprints and names only. The Resource-files fields are slice 2.2C's.
+manifest_text() {
+    local with_data=() table
+    for table in "${HISTORICAL_TABLES[@]}"; do in_array "$table" "${TRANSIENT_TABLES[@]}" || with_data+=("$table"); done
+    cat <<MANIFEST
+{
+  "manifest_version": 1,
+  "backup_id": "${4//[-:]/}",
+  "taken_at": "$4",
+  "reason": "rehearsal",
+  "dump_file": "$DUMP_FILE",
+  "dump_sha256": "$1",
+  "dump_bytes": $2,
+  "release": {
+    "version": "$RELEASE_VERSION",
+    "commit": "$HISTORICAL_COMMIT"
+  },
+  "database": {
+    "connection": "mariadb",
+    "name": "$APP_DB",
+    "server_version": "$3",
+    "run_token_fingerprint": "$5"
+  },
+  "keyring": {
+    "current_key_fingerprint": "$CURRENT_FP",
+    "previous_key_fingerprints": ["$PREVIOUS_FP"],
+    "keyring_fingerprint": "$RING_FP",
+    "previous_keys_configured": true
+  },
+  "tables_with_data": $(json_list "${with_data[@]}"),
+  "tables_schema_only": $(json_list "${TRANSIENT_TABLES[@]}")
+}
+MANIFEST
+}
+
+# manifest_value FILE KEY: the one string or number the manifest holds under KEY, or nothing (also nothing when KEY appears more than once).
+manifest_value() {
+    local found
+    found="$(sed -n "s/^ *\"$2\": \"\{0,1\}\([^\",]*\)\"\{0,1\},\{0,1\}\$/\1/p" "$1")"
+    [[ -n "$found" && "$found" != *$'\n'* ]] || return 1
+    printf '%s' "$found"
+}
+
+# manifest_names FILE KEY: the names in a one-line list, one per line, sorted.
+manifest_names() {
+    sed -n "s/^ *\"$2\": \[\(.*\)\],\{0,1\}\$/\1/p" "$1" | tr -d '" ' | tr ',' '\n' | LC_ALL=C sort
+}
+
+# manifest_problem FILE SNAPSHOT_TABLE_LINES: the manifest is this run's, for the v0.3.0 release, and agrees with the snapshot and the
+# contract on every table.
+manifest_problem() {
+    local file="$1" snapshot_names value with_data schema_only ring
+    value="$(manifest_value "$file" manifest_version)" && [[ "$value" == 1 ]] || { echo "its manifest_version is not 1"; return 1; }
+    value="$(manifest_value "$file" commit)" && [[ "$value" == "$HISTORICAL_COMMIT" ]] || { echo "it is not for the historical commit $HISTORICAL_COMMIT"; return 1; } # guard:G15-manifest-release
+    value="$(manifest_value "$file" run_token_fingerprint)" && [[ "$value" == "$(token_fingerprint "$(state_token "$ROOT")")" ]] || { echo "it is not this run's (its run token fingerprint differs)"; return 1; } # guard:G15-manifest-run
+    with_data="$(manifest_names "$file" tables_with_data)"
+    schema_only="$(manifest_names "$file" tables_schema_only)"
+    snapshot_names="$(cut -d' ' -f1 <<<"$2" | LC_ALL=C sort)"
+    [[ "$(LC_ALL=C sort <<<"$with_data"$'\n'"$schema_only" | grep -v '^$')" == "$snapshot_names" ]] || { echo "its table inventory is not the snapshot's"; return 1; } # guard:G15-manifest-inventory
+    [[ "$schema_only" == "$(sorted_list "${TRANSIENT_TABLES[@]}")" && "$with_data" == "$(durable_inventory)" ]] || { echo "its durable and schema-only tables are not the contract's"; return 1; } # guard:G15-manifest-classes
+    ring="$(manifest_value "$file" keyring_fingerprint)" || { echo "it has no keyring fingerprint"; return 1; }
+    [[ "$ring" == "$(keyring_fingerprint "$(manifest_value "$file" current_key_fingerprint)" "$(manifest_names "$file" previous_key_fingerprints)")" ]] || { echo "its keyring fingerprint is not that of the fingerprints it lists"; return 1; } # guard:G15-manifest-keyring
+    return 0
+}
+
+# dump_matches_manifest FILE MANIFEST: the dump's byte count and SHA-256 are the ones the manifest recorded. Nothing is loaded from a dump
+# that has not just passed this.
+dump_matches_manifest() {
+    local dump="$1" manifest="$2" sha bytes
+    sha="$(sha256sum <"$dump" | cut -c1-64)"
+    bytes="$(wc -c <"$dump" | tr -d ' ')"
+    [[ "$sha" == "$(manifest_value "$manifest" dump_sha256)" ]] || { echo "its SHA-256 is not the manifest's"; return 1; } # guard:G15-dump-sha
+    [[ "$bytes" == "$(manifest_value "$manifest" dump_bytes)" ]] || { echo "its size is not the manifest's"; return 1; } # guard:G15-dump-bytes
+    return 0
+}
+
+# require_backup: the backup an earlier stage took is present, intact and this run's. Sets SNAPSHOT_TEXT and SNAPSHOT_TABLES.
+require_backup() {
+    local why
+    read_state_file SNAPSHOT_TEXT "$SNAPSHOT_FILE"
+    capture SNAPSHOT_TABLES 'validating the snapshot' table_lines table "$SNAPSHOT_TEXT"
+    { state_file_ok "$DUMP_FILE" && state_file_ok "$MANIFEST_FILE"; } || refuse "there is no complete backup in the state directory (take-backup has not finished). Nothing was changed." # guard:G13-backup-required
+    why="$(manifest_problem "$ROOT/$MANIFEST_FILE" "$SNAPSHOT_TABLES")" || refuse "the manifest cannot be relied on: $why."
+    why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump cannot be relied on: $why."
+    why="$(dump_problem "$ROOT/$DUMP_FILE")" || refuse "the dump cannot be relied on: $why."
+}
+
+# --- the stages ----------------------------------------------------------------------------------------------------------------------------
+
+cmd_baseline() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_source_commits
+    local existing migrated fixture_out table_text upgrade_text why content
+    capture existing 'reading the table inventory' db_inventory
+    [[ -z "$existing" ]] || refuse "the rehearsal database already holds $(grep -c . <<<"$existing") table(s). The baseline builds the v0.3.0 schema in an EMPTY database. The rehearsal is disposable: run cleanup, then up and prepare, then baseline." # guard:G13-empty-target
+    STAGE=baseline
+    trap on_stage_exit EXIT
+    say "Building the v0.3.0 schema with the v0.3.0 application (its 15 migrations) ..."
+    run_helper historical migrate migrated
+    printf '%s\n' "$migrated"
+    require_inventory "$(historical_inventory)" 'the 16 tables of the v0.3.0 schema' # guard:G13-baseline-inventory
+    say "ok   the database holds exactly the 16 v0.3.0 tables"
+    say "Loading the synthetic v0.3.0 fixture (one transaction) ..."
+    run_helper historical helper:fixture-load fixture_out
+    grep -Fxq 'fixture:complete=ok' <<<"$fixture_out" || refuse "the fixture helper did not report fixture:complete=ok." # guard:G13-fixture-reported
+    capture table_text 'validating the snapshot' table_lines table "$fixture_out"
+    capture upgrade_text 'validating the expected-upgrade digests' table_lines upgrade "$fixture_out"
+    why="$(fixture_problem "$table_text")" || refuse "the fixture is incomplete: $why."
+    load_keyring
+    why="$(keys_problem "$fixture_out")" || refuse "$why."
+    content="snapshot-v1"$'\n'"$(grep -E '^key:(current|previous)=[0-9a-f]{16}$' <<<"$fixture_out")"$'\n'
+    content+="$(awk '{ print "table " $0 }' <<<"$table_text")"$'\n'"$(awk '{ print "upgrade " $0 }' <<<"$upgrade_text")"
+    write_state_file "$SNAPSHOT_FILE" "$content"
+    say "ok   the fixture is complete: $(grep -c . <<<"$table_text") tables, $FIXTURE_PEOPLE people"
+    say "ok   the encryption keys the application used are the ones this run generated (fingerprints $CURRENT_FP current, $PREVIOUS_FP previous)"
+    say "Baseline done: snapshot written to the state directory (digests only; no row, key or secret)."
+}
+
+cmd_take_backup() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    local snapshot table_text dump_tmp version taken sha bytes why
+    read_state_file snapshot "$SNAPSHOT_FILE"
+    capture table_text 'validating the snapshot' table_lines table "$snapshot"
+    [[ ! -e "$ROOT/$DUMP_FILE" && ! -e "$ROOT/$MANIFEST_FILE" ]] || refuse "a backup already exists in the state directory and is never overwritten. The rehearsal is disposable: run cleanup, then up, prepare, baseline and take-backup." # guard:G15-no-overwrite
+    require_inventory "$(historical_inventory)" 'the 16 tables of the v0.3.0 schema' # guard:G13-backup-inventory
+    require_database_matches_snapshot historical "$table_text"
+    load_keyring
+    why="$(keys_problem "$snapshot")" || refuse "$why."
+
+    say "Taking the two-pass dump as the application account (structure of every table, rows of the durable tables only) ..."
+    dump_tmp="$(umask 077 && mktemp -- "$ROOT/.dump.XXXXXX")"
+    take_dump "$dump_tmp" || { rm -f -- "$dump_tmp"; exit 1; }
+    why="$(dump_problem "$dump_tmp")" || { rm -f -- "$dump_tmp"; refuse "the dump is not what the backup contract requires: $why. It was removed."; } # guard:G15-dump-checked
+    capture version 'reading the server version' server_version_text "$CID"
+    [[ "$version" =~ $SERVER_VERSION_RE ]] || { rm -f -- "$dump_tmp"; refuse "the server reports version '$version', not 10.11.18."; }
+    sha="$(sha256sum <"$dump_tmp" | cut -c1-64)"
+    bytes="$(wc -c <"$dump_tmp" | tr -d ' ')"
+    taken="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    mv -- "$dump_tmp" "$ROOT/$DUMP_FILE"
+    write_state_file "$MANIFEST_FILE" "$(manifest_text "$sha" "$bytes" "$version" "$taken" "$(token_fingerprint "$(state_token "$ROOT")")")"
+    why="$(manifest_problem "$ROOT/$MANIFEST_FILE" "$table_text")" || refuse "the manifest just written is not consistent with the snapshot: $why."
+    why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump just written does not match its manifest: $why."
+    say "ok   the dump creates and drops exactly the 16 v0.3.0 tables and carries rows for the 9 durable tables only"
+    say "ok   dump $bytes bytes, sha256 ${sha:0:16}...; manifest agrees with the snapshot on all 16 tables"
+    say "ok   keyring: current $CURRENT_FP, previous $PREVIOUS_FP, ring $RING_FP (fingerprints only)"
+    say "Backup done: $DUMP_FILE and $MANIFEST_FILE are in the state directory."
+}
+
+cmd_upgrade() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    local migrated now_out now_table upgrade_lines diff marked
+    require_backup
+    require_inventory "$(historical_inventory)" 'the 16 tables of the v0.3.0 schema' # guard:G13-upgrade-from-historical
+    require_database_matches_snapshot historical "$SNAPSHOT_TABLES"
+    say "ok   a verified backup exists and the database still equals its snapshot"
+    STAGE=upgrade
+    trap on_stage_exit EXIT
+    say "Upgrading with the current application's migrations (the 14 after v0.3.0) ..."
+    run_helper current migrate migrated
+    printf '%s\n' "$migrated"
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the current schema' # guard:G13-upgrade-inventory
+    say "ok   the database holds exactly the 34 tables of the current schema (16 historical, 18 newer)"
+    run_helper current helper:snapshot now_out
+    capture now_table 'validating the post-upgrade snapshot' table_lines table "$now_out"
+    capture upgrade_lines 'validating the expected-upgrade digests' table_lines upgrade "$SNAPSHOT_TEXT"
+    diff="$(digest_differences "$upgrade_lines" "$now_table")"
+    [[ -z "$diff" ]] || refuse "the upgrade did not leave the data as expected (changed other than as expected: $(tr '\n' ' ' <<<"$diff"))." # guard:G13-upgrade-data
+    say "ok   every v0.3.0 table is as expected after the upgrade (role keys renamed, the 14 migrations recorded, everything else untouched)"
+    run_helper current helper:post-upgrade-mark marked
+    grep -Fxq 'marker:written=ok' <<<"$marked" || refuse "the marker helper did not report marker:written=ok." # guard:G13-marker
+    say "ok   one synthetic post-upgrade Person and CRM profile written (so recovery can tell the upgraded state from the historical one)"
+    say "Upgrade done."
+}
+
+# The state the WP3-01 demonstration starts from and must find: the post-upgrade database (14 Persons, one marker profile that has its
+# Person, 29 migrations). Four counts, tab-separated.
+readonly COUNTS_SQL='SELECT (SELECT COUNT(*) FROM people), (SELECT COUNT(*) FROM contact_profiles), (SELECT COUNT(*) FROM migrations), (SELECT COUNT(*) FROM contact_profiles cp LEFT JOIN people p ON p.id = cp.person_id WHERE p.id IS NULL);'
+
+cmd_reproduce_wp3_01() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    local counts people profiles ledger orphans missing diff inventory_after after_out after_table bad_tables why
+    require_backup
+    load_keyring
+    missing="$(keyring_missing "$(printf '%s\n%s\n' "$(manifest_value "$ROOT/$MANIFEST_FILE" current_key_fingerprint)" "$(manifest_names "$ROOT/$MANIFEST_FILE" previous_key_fingerprints)")" "$(printf '%s\n%s\n' "$CURRENT_FP" "$PREVIOUS_FP")")"
+    [[ -z "$missing" ]] || refuse "the live keyring lacks a key fingerprint the backup requires ($(tr '\n' ' ' <<<"$missing")). Nothing was changed." # guard:G16-keyring-present
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the upgraded schema (this demonstration starts from an upgraded database)' # guard:G16-upgraded-inventory
+    capture counts 'reading the upgraded state' app_query "$COUNTS_SQL"
+    IFS=$'\t' read -r people profiles ledger orphans <<<"$counts"
+    [[ "$people" == $((FIXTURE_PEOPLE + 1)) && "$profiles" == 1 && "$ledger" == 29 && "$orphans" == 0 ]] || refuse "the database is not the post-upgrade state this demonstration starts from (people $people, contact_profiles $profiles, migrations $ledger, profiles without a Person $orphans; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0). Has it already been run?" # guard:G16-upgraded-state
+
+    STAGE=reproduce-wp3-01
+    trap on_stage_exit EXIT
+    say "WP3-01: loading the historical dump over the UPGRADED database WITHOUT clearing it first."
+    say "This is the defect, not a restoration: nothing here claims the database was recovered."
+    why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump is not the one the manifest describes ($why); it is not loaded." # guard:G16-import-verified-dump
+    guarded_app_sql "$ROOT" "$APP_DB" <"$ROOT/$DUMP_FILE" >/dev/null || fail "the dump could not be loaded"
+
+    capture inventory_after 'reading the table inventory after the load' db_inventory
+    diff="$(inventory_difference "$(historical_inventory)" "$inventory_after")"
+    [[ -n "$diff" ]] || fail "UNEXPECTED: after loading the historical dump the database holds exactly the 16 historical tables, so the WP3-01 defect did not reproduce. The premise of the rehearsal is not holding; report this."
+    [[ "$diff" == "$(inventory_difference "$(historical_inventory)" "$(upgraded_inventory)")" ]] || fail "UNEXPECTED: the table-inventory equality failed, but not as WP3-01 describes (differences: $(tr '\n' ';' <<<"$diff")); expected exactly the 18 newer tables to remain." # guard:G16-defect-reproduced
+    say "ok   the table-inventory equality assertion FAILED, as the audit predicted: all 18 newer tables remain and no historical table is missing"
+    capture counts 'reading the state after the load' app_query "$COUNTS_SQL"
+    IFS=$'\t' read -r people profiles ledger orphans <<<"$counts"
+    [[ "$people" == "$FIXTURE_PEOPLE" && "$profiles" == 1 && "$ledger" == 15 && "$orphans" == 1 ]] || fail "UNEXPECTED: after the load the state is people $people, contact_profiles $profiles, migrations $ledger, profiles without a Person $orphans; WP3-01 predicts $FIXTURE_PEOPLE, 1, 15, 1."
+    say "ok   the post-upgrade CRM profile survives with no Person behind it, and the ledger says 15 migrations while 34 tables exist"
+    run_helper current helper:snapshot after_out
+    capture after_table 'validating the snapshot after the load' table_lines table "$after_out"
+    bad_tables="$(restore_state_differences "$SNAPSHOT_TABLES" "$after_table")"
+    [[ -z "$bad_tables" ]] || fail "UNEXPECTED: the historical tables are not as the dump should leave them (differ: $(tr '\n' ' ' <<<"$bad_tables"))."
+    say "ok   and yet the 16 historical tables match the pre-upgrade snapshot (durable tables identical, transient tables empty): a check of those alone would pass"
+    say "WP3-01 reproduced. The database is now in the defective state; the corrected restore (slice 2.2B) starts from here, or run cleanup."
+}
+
 main() {
     local command="${1:-}"
     case "$command" in
@@ -1141,6 +1721,10 @@ main() {
         prepare) shift; cmd_prepare "$@" ;;
         run) shift; cmd_run "$@" ;;
         probe) shift; cmd_probe "$@" ;;
+        baseline) shift; cmd_baseline "$@" ;;
+        take-backup) shift; cmd_take_backup "$@" ;;
+        upgrade) shift; cmd_upgrade "$@" ;;
+        reproduce-wp3-01) shift; cmd_reproduce_wp3_01 "$@" ;;
         help | -h | --help) usage ;;
         *) usage >&2; exit 64 ;;
     esac

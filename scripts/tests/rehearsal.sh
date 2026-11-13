@@ -47,11 +47,25 @@ NAME_R='flc-rehearsal-restore-runner'
 NAME_P='flc-rehearsal-restore-prepare'
 RID="$(printf '1%.0s' {1..64})"
 PID_="$(printf '2%.0s' {1..64})"
+# Slice 2.2A. The keys the fixture state holds (bytes 0..31 and 32 zero bytes), their fingerprints and their ring's, as computed independently
+# of the script (Python's hashlib, base64 and the runbook's definitions): the test vectors the deployment runbook's fingerprint wording lacks.
+KEY_CUR='base64:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
+KEY_PREV='base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+KEY_FF='base64://////////////////////////////////////////8='
+FP_CUR=2c8a734376e488fb
+FP_PREV=dd55ac8a8f7837a8
+FP_FF=da15800f513e503f
+RING_CUR_PREV=5fa4bb2695669a8f
+RING_CUR_ONLY=aa8b784552ea86fa
+RING_THREE=357d42c365bacbce
+HIST_TABLES=(account_invitations account_recovery_codes account_totp_factors accounts cache cache_locks failed_jobs job_batches jobs membership_grants migrations password_reset_tokens people role_assignments security_events sessions)
+NEWER_TABLES=(contact_interactions contact_methods contact_profiles contact_tag_assignments contact_tags discussion_messages discussions person_relationship_field_values person_relationship_role_provisions person_relationship_status_changes person_relationships resource_assets resource_card_audiences resource_cards resource_categories resource_pack_audiences resource_packs sourced_role_grants)
+TRANSIENT=(cache cache_locks failed_jobs job_batches jobs password_reset_tokens sessions)
 
 # --- the tool directory ------------------------------------------------------------------------------------------------------------
 
 mkdir -p "$BIN"
-for tool in bash env cat grep awk tr od id mktemp mv chmod rm rmdir mkdir dirname cut tail head wc flock sed sort date sleep ln cp tee basename true tar; do
+for tool in bash env cat grep awk tr od id mktemp mv chmod rm rmdir mkdir dirname cut tail head wc flock sed sort date sleep ln cp tee basename true tar base64 sha256sum; do
     path="$(command -v "$tool" || true)"
     [[ -n "$path" ]] || { echo "rehearsal tests: the tool '$tool' is needed" >&2; exit 1; }
     ln -s "$path" "$BIN/$tool"
@@ -226,12 +240,24 @@ case "$1 ${2:-}" in
         done ;;
     "network rm") [[ ! -e "$W/network_rm_fail" ]] || exit 1; rm -rf "$W/n/$(lastarg "$@")" ;;
     "volume rm") [[ ! -e "$W/volume_rm_fail" ]] || exit 1; rm -rf "$W/v/$(lastarg "$@")" ;;
+    "exec --user") # the application account's dump client: `exec --user U ID sh -c SNIPPET sh ARGS...` (no stdin)
+        [[ -d "$W/c/$4" ]] || { echo "Error: No such container: $4" >&2; exit 1; }
+        printf 'DUMP args=[%s]\n' "${*:9}" >>"$W/dumpcalls"
+        [[ ! -e "$W/dump_fail" ]] || exit 1
+        case " $* " in *" --no-data "*) cat "$W/dump_pass1" 2>/dev/null ;; *) cat "$W/dump_pass2" 2>/dev/null ;; esac ;;
     "exec -i")
         if [[ "$3" == --user ]]; then # the restricted application-user client: `exec -i --user U ID sh -c SNIPPET sh ARGS...`
             [[ -d "$W/c/$5" ]] || { echo "Error: No such container: $5" >&2; exit 1; }
             sql="$(cat)"
+            hook app_sql
             [[ ! -e "$W/app_cannot_connect" ]] || exit 1
             case "$sql" in
+                *'DROP TABLE IF EXISTS'*) # loading a dump: logged whole, and the world may change as it would
+                    printf '%s' "$sql" >"$W/import.sql"; printf 'IMPORT args=[%s]\n' "${*:10}" >>"$W/appsql.log"
+                    [[ ! -f "$W/import_fail" ]] || { echo 'ERROR 1050 (42S01): the fake load failed' >&2; exit 1; }
+                    if [[ -f "$W/on_import" ]]; then bash "$W/on_import"; fi ;;
+                *'information_schema.tables'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/inventory" 2>/dev/null; echo ;;
+                *'SELECT (SELECT COUNT(*) FROM people)'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/counts" 2>/dev/null; echo ;;
                 *'SELECT CURRENT_USER();'*)
                     cat "$W/app_identity" 2>/dev/null || echo 'flc_rehearsal@%'
                     if [[ -f "$W/app_grants" ]]; then cat "$W/app_grants"; else
@@ -280,7 +306,7 @@ case "$1 ${2:-}" in
     "create "*)
         shift
         [[ ! -e "$W/create_fail" ]] || exit 1
-        cname='' cuser='' ccapdrop='' csecopt='' cnet='' cmem='' cpids='' ccpus='' cro=false cimage='' ctmpfs=() cmounts_out='' cenvs=() clabels=()
+        cname='' cuser='' ccapdrop='' csecopt='' cnet='' cmem='' cpids='' ccpus='' cro=false cimage='' cworkdir='' ctmpfs=() cmounts_out='' cenvs=() clabels=()
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --name) cname="$2"; shift 2 ;;
@@ -294,7 +320,8 @@ case "$1 ${2:-}" in
                 --cpus) ccpus="$2"; shift 2 ;;
                 --tmpfs) ctmpfs+=("${2%%:*}"); shift 2 ;;
                 -e) cenvs+=("${2%%=*}"); shift 2 ;;
-                --memory-swap | --pull | --entrypoint | --workdir) shift 2 ;;
+                --workdir) cworkdir="$2"; shift 2 ;;
+                --memory-swap | --pull | --entrypoint) shift 2 ;;
                 --read-only) cro=true; shift ;;
                 -i) shift ;;
                 --mount)
@@ -329,8 +356,10 @@ case "$1 ${2:-}" in
         printf '%s' "$cpids" >"$d/pids"
         case "$ccpus" in 1) printf 1000000000 ;; *) printf '%s' "$ccpus" ;; esac >"$d/nanocpus"
         printf '%s\n' "${cenvs[@]}" >"$d/envnames"
+        printf '%s' "$cworkdir" >"$d/workdir"; printf '%s' "$*" >"$d/cmd"
         # The password reaches the daemon client only through its environment; record whether it arrived, never print it.
         printf '%s' "${DB_PASSWORD:-}" >"$W/create_password_seen.$n"
+        printf '%s' "${APP_KEY:-}" >"$W/create_appkey_seen.$n"; printf '%s' "${APP_PREVIOUS_KEYS:-}" >"$W/create_previouskeys_seen.$n"
         env | cut -d= -f1 | sort >"$W/create_env_names.$n"
         if [[ -f "$W/create_override" ]]; then while read -r field value; do printf '%s' "$value" >"$d/$field"; done <"$W/create_override"; fi
         printf '%s\n' "$cid" ;;
@@ -340,7 +369,19 @@ case "$1 ${2:-}" in
         printf '%s\n' "$(cat "$W/c/$id/name")" >>"$W/started"
         case " $* " in *" -i "*) cat >"$W/stdin.$(wc -l <"$W/started")" ;; esac
         [[ ! -e "$W/start_fail" ]] || exit "$(cat "$W/start_fail")"
-        if [[ -f "$W/run_stdout" ]]; then cat "$W/run_stdout"; else echo ok; fi ;;
+        # Slice 2.2A: which helper this is (by its command and tree), what it prints (out_<key>), what it changes in the world afterwards
+        # (after_<key>, a script) and whether it fails (fail_<key>, an exit status). The order of the helpers is recorded in $W/runs.
+        cmd="$(cat "$W/c/$id/cmd" 2>/dev/null)"; wd="$(cat "$W/c/$id/workdir" 2>/dev/null)"; key=''
+        case "$cmd" in
+            *'rehearse.php fixture-load'*) key=fixture_load ;;
+            *'rehearse.php snapshot'*) key="snapshot_${wd##*/}" ;;
+            *'rehearse.php mark'*) key=mark ;;
+            *' migrate --force'*) key="migrate_${wd##*/}" ;;
+        esac
+        [[ -z "$key" ]] || printf '%s\n' "$key" >>"$W/runs"
+        if [[ -n "$key" && -f "$W/fail_$key" ]]; then echo 'harness:refused the fake helper was told to fail' >&2; exit "$(cat "$W/fail_$key")"; fi
+        if [[ -n "$key" && -f "$W/out_$key" ]]; then cat "$W/out_$key"; elif [[ -f "$W/run_stdout" ]]; then cat "$W/run_stdout"; else echo ok; fi
+        if [[ -n "$key" && -f "$W/after_$key" ]]; then bash "$W/after_$key"; fi ;;
     "compose "*)
         case " $* " in
             *" config"*) [[ ! -f "$W/rendered" ]] || cat "$W/rendered" ;;
@@ -377,6 +418,7 @@ case "${args[0]}" in
         [[ ! -f "$W/commit_wrong" || "$rev" != 2f385b79* ]] || { echo "$(printf '9%.0s' {1..40})"; exit 0; }
         echo "${line#* }" ;;
     cat-file) [[ ! -f "$W/no_lockfile" ]] || exit 1 ;;
+    status) [[ ! -f "$W/git_status" ]] || cat "$W/git_status" ;;
     archive) echo "GIT-ARCHIVE ${args[2]} ${args[3]}" ;;
     *) echo "fake git: unexpected call: $*" >&2; exit 97 ;;
 esac
@@ -436,7 +478,7 @@ add_volume() {
 make_root() {
     mkdir -m 700 "$T/root"
     printf 'restore-rehearsal-v1\n' >"$T/root/.flc-rehearsal-root"
-    printf 'REHEARSAL_DB_ROOT_PASSWORD=%s\nREHEARSAL_DB_APP_PASSWORD=%s\nREHEARSAL_RUN_TOKEN=%s\n' "$ROOT_PW" "$APP_PW" "${1:-$TOKEN}" >"$T/root/compose.env"
+    printf 'REHEARSAL_DB_ROOT_PASSWORD=%s\nREHEARSAL_DB_APP_PASSWORD=%s\nREHEARSAL_RUN_TOKEN=%s\nREHEARSAL_APP_KEY=%s\nREHEARSAL_APP_PREVIOUS_KEY=%s\n' "$ROOT_PW" "$APP_PW" "${1:-$TOKEN}" "$KEY_CUR" "$KEY_PREV" >"$T/root/compose.env"
     chmod 600 "$T/root/compose.env"
 }
 
@@ -510,10 +552,16 @@ run_fn() {
 # --- assertions -------------------------------------------------------------------------------------------------------------------------
 
 FIRST_BAD=''
+ABORT_ON_BAD=0
 bad() {
     TEST_FAILS=$((TEST_FAILS + 1))
     [[ -n "$FIRST_BAD" ]] || FIRST_BAD="$*"
     if [[ $QUIET == 0 ]]; then printf '        FAIL: %s\n' "$*" >&2; fi
+    # In the mutation matrix one failed assertion is the whole answer: end the test (it runs in a subshell there) and say why.
+    if [[ $ABORT_ON_BAD == 1 ]]; then
+        printf '%s' "$FIRST_BAD" >"$T/first_bad"
+        exit 1
+    fi
 }
 expect_rc() { [[ "$RC" == "$2" ]] || bad "$1: expected exit $2, got $RC (stderr: ${ERR:0:300})"; }
 expect_refused() { # DESC NEEDLE
@@ -695,11 +743,17 @@ t_g3_credentials_per_run_and_private() {
     first="$(<"$f")"
     [[ "$("$REAL_STAT" -c %a "$f")" == 600 ]] || bad 'compose.env is not mode 600'
     expect_has 'compose.env' "$first" 'REHEARSAL_DB_ROOT_PASSWORD='
-    local value
-    while IFS='=' read -r _ value; do
-        [[ ${#value} -ge 32 && "$value" =~ ^[0-9a-f]+$ ]] || bad "a generated value is too short or not hex: ${#value}"
+    local value name line
+    while IFS= read -r line; do
+        name="${line%%=*}" value="${line#*=}" # not `IFS='=' read`: it would drop a key's trailing = padding
+        if [[ "$name" == REHEARSAL_APP_KEY || "$name" == REHEARSAL_APP_PREVIOUS_KEY ]]; then
+            [[ "$value" =~ ^base64:[A-Za-z0-9+/]{43}=$ ]] || bad "$name is not a base64: key of 32 bytes"
+        else
+            [[ ${#value} -ge 32 && "$value" =~ ^[0-9a-f]+$ ]] || bad "a generated value is too short or not hex: ${#value}"
+        fi
         expect_lacks 'script output' "$OUT$ERR" "$value"
     done <<<"$first"
+    [[ "$(grep -E '^REHEARSAL_APP_KEY=' <<<"$first")" != "$(grep -E '^REHEARSAL_APP_PREVIOUS_KEY=' <<<"$first" | sed 's/PREVIOUS_//')" ]] || bad 'the current and previous keys are the same'
     run_script -- cleanup
     expect_rc 'cleanup' 0
     new_world
@@ -708,7 +762,7 @@ t_g3_credentials_per_run_and_private() {
     expect_rc 'second up' 0
     second="$(<"$f")"
     [[ "$first" != "$second" ]] || bad 'two runs produced identical credentials'
-    [[ "$(grep -c . <<<"$second")" == 3 ]] || bad 'compose.env should hold exactly three values'
+    [[ "$(grep -c . <<<"$second")" == 5 ]] || bad 'compose.env should hold exactly five values (three credentials and two keys)'
     local line
     while IFS= read -r line; do
         grep -qxF "$line" <<<"$first" && bad "a value was reused between runs: ${line%%=*}"
@@ -1856,9 +1910,9 @@ only_database_left() {
     for d in "$W/c"/*; do [[ ! -e "$d" ]] || left+="${d##*/} "; done
     [[ "$left" == "$CID " ]] || bad "$1: a container other than the database remains: $left"
 }
-no_secret_anywhere() { # DESC -- the generated passwords appear in no docker argument, git argument, output or log
+no_secret_anywhere() { # DESC -- the generated passwords and keys appear in no docker argument, git argument, output or log
     local secret what
-    for secret in "$ROOT_PW" "$APP_PW"; do
+    for secret in "$ROOT_PW" "$APP_PW" "$KEY_CUR" "$KEY_PREV" "${KEY_CUR#base64:}" "${KEY_PREV#base64:}"; do
         for what in "$(cat "$W/calls")" "$(cat "$W/gitcalls" 2>/dev/null)" "$OUT" "$ERR"; do
             [[ "$what" != *"$secret"* ]] || bad "$1: a generated password appears in a docker or git argument, in the output or in the error output"
         done
@@ -1866,7 +1920,7 @@ no_secret_anywhere() { # DESC -- the generated passwords appear in no docker arg
 }
 
 t_g10_run_happy_path() {
-    local create name allowed_env='^(PATH|HOME|LANG|DB_PASSWORD|_|PWD|OLDPWD|SHLVL)$'
+    local create name allowed_env='^(PATH|HOME|LANG|DB_PASSWORD|APP_KEY|APP_PREVIOUS_KEYS|_|PWD|OLDPWD|SHLVL)$'
     src_world
     run_script -- run current migrate:status
     expect_rc 'run' 0
@@ -1880,6 +1934,8 @@ t_g10_run_happy_path() {
     [[ "$(cat "$W/started")" == "/$NAME_R" ]] || bad "the runner was not started exactly once: $(cat "$W/started" 2>/dev/null)"
     # The password reaches the Docker client only through its environment, which holds nothing else of the caller's.
     [[ "$(cat "$W/create_password_seen.1")" == "$APP_PW" ]] || bad 'the application password was not exported to the docker client'
+    [[ "$(cat "$W/create_appkey_seen.1")" == "$KEY_CUR" ]] || bad 'the current key was not exported to the docker client'
+    [[ "$(cat "$W/create_previouskeys_seen.1")" == "$KEY_PREV" ]] || bad 'the previous key was not exported to the docker client'
     while IFS= read -r name; do
         [[ "$name" =~ $allowed_env ]] || bad "the docker client that created the runner had the variable $name"
     done <"$W/create_env_names.1"
@@ -1913,6 +1969,8 @@ t_g11_fixed_argument_vectors() {
         [about]='php artisan about' [migrate:status]='php artisan migrate:status' [migrate]='php artisan migrate --force --no-interaction'
         [relationships:check]='php artisan relationships:check' [release:show]='php artisan release:show'
         [resources:assets:prune]='php artisan resources:assets:prune --dry-run' [helper:db-ping]='php /var/www/html/harness/db-ping.php'
+        [helper:fixture-load]='php /var/www/html/harness/rehearse.php fixture-load' [helper:snapshot]='php /var/www/html/harness/rehearse.php snapshot'
+        [helper:post-upgrade-mark]='php /var/www/html/harness/rehearse.php mark'
     )
     for name in "${!want[@]}"; do
         src_world
@@ -2406,6 +2464,713 @@ t_g10_cleanup_keeps_ephemerals_that_do_not_verify() {
     [[ -d "$W/c/$FOREIGN" ]] || bad 'an unlabelled container named like the runner was removed'
 }
 
+# --- tests: slice 2.2A, the first half of the recovery cycle ---------------------------------------------------------------------------------
+#
+# The harness (php/rehearse.php) runs in the runner, so here it is a fake: out_<key> is what it prints, after_<key> what it changes in the
+# world, fail_<key> an exit status (keys: migrate_historical, fixture_load, snapshot_historical, snapshot_current, migrate_current, mark).
+# The state files the later stages need are made by the real script's earlier stages, once, and copied (the world's token and keys are fixed).
+
+rows_of() {
+    case "$1" in
+        account_invitations) echo 4 ;; account_recovery_codes) echo 5 ;; account_totp_factors) echo 3 ;; accounts) echo 11 ;;
+        cache | cache_locks | failed_jobs | job_batches | jobs) echo 0 ;; membership_grants) echo 5 ;; migrations) echo 15 ;;
+        password_reset_tokens) echo 2 ;; people) echo 13 ;; role_assignments) echo 12 ;; security_events) echo 8 ;; sessions) echo 3 ;;
+    esac
+}
+fake_digest() { printf '%s' "$1" | sha256sum | cut -c1-64; }
+table_block() { # KIND SEED: one line per v0.3.0 table, as the harness prints them
+    local t
+    for t in "${HIST_TABLES[@]}"; do printf '%s %s %s %s\n' "$1" "$t" "$(rows_of "$t")" "$(fake_digest "$t$2")"; done
+}
+restored_block() { # the snapshot's durable tables as they were, the transient ones empty: what a restore of the two-pass dump leaves
+    local t rows
+    for t in "${HIST_TABLES[@]}"; do
+        rows="$(rows_of "$t")"
+        if [[ " ${TRANSIENT[*]} " == *" $t "* ]]; then printf 'table %s 0 %s\n' "$t" "$(fake_digest empty)"; else printf 'table %s %s %s\n' "$t" "$rows" "$(fake_digest "${t}before")"; fi
+    done
+}
+fixture_output() { printf 'key:current=%s\nkey:previous=%s\n' "$FP_CUR" "$FP_PREV"; table_block table before; table_block upgrade after; echo 'fixture:complete=ok'; }
+snapshot_output() { table_block table "$1"; echo 'snapshot:complete=ok'; } # SEED
+hist_names() { printf '%s\n' "${HIST_TABLES[@]}"; }
+up_names() { printf '%s\n' "${HIST_TABLES[@]}" "${NEWER_TABLES[@]}"; }
+put_dumps() { # the two passes as mariadb-dump writes their parts that the script reads
+    local t
+    : >"$W/dump_pass1"
+    : >"$W/dump_pass2"
+    for t in "${HIST_TABLES[@]}"; do
+        printf 'DROP TABLE IF EXISTS \x60%s\x60;\nCREATE TABLE \x60%s\x60 (\n  \x60id\x60 int\n) ENGINE=InnoDB;\n' "$t" "$t" >>"$W/dump_pass1"
+        [[ " ${TRANSIENT[*]} " == *" $t "* ]] || printf 'INSERT INTO \x60%s\x60 VALUES (1);\n' "$t" >>"$W/dump_pass2"
+    done
+}
+
+# The empty rehearsal database with the prepared source, and what the helpers print and change.
+stage_world() { src_world; : >"$W/inventory"; }
+baseline_world() {
+    stage_world
+    hist_names >"$W/hist.inv"
+    fixture_output >"$W/out_fixture_load"
+    snapshot_output before >"$W/out_snapshot_historical"
+    printf 'cp "%s/hist.inv" "%s/inventory"\n' "$W" "$W" >"$W/after_migrate_historical"
+    put_dumps
+}
+CACHE_READY=0
+ensure_cache() { # runs baseline and take-backup once, and keeps the three state files
+    [[ "$CACHE_READY" == 0 ]] || return 0
+    baseline_world
+    run_script -- baseline
+    [[ "$RC" == 0 ]] || bad "preparing the cached baseline: exit $RC: ${ERR:0:300}"
+    run_script -- take-backup
+    [[ "$RC" == 0 ]] || bad "preparing the cached backup: exit $RC: ${ERR:0:300}"
+    rm -rf "${T:?}/cache"
+    mkdir -p "$T/cache"
+    cp -p "$T/root/historical.snapshot" "$T/root/historical.dump.sql" "$T/root/historical.manifest.json" "$T/cache/"
+    CACHE_READY=1
+}
+install_state() { local f; for f in "$@"; do cp -p "$T/cache/historical.$f" "$T/root/historical.$f"; done; } # snapshot dump.sql manifest.json
+# A world for each later stage, with the state its predecessors left. Call ensure_cache BEFORE (it builds worlds of its own).
+backup_world() { baseline_world; hist_names >"$W/inventory"; install_state snapshot; }
+upgrade_world() {
+    stage_world
+    hist_names >"$W/inventory"
+    up_names >"$W/up.inv"
+    snapshot_output before >"$W/out_snapshot_historical"
+    printf 'cp "%s/up.inv" "%s/inventory"\n' "$W" "$W" >"$W/after_migrate_current"
+    snapshot_output after >"$W/out_snapshot_current"
+    echo 'marker:written=ok' >"$W/out_mark"
+    install_state snapshot dump.sql manifest.json
+}
+reproduce_world() {
+    stage_world
+    up_names >"$W/inventory"
+    cp "$W/inventory" "$W/up.inv"
+    printf '14\t1\t29\t0\n' >"$W/counts"
+    printf 'cp "%s/up.inv" "%s/inventory"\nprintf "13\\t1\\t15\\t1\\n" >"%s/counts"\n' "$W" "$W" "$W" >"$W/on_import"
+    { restored_block; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
+    install_state snapshot dump.sql manifest.json
+}
+no_helper_ran() { [[ ! -e "$W/runs" ]] || bad "$1: a helper ran: $(tr '\n' ' ' <"$W/runs")"; }
+leftover_dump() { compgen -G "$T/root/.dump.*" >/dev/null; } # a temporary dump file in the state directory
+no_dump_or_import() { [[ ! -e "$W/dumpcalls" && ! -e "$W/import.sql" ]] || bad "$1: a dump was taken or a dump was loaded"; }
+
+# --- G14: keys and fingerprints ---
+
+t_g14_vectors_and_forms() {
+    local k
+    good_world
+    run_fn "key_fingerprint '$KEY_CUR'"; [[ "$OUT" == "$FP_CUR" ]] || bad "the bytes 0..31 key fingerprints as '$OUT', not $FP_CUR"
+    run_fn "key_fingerprint '$KEY_PREV'"; [[ "$OUT" == "$FP_PREV" ]] || bad "the zero key fingerprints as '$OUT', not $FP_PREV"
+    run_fn "key_fingerprint '$KEY_FF'"; [[ "$OUT" == "$FP_FF" ]] || bad "the 0xff key fingerprints as '$OUT', not $FP_FF"
+    run_fn "keyring_fingerprint $FP_CUR"; [[ "$OUT" == "$RING_CUR_ONLY" ]] || bad "one-key ring is '$OUT', not $RING_CUR_ONLY"
+    run_fn "keyring_fingerprint $FP_CUR $FP_PREV"; [[ "$OUT" == "$RING_CUR_PREV" ]] || bad "two-key ring is '$OUT', not $RING_CUR_PREV"
+    run_fn "keyring_fingerprint $FP_PREV $FP_CUR"; [[ "$OUT" == "$RING_CUR_PREV" ]] || bad 'the ring depends on the order of the fingerprints'
+    run_fn "keyring_fingerprint $FP_CUR $FP_CUR"; [[ "$OUT" == "$RING_CUR_ONLY" ]] || bad 'a repeated fingerprint changes the ring'
+    run_fn "keyring_fingerprint $FP_FF $FP_PREV $FP_CUR"; [[ "$OUT" == "$RING_THREE" ]] || bad "three-key ring is '$OUT', not $RING_THREE"
+    for k in "$KEY_CUR" "$KEY_PREV" "$KEY_FF"; do run_fn "key_form_ok '$k'"; expect_rc "valid key form" 0; done
+    for k in '' 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=' 'base64:' 'base64:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' "base64:$(printf 'A%.0s' {1..43})" \
+        'base64:AAECAwQFBgcICQoLDA0ODw==' 'base64:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=extra' 'base64:!AECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='; do
+        run_fn "key_form_ok '$k'"
+        [[ "$RC" != 0 ]] || bad "a malformed key was accepted: '${k:0:50}'"
+    done
+    # Missing required fingerprints are named; a larger live ring is the normal state after a rotation.
+    run_fn "keyring_missing '$FP_CUR
+$FP_PREV' '$FP_CUR
+$FP_FF'"
+    [[ "$OUT" == "$FP_PREV" ]] || bad "the missing fingerprint was '$OUT', not $FP_PREV"
+    run_fn "keyring_missing '$FP_CUR
+$FP_PREV' '$FP_FF
+$FP_PREV
+$FP_CUR'"
+    [[ -z "$OUT" ]] || bad "a live ring that holds every required fingerprint reported '$OUT' missing"
+    run_fn "keyring_missing '$FP_CUR
+$FP_PREV' ''"
+    [[ "$OUT" == "$FP_CUR"$'\n'"$FP_PREV" ]] || bad 'an empty live ring did not report every fingerprint missing'
+}
+
+t_g14_key_format() {
+    local line
+    for line in '' 'REHEARSAL_APP_KEY=' 'REHEARSAL_APP_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=' 'REHEARSAL_APP_KEY=base64:AAECAwQFBgcICQoLDA0ODw=='; do
+        src_world
+        grep -v '^REHEARSAL_APP_KEY=' "$T/root/compose.env" >"$T/root/compose.env.new" || true
+        [[ -z "$line" ]] || printf '%s\n' "$line" >>"$T/root/compose.env.new"
+        mv "$T/root/compose.env.new" "$T/root/compose.env"
+        run_script -- run current about
+        expect_refused "key line '${line:0:40}'" 'encryption key REHEARSAL_APP_KEY'
+        [[ "$(grep -cE '^create' "$W/calls")" == 0 ]] || bad "key line '${line:0:40}': a runner was created"
+    done
+    src_world
+    sed -i '/^REHEARSAL_APP_PREVIOUS_KEY=/d' "$T/root/compose.env"
+    run_script -- run current about
+    expect_refused 'no previous key' 'REHEARSAL_APP_PREVIOUS_KEY'
+}
+
+t_g14_keys_agree() {
+    baseline_world
+    sed -i "s/^key:current=.*/key:current=$FP_FF/" "$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a different current key' 'not the one this run generated'
+    baseline_world
+    sed -i "s/^key:previous=.*/key:previous=$FP_FF/" "$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a different previous key' 'previous keys'
+    [[ ! -e "$T/root/historical.snapshot" ]] || bad 'a snapshot was written for keys that do not agree'
+}
+
+# --- G13: baseline ---
+
+t_g13_baseline_happy_path() {
+    local creates f
+    baseline_world
+    run_script -- baseline
+    expect_rc baseline 0
+    expect_has 'summary' "$OUT" 'Baseline done'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'migrate_historical fixture_load ' ]] || bad "the helpers did not run as migrate then fixture-load in the historical tree: $(tr '\n' ' ' <"$W/runs")"
+    creates="$(grep -E '^create ' "$W/calls")"
+    [[ "$(grep -c -- '--workdir /var/www/html/historical' <<<"$creates")" == 2 ]] || bad 'both runners were not in the historical tree'
+    expect_has 'the historical migration' "$creates" ' php artisan migrate --force --no-interaction'
+    expect_has 'the fixture' "$creates" ' php /var/www/html/harness/rehearse.php fixture-load'
+    f="$T/root/historical.snapshot"
+    [[ "$("$REAL_STAT" -c %a "$f")" == 600 ]] || bad 'the snapshot is not mode 600'
+    [[ "$(grep -c '^table ' "$f")" == 16 && "$(grep -c '^upgrade ' "$f")" == 16 && "$(grep -c '^key:' "$f")" == 2 ]] || bad 'the snapshot is not 16 table lines, 16 upgrade lines and two key fingerprints'
+    expect_lacks 'the snapshot' "$(<"$f")" "${KEY_CUR#base64:}"
+    only_database_left baseline
+    no_secret_anywhere baseline
+    # The emptiness check came before the first runner.
+    [[ "$(grep -n 'information_schema' "$W/appsql.log" | head -n 1 | cut -d: -f1)" == 1 ]] || bad 'the inventory was not read first'
+}
+
+t_g13_source_commits() {
+    baseline_world
+    printf 'HEAD %s\n' "$HEAD_SHA" >"$W/commits"
+    run_script -- baseline
+    expect_refused 'the historical commit is absent' 'is not in this clone'
+    no_helper_ran 'absent commit'
+    baseline_world
+    touch "$W/commit_wrong"
+    run_script -- baseline
+    expect_refused 'the historical commit resolves to another' 'resolved to'
+    no_helper_ran 'another commit'
+    baseline_world
+    printf ' M apps/platform/composer.json\n' >"$W/git_status"
+    run_script -- baseline
+    expect_refused 'an unclean checkout' 'uncommitted or untracked'
+    no_helper_ran 'unclean checkout'
+}
+
+t_g13_baseline_preconditions() {
+    baseline_world
+    printf 'sessions\n' >"$W/inventory"
+    run_script -- baseline
+    expect_refused 'a database that is not empty' 'EMPTY database'
+    no_helper_ran 'non-empty database'
+    baseline_world
+    { hist_names; echo extra_table; } >"$W/hist.inv"
+    run_script -- baseline
+    expect_refused 'a 17-table result' 'not exactly the 16 tables'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'migrate_historical ' ]] || bad 'the fixture was loaded into a schema that is not the v0.3.0 one'
+    baseline_world
+    grep -v '^people$' <(hist_names) >"$W/hist.inv"
+    run_script -- baseline
+    expect_refused 'a 15-table result' 'missing people'
+}
+
+t_g13_baseline_fixture() {
+    local line
+    baseline_world
+    sed -i '/^fixture:complete=ok$/d' "$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a fixture that does not report completion' 'fixture:complete=ok'
+    baseline_world
+    sed -i '/^table sessions /d' "$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a snapshot without a table' 'not exactly one for each'
+    baseline_world
+    sed -i 's/^table people 13 /table people 12 /' "$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a fixture with 12 people' 'people holds 12'
+    baseline_world
+    sed -i 's/^table accounts 11 /table accounts 0 /' "$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a durable table with no rows' 'durable table accounts is empty'
+    baseline_world
+    sed -i 's/^\(table accounts 11 \).*/\1nothex/' "$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a malformed digest' 'malformed'
+    baseline_world
+    line="$(grep -m1 '^table people ' "$W/out_fixture_load")"
+    printf '%s\n' "$line" >>"$W/out_fixture_load"
+    run_script -- baseline
+    expect_refused 'a repeated table' 'not exactly one for each'
+    [[ ! -e "$T/root/historical.snapshot" ]] || bad 'a snapshot was written from an incomplete fixture'
+}
+
+t_g13_previous_stage() {
+    local c
+    for c in take-backup upgrade reproduce-wp3-01; do
+        baseline_world
+        run_script -- "$c"
+        expect_refused "$c with no snapshot" 'is missing from the state directory'
+        no_helper_ran "$c with no snapshot"
+        no_dump_or_import "$c with no snapshot"
+    done
+    ensure_cache
+    backup_world
+    chmod 644 "$T/root/historical.snapshot"
+    run_script -- take-backup
+    expect_refused 'a snapshot that is not private' 'not intact'
+}
+
+t_g13_backup_required() {
+    ensure_cache
+    upgrade_world
+    rm -f "$T/root/historical.dump.sql" "$T/root/historical.manifest.json"
+    run_script -- upgrade
+    expect_refused 'upgrade with no backup' 'no complete backup'
+    no_helper_ran 'upgrade with no backup'
+    upgrade_world
+    rm -f "$T/root/historical.manifest.json"
+    run_script -- upgrade
+    expect_refused 'upgrade with no manifest' 'no complete backup'
+    reproduce_world
+    rm -f "$T/root/historical.dump.sql"
+    run_script -- reproduce-wp3-01
+    expect_refused 'reproduce with no dump' 'no complete backup'
+    no_dump_or_import 'reproduce with no dump'
+}
+
+t_g13_backup_preconditions() {
+    ensure_cache
+    backup_world
+    { hist_names; echo extra_table; } >"$W/inventory"
+    run_script -- take-backup
+    expect_refused 'a database with an extra table' 'not exactly the 16 tables'
+    no_dump_or_import 'extra table'
+    backup_world
+    snapshot_output changed >"$W/out_snapshot_historical"
+    run_script -- take-backup
+    expect_refused 'a database that changed since the snapshot' 'no longer equals the snapshot'
+    expect_has 'the changed tables are named' "$ERR" 'people'
+    no_dump_or_import 'changed database'
+}
+
+# --- G15: the backup ---
+
+# shellcheck disable=SC2016 # the client's own $MARIADB_PASSWORD is text to look for, not an expansion
+t_g15_take_backup() {
+    local f m sha line p1 p2 table
+    ensure_cache
+    backup_world
+    run_script -- take-backup
+    expect_rc take-backup 0
+    expect_has 'summary' "$OUT" 'Backup done'
+    f="$T/root/historical.dump.sql"
+    m="$T/root/historical.manifest.json"
+    [[ "$("$REAL_STAT" -c %a "$f")" == 600 && "$("$REAL_STAT" -c %a "$m")" == 600 ]] || bad 'the dump or the manifest is not mode 600'
+    [[ "$(cat "$W/dump_pass1" "$W/dump_pass2")" == "$(<"$f")" ]] || bad 'the dump is not pass 1 followed by pass 2'
+    # The two passes, as the runbook gives them, with the database last and every transient table ignored.
+    p1="$(sed -n 1p "$W/dumpcalls")"
+    p2="$(sed -n 2p "$W/dumpcalls")"
+    [[ "$p1" == 'DUMP args=[--no-data --no-tablespaces flc_rehearsal_app]' ]] || bad "pass 1 was: $p1"
+    line='DUMP args=[--no-create-info --single-transaction --quick --no-tablespaces'
+    for table in "${TRANSIENT[@]}"; do line+=" --ignore-table=flc_rehearsal_app.$table"; done
+    [[ "$p2" == "$line flc_rehearsal_app]" ]] || bad "pass 2 was: $p2"
+    [[ "$(grep -c . "$W/dumpcalls")" == 2 ]] || bad 'the dump client was not called exactly twice'
+    line="$(grep -E '^exec --user mysql .* sh -c ' "$W/calls" | head -n 1)"
+    for sha in 'mariadb-dump' '--no-defaults' '--user=flc_rehearsal' '--protocol=tcp' '-u MARIADB_ROOT_PASSWORD' '-u MYSQL_ROOT_PASSWORD' 'EDITOR=/bin/false' 'PAGER=cat' 'MYSQL_PWD="$MARIADB_PASSWORD"'; do
+        expect_has 'dump client' "$line" "$sha"
+    done
+    for sha in '--user=root' '-uroot' ' -p' '--password' "$APP_PW" "$ROOT_PW"; do expect_lacks 'dump client' "$line" "$sha"; done
+    # The manifest: the runbook's, with every value checked against the facts.
+    sha="$(sha256sum <"$f" | cut -c1-64)"
+    expect_has 'dump checksum' "$(<"$m")" "\"dump_sha256\": \"$sha\","
+    expect_has 'dump size' "$(<"$m")" "\"dump_bytes\": $(wc -c <"$f" | tr -d ' '),"
+    expect_has 'release' "$(<"$m")" "\"commit\": \"$HIST\""
+    expect_has 'release version' "$(<"$m")" '"version": "v0.3.0"'
+    expect_has 'database' "$(<"$m")" '"name": "flc_rehearsal_app"'
+    expect_has 'server version' "$(<"$m")" '"server_version": "10.11.18-MariaDB-ubu2204"'
+    expect_has 'current fingerprint' "$(<"$m")" "\"current_key_fingerprint\": \"$FP_CUR\","
+    expect_has 'previous fingerprints' "$(<"$m")" "\"previous_key_fingerprints\": [\"$FP_PREV\"],"
+    expect_has 'keyring fingerprint' "$(<"$m")" "\"keyring_fingerprint\": \"$RING_CUR_PREV\","
+    expect_has 'the durable tables' "$(<"$m")" '"tables_with_data": ["account_invitations", "account_recovery_codes", "account_totp_factors", "accounts", "membership_grants", "migrations", "people", "role_assignments", "security_events"],'
+    expect_has 'the schema-only tables' "$(<"$m")" '"tables_schema_only": ["cache", "cache_locks", "failed_jobs", "job_batches", "jobs", "password_reset_tokens", "sessions"]'
+    [[ "$(grep -cE '^  "taken_at": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",$' "$m")" == 1 ]] || bad 'taken_at is not an ISO-8601 UTC time'
+    # No secret anywhere: not in the manifest, the output, a docker or git argument. (The dump holds synthetic hashes and ciphertext by nature.)
+    for sha in "$KEY_CUR" "$KEY_PREV" "${KEY_CUR#base64:}" "${KEY_PREV#base64:}" "$APP_PW" "$ROOT_PW" "$TOKEN"; do expect_lacks 'the manifest' "$(<"$m")" "$sha"; done
+    no_secret_anywhere take-backup
+    expect_lacks 'the output' "$OUT" "$TOKEN"
+    ! leftover_dump || bad 'a temporary dump file was left behind'
+    only_database_left take-backup
+}
+
+t_g15_dump_contract() {
+    ensure_cache
+    # A dump that is not what the contract requires is removed and never becomes a backup.
+    check() { # DESC NEEDLE -- the world's dump files have been edited by the caller
+        run_script -- take-backup
+        expect_refused "$1" "$2"
+        [[ ! -e "$T/root/historical.dump.sql" && ! -e "$T/root/historical.manifest.json" ]] || bad "$1: a backup was kept"
+        ! leftover_dump || bad "$1: the rejected dump file was left behind"
+    }
+    backup_world; sed -i '/^CREATE TABLE \x60jobs\x60/,/^) ENGINE/d' "$W/dump_pass1"; check 'a table whose structure is missing' 'does not create exactly'
+    backup_world; sed -i '/^DROP TABLE IF EXISTS \x60jobs\x60;/d' "$W/dump_pass1"; check 'a table that is not dropped before it is created' 'does not drop exactly'
+    backup_world; printf 'INSERT INTO \x60sessions\x60 VALUES (1);\n' >>"$W/dump_pass2"; check 'rows of a transient table' 'rows for other than exactly the durable tables'
+    backup_world; sed -i '/^INSERT INTO \x60people\x60/d' "$W/dump_pass2"; check 'a durable table without rows' 'rows for other than exactly the durable tables'
+    backup_world; printf 'USE other_db;\n' >>"$W/dump_pass2"; check 'a dump that names a database' 'names a database'
+    backup_world; printf 'CREATE DATABASE other_db;\n' >>"$W/dump_pass1"; check 'a dump that creates a database' 'names a database'
+    backup_world; printf 'CREATE TABLE \x60extra\x60 (\n  \x60id\x60 int\n) ENGINE=InnoDB;\n' >>"$W/dump_pass1"; check 'a table beyond the sixteen' 'does not create exactly'
+    backup_world; touch "$W/dump_fail"; run_script -- take-backup; expect_rc 'a dump client that fails' 1
+    [[ ! -e "$T/root/historical.manifest.json" && ! -e "$T/root/historical.dump.sql" ]] || bad 'a backup was kept for a failed dump'
+    ! leftover_dump || bad 'the temporary file of a failed dump was left behind'
+}
+
+t_g15_no_overwrite() {
+    ensure_cache
+    backup_world
+    install_state dump.sql manifest.json
+    run_script -- take-backup
+    expect_refused 'a second backup' 'never overwritten'
+    no_dump_or_import 'a second backup'
+    backup_world
+    install_state manifest.json
+    run_script -- take-backup
+    expect_refused 'a manifest with no dump' 'never overwritten'
+}
+
+t_g12_the_dump_runs_the_account_checks() {
+    good_world
+    printf '%s\n' "$GRANT_GLOBAL_ALL" >"$W/app_grants"
+    run_fn "guarded_app_dump '$T/root' flc_rehearsal_app --no-data"
+    expect_refused 'an over-privileged account' 'beyond the rehearsal database'
+    [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken as an over-privileged account'
+    good_world
+    run_fn "guarded_app_dump '$T/root' flowlife --no-data"
+    expect_refused 'a development database name' 'not one of the rehearsal'
+    [[ ! -e "$W/dumpcalls" ]] || bad 'a development database was dumped'
+    good_world
+    put "$W" sentinel_token "$OTHER_TOKEN"
+    run_fn "guarded_app_dump '$T/root' flc_rehearsal_app --no-data"
+    expect_refused 'a server that is not this run' "sentinel"
+    [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken from a server whose sentinel is not this run'
+}
+
+t_g15_manifest_is_checked() {
+    local m
+    ensure_cache
+    m="$T/root/historical.manifest.json"
+    manifest_case() { # DESC SED NEEDLE
+        upgrade_world
+        sed -i "$2" "$m"
+        run_script -- upgrade
+        expect_refused "$1" "$3"
+        no_helper_ran "$1"
+    }
+    manifest_case 'another manifest version' 's/"manifest_version": 1,/"manifest_version": 2,/' 'manifest_version'
+    manifest_case 'another release commit' "s/\"commit\": \"$HIST\"/\"commit\": \"$(printf 'a%.0s' {1..40})\"/" 'not for the historical commit'
+    manifest_case 'another run' 's/"run_token_fingerprint": "[0-9a-f]*"/"run_token_fingerprint": "0000000000000000"/' "not this run's"
+    manifest_case 'a table missing from the inventory' 's/"cache", //' "not the snapshot's"
+    manifest_case 'a table that is not in the snapshot' 's/"jobs", /"jobs", "extra_table", /' "not the snapshot's"
+    manifest_case 'a transient table classed as durable' 's/"tables_with_data": \[/"tables_with_data": ["sessions", /; s/, "sessions"\]/]/' "not the contract's"
+    manifest_case 'a keyring fingerprint that does not follow' 's/"keyring_fingerprint": "[0-9a-f]*"/"keyring_fingerprint": "0000000000000000"/' 'keyring fingerprint is not'
+    manifest_case 'a listed fingerprint that was changed' "s/\"current_key_fingerprint\": \"$FP_CUR\"/\"current_key_fingerprint\": \"$FP_FF\"/" 'keyring fingerprint is not'
+    reproduce_world
+    sed -i 's/"run_token_fingerprint": "[0-9a-f]*"/"run_token_fingerprint": "0000000000000000"/' "$m"
+    run_script -- reproduce-wp3-01
+    expect_refused 'reproduce with another run'"'"'s manifest' "not this run's"
+    no_dump_or_import 'another run'"'"'s manifest'
+}
+
+t_g15_dump_matches_manifest() {
+    local f m
+    ensure_cache
+    f="$T/root/historical.dump.sql"
+    m="$T/root/historical.manifest.json"
+    upgrade_world
+    sed -i '0,/VALUES (1)/s//VALUES (2)/' "$f" # the same size, another checksum
+    run_script -- upgrade
+    expect_refused 'a dump altered in place' "SHA-256 is not the manifest's"
+    no_helper_ran 'a dump altered in place'
+    upgrade_world
+    sed -i 's/"dump_bytes": [0-9]*,/"dump_bytes": 1,/' "$m"
+    run_script -- upgrade
+    expect_refused 'a manifest with another size' "size is not the manifest's"
+    no_helper_ran 'a manifest with another size'
+    reproduce_world
+    printf '\n' >>"$f"
+    run_script -- reproduce-wp3-01
+    expect_refused 'a dump that grew' 'dump cannot be relied on'
+    no_dump_or_import 'a dump that grew'
+}
+
+
+# --- G13: upgrade ---
+
+t_g13_upgrade_happy_path() {
+    local creates
+    ensure_cache
+    upgrade_world
+    run_script -- upgrade
+    expect_rc upgrade 0
+    expect_has 'summary' "$OUT" 'Upgrade done'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical migrate_current snapshot_current mark ' ]] || bad "the helpers did not run in the expected order: $(tr '\n' ' ' <"$W/runs")"
+    creates="$(grep -E '^create ' "$W/calls")"
+    [[ "$(grep -c -- '--workdir /var/www/html/historical' <<<"$creates")" == 1 && "$(grep -c -- '--workdir /var/www/html/current' <<<"$creates")" == 3 ]] || bad 'the runners were not one historical (the check before) and three current'
+    expect_has 'the migration' "$creates" ' php artisan migrate --force --no-interaction'
+    expect_has 'the marker' "$creates" ' php /var/www/html/harness/rehearse.php mark'
+    only_database_left upgrade
+    no_secret_anywhere upgrade
+    # The migration never ran before the check that the database still equals its snapshot.
+    [[ "$(head -n 1 "$W/runs")" == snapshot_historical ]] || bad 'the upgrade began with something other than the snapshot check'
+}
+
+t_g13_upgrade_preconditions() {
+    ensure_cache
+    upgrade_world
+    up_names >"$W/inventory"
+    run_script -- upgrade
+    expect_refused 'a database that is already upgraded' 'not exactly the 16 tables'
+    no_helper_ran 'an upgraded database'
+    upgrade_world
+    snapshot_output changed >"$W/out_snapshot_historical"
+    run_script -- upgrade
+    expect_refused 'a database that changed since the backup' 'no longer equals the snapshot'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical ' ]] || bad 'a migration ran although the database no longer equals the backup'
+}
+
+t_g13_upgrade_results() {
+    ensure_cache
+    upgrade_world
+    grep -v '^sourced_role_grants$' "$W/up.inv" >"$W/up.inv.new"; mv "$W/up.inv.new" "$W/up.inv"
+    run_script -- upgrade
+    expect_refused 'a 33-table result' 'not exactly the 34 tables'
+    expect_has 'the missing table is named' "$ERR" 'missing sourced_role_grants'
+    upgrade_world
+    { up_names; echo surprise; } >"$W/up.inv"
+    run_script -- upgrade
+    expect_refused 'a 35-table result' 'extra surprise'
+    upgrade_world
+    snapshot_output after | sed 's/^\(table role_assignments [0-9]* \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' >"$W/out_snapshot_current"
+    run_script -- upgrade
+    expect_refused 'a role assignment table that is not as the upgrade should leave it' 'did not leave the data as expected'
+    expect_has 'the table is named' "$ERR" 'role_assignments'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_historical migrate_current snapshot_current ' ]] || bad 'the marker was written although the upgrade result was wrong'
+    upgrade_world
+    echo 'something else' >"$W/out_mark"
+    run_script -- upgrade
+    expect_refused 'a marker that was not reported' 'marker:written=ok'
+    upgrade_world
+    printf '5\n' >"$W/fail_migrate_current"
+    run_script -- upgrade
+    expect_rc 'a migration that fails' 5
+    expect_has 'recovery is named' "$ERR" 'cleanup'
+}
+
+# --- G16: the WP3-01 demonstration ---
+
+t_g16_reproduce_happy_path() {
+    local f
+    ensure_cache
+    reproduce_world
+    run_script -- reproduce-wp3-01
+    expect_rc reproduce 0
+    expect_has 'the failed equality' "$OUT" 'inventory equality assertion FAILED'
+    expect_has 'the orphan' "$OUT" 'no Person behind it'
+    expect_has 'the checksums that match' "$OUT" 'would pass'
+    expect_has 'the verdict' "$OUT" 'WP3-01 reproduced'
+    expect_has 'it is not a restoration' "$OUT" 'not a restoration'
+    f="$T/root/historical.dump.sql"
+    [[ "$(<"$f")" == "$(<"$W/import.sql")" ]] || bad 'what was loaded is not exactly the verified dump' # (the fake's capture drops the final newline)
+    expect_has 'the load went through the application account, into the one database' "$(<"$W/appsql.log")" 'IMPORT args=[-D flc_rehearsal_app]'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_current ' ]] || bad "the only helper should be the snapshot after the load: $(tr '\n' ' ' <"$W/runs")"
+    # No clearing, no recreation, no other mutation: every docker call is a read, an exec, or the runner's create/start/rm.
+    ! grep -qE '^(volume rm|network rm|stop|compose)' "$W/calls" || bad 'the demonstration removed or recreated an object'
+    only_database_left reproduce
+    no_secret_anywhere reproduce
+}
+
+t_g16_preconditions() {
+    local fp ring
+    ensure_cache
+    reproduce_world
+    hist_names >"$W/inventory"
+    run_script -- reproduce-wp3-01
+    expect_refused 'a database that is not upgraded' 'not exactly the 34 tables'
+    no_dump_or_import 'a database that is not upgraded'
+    reproduce_world
+    printf '13\t1\t15\t1\n' >"$W/counts"
+    run_script -- reproduce-wp3-01
+    expect_refused 'a database that is already in the defective state' 'not the post-upgrade state'
+    no_dump_or_import 'a database already in the defective state'
+    reproduce_world
+    printf '14\t0\t29\t0\n' >"$W/counts"
+    run_script -- reproduce-wp3-01
+    expect_refused 'a database with no marker profile' 'not the post-upgrade state'
+    # A live ring that lacks a fingerprint the backup requires: nothing is loaded.
+    reproduce_world
+    run_fn "keyring_fingerprint $FP_CUR $FP_FF"
+    ring="$OUT"
+    reproduce_world
+    sed -i "s/\"previous_key_fingerprints\": \\[\"$FP_PREV\"\\]/\"previous_key_fingerprints\": [\"$FP_FF\"]/; s/\"keyring_fingerprint\": \"[0-9a-f]*\"/\"keyring_fingerprint\": \"$ring\"/" "$T/root/historical.manifest.json"
+    run_script -- reproduce-wp3-01
+    expect_refused 'a backup that requires a key the live ring lacks' "lacks a key fingerprint the backup requires ($FP_FF"
+    no_dump_or_import 'a missing key'
+    fp="$(grep -c 'DROP' "$W/appsql.log" 2>/dev/null || true)"
+    [[ "${fp:-0}" == 0 ]] || bad 'a statement that drops was sent'
+}
+
+t_g16_import_is_reverified() {
+    ensure_cache
+    reproduce_world
+    # The dump changes, in place and to the same size, after the checks that start the command and before the load.
+    printf "sed -i '0,/VALUES (1)/s//VALUES (2)/' '%s/root/historical.dump.sql'\n" "$T" >"$W/hook_app_sql"
+    run_script -- reproduce-wp3-01
+    expect_refused 'a dump changed after it was checked' 'is not the one the manifest describes'
+    [[ ! -e "$W/import.sql" ]] || bad 'a dump that no longer matched its manifest was loaded'
+}
+
+t_g16_unexpected_outcomes() {
+    ensure_cache
+    reproduce_world
+    hist_names >"$W/after.inv"
+    printf 'cp "%s/after.inv" "%s/inventory"\nprintf "13\\t1\\t15\\t1\\n" >"%s/counts"\n' "$W" "$W" "$W" >"$W/on_import"
+    run_script -- reproduce-wp3-01
+    expect_rc 'an inventory that equals the historical one after the load' 1
+    expect_has 'the defect did not reproduce' "$ERR" 'did not reproduce'
+    reproduce_world
+    grep -v '^resource_packs$' "$W/up.inv" >"$W/after.inv"
+    printf 'cp "%s/after.inv" "%s/inventory"\nprintf "13\\t1\\t15\\t1\\n" >"%s/counts"\n' "$W" "$W" "$W" >"$W/on_import"
+    run_script -- reproduce-wp3-01
+    expect_rc 'only 17 of the 18 newer tables remain' 1
+    expect_has 'not as described' "$ERR" 'not as WP3-01 describes'
+    reproduce_world
+    grep -v '^people$' "$W/up.inv" >"$W/after.inv"
+    printf 'cp "%s/after.inv" "%s/inventory"\nprintf "13\\t1\\t15\\t1\\n" >"%s/counts"\n' "$W" "$W" "$W" >"$W/on_import"
+    run_script -- reproduce-wp3-01
+    expect_rc 'a historical table missing after the load' 1
+    expect_has 'a missing table is not the defect' "$ERR" 'not as WP3-01 describes'
+    reproduce_world
+    printf 'cp "%s/up.inv" "%s/inventory"\nprintf "13\\t1\\t29\\t0\\n" >"%s/counts"\n' "$W" "$W" "$W" >"$W/on_import"
+    run_script -- reproduce-wp3-01
+    expect_rc 'a ledger that was not restored' 1
+    expect_has 'the state after the load' "$ERR" 'after the load the state is'
+    reproduce_world
+    { restored_block | sed 's/^\(table people [0-9]* \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/'; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
+    run_script -- reproduce-wp3-01
+    expect_rc 'historical tables that the dump did not restore' 1
+    expect_has 'the tables are named' "$ERR" 'people'
+    reproduce_world
+    touch "$W/import_fail"
+    run_script -- reproduce-wp3-01
+    expect_rc 'a load that fails' 1
+    expect_has 'the failure' "$ERR" 'could not be loaded'
+}
+
+t_g16_the_load_is_guarded() {
+    ensure_cache
+    reproduce_world
+    put "$W" sentinel_token "$OTHER_TOKEN"
+    run_script -- reproduce-wp3-01
+    expect_refused 'a server that is not this run' 'sentinel'
+    no_dump_or_import 'a server that is not this run'
+    reproduce_world
+    printf '%s\n' "$GRANT_GLOBAL_ALL" >"$W/app_grants"
+    run_script -- reproduce-wp3-01
+    expect_refused 'an over-privileged account' 'beyond the rehearsal database'
+    no_dump_or_import 'an over-privileged account'
+}
+
+# --- the command surface ---
+
+t_g13_commands_take_no_arguments() {
+    local c
+    for c in baseline take-backup upgrade reproduce-wp3-01; do
+        good_world
+        run_script -- "$c" /tmp/other.sql
+        expect_rc "$c with an argument" 64
+        assert_no_docker_call "$c with an argument"
+        run_script -- "$c" --database flowlife
+        expect_rc "$c with a database" 64
+    done
+    run_script -- --help
+    for c in baseline take-backup upgrade reproduce-wp3-01; do expect_has 'usage' "$OUT" "$c"; done
+    expect_has 'usage names the defect' "$OUT" 'not a restoration'
+}
+
+t_g2_stage_commands_refuse_inherited_variables() {
+    local c
+    for c in baseline take-backup upgrade reproduce-wp3-01; do
+        src_world
+        run_script DB_HOST=elsewhere -- "$c"
+        expect_refused "$c with DB_HOST" 'DB_HOST'
+        assert_no_docker_call "$c with DB_HOST"
+    done
+    src_world
+    run_script APP_KEY="$KEY_CUR" -- baseline
+    expect_refused 'baseline with an inherited APP_KEY' 'APP_KEY'
+    assert_no_docker_call 'an inherited APP_KEY'
+}
+
+t_cleanup_removes_the_stage_files() {
+    ensure_cache
+    good_world
+    install_state snapshot dump.sql manifest.json
+    run_script -- cleanup --dry-run
+    expect_rc 'dry run' 0
+    [[ -e "$T/root/historical.dump.sql" ]] || bad 'a dry run removed the dump'
+    run_script -- cleanup
+    expect_rc 'cleanup' 0
+    [[ ! -e "$T/root" ]] || bad 'cleanup left the state directory although it held only files this script wrote'
+    good_world
+    install_state snapshot dump.sql manifest.json
+    printf 'mine\n' >"$T/root/notes.txt"
+    run_script -- cleanup
+    expect_rc 'cleanup beside another file' 1
+    [[ -e "$T/root/notes.txt" && -e "$T/root/historical.dump.sql" && -e "$T/root/.flc-rehearsal-root" ]] || bad 'cleanup removed files from a directory that holds a file it did not write'
+    mkdir "$T/root/historical.snapshot.d" 2>/dev/null || true
+}
+
+# --- static: the lists, and the two languages, agree ---
+
+# shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+t_static_lists_match_the_repository() {
+    local snap="$ROOT/apps/platform/tests/Support/HistoricalSnapshot.php" fixture="$ROOT/apps/platform/tests/Support/HistoricalFixture.php" runbook="$ROOT/docs/runbooks/deployment.md" got want name
+    want="$(printf '%s\n' "${HIST_TABLES[@]}" | sort)"
+    got="$(sed -n '/public const array TABLES = \[/,/^    \];/p' "$snap" | grep -o "^ *'[a-z_]*' =>" | tr -d " '=>" | sort)"
+    [[ "$got" == "$want" ]] || bad 'the 16 historical tables are not HistoricalSnapshot::TABLES'
+    want="$(printf '%s\n' "${NEWER_TABLES[@]}" | sort)"
+    got="$(sed -n '/public const array NEW_TABLES = \[/,/^    \];/p' "$fixture" | grep -o "'[a-z_]*'" | tr -d "'" | sort)"
+    [[ "$got" == "$want" ]] || bad 'the 18 newer tables are not HistoricalFixture::NEW_TABLES'
+    want="$(printf '%s\n' "${TRANSIENT[@]}" | sort)"
+    got="$(grep -o -- '--ignore-table=<db>\.[a-z_]*' "$runbook" | sed 's/.*\.//' | sort -u)"
+    [[ "$got" == "$want" ]] || bad 'the transient tables are not the deployment runbook'"'"'s --ignore-table list'
+    # The script's own lists are the tests' lists.
+    run_fn 'printf "%s\n" "${HISTORICAL_TABLES[@]}" | LC_ALL=C sort'; [[ "$OUT" == "$(printf '%s\n' "${HIST_TABLES[@]}" | LC_ALL=C sort)" ]] || bad "the script's HISTORICAL_TABLES differ from the tests'"
+    run_fn 'printf "%s\n" "${NEWER_TABLES[@]}" | LC_ALL=C sort'; [[ "$OUT" == "$(printf '%s\n' "${NEWER_TABLES[@]}" | LC_ALL=C sort)" ]] || bad "the script's NEWER_TABLES differ from the tests'"
+    run_fn 'printf "%s\n" "${TRANSIENT_TABLES[@]}" | LC_ALL=C sort'; [[ "$OUT" == "$(printf '%s\n' "${TRANSIENT[@]}" | LC_ALL=C sort)" ]] || bad "the script's TRANSIENT_TABLES differ from the tests'"
+    [[ "$(( ${#HIST_TABLES[@]} + ${#NEWER_TABLES[@]} ))" == 34 && ${#NEWER_TABLES[@]} == 18 && ${#TRANSIENT[@]} == 7 ]] || bad 'the table counts are not 16 + 18 = 34, with 7 transient'
+    # The harness's written-out row counts: the 16 tables, 13 people.
+    for name in "${HIST_TABLES[@]}"; do
+        grep -qE "'$name' => $(rows_of "$name")[,]" "$SRC/php/rehearse.php" || bad "rehearse.php's FIXTURE_ROWS does not hold $name => $(rows_of "$name")"
+    done
+    run_fn 'echo "$FIXTURE_PEOPLE"'; [[ "$OUT" == 13 ]] || bad 'FIXTURE_PEOPLE is not 13'
+}
+
+t_static_the_harness_and_the_script_agree() {
+    local php_lines
+    if ! command -v php >/dev/null 2>&1; then return 0; fi
+    # The harness's own functions, with no database: the fingerprint vectors, and the lines it prints parsing as the script reads them.
+    [[ "$(php -r "require '$SRC/php/rehearse.php'; echo keyFingerprint('$KEY_CUR'), keyFingerprint('$KEY_PREV'), keyFingerprint('$KEY_FF');")" == "$FP_CUR$FP_PREV$FP_FF" ]] || bad 'the harness fingerprints the three vectors differently from the script'
+    php -r "require '$SRC/php/rehearse.php';
+        try { keyFingerprint('base64:AAAA'); echo 'accepted'; } catch (HarnessRefusal) { echo 'refused'; }" | grep -qx refused || bad 'the harness accepted a key that is not 32 bytes'
+    php_lines="$(php -r "require '$SRC/php/rehearse.php'; require '$ROOT/apps/platform/tests/Support/HistoricalSnapshot.php';
+        \$rows = []; foreach (array_keys(\\Tests\\Support\\HistoricalSnapshot::TABLES) as \$t) { \$rows[\$t] = []; }
+        echo tableLines('table', \$rows);")"
+    [[ "$(grep -c . <<<"$php_lines")" == 16 ]] || bad 'the harness does not print one line for each of the 16 tables'
+    run_fn "table_lines table '$php_lines'"
+    expect_rc 'the harness lines parse as the script reads them' 0
+    [[ "$(grep -c . <<<"$OUT")" == 16 ]] || bad 'the script did not read 16 lines from the harness output'
+    expect_has 'the digest of no rows' "$php_lines" "$(printf '[]' | sha256sum | cut -c1-64)"
+}
+
+
 # --- tests: static -------------------------------------------------------------------------------------------------------------------
 
 t_static_substrate() {
@@ -2413,6 +3178,10 @@ t_static_substrate() {
     # The application password is exported in exactly one place, the launcher, and is never a value on a command line.
     [[ "$(grep -c 'DB_PASSWORD=' "$script")" == 1 ]] || bad 'DB_PASSWORD= appears other than in the launcher'
     grep -q 'export DB_PASSWORD=' "$script" || bad 'the launcher does not export DB_PASSWORD'
+    # The same for the encryption keys: exported in the launcher alone (REHEARSAL_APP_KEY= is the state file's name for it, not an export).
+    [[ "$(grep -c '[^_]APP_KEY=' "$script")" == 1 && "$(grep -c 'APP_PREVIOUS_KEYS=' "$script")" == 1 ]] || bad 'APP_KEY= or APP_PREVIOUS_KEYS= appears other than in the launcher'
+    { grep -q 'export APP_KEY=' "$script" && grep -q 'export APP_PREVIOUS_KEYS=' "$script"; } || bad 'the launcher does not export the keys'
+    grep -q -e '-e APP_KEY -e APP_PREVIOUS_KEYS' "$script" || bad 'the runner is not given the keys by name'
     if grep -nE '(--force|--privileged|--publish|--env-file|--volumes-from|--network host|-p [0-9])' "$script" | grep -vE '^[0-9]+:[[:space:]]*#|artisan|migrate|refuse|no --force|never|dkr compose' | grep -q .; then bad 'a forbidden docker or client option appears in the script'; fi
     if grep -n 'compose.*-e \|docker.*-v ' "$script" | grep -q .; then bad 'a bind-style docker option appears in the script'; fi
     for f in "$SRC"/php/*.php; do
@@ -2426,7 +3195,7 @@ t_static_substrate() {
     # compose.yaml gains nothing for this slice: still one service, one network, one volume.
     grep -q 'runner\|prepare' "$SRC/compose.yaml" && bad 'compose.yaml mentions the runner or preparation container'
 }
-HARNESS_FILES_EXPECTED=(db-ping.php probe.php)
+HARNESS_FILES_EXPECTED=(db-ping.php probe.php rehearse.php)
 
 declare -A GUARD_TESTS=(
     [G1-context]='t_g1_context t_g1_applies_to_every_command'
@@ -2559,6 +3328,45 @@ declare -A GUARD_TESTS=(
     [G10-s-token]='t_g10_source_volume_identity'
     [G10-s-in-use]='t_g10_source_volume_identity'
     [G10-s-users-list]='t_g10_source_volume_identity'
+    [G14-key-format]='t_g14_key_format'
+    [G14-keys-agree]='t_g14_keys_agree'
+    [G14-previous-agree]='t_g14_keys_agree'
+    [G13-commit-present]='t_g13_source_commits'
+    [G13-commit-exact]='t_g13_source_commits'
+    [G13-clean-checkout]='t_g13_source_commits'
+    [G13-empty-target]='t_g13_baseline_preconditions'
+    [G13-baseline-inventory]='t_g13_baseline_preconditions'
+    [G13-fixture-reported]='t_g13_baseline_fixture'
+    [G13-snapshot-complete]='t_g13_baseline_fixture'
+    [G13-fixture-people]='t_g13_baseline_fixture'
+    [G13-fixture-durable]='t_g13_baseline_fixture'
+    [G13-previous-stage]='t_g13_previous_stage'
+    [G13-backup-required]='t_g13_backup_required'
+    [G13-backup-inventory]='t_g13_backup_preconditions'
+    [G13-snapshot-matches]='t_g13_backup_preconditions t_g13_upgrade_preconditions'
+    [G13-upgrade-from-historical]='t_g13_upgrade_preconditions'
+    [G13-upgrade-inventory]='t_g13_upgrade_results'
+    [G13-upgrade-data]='t_g13_upgrade_results'
+    [G13-marker]='t_g13_upgrade_results'
+    [G12-before-dump]='t_g12_the_dump_runs_the_account_checks'
+    [G15-schema-all]='t_g15_dump_contract'
+    [G15-schema-drops]='t_g15_dump_contract'
+    [G15-data-durable-only]='t_g15_dump_contract'
+    [G15-no-database]='t_g15_dump_contract'
+    [G15-dump-checked]='t_g15_dump_contract'
+    [G15-no-overwrite]='t_g15_no_overwrite'
+    [G15-manifest-release]='t_g15_manifest_is_checked'
+    [G15-manifest-run]='t_g15_manifest_is_checked'
+    [G15-manifest-inventory]='t_g15_manifest_is_checked'
+    [G15-manifest-classes]='t_g15_manifest_is_checked'
+    [G15-manifest-keyring]='t_g15_manifest_is_checked'
+    [G15-dump-sha]='t_g15_dump_matches_manifest'
+    [G15-dump-bytes]='t_g15_dump_matches_manifest'
+    [G16-keyring-present]='t_g16_preconditions'
+    [G16-upgraded-inventory]='t_g16_preconditions'
+    [G16-upgraded-state]='t_g16_preconditions'
+    [G16-import-verified-dump]='t_g16_import_is_reverified'
+    [G16-defect-reproduced]='t_g16_unexpected_outcomes'
 )
 
 # --- running -------------------------------------------------------------------------------------------------------------------------------------
@@ -2621,8 +3429,14 @@ for id in "${MARKERS[@]}"; do
     SUT="$mutant"
     QUIET=1
     caught=''
+    rm -f "$T/first_bad"
     for t in ${GUARD_TESTS[$id]}; do
-        if ! run_test "$t"; then caught="$t"; break; fi
+        # In a subshell, so that the first failed assertion can end the test at once; nothing a test changes needs to outlive it here.
+        if ! (ABORT_ON_BAD=1; run_test "$t"); then
+            caught="$t"
+            FIRST_BAD="$(cat "$T/first_bad" 2>/dev/null || true)"
+            break
+        fi
     done
     QUIET=0
     SUT="$SRC"
