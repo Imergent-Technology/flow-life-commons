@@ -37,11 +37,21 @@ NAME_C='flc-rehearsal-restore-mariadb'
 NAME_N='flc-rehearsal-restore-db'
 NAME_V='flc-rehearsal-restore-db-data'
 IMAGE='mirror.gcr.io/library/mariadb:10.11.18'
+ROOT_PW="$(printf '7e%.0s' {1..24})"
+APP_PW="$(printf '5c%.0s' {1..24})"
+HIST='2f385b79a7b83323c6f15a6685ee610ccd85b5bf'
+HEAD_SHA="$(printf 'e%.0s' {1..40})"
+IMG_ID="sha256:$(printf 'd%.0s' {1..64})"
+NAME_SRC='flc-rehearsal-restore-src'
+NAME_R='flc-rehearsal-restore-runner'
+NAME_P='flc-rehearsal-restore-prepare'
+RID="$(printf '1%.0s' {1..64})"
+PID_="$(printf '2%.0s' {1..64})"
 
 # --- the tool directory ------------------------------------------------------------------------------------------------------------
 
 mkdir -p "$BIN"
-for tool in bash env cat grep awk tr od id mktemp mv chmod rm rmdir mkdir dirname cut tail head wc flock sed sort date sleep ln cp tee basename true; do
+for tool in bash env cat grep awk tr od id mktemp mv chmod rm rmdir mkdir dirname cut tail head wc flock sed sort date sleep ln cp tee basename true tar; do
     path="$(command -v "$tool" || true)"
     [[ -n "$path" ]] || { echo "rehearsal tests: the tool '$tool' is needed" >&2; exit 1; }
     ln -s "$path" "$BIN/$tool"
@@ -100,6 +110,19 @@ declare -A CX=(
     ['{{range $k,$v := .NetworkSettings.Networks}}{{$k}},{{end}}']=nets
     ['{{range .Mounts}}{{.Type}}:{{.Name}}:{{.Destination}},{{end}}']=mounts
 )
+declare -A EX=(
+    ['{{.Id}}']=id ['{{.Name}}']=name ['{{.Image}}']=image
+    ['{{index .Config.Labels "io.flowlife.rehearsal"}}']=l_ns
+    ['{{index .Config.Labels "io.flowlife.rehearsal.role"}}']=l_role
+    ['{{index .Config.Labels "io.flowlife.rehearsal.run-token"}}']=l_token
+    ['{{len .HostConfig.PortBindings}}']=ports ['{{.HostConfig.Privileged}}']=privileged ['{{json .HostConfig.CapAdd}}']=capadd
+    ['{{json .HostConfig.CapDrop}}']=capdrop ['{{json .HostConfig.SecurityOpt}}']=secopt ['{{.HostConfig.ReadonlyRootfs}}']=readonly_root
+    ['{{.Config.User}}']=user ['{{.HostConfig.NetworkMode}}']=netmode
+    ['{{range $k,$v := .NetworkSettings.Networks}}{{$k}},{{end}}']=nets
+    ['{{range .Mounts}}{{.Type}}:{{.Name}}:{{.Destination}}:{{.RW}},{{end}}']=mounts
+    ['{{range $k,$v := .HostConfig.Tmpfs}}{{$k}},{{end}}']=tmpfs
+    ['{{.HostConfig.Memory}}']=memory ['{{.HostConfig.PidsLimit}}']=pids ['{{.HostConfig.NanoCpus}}']=nanocpus
+)
 declare -A NX=(
     ['{{.Id}}']=id ['{{.Name}}']=name ['{{.Internal}}']=internal ['{{.Driver}}']=driver
     ['{{index .Labels "io.flowlife.rehearsal"}}']=l_ns
@@ -122,12 +145,13 @@ render() { # KIND DIR TEMPLATE
         echo 'template parsing error: template: :1:402: executing "" at <.Name>: map has no entry for key "Name"' >&2
         exit 1
     fi
-    for expr in "${!table[@]}"; do
+    # Longest expression first: some expressions contain a shorter one, which must not be replaced inside it.
+    while IFS= read -r expr; do
         value="$(cat "$dir/${table[$expr]}" 2>/dev/null || true)"
         # A label that is absent renders as "<no value>" for containers and networks (empty for volumes), as on the real daemon.
         if [[ -z "$value" && "${table[$expr]}" == l_* && "$1" != VX ]]; then value='<no value>'; fi
         out="${out//"$expr"/$value}"
-    done
+    done < <(printf '%s\n' "${!table[@]}" | awk '{print length($0) "\t" $0}' | sort -rn | cut -f2-)
     if [[ "$out" == *'{{'* ]]; then echo "fake docker: unsupported template: $3" >&2; exit 97; fi
     printf '%s\n' "$out"
 }
@@ -153,6 +177,7 @@ list() { # KIND(c|n|v) -- applies the --filter arguments; prints one line per ma
                     local lk="${val%%=*}" lv="${val#*=}"
                     case "$lk" in
                         io.flowlife.rehearsal) [[ "$(cat "$dir/l_ns" 2>/dev/null)" == "$lv" ]] || match=0 ;;
+                        io.flowlife.rehearsal.role) [[ "$(cat "$dir/l_role" 2>/dev/null)" == "$lv" ]] || match=0 ;;
                         com.docker.compose.project) [[ "$(cat "$dir/l_project" 2>/dev/null)" == "$lv" ]] || match=0 ;;
                         *) match=0 ;;
                     esac ;;
@@ -176,8 +201,9 @@ case "$1 ${2:-}" in
     "inspect --type")
         id="$(lastarg "$@")"
         [[ -d "$W/c/$id" ]] || { echo "Error: No such container: $id" >&2; exit 1; }
-        render CX "$W/c/$id" "$(formatarg "$@")"
-        hook inspect_c ;;
+        if [[ "$(formatarg "$@")" == *ReadonlyRootfs* ]]; then render EX "$W/c/$id" "$(formatarg "$@")"; else render CX "$W/c/$id" "$(formatarg "$@")"; fi
+        # The hook models a container changing between a full identity check and the next one; reading only the role label is not one.
+        [[ "$(formatarg "$@")" == '{{index .Config.Labels "io.flowlife.rehearsal.role"}}' ]] || hook inspect_c ;;
     "network inspect")
         id="$(lastarg "$@")"
         [[ -d "$W/n/$id" ]] || { echo "Error: No such network: $id" >&2; exit 1; }
@@ -201,18 +227,120 @@ case "$1 ${2:-}" in
     "network rm") [[ ! -e "$W/network_rm_fail" ]] || exit 1; rm -rf "$W/n/$(lastarg "$@")" ;;
     "volume rm") [[ ! -e "$W/volume_rm_fail" ]] || exit 1; rm -rf "$W/v/$(lastarg "$@")" ;;
     "exec -i")
+        if [[ "$3" == --user ]]; then # the restricted application-user client: `exec -i --user U ID sh -c SNIPPET sh ARGS...`
+            [[ -d "$W/c/$5" ]] || { echo "Error: No such container: $5" >&2; exit 1; }
+            sql="$(cat)"
+            [[ ! -e "$W/app_cannot_connect" ]] || exit 1
+            case "$sql" in
+                *'SELECT CURRENT_USER();'*)
+                    cat "$W/app_identity" 2>/dev/null || echo 'flc_rehearsal@%'
+                    if [[ -f "$W/app_grants" ]]; then cat "$W/app_grants"; else
+                        echo "GRANT USAGE ON *.* TO \`flc_rehearsal\`@\`%\` IDENTIFIED BY PASSWORD '*0123456789ABCDEF0123456789ABCDEF01234567'"
+                        printf '%s\n' 'GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_app`.* TO `flc_rehearsal`@`%`'
+                    fi
+                    echo ;;
+                *'flc_rehearsal_identity.run_token'*) [[ -f "$W/app_sees_sentinel" ]] || { echo 'ERROR 1142 (42000): SELECT command denied' >&2; exit 1; }; cat "$W/sentinel_token"; echo ;;
+                *'\! echo'*) if [[ -f "$W/sandbox_escape" ]]; then echo FLC_ESCAPED; else echo 'ERROR: the sandbox does not allow system commands' >&2; exit 1; fi ;;
+                *) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; echo 1 ;;
+            esac
+            exit 0
+        fi
         id="$3"
         [[ -n "$id" ]] || { echo "Error: No container specified" >&2; exit 1; }
         [[ -d "$W/c/$id" ]] || { echo "Error: No such container: $id" >&2; exit 1; }
         sql="$(cat)"
         case "$sql" in
             *'SELECT VERSION()'*) cat "$W/version"; echo ;;
+            *'FROM mysql.user'*) cat "$W/account_count" 2>/dev/null || echo 1 ;;
             *'SELECT token FROM flc_rehearsal_identity.run_token'*) [[ -f "$W/sentinel_token" ]] || exit 1; cat "$W/sentinel_token"; echo ;;
             *'CREATE DATABASE flc_rehearsal_identity'*)
                 printf '%s' "$sql" | sed -n "s/.*VALUES ('\([0-9a-f]*\)').*/\1/p" >"$W/sentinel_token"
                 printf 'SENTINEL %s\n' "$sql" >>"$W/sql.log" ;;
             *) printf 'SQL args=[%s] %s\n' "${*:8}" "$sql" >>"$W/sql.log"; echo 1 ;;
         esac ;;
+    "image inspect") [[ -f "$W/image_id" ]] || { echo 'Error: No such image' >&2; exit 1; }; cat "$W/image_id"; echo ;;
+    "volume create")
+        args=("$@")
+        vname="${args[-1]}"
+        if [[ ! -d "$W/v/$vname" ]]; then # as the real daemon: creating a volume that exists is not an error and changes nothing
+            mkdir -p "$W/v/$vname"
+            printf '%s' "$vname" >"$W/v/$vname/id"; printf '%s' "$vname" >"$W/v/$vname/name"; printf local >"$W/v/$vname/driver"; printf 0 >"$W/v/$vname/options"
+            for ((i = 0; i < ${#args[@]}; i++)); do
+                if [[ "${args[i]}" == --label ]]; then
+                    case "${args[i + 1]}" in
+                        io.flowlife.rehearsal=*) printf '%s' "${args[i + 1]#*=}" >"$W/v/$vname/l_ns" ;;
+                        io.flowlife.rehearsal.role=*) printf '%s' "${args[i + 1]#*=}" >"$W/v/$vname/l_role" ;;
+                        io.flowlife.rehearsal.run-token=*) printf '%s' "${args[i + 1]#*=}" >"$W/v/$vname/l_token" ;;
+                    esac
+                fi
+            done
+        fi
+        if [[ -f "$W/volume_create_override" ]]; then while read -r field value; do printf '%s' "$value" >"$W/v/$vname/$field"; done <"$W/volume_create_override"; fi
+        printf '%s\n' "$vname" ;;
+    "create "*)
+        shift
+        [[ ! -e "$W/create_fail" ]] || exit 1
+        cname='' cuser='' ccapdrop='' csecopt='' cnet='' cmem='' cpids='' ccpus='' cro=false cimage='' ctmpfs=() cmounts_out='' cenvs=() clabels=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --name) cname="$2"; shift 2 ;;
+                --label) clabels+=("$2"); shift 2 ;;
+                --user) cuser="$2"; shift 2 ;;
+                --cap-drop) ccapdrop="$2"; shift 2 ;;
+                --security-opt) csecopt="$2"; shift 2 ;;
+                --network) cnet="$2"; shift 2 ;;
+                --memory) cmem="$2"; shift 2 ;;
+                --pids-limit) cpids="$2"; shift 2 ;;
+                --cpus) ccpus="$2"; shift 2 ;;
+                --tmpfs) ctmpfs+=("${2%%:*}"); shift 2 ;;
+                -e) cenvs+=("${2%%=*}"); shift 2 ;;
+                --memory-swap | --pull | --entrypoint | --workdir) shift 2 ;;
+                --read-only) cro=true; shift ;;
+                -i) shift ;;
+                --mount)
+                    msrc='' mtgt='' mrw=true
+                    IFS=',' read -ra mparts <<<"$2"
+                    for mp in "${mparts[@]}"; do case "$mp" in source=*) msrc="${mp#*=}" ;; target=*) mtgt="${mp#*=}" ;; readonly) mrw=false ;; esac; done
+                    cmounts_out+="volume:$msrc:$mtgt:$mrw,"
+                    shift 2 ;;
+                -*) echo "fake docker: unsupported create option $1" >&2; exit 97 ;;
+                *) cimage="$1"; shift; break ;;
+            esac
+        done
+        n=$(($(cat "$W/seq" 2>/dev/null || echo 0) + 1)); printf '%s' "$n" >"$W/seq"
+        cid="$(printf 'c%063x' "$n")"
+        d="$W/c/$cid"; mkdir -p "$d"
+        printf '%s' "$cid" >"$d/id"; printf '%s' "/$cname" >"$d/name"; printf '%s' "$cimage" >"$d/image"
+        for l in "${clabels[@]}"; do
+            case "$l" in
+                io.flowlife.rehearsal=*) printf '%s' "${l#*=}" >"$d/l_ns" ;;
+                io.flowlife.rehearsal.role=*) printf '%s' "${l#*=}" >"$d/l_role" ;;
+                io.flowlife.rehearsal.run-token=*) printf '%s' "${l#*=}" >"$d/l_token" ;;
+            esac
+        done
+        printf 0 >"$d/ports"; printf false >"$d/privileged"; printf null >"$d/capadd"
+        if [[ -n "$ccapdrop" ]]; then printf '["%s"]' "$ccapdrop" >"$d/capdrop"; else printf null >"$d/capdrop"; fi
+        if [[ -n "$csecopt" ]]; then printf '["%s"]' "$csecopt" >"$d/secopt"; else printf null >"$d/secopt"; fi
+        printf '%s' "$cro" >"$d/readonly_root"; printf '%s' "$cuser" >"$d/user"; printf '%s' "$cnet" >"$d/netmode"; printf '%s,' "$cnet" >"$d/nets"
+        printf '%s' "$cmounts_out" >"$d/mounts"
+        [[ ! -e "$W/tmpfs_in_mounts" ]] || for t in "${ctmpfs[@]}"; do printf 'tmpfs::%s:true,' "$t" >>"$d/mounts"; done
+        printf '%s\n' "${ctmpfs[@]}" | sort | tr '\n' ',' | sed 's/^,$//' >"$d/tmpfs"
+        case "$cmem" in 1g) printf 1073741824 ;; *) printf '%s' "$cmem" ;; esac >"$d/memory"
+        printf '%s' "$cpids" >"$d/pids"
+        case "$ccpus" in 1) printf 1000000000 ;; *) printf '%s' "$ccpus" ;; esac >"$d/nanocpus"
+        printf '%s\n' "${cenvs[@]}" >"$d/envnames"
+        # The password reaches the daemon client only through its environment; record whether it arrived, never print it.
+        printf '%s' "${DB_PASSWORD:-}" >"$W/create_password_seen.$n"
+        env | cut -d= -f1 | sort >"$W/create_env_names.$n"
+        if [[ -f "$W/create_override" ]]; then while read -r field value; do printf '%s' "$value" >"$d/$field"; done <"$W/create_override"; fi
+        printf '%s\n' "$cid" ;;
+    "start "*)
+        id="$(lastarg "$@")"
+        [[ -d "$W/c/$id" ]] || { echo "Error: No such container: $id" >&2; exit 1; }
+        printf '%s\n' "$(cat "$W/c/$id/name")" >>"$W/started"
+        case " $* " in *" -i "*) cat >"$W/stdin.$(wc -l <"$W/started")" ;; esac
+        [[ ! -e "$W/start_fail" ]] || exit "$(cat "$W/start_fail")"
+        if [[ -f "$W/run_stdout" ]]; then cat "$W/run_stdout"; else echo ok; fi ;;
     "compose "*)
         case " $* " in
             *" config"*) [[ ! -f "$W/rendered" ]] || cat "$W/rendered" ;;
@@ -231,6 +359,29 @@ case "$1 ${2:-}" in
 esac
 FAKE
 chmod +x "$BIN/docker"
+
+# A stand-in for git: answers from $W/commits (lines `<rev> <full id>`), logs its calls and the NAMES of its environment, and "archives"
+# to a line of text naming the commit and path, which the fake daemon's `start -i` records as the container's stdin.
+cat >"$BIN/git" <<'FAKEGIT'
+#!/usr/bin/env bash
+W="$(dirname "$0")/.world"
+printf '%s\n' "$*" >>"$W/gitcalls"
+env | cut -d= -f1 | sort >>"$W/gitenvnames"
+args=("$@")
+[[ "${args[0]}" == -C ]] && args=("${args[@]:2}")
+case "${args[0]}" in
+    rev-parse)
+        if [[ "${args[1]}" == --is-shallow-repository ]]; then echo true; exit 0; fi
+        rev="${args[-1]%^\{commit\}}"
+        line="$(grep "^$rev " "$W/commits" 2>/dev/null)" || exit 1
+        [[ ! -f "$W/commit_wrong" || "$rev" != 2f385b79* ]] || { echo "$(printf '9%.0s' {1..40})"; exit 0; }
+        echo "${line#* }" ;;
+    cat-file) [[ ! -f "$W/no_lockfile" ]] || exit 1 ;;
+    archive) echo "GIT-ARCHIVE ${args[2]} ${args[3]}" ;;
+    *) echo "fake git: unexpected call: $*" >&2; exit 97 ;;
+esac
+FAKEGIT
+chmod +x "$BIN/git"
 
 # --- building a world ------------------------------------------------------------------------------------------------------------------
 
@@ -285,7 +436,7 @@ add_volume() {
 make_root() {
     mkdir -m 700 "$T/root"
     printf 'restore-rehearsal-v1\n' >"$T/root/.flc-rehearsal-root"
-    printf 'REHEARSAL_DB_ROOT_PASSWORD=aaaa\nREHEARSAL_DB_APP_PASSWORD=bbbb\nREHEARSAL_RUN_TOKEN=%s\n' "${1:-$TOKEN}" >"$T/root/compose.env"
+    printf 'REHEARSAL_DB_ROOT_PASSWORD=%s\nREHEARSAL_DB_APP_PASSWORD=%s\nREHEARSAL_RUN_TOKEN=%s\n' "$ROOT_PW" "$APP_PW" "${1:-$TOKEN}" >"$T/root/compose.env"
     chmod 600 "$T/root/compose.env"
 }
 
@@ -407,7 +558,8 @@ t_surface_no_restore_command() {
 
 t_static_no_application_env() {
     # The script reads no .env and names no application directory. (G3)
-    if grep -nE '(apps/platform|FLOW_ROOT)' "$SRC/restore-rehearsal.sh" >/dev/null; then bad 'the script names the application tree or FLOW_ROOT'; fi
+    # Slice 2.1 archives apps/platform from git, so the tree is named; what must never appear is a path to an application .env or FLOW_ROOT.
+    if grep -nE '(apps/platform/\.env|FLOW_ROOT)' "$SRC/restore-rehearsal.sh" >/dev/null; then bad 'the script names an application .env or FLOW_ROOT'; fi
     if grep -nE '^[[:space:]]*(source|\.)[[:space:]]+[^[:space:]]*\.env' "$SRC/restore-rehearsal.sh" >/dev/null; then bad 'the script sources an .env file'; fi
     if grep -nE 'docker\.sock' "$SRC/restore-rehearsal.sh" "$SRC/compose.yaml" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -q .; then bad 'a Docker socket is named outside comments'; fi
 }
@@ -1670,6 +1822,612 @@ t_g5_malformed_state_recovery_path() {
 
 # --- the registry: which tests prove which guard ---------------------------------------------------------------------------------------------
 
+# --- tests: slice 2.1, the PHP execution substrate -------------------------------------------------------------------------------------
+
+# A world with the verified PHP image and both commits, with (src_world) or without the prepared source volume.
+prep_world() {
+    good_world
+    put "$W" image_id "$IMG_ID"
+    printf '%s %s\nHEAD %s\n' "$HIST" "$HIST" "$HEAD_SHA" >"$W/commits"
+}
+src_world() {
+    prep_world
+    add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source
+}
+
+# add_ephemeral ID ROLE [field=value ...]: a runner or preparation container as `docker create` makes it from this script's arguments.
+add_ephemeral() {
+    local id="$1" role="$2" d name="$NAME_R" mode="$NAME_N" rw=false tmpfs kv
+    shift 2
+    tmpfs='/tmp,/var/www/html/current/bootstrap/cache,/var/www/html/current/storage,/var/www/html/historical/bootstrap/cache,/var/www/html/historical/storage,'
+    if [[ "$role" == prepare ]]; then name="$NAME_P" mode=none rw=true tmpfs='/tmp,'; fi
+    d="$W/c/$id"
+    mkdir -p "$d"
+    put "$d" id "$id"; put "$d" name "/$name"; put "$d" image "$IMG_ID"; put "$d" l_ns restore-v1; put "$d" l_role "$role"; put "$d" l_token "$TOKEN"
+    put "$d" ports 0; put "$d" privileged false; put "$d" capadd null; put "$d" capdrop '["ALL"]'; put "$d" secopt '["no-new-privileges"]'
+    put "$d" readonly_root true; put "$d" user 33:33; put "$d" netmode "$mode"; put "$d" nets "$mode,"
+    put "$d" mounts "volume:$NAME_SRC:/var/www/html:$rw,"; put "$d" tmpfs "$tmpfs"
+    put "$d" memory 1073741824; put "$d" pids 256; put "$d" nanocpus 1000000000
+    for kv in "$@"; do put "$d" "${kv%%=*}" "${kv#*=}"; done
+}
+
+only_database_left() {
+    local d left=''
+    for d in "$W/c"/*; do [[ ! -e "$d" ]] || left+="${d##*/} "; done
+    [[ "$left" == "$CID " ]] || bad "$1: a container other than the database remains: $left"
+}
+no_secret_anywhere() { # DESC -- the generated passwords appear in no docker argument, git argument, output or log
+    local secret what
+    for secret in "$ROOT_PW" "$APP_PW"; do
+        for what in "$(cat "$W/calls")" "$(cat "$W/gitcalls" 2>/dev/null)" "$OUT" "$ERR"; do
+            [[ "$what" != *"$secret"* ]] || bad "$1: a generated password appears in a docker or git argument, in the output or in the error output"
+        done
+    done
+}
+
+t_g10_run_happy_path() {
+    local create name allowed_env='^(PATH|HOME|LANG|DB_PASSWORD|_|PWD|OLDPWD|SHLVL)$'
+    src_world
+    run_script -- run current migrate:status
+    expect_rc 'run' 0
+    expect_has 'run' "$OUT" ok
+    only_database_left run
+    create="$(grep -E '^create ' "$W/calls" || true)"
+    [[ "$(grep -c . <<<"$create")" == 1 ]] || bad "run: expected exactly one create, got: $create"
+    expect_has 'image by ID' "$create" " $IMG_ID "
+    expect_lacks 'image by tag' "$create" 'flowlife-dev/php'
+    [[ "$(grep -cE '^image inspect ' "$W/calls")" == 1 ]] || bad 'the PHP image was not resolved exactly once'
+    [[ "$(cat "$W/started")" == "/$NAME_R" ]] || bad "the runner was not started exactly once: $(cat "$W/started" 2>/dev/null)"
+    # The password reaches the Docker client only through its environment, which holds nothing else of the caller's.
+    [[ "$(cat "$W/create_password_seen.1")" == "$APP_PW" ]] || bad 'the application password was not exported to the docker client'
+    while IFS= read -r name; do
+        [[ "$name" =~ $allowed_env ]] || bad "the docker client that created the runner had the variable $name"
+    done <"$W/create_env_names.1"
+    no_secret_anywhere 'run'
+    # A daemon that lists tmpfs mounts among the mounts must not make a correct runner look wrong.
+    src_world
+    touch "$W/tmpfs_in_mounts"
+    run_script -- run current about
+    expect_rc 'tmpfs listed in mounts' 0
+}
+
+t_g10_run_argv_isolation() {
+    local create flag
+    src_world
+    run_script -- run historical about
+    expect_rc run 0
+    create="$(grep -E '^create ' "$W/calls")"
+    for flag in '--read-only' '--cap-drop ALL' '--security-opt no-new-privileges' '--user 33:33' '--pids-limit 256' '--memory 1g' '--pull never' \
+        "--network $NAME_N" "type=volume,source=$NAME_SRC,target=/var/www/html,readonly" '--workdir /var/www/html/historical' '-e DB_PASSWORD '; do
+        expect_has 'runner isolation' "$create" "$flag"
+    done
+    create="${create%% "$IMG_ID" *}" # the options, not the command that follows the image (it has its own mkdir -p)
+    for flag in ' -p ' '--publish' '--privileged' 'docker.sock' 'type=bind' ' -v ' '--env-file' '--network host' '--cap-add' '--add-host' '--volumes-from' 'DB_PASSWORD=' 'ROOT_PASSWORD' '--device'; do
+        expect_lacks 'runner isolation' "$create" "$flag"
+    done
+}
+
+t_g11_fixed_argument_vectors() {
+    local name
+    declare -A want=(
+        [about]='php artisan about' [migrate:status]='php artisan migrate:status' [migrate]='php artisan migrate --force --no-interaction'
+        [relationships:check]='php artisan relationships:check' [release:show]='php artisan release:show'
+        [resources:assets:prune]='php artisan resources:assets:prune --dry-run' [helper:db-ping]='php /var/www/html/harness/db-ping.php'
+    )
+    for name in "${!want[@]}"; do
+        src_world
+        run_script -- run historical "$name"
+        expect_rc "run $name" 0
+        [[ "$(grep -E '^create ' "$W/calls")" == *' sh '"${want[$name]}" ]] || bad "run $name: the command was not exactly '${want[$name]}': $(grep -E '^create ' "$W/calls" | tail -c 120)"
+    done
+}
+
+t_g11_run_policy() {
+    local name
+    for name in migrate:fresh migrate:rollback db:wipe tinker res:ass:pru 'migrate --pretend' '--env=testing' '../harness/probe.php' helper:probe schedule:run 'resources:assets:prune --dry-run' ''; do
+        src_world
+        run_script -- run current "$name"
+        expect_refused "run '$name'" 'is not a command the rehearsal runs'
+        assert_no_docker_call "run '$name'"
+    done
+    for args in '' 'current' 'current about extra' 'current about --force' 'main about' 'harness about' '../x about' 'historical,current about'; do
+        src_world
+        # shellcheck disable=SC2086 # the words are the point
+        run_script -- run $args
+        expect_rc "run $args" 64
+        assert_no_docker_call "run $args"
+    done
+}
+
+t_g11_artisan_policy_is_applied_to_the_built_vector() {
+    # runner_command must ask the artisan policy about the vector it built, so the two cannot drift apart.
+    run_fn 'artisan_problem() { echo denied; return 1; }; runner_command migrate:status'
+    expect_rc 'a vector the policy refuses' 3
+}
+
+t_g2_substrate_commands_refuse_inherited_variables() {
+    local c
+    for c in prepare 'run current about' probe; do
+        src_world
+        # shellcheck disable=SC2086
+        run_script DB_HOST=elsewhere -- $c
+        expect_refused "$c with DB_HOST" 'DB_HOST'
+        assert_no_docker_call "$c with DB_HOST"
+    done
+}
+
+# After `docker create` and before `docker start`, each isolation property is checked against the container Docker made. The fake derives
+# the container from the arguments it was given; create_override changes one field afterwards, as a daemon that did not honour it would.
+ephemeral_case() { # FIELD VALUE NEEDLE
+    src_world
+    printf '%s %s\n' "$1" "$2" >"$W/create_override"
+    run_script -- run current about
+    expect_refused "$1=$2" 'was not created as asked'
+    expect_has "$1=$2" "$ERR" "$3"
+    [[ ! -e "$W/started" ]] || bad "$1=$2: the runner was started"
+    only_database_left "$1=$2"
+}
+t_g10_e_name() { ephemeral_case name /someone-else 'its name is'; }
+t_g10_e_image() { ephemeral_case image "sha256:$(printf 'e%.0s' {1..64})" 'verified PHP image'; }
+t_g10_e_label() { ephemeral_case l_ns other 'labels are not'; }
+t_g10_e_token() { ephemeral_case l_token "$OTHER_TOKEN" 'run token differs'; }
+t_g10_e_ports() { ephemeral_case ports 1 'publishes 1 port'; }
+t_g10_e_privilege() { ephemeral_case privileged true 'privileged'; }
+t_g10_e_capdrop() { ephemeral_case capdrop null 'drop all capabilities'; }
+t_g10_e_nnp() { ephemeral_case secopt null 'no-new-privileges'; }
+t_g10_e_readonly() { ephemeral_case readonly_root false 'root filesystem is writable'; }
+t_g10_e_user() { ephemeral_case user 0:0 'runs as'; }
+t_g10_e_network() { ephemeral_case netmode bridge 'its network is'; }
+t_g10_e_mounts() {
+    ephemeral_case mounts "volume:$NAME_SRC:/var/www/html:true," 'mounts are'
+    ephemeral_case mounts "volume:$NAME_SRC:/var/www/html:false,bind::/var/run/docker.sock:true," 'mounts are'
+}
+t_g10_e_tmpfs() { ephemeral_case tmpfs '/tmp,' 'temporary filesystems'; }
+t_g10_e_limits() {
+    ephemeral_case memory 0 'limit'
+    ephemeral_case pids 0 'limit'
+    ephemeral_case nanocpus 0 'limit'
+}
+
+t_g10_a_start_failure_still_removes_the_runner() {
+    src_world
+    printf 3 >"$W/start_fail"
+    run_script -- run current about
+    expect_rc 'a runner that fails' 3
+    only_database_left 'failed runner'
+}
+
+t_g10_the_image_must_resolve_to_an_id() {
+    src_world
+    rm "$W/image_id"
+    run_script -- run current about
+    expect_refused 'no image' 'not present locally'
+    [[ "$(grep -cE '^(create|pull|build)' "$W/calls")" == 0 ]] || bad 'a missing image led to a create, pull or build'
+    src_world
+    put "$W" image_id latest
+    run_script -- run current about
+    expect_refused 'a tag instead of an ID' 'image ID'
+    [[ "$(grep -cE '^create' "$W/calls")" == 0 ]] || bad 'a non-ID image led to a create'
+}
+
+t_g10_password_must_be_the_generated_form() {
+    src_world
+    printf 'REHEARSAL_DB_ROOT_PASSWORD=%s\nREHEARSAL_DB_APP_PASSWORD=bbbb\nREHEARSAL_RUN_TOKEN=%s\n' "$ROOT_PW" "$TOKEN" >"$T/root/compose.env"
+    run_script -- run current about
+    expect_refused 'a short password' 'application database password'
+    [[ "$(grep -cE '^create' "$W/calls")" == 0 ]] || bad 'a malformed password led to a create'
+}
+
+t_g10_leftover_ephemeral_containers_stop_everything() {
+    local c
+    for c in 'run current about' prepare self-check; do
+        src_world
+        [[ "$c" != prepare ]] || rm -rf "$W/v/$NAME_SRC"
+        add_ephemeral "$RID" runner
+        # shellcheck disable=SC2086
+        run_script -- $c
+        case "$c" in
+            self-check) expect_refused "$c" 'other than the database' ;;
+            *) expect_refused "$c" 'other than the database' ;;
+        esac
+        [[ "$(grep -cE '^(create|volume create)' "$W/calls")" == 0 ]] || bad "$c: created something beside a leftover container"
+    done
+}
+
+t_g10_run_needs_the_prepared_source() {
+    prep_world
+    run_script -- run current about
+    expect_refused 'no source volume' "has 'prepare' been run"
+    [[ "$(grep -cE '^create' "$W/calls")" == 0 ]] || bad 'a run without source led to a create'
+    prep_world
+    add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source l_token="$OTHER_TOKEN"
+    run_script -- run current about
+    expect_refused 'a source volume of another run' 'run token differs'
+}
+
+t_g10_source_volume_identity() {
+    vol_case() { # FIELD VALUE NEEDLE
+        src_world
+        add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source "$1=$2"
+        run_fn "source_volume_identity_problem $NAME_SRC $TOKEN ''"
+        [[ "$RC" == 1 ]] || bad "$1=$2: expected a reported problem, got $RC"
+        expect_has "$1=$2" "$OUT" "$3"
+    }
+    src_world
+    run_fn "source_volume_identity_problem $NAME_SRC $TOKEN ''"
+    expect_rc 'a healthy source volume' 0
+    vol_case name other 'its name is'
+    vol_case options 1 'not a plain local volume'
+    vol_case driver nfs 'not a plain local volume'
+    vol_case l_role database-data 'labels are not'
+    vol_case l_ns other 'labels are not'
+    vol_case l_token "$OTHER_TOKEN" 'run token differs'
+    src_world
+    add_container "$FOREIGN" "name=/someone-else" "l_ns=" "mounts=volume:$NAME_SRC:/data,"
+    run_fn "source_volume_identity_problem $NAME_SRC $TOKEN ''"
+    expect_has 'a foreign user of the volume' "$OUT" 'that is not ours uses it'
+    src_world
+    inject_failure 'ps *volume=*'
+    run_fn "source_volume_identity_problem $NAME_SRC $TOKEN ''"
+    expect_has 'users cannot be listed' "$OUT" 'cannot be listed'
+}
+
+# --- tests: prepare ------------------------------------------------------------------------------------------------------------------
+
+t_g10_prepare_happy_path() {
+    local creates line i
+    prep_world
+    run_script -- prepare
+    expect_rc prepare 0
+    expect_has prepare "$OUT" 'Prepared'
+    only_database_left prepare
+    expect_has 'volume labels' "$(grep '^volume create' "$W/calls")" "io.flowlife.rehearsal.role=source"
+    expect_has 'volume token' "$(grep '^volume create' "$W/calls")" "io.flowlife.rehearsal.run-token=$TOKEN"
+    expect_has 'verified commits' "$(cat "$W/gitcalls")" "archive --format=tar $HIST apps/platform"
+    expect_has 'current commit' "$(cat "$W/gitcalls")" "archive --format=tar $HEAD_SHA apps/platform"
+    expect_has 'historical stdin' "$(cat "$W/stdin.1")" "GIT-ARCHIVE $HIST apps/platform"
+    expect_has 'current stdin' "$(cat "$W/stdin.2")" "GIT-ARCHIVE $HEAD_SHA apps/platform"
+    # Composer (steps 3 and 4, the only ones with a route out) runs before the harness is copied in (step 5, stdin.5 below).
+    expect_has 'harness' "$(tar -tf "$W/stdin.5" | tr '\n' ' ')" 'db-ping.php probe.php'
+    creates="$(grep -E '^create ' "$W/calls")"
+    [[ "$(grep -c . <<<"$creates")" == 5 ]] || bad "expected five preparation containers, got: $creates"
+    i=0
+    while IFS= read -r line; do
+        i=$((i + 1))
+        expect_has "step $i" "$line" "--name $NAME_P"
+        expect_has "step $i" "$line" '--read-only --cap-drop ALL --security-opt no-new-privileges'
+        expect_has "step $i" "$line" "type=volume,source=$NAME_SRC,target=/var/www/html "
+        expect_lacks "step $i" "$line" "$NAME_N"
+        expect_lacks "step $i" "$line" ' -e '
+        expect_lacks "step $i" "$line" 'DB_PASSWORD'
+        [[ -z "$(cat "$W/create_password_seen.$i")" ]] || bad "step $i: a password reached the preparation docker client"
+        if ((i == 3 || i == 4)); then expect_has "step $i" "$line" '--network bridge'; else expect_has "step $i" "$line" '--network none'; fi
+    done <<<"$creates"
+    for line in historical current; do
+        expect_has "composer $line" "$creates" "composer install --no-dev --no-scripts --no-interaction --no-progress --prefer-dist --optimize-autoloader --working-dir=/var/www/html/$line"
+    done
+    no_secret_anywhere prepare
+}
+
+t_g10_prepare_uses_only_verified_commits() {
+    prep_world
+    printf 'HEAD %s\n' "$HEAD_SHA" >"$W/commits"
+    run_script -- prepare
+    expect_refused 'the historical commit is absent' "$HIST"
+    expect_has 'no substitution' "$ERR" 'Nothing was substituted'
+    expect_has 'the action is proposed' "$ERR" 'git fetch'
+    [[ "$(grep -cE '^(create|volume create)' "$W/calls")" == 0 ]] || bad 'an absent commit led to Docker objects'
+    [[ "$(grep -c archive "$W/gitcalls" 2>/dev/null || true)" == 0 ]] || bad 'an absent commit was archived from something else'
+    prep_world
+    touch "$W/commit_wrong"
+    run_script -- prepare
+    expect_refused 'a commit that resolves to another ID' 'resolved to'
+    prep_world
+    touch "$W/no_lockfile"
+    run_script -- prepare
+    expect_refused 'a commit without a lockfile' 'composer.lock'
+    [[ "$(grep -cE '^(create|volume create)' "$W/calls")" == 0 ]] || bad 'a missing lockfile led to Docker objects'
+}
+
+t_g10_prepare_never_adopts_an_existing_volume() {
+    prep_world
+    add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source
+    run_script -- prepare
+    expect_refused 'a prepared volume' 'already exists'
+    prep_world
+    add_volume "$NAME_SRC" "name=$NAME_SRC" "l_ns="
+    run_script -- prepare
+    expect_refused 'an unlabelled volume of the same name' 'already exists'
+    [[ "$(grep -cE '^(create|volume create)' "$W/calls")" == 0 ]] || bad 'an existing volume was used'
+}
+
+t_g10_prepare_verifies_the_volume_it_made() {
+    prep_world
+    printf 'l_token %s\n' "$OTHER_TOKEN" >"$W/volume_create_override"
+    run_script -- prepare
+    expect_refused 'a volume with another token' 'source volume is not the rehearsal'
+    [[ "$(grep -cE '^create' "$W/calls")" == 0 ]] || bad 'a container was created over an unverified volume'
+    expect_has 'recovery' "$ERR" 'cleanup --dry-run'
+}
+
+t_g10_prepare_containers_are_verified() {
+    prep_world
+    printf 'netmode %s\nnets %s,\n' "$NAME_N" "$NAME_N" >"$W/create_override"
+    run_script -- prepare
+    expect_refused 'a preparation container on the database network' 'was not created as asked'
+    [[ ! -e "$W/started" ]] || bad 'a preparation container on the database network was started'
+    prep_world
+    printf 'readonly_root false\n' >"$W/create_override"
+    run_script -- prepare
+    expect_refused 'a writable root' 'root filesystem is writable'
+}
+
+t_g10_prepare_scrubs_git() {
+    prep_world
+    run_script GIT_DIR=/elsewhere GIT_WORK_TREE=/elsewhere -- prepare
+    expect_rc 'prepare with GIT_DIR set' 0
+    expect_lacks 'git environment' "$(sort -u "$W/gitenvnames" | tr '\n' ' ')" 'GIT_DIR'
+    expect_lacks 'git environment' "$(sort -u "$W/gitenvnames" | tr '\n' ' ')" 'GIT_WORK_TREE'
+}
+
+t_g10_prepare_needs_up() {
+    new_world
+    run_script -- prepare
+    expect_refused 'no state' 'no rehearsal state'
+}
+
+# shellcheck disable=SC2016 # grant text contains literal backticks
+GRANT_GLOBAL_ALL='GRANT ALL PRIVILEGES ON *.* TO `flc_rehearsal`@`%`'
+# shellcheck disable=SC2016 # as above
+GRANT_GLOBAL_SELECT='GRANT SELECT ON *.* TO `flc_rehearsal`@`%`'
+
+# --- tests: the application-user SQL path ---------------------------------------------------------------------------------------------
+
+# shellcheck disable=SC2016 # grant text contains literal backticks
+t_g12_account_identity_and_grants() {
+    acct_case() { # DESC NEEDLE -- the world is prepared by the caller
+        run_fn "app_account_problem $CID"
+        [[ "$RC" == 1 ]] || bad "$1: expected a reported problem, got $RC"
+        expect_has "$1" "$OUT" "$2"
+    }
+    local db='GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_app`.* TO `flc_rehearsal`@`%`' usage='GRANT USAGE ON *.* TO `flc_rehearsal`@`%`'
+    good_world
+    run_fn "app_account_problem $CID"
+    expect_rc 'the account as MariaDB creates it' 0
+    # An authentication hash in any syntax, and the unescaped spelling of the database name, are not problems.
+    printf '%s IDENTIFIED VIA mysql_native_password USING '"'"'*ABC'"'"'\nGRANT ALL PRIVILEGES ON `flc_rehearsal_app`.* TO `flc_rehearsal`@`%%`\n' "$usage" >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_rc 'another hash syntax' 0
+    good_world; printf '2' >"$W/account_count"; acct_case 'two accounts' 'not exactly one'
+    good_world; printf 'root@localhost' >"$W/app_identity"; acct_case 'the client is another account' 'not the application account'
+    good_world; touch "$W/app_cannot_connect"; acct_case 'the account cannot connect' 'cannot connect'
+    good_world; printf '%s\n%s\nGRANT SELECT ON *.* TO `flc_rehearsal`@`%%`\n' "$usage" "$db" >"$W/app_grants"; acct_case 'a global privilege' 'beyond the rehearsal database'
+    good_world; printf 'GRANT ALL PRIVILEGES ON *.* TO `flc_rehearsal`@`%%` WITH GRANT OPTION\n%s\n' "$db" >"$W/app_grants"; acct_case 'global with grant option' 'beyond'
+    good_world; printf '%s\n%s\nGRANT SELECT ON `flc_rehearsal_identity`.* TO `flc_rehearsal`@`%%`\n' "$usage" "$db" >"$W/app_grants"; acct_case 'the sentinel database' 'beyond'
+    good_world; printf '%s\nGRANT ALL PRIVILEGES ON `flc_rehearsal_%%`.* TO `flc_rehearsal`@`%%`\n' "$usage" >"$W/app_grants"; acct_case 'a wildcard database' 'beyond'
+    good_world; printf '%s\n%s WITH GRANT OPTION\n' "$usage" "$db" >"$W/app_grants"; acct_case 'grant option' 'beyond'
+    good_world; printf '%s\n%s\nGRANT `admin` TO `flc_rehearsal`@`%%`\n' "$usage" "$db" >"$W/app_grants"; acct_case 'an inherited role' 'beyond'
+    good_world; printf '%s\n' "$usage" >"$W/app_grants"; acct_case 'no database privilege at all' 'not exactly USAGE'
+    good_world; printf '%s\n%s\n%s\n' "$usage" "$db" "$db" >"$W/app_grants"; acct_case 'a repeated grant' 'not exactly USAGE'
+}
+
+# shellcheck disable=SC2016 # the client's own $MARIADB_PASSWORD is text to look for, not an expansion
+t_g12_restricted_client_and_guarded_path() {
+    local line
+    good_world
+    run_fn "printf 'SELECT 1;\\n' | guarded_app_sql '$T/root' flc_rehearsal_app"
+    expect_rc 'guarded application SQL' 0
+    expect_has 'the statement reached the application path' "$(cat "$W/appsql.log")" 'args=[-D flc_rehearsal_app] SELECT 1;'
+    line="$(grep -E '^exec -i --user mysql .* sh -c ' "$W/calls" | tail -n 1)"
+    [[ -n "$line" ]] || bad 'no restricted client call was made'
+    for flag in '--sandbox' '--local-infile=0' '--no-defaults' '--user=flc_rehearsal' '--protocol=tcp' '-u MARIADB_ROOT_PASSWORD' '-u MYSQL_ROOT_PASSWORD' 'EDITOR=/bin/false' 'VISUAL=/bin/false' 'PAGER=cat' 'MYSQL_PAGER=cat' 'MYSQL_PWD="$MARIADB_PASSWORD"'; do
+        expect_has 'restricted client' "$line" "$flag"
+    done
+    for flag in '--force' ' -f ' '--user=root' '-uroot' ' -p' '--password' "$APP_PW" "$ROOT_PW"; do
+        expect_lacks 'restricted client' "$line" "$flag"
+    done
+    [[ "$line" == *'--user mysql'* ]] || bad 'the client does not run as a non-root operating-system user'
+    run_fn "printf 'SELECT 1;\\n' | guarded_app_sql '$T/root' flowlife"
+    expect_refused 'a development database name' 'not one of the rehearsal'
+}
+
+# The grant line exactly as the real client prints it: the entrypoint escapes the underscores (`flc\_rehearsal\_app`) and --batch doubles each
+# backslash. This is the regression test for the defect the review found: a comparison against single backslashes never matched.
+# shellcheck disable=SC2016 # grant text contains literal backticks
+t_g12_grant_escaping_matches_batch_output() {
+    local usage='GRANT USAGE ON *.* TO `flc_rehearsal`@`%` IDENTIFIED BY PASSWORD '"'"'*0123456789ABCDEF0123456789ABCDEF01234567'"'"''
+    local batch='GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_app`.* TO `flc_rehearsal`@`%`'
+    local single='GRANT ALL PRIVILEGES ON `flc\_rehearsal\_app`.* TO `flc_rehearsal`@`%`'
+    good_world
+    # The fake's default output is the --batch form: two backslashes before each underscore.
+    run_fn "printf 'SELECT 1;\\n' | guarded_app_sql '$T/root' flc_rehearsal_app"
+    expect_rc 'the default (--batch) grants' 0
+    good_world; printf '%s\n%s\n' "$usage" "$batch" >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_rc 'the correctly escaped grant' 0
+    expect_lacks 'no problem reported' "$OUT" 'beyond'
+    # Anything that is not exactly that line still refuses.
+    good_world; printf '%s\n%s\n' "$usage" "$single" >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_has 'a single-backslash line is not what --batch prints' "$OUT" 'beyond'
+    good_world; printf '%s\n%s WITH GRANT OPTION\n' "$usage" "$batch" >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_has 'the escaped grant with grant option' "$OUT" 'beyond'
+    good_world; printf '%s\n%s\n%s\n' "$usage" "$batch" 'GRANT SELECT ON `flc\\_rehearsal\\_identity`.* TO `flc_rehearsal`@`%`' >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_has 'the escaped grant plus the sentinel database' "$OUT" 'beyond'
+    good_world; printf '%s\n%s\n' "$usage" 'GRANT ALL PRIVILEGES ON `flc\\_rehearsal\\_%`.* TO `flc_rehearsal`@`%`' >"$W/app_grants"
+    run_fn "app_account_problem $CID"
+    expect_has 'an escaped wildcard database' "$OUT" 'beyond'
+}
+
+t_g10_cleanup_dry_run_names_each_container_by_its_verified_identity() {
+    src_world
+    add_ephemeral "$RID" runner
+    add_ephemeral "$PID_" prepare
+    put "$W/n/$NID" endpoints "$CID,$RID,"
+    run_script -- cleanup --dry-run
+    expect_rc 'dry run' 0
+    expect_has 'the runner' "$OUT" "would remove container ${RID:0:12} ($NAME_R)"
+    expect_has 'the preparation container' "$OUT" "would remove container ${PID_:0:12} ($NAME_P)"
+    expect_has 'the database' "$OUT" "would remove container ${CID:0:12} ($NAME_C)"
+    [[ -d "$W/c/$RID" && -d "$W/c/$PID_" && -d "$W/c/$CID" ]] || bad 'a dry run removed a container'
+}
+
+t_g12_there_is_no_root_fallback() {
+    good_world
+    touch "$W/app_cannot_connect"
+    run_fn "printf 'SELECT 1;\\n' | guarded_app_sql '$T/root' flc_rehearsal_app"
+    expect_refused 'an account that cannot connect' 'never falls back to root'
+    expect_has 'the smallest correction is named' "$ERR" 'GRANT'
+    [[ ! -e "$W/appsql.log" ]] || bad 'the statement reached the application path'
+    ! grep -q 'SELECT 1' "$W/sql.log" 2>/dev/null || bad 'the statement was sent through the root path instead'
+    good_world
+    printf '%s\n' "$GRANT_GLOBAL_ALL" >"$W/app_grants"
+    run_fn "printf 'DROP DATABASE x;\\n' | guarded_app_sql '$T/root' flc_rehearsal_app"
+    expect_refused 'an over-privileged account' 'beyond the rehearsal database'
+    [[ ! -e "$W/appsql.log" ]] || bad 'a statement was sent as an over-privileged account'
+}
+
+t_g12_run_checks_the_account_first() {
+    src_world
+    printf '%s\n' "$GRANT_GLOBAL_ALL" >"$W/app_grants"
+    run_script -- run current migrate
+    expect_refused 'an over-privileged account' 'beyond the rehearsal database'
+    [[ "$(grep -cE '^create' "$W/calls")" == 0 ]] || bad 'a runner was created for an over-privileged account'
+}
+
+t_g12_self_check_uses_the_application_account() {
+    src_world
+    run_script -- self-check
+    expect_rc 'self-check' 0
+    expect_has 'self-check' "$OUT" 'application account answers through the restricted client'
+    expect_has 'self-check' "$OUT" 'source volume is a plain local volume'
+    assert_read_only 'self-check with a source volume'
+    src_world
+    printf '%s\n' "$GRANT_GLOBAL_SELECT" >"$W/app_grants"
+    run_script -- self-check
+    expect_refused 'self-check with an over-privileged account' 'beyond the rehearsal database'
+}
+
+t_g10_self_check_verifies_the_source_volume() {
+    src_world
+    add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source l_token="$OTHER_TOKEN"
+    run_script -- self-check
+    expect_refused 'a source volume of another run' 'source volume is not the rehearsal'
+}
+
+t_g10_lookalikes_of_the_new_names() {
+    local c
+    for c in "$NAME_R" "$NAME_P"; do
+        good_world
+        add_container "$FOREIGN" "name=/$c" "l_ns="
+        run_script -- self-check
+        expect_refused "an unlabelled container named $c" 'cannot prove it created'
+    done
+    good_world
+    add_volume "$NAME_SRC" "name=$NAME_SRC" "l_ns="
+    run_script -- self-check
+    expect_refused 'an unlabelled volume named like the source volume' 'cannot prove it created'
+}
+
+# --- tests: the probe ------------------------------------------------------------------------------------------------------------------
+
+probe_output() {
+    local line
+    for line in php-version user network-external dns-external root-fs source-readonly tmp-writable db-app databases sentinel-denied; do printf 'probe:%s=ok\n' "$line"; done
+}
+
+t_g12_probe() {
+    src_world
+    probe_output >"$W/run_stdout"
+    run_script -- probe
+    expect_rc probe 0
+    expect_has probe "$OUT" 'Probe passed'
+    expect_has 'the runner runs the fixed probe in the helper directory' "$(grep -E '^create ' "$W/calls")" '--workdir /var/www/html/harness'
+    expect_has 'the fixed probe' "$(grep -E '^create ' "$W/calls")" ' sh php /var/www/html/harness/probe.php'
+    only_database_left probe
+    assert_read_only_sql_after_probe
+}
+assert_read_only_sql_after_probe() { # the probe sends no statement that changes anything
+    ! grep -qiE 'CREATE|DROP|INSERT|DELETE|ALTER|UPDATE|TRUNCATE|GRANT' "$W/appsql.log" 2>/dev/null || bad 'the probe sent a statement that changes data or schema'
+}
+
+t_g12_probe_refuses_what_it_finds() {
+    src_world; probe_output >"$W/run_stdout"; touch "$W/app_sees_sentinel"
+    run_script -- probe
+    expect_refused 'an application account that sees the sentinel' 'can read the sentinel'
+    [[ "$(grep -cE '^create' "$W/calls")" == 0 ]] || bad 'the runner was created after the client probe failed'
+    src_world; probe_output >"$W/run_stdout"; touch "$W/sandbox_escape"
+    run_script -- probe
+    expect_refused 'a client sandbox that runs a shell' 'sandbox ran a shell'
+    src_world; probe_output | sed 's/network-external=ok/network-external=FAIL/' >"$W/run_stdout"
+    run_script -- probe
+    expect_refused 'a runner that reaches the network' 'network-external=ok'
+    src_world; probe_output | grep -v sentinel-denied >"$W/run_stdout"
+    run_script -- probe
+    expect_refused 'a probe that did not report a check' 'sentinel-denied=ok'
+}
+
+# --- tests: cleanup and the new objects -------------------------------------------------------------------------------------------------
+
+t_g10_cleanup_removes_leftover_ephemerals_and_source() {
+    src_world
+    add_ephemeral "$RID" runner
+    add_ephemeral "$PID_" prepare
+    put "$W/n/$NID" endpoints "$CID,$RID,"
+    run_script -- cleanup
+    expect_rc 'cleanup' 0
+    [[ -z "$(ls -A "$W/c")$(ls -A "$W/n")$(ls -A "$W/v")" ]] || bad 'cleanup left a container, network or volume'
+    [[ ! -e "$T/root" ]] || bad 'cleanup left the state directory'
+    src_world
+    add_ephemeral "$PID_" prepare netmode=bridge nets=bridge,
+    run_script -- cleanup
+    expect_rc 'cleanup of a preparation container that had a route out' 0
+    [[ -z "$(ls "$W/c")" ]] || bad 'a preparation container with the bridge network was kept'
+}
+
+t_g10_cleanup_keeps_ephemerals_that_do_not_verify() {
+    src_world
+    add_ephemeral "$RID" runner "mounts=volume:$NAME_SRC:/var/www/html:false,bind::/var/run/docker.sock:true,"
+    run_script -- cleanup
+    expect_rc 'cleanup with an unverifiable runner' 1
+    expect_has 'cleanup' "$ERR" 'remains: container'
+    [[ -d "$W/c/$RID" ]] || bad 'a runner that does not verify was removed'
+    src_world
+    add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source l_token="$OTHER_TOKEN"
+    run_script -- cleanup
+    expect_rc 'cleanup with a source volume of another run' 1
+    [[ -d "$W/v/$NAME_SRC" ]] || bad 'a source volume of another run was removed'
+    src_world
+    add_container "$FOREIGN" "name=/$NAME_R" "l_ns=" "mounts=volume:elsewhere:/x,"
+    run_script -- cleanup
+    expect_rc 'cleanup beside an unlabelled lookalike' 0
+    [[ -d "$W/c/$FOREIGN" ]] || bad 'an unlabelled container named like the runner was removed'
+}
+
+# --- tests: static -------------------------------------------------------------------------------------------------------------------
+
+t_static_substrate() {
+    local script="$SRC/restore-rehearsal.sh" f
+    # The application password is exported in exactly one place, the launcher, and is never a value on a command line.
+    [[ "$(grep -c 'DB_PASSWORD=' "$script")" == 1 ]] || bad 'DB_PASSWORD= appears other than in the launcher'
+    grep -q 'export DB_PASSWORD=' "$script" || bad 'the launcher does not export DB_PASSWORD'
+    if grep -nE '(--force|--privileged|--publish|--env-file|--volumes-from|--network host|-p [0-9])' "$script" | grep -vE '^[0-9]+:[[:space:]]*#|artisan|migrate|refuse|no --force|never|dkr compose' | grep -q .; then bad 'a forbidden docker or client option appears in the script'; fi
+    if grep -n 'compose.*-e \|docker.*-v ' "$script" | grep -q .; then bad 'a bind-style docker option appears in the script'; fi
+    for f in "$SRC"/php/*.php; do
+        [[ " ${HARNESS_FILES_EXPECTED[*]} " == *" ${f##*/} "* ]] || bad "an unexpected helper script ${f##*/} sits in scripts/rehearsal/php"
+    done
+    [[ "$(grep -c 'HARNESS_FILES=' "$script")" == 1 ]] || bad 'the harness file list is not stated once'
+    grep -q "HARNESS_FILES=(${HARNESS_FILES_EXPECTED[*]})" "$script" || bad 'the harness file list is not the expected one'
+    if command -v php >/dev/null 2>&1; then
+        for f in "$SRC"/php/*.php; do php -l "$f" >/dev/null 2>&1 || bad "${f##*/} does not parse"; done
+    fi
+    # compose.yaml gains nothing for this slice: still one service, one network, one volume.
+    grep -q 'runner\|prepare' "$SRC/compose.yaml" && bad 'compose.yaml mentions the runner or preparation container'
+}
+HARNESS_FILES_EXPECTED=(db-ping.php probe.php)
+
 declare -A GUARD_TESTS=(
     [G1-context]='t_g1_context t_g1_applies_to_every_command'
     [G1-context-env]='t_g1_context_env'
@@ -1755,6 +2513,52 @@ declare -A GUARD_TESTS=(
     [G9-lookalikes]='t_g9_lookalikes_by_name'
     [G9-selfcheck-state]='t_g9_selfcheck_state'
     [G9-selfcheck-lookalikes]='t_g9_selfcheck_state'
+    [G2-substrate]='t_g2_substrate_commands_refuse_inherited_variables'
+    [G10-e-name]='t_g10_e_name'
+    [G10-e-image]='t_g10_e_image'
+    [G10-e-label]='t_g10_e_label'
+    [G10-e-token]='t_g10_e_token'
+    [G10-e-ports]='t_g10_e_ports'
+    [G10-e-privilege]='t_g10_e_privilege'
+    [G10-e-capdrop]='t_g10_e_capdrop'
+    [G10-e-nnp]='t_g10_e_nnp'
+    [G10-e-readonly]='t_g10_e_readonly'
+    [G10-e-user]='t_g10_e_user'
+    [G10-e-network]='t_g10_e_network'
+    [G10-e-mounts]='t_g10_e_mounts'
+    [G10-e-tmpfs]='t_g10_e_tmpfs'
+    [G10-e-limits]='t_g10_e_limits'
+    [G10-image-id]='t_g10_the_image_must_resolve_to_an_id'
+    [G10-password-format]='t_g10_password_must_be_the_generated_form'
+    [G10-commit-present]='t_g10_prepare_uses_only_verified_commits'
+    [G10-commit-exact]='t_g10_prepare_uses_only_verified_commits'
+    [G10-lockfile]='t_g10_prepare_uses_only_verified_commits'
+    [G10-no-leftover]='t_g10_leftover_ephemeral_containers_stop_everything'
+    [G10-prepare-no-leftover]='t_g10_leftover_ephemeral_containers_stop_everything'
+    [G10-selfcheck-leftover]='t_g10_leftover_ephemeral_containers_stop_everything'
+    [G10-prepare-volume-new]='t_g10_prepare_never_adopts_an_existing_volume'
+    [G10-prepare-volume]='t_g10_prepare_verifies_the_volume_it_made'
+    [G10-run-volume]='t_g10_run_needs_the_prepared_source'
+    [G10-selfcheck-source]='t_g10_self_check_verifies_the_source_volume'
+    [G10-probe-lines]='t_g12_probe_refuses_what_it_finds'
+    [G11-allowlist]='t_g11_run_policy'
+    [G11-arity]='t_g11_run_policy'
+    [G11-version]='t_g11_run_policy'
+    [G11-artisan-policy]='t_g11_artisan_policy_is_applied_to_the_built_vector'
+    [G12-before-run]='t_g12_run_checks_the_account_first'
+    [G12-before-sql]='t_g12_there_is_no_root_fallback t_g12_restricted_client_and_guarded_path'
+    [G12-grants]='t_g12_account_identity_and_grants t_g12_grant_escaping_matches_batch_output'
+    [G12-grants-complete]='t_g12_account_identity_and_grants t_g12_grant_escaping_matches_batch_output'
+    [G12-identity]='t_g12_account_identity_and_grants'
+    [G12-one-account]='t_g12_account_identity_and_grants'
+    [G12-probe-sandbox]='t_g12_probe_refuses_what_it_finds'
+    [G12-probe-sentinel]='t_g12_probe_refuses_what_it_finds'
+    [G10-s-name]='t_g10_source_volume_identity'
+    [G10-s-options]='t_g10_source_volume_identity'
+    [G10-s-label]='t_g10_source_volume_identity'
+    [G10-s-token]='t_g10_source_volume_identity'
+    [G10-s-in-use]='t_g10_source_volume_identity'
+    [G10-s-users-list]='t_g10_source_volume_identity'
 )
 
 # --- running -------------------------------------------------------------------------------------------------------------------------------------

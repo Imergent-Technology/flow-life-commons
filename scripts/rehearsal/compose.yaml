@@ -53,7 +53,7 @@ services:
 networks:
   rehearsal-db:
     name: flc-rehearsal-restore-db
-    # No route out and no route in from the host: the whole point of the rehearsal's isolation.
+    # No route to external networks and nothing published. (A service on the bridge gateway may still answer: see the development note.)
     internal: true
     labels:
       io.flowlife.rehearsal: restore-v1
