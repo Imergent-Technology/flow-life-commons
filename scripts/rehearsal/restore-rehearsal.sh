@@ -1568,13 +1568,21 @@ take_dump() {
 # dump_problem FILE: what the backup contract requires of the dump itself. It is read for table names only, never judged as SQL: this is a
 # check that the two passes did what the runbook says, not a parser.
 dump_problem() {
-    local file="$1" drops creates inserts all
+    local file="$1" drops creates inserts all statements recognised
     all="$(historical_inventory)"
     creates="$(sed -n 's/^CREATE TABLE \x60\([a-z0-9_]*\)\x60 (.*$/\1/p' "$file" | LC_ALL=C sort)"
     drops="$(sed -n 's/^DROP TABLE IF EXISTS \x60\([a-z0-9_]*\)\x60;$/\1/p' "$file" | LC_ALL=C sort)"
-    inserts="$(sed -n 's/^INSERT INTO \x60\([a-z0-9_]*\)\x60 VALUES .*$/\1/p' "$file" | LC_ALL=C sort -u)"
+    # mariadb-dump 10.11.18 ends the statement's first line at VALUES and puts the rows on the lines after it; the single-line form (VALUES (...))
+    # is accepted too. Every statement is counted before the names are made unique, so a statement in any other form cannot hide behind a
+    # recognised one for the same table.
+    statements="$(grep -c '^INSERT' "$file" || true)"
+    inserts="$(sed -n 's/^INSERT INTO \x60\([a-z0-9_]*\)\x60 VALUES\( .*\)\{0,1\}$/\1/p' "$file" | LC_ALL=C sort)"
+    recognised=0
+    [[ -z "$inserts" ]] || recognised="$(printf '%s\n' "$inserts" | wc -l)"
     [[ "$creates" == "$all" ]] || { echo "it does not create exactly the 16 v0.3.0 tables"; return 1; } # guard:G15-schema-all
     [[ "$drops" == "$all" ]] || { echo "it does not drop exactly the 16 tables it creates"; return 1; } # guard:G15-schema-drops
+    [[ "$statements" -eq "$recognised" ]] || { echo "it has an INSERT statement in a form this check does not recognise ($((statements - recognised)) of $statements)"; return 1; } # guard:G15-insert-format
+    inserts="$(printf '%s\n' "$inserts" | LC_ALL=C sort -u)"
     [[ "$inserts" == "$(durable_inventory)" ]] || { echo "it carries rows for other than exactly the durable tables (a transient table's rows, or a durable table's absence)"; return 1; } # guard:G15-data-durable-only
     ! grep -Eq '^(USE |CREATE DATABASE)' "$file" || { echo "it names a database"; return 1; } # guard:G15-no-database
     return 0

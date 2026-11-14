@@ -2552,13 +2552,16 @@ fixture_output() { printf 'key:current=%s\nkey:previous=%s\n' "$FP_CUR" "$FP_PRE
 snapshot_output() { table_block table "$1"; structure_block "${2:-hist}"; echo 'snapshot:complete=ok'; } # SEED [hist|up]
 hist_names() { printf '%s\n' "${HIST_TABLES[@]}"; }
 up_names() { printf '%s\n' "${HIST_TABLES[@]}" "${NEWER_TABLES[@]}"; }
-put_dumps() { # the two passes as mariadb-dump writes their parts that the script reads
+put_dumps() { # [oneline]: the two passes as mariadb-dump writes their parts that the script reads
     local t
     : >"$W/dump_pass1"
     : >"$W/dump_pass2"
     for t in "${HIST_TABLES[@]}"; do
         printf 'DROP TABLE IF EXISTS \x60%s\x60;\nCREATE TABLE \x60%s\x60 (\n  \x60id\x60 int\n) ENGINE=InnoDB;\n' "$t" "$t" >>"$W/dump_pass1"
-        [[ " ${TRANSIENT[*]} " == *" $t "* ]] || printf 'INSERT INTO \x60%s\x60 VALUES (1);\n' "$t" >>"$W/dump_pass2"
+        [[ " ${TRANSIENT[*]} " == *" $t "* ]] && continue
+        # Observed live (mariadb-dump 10.19 of MariaDB 10.11.18, L2, 2026-11-13): the statement's first line ends at VALUES and each row has a line
+        # of its own. The single-line form is what the first tests assumed; the script accepts both.
+        if [[ "${1:-}" == oneline ]]; then printf 'INSERT INTO \x60%s\x60 VALUES (1),(2);\n' "$t" >>"$W/dump_pass2"; else printf 'INSERT INTO \x60%s\x60 VALUES\n(1),\n(2);\n' "$t" >>"$W/dump_pass2"; fi
     done
 }
 
@@ -2872,14 +2875,34 @@ t_g15_dump_contract() {
     }
     backup_world; sed -i '/^CREATE TABLE \x60jobs\x60/,/^) ENGINE/d' "$W/dump_pass1"; check 'a table whose structure is missing' 'does not create exactly'
     backup_world; sed -i '/^DROP TABLE IF EXISTS \x60jobs\x60;/d' "$W/dump_pass1"; check 'a table that is not dropped before it is created' 'does not drop exactly'
-    backup_world; printf 'INSERT INTO \x60sessions\x60 VALUES (1);\n' >>"$W/dump_pass2"; check 'rows of a transient table' 'rows for other than exactly the durable tables'
-    backup_world; sed -i '/^INSERT INTO \x60people\x60/d' "$W/dump_pass2"; check 'a durable table without rows' 'rows for other than exactly the durable tables'
+    backup_world; printf 'INSERT INTO \x60sessions\x60 VALUES\n(1);\n' >>"$W/dump_pass2"; check 'rows of a transient table' 'rows for other than exactly the durable tables'
+    backup_world; printf 'INSERT INTO \x60sessions\x60 VALUES (1);\n' >>"$W/dump_pass2"; check 'rows of a transient table, on one line' 'rows for other than exactly the durable tables'
+    backup_world; sed -i '/^INSERT INTO \x60people\x60/,/;$/d' "$W/dump_pass2"; check 'a durable table without rows' 'rows for other than exactly the durable tables'
+    # An INSERT in a form the check does not know is refused as such, also when a recognised statement for the same table is present (the
+    # statements are counted before the names are made unique) and also when it is the only one (never read as a table without rows).
+    backup_world; printf 'INSERT INTO \x60people\x60 (\x60id\x60) VALUES (1);\n' >>"$W/dump_pass2"; check 'an unrecognised INSERT beside a recognised one' 'INSERT statement in a form this check does not recognise'
+    backup_world; sed -i '/^INSERT INTO \x60people\x60/,/;$/c\INSERT IGNORE INTO \x60people\x60 VALUES (1);' "$W/dump_pass2"; check 'an unrecognised INSERT alone' 'INSERT statement in a form this check does not recognise'
     backup_world; printf 'USE other_db;\n' >>"$W/dump_pass2"; check 'a dump that names a database' 'names a database'
     backup_world; printf 'CREATE DATABASE other_db;\n' >>"$W/dump_pass1"; check 'a dump that creates a database' 'names a database'
     backup_world; printf 'CREATE TABLE \x60extra\x60 (\n  \x60id\x60 int\n) ENGINE=InnoDB;\n' >>"$W/dump_pass1"; check 'a table beyond the sixteen' 'does not create exactly'
     backup_world; touch "$W/dump_fail"; run_script -- take-backup; expect_rc 'a dump client that fails' 1
     [[ ! -e "$T/root/historical.manifest.json" && ! -e "$T/root/historical.dump.sql" ]] || bad 'a backup was kept for a failed dump'
     ! leftover_dump || bad 'the temporary file of a failed dump was left behind'
+}
+
+# Both shapes of mariadb-dump's INSERT are backups: the one the tool prints (rows on the lines after VALUES) and the single-line form.
+t_g15_dump_insert_forms() {
+    ensure_cache
+    backup_world
+    run_script -- take-backup
+    expect_rc 'a dump with the rows on the lines after VALUES' 0
+    grep -q '^INSERT INTO .people. VALUES$' "$T/root/historical.dump.sql" || bad 'the test dump is not in the form mariadb-dump prints'
+    rm -f "$T/root/historical.dump.sql" "$T/root/historical.manifest.json"
+    backup_world
+    put_dumps oneline
+    run_script -- take-backup
+    expect_rc 'a dump with each statement on one line' 0
+    grep -qF 'VALUES (1),(2);' "$T/root/historical.dump.sql" || bad 'the test dump is not in the single-line form'
 }
 
 t_g15_no_overwrite() {
@@ -2944,7 +2967,7 @@ t_g15_dump_matches_manifest() {
     f="$T/root/historical.dump.sql"
     m="$T/root/historical.manifest.json"
     upgrade_world
-    sed -i '0,/VALUES (1)/s//VALUES (2)/' "$f" # the same size, another checksum
+    sed -i '0,/^(1),/s//(2),/' "$f" # the same size, another checksum
     run_script -- upgrade
     expect_refused 'a dump altered in place' "SHA-256 is not the manifest's"
     no_helper_ran 'a dump altered in place'
@@ -3080,7 +3103,7 @@ t_g16_import_is_reverified() {
     ensure_cache
     reproduce_world
     # The dump changes, in place and to the same size, after the checks that start the command and before the load.
-    printf "sed -i '0,/VALUES (1)/s//VALUES (2)/' '%s/root/historical.dump.sql'\n" "$T" >"$W/hook_app_sql"
+    printf "sed -i '0,/^(1),/s//(2),/' '%s/root/historical.dump.sql'\n" "$T" >"$W/hook_app_sql"
     run_script -- reproduce-wp3-01
     expect_refused 'a dump changed after it was checked' 'is not the one the manifest describes'
     [[ ! -e "$W/import.sql" ]] || bad 'a dump that no longer matched its manifest was loaded'
@@ -3265,11 +3288,11 @@ t_g17_the_dump_is_reverified() {
     ensure_cache
     # Changed (in place, to the same size) after the backup was checked and before the schema is cleared.
     restore_world
-    printf "sed -i '0,/VALUES (1)/s//VALUES (2)/' '%s/root/historical.dump.sql'\n" "$T" >"$W/hook_app_sql"
+    printf "sed -i '0,/^(1),/s//(2),/' '%s/root/historical.dump.sql'\n" "$T" >"$W/hook_app_sql"
     restore_refused 'a dump changed before the schema is cleared' 'is not the one the manifest describes'
     # Changed after the schema was cleared: nothing is loaded, and the cleared state is reported honestly.
     restore_world
-    printf 'sed -i "0,/VALUES (1)/s//VALUES (2)/" "%s/root/historical.dump.sql"\n: >"%s/inventory"\n' "$T" "$W" >"$W/on_clear"
+    printf 'sed -i "0,/^(1),/s//(2),/" "%s/root/historical.dump.sql"\n: >"%s/inventory"\n' "$T" "$W" >"$W/on_clear"
     run_script -- restore-historical
     expect_refused 'a dump changed after the schema was cleared' 'it is not loaded'
     [[ ! -e "$W/import.sql" ]] || bad 'a dump that no longer matched its manifest was loaded'
@@ -3821,6 +3844,7 @@ declare -A GUARD_TESTS=(
     [G15-schema-all]='t_g15_dump_contract'
     [G15-schema-drops]='t_g15_dump_contract'
     [G15-data-durable-only]='t_g15_dump_contract'
+    [G15-insert-format]='t_g15_dump_contract'
     [G15-no-database]='t_g15_dump_contract'
     [G15-dump-checked]='t_g15_dump_contract'
     [G15-no-overwrite]='t_g15_no_overwrite'
