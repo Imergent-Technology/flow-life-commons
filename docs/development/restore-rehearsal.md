@@ -1,6 +1,6 @@
 # The local recovery rehearsal
 
-**Status.** G6 WP3c ([contract](../audits/g6/README.md#wp3--data-integrity-upgrade-and-restore-safety)). Slice 1 is the isolated database environment and its safeguards; slice 2.1 adds a PHP execution substrate (a source volume, a preparation step and disposable runners) and passed its first live validation (L1, below). Slice 2.2A, the first half of the recovery cycle (historical baseline, backup, upgrade, and a demonstration of the audited WP3-01 restore defect), and slice 2.2B, the second half (the corrected restore, a sign-in with TOTP on the restored application, and the re-upgrade), are implemented and tested against the fake daemon: **no live run of either slice has been made.** Resource files, half-failed migrations and security reconciliation are slice 2.2C.
+**Status.** G6 WP3c ([contract](../audits/g6/README.md#wp3--data-integrity-upgrade-and-restore-safety)). Slice 1 is the isolated database environment and its safeguards; slice 2.1 adds a PHP execution substrate (a source volume, a preparation step and disposable runners) and passed its first live validation (L1, below). Slice 2.2A, the first half of the recovery cycle (historical baseline, backup, upgrade, and a demonstration of the audited WP3-01 restore defect), and slice 2.2B, the second half (the corrected restore, a sign-in with TOTP on the restored application, and the re-upgrade), passed their first complete live run (L2, [below](#l2-the-live-recovery-rehearsal-passed-2026-11-14): 12 stages, 2026-11-14, synthetic data, one local machine). **That is evidence about this script and the recovery strategy it rehearses, not production recovery readiness:** the production operator procedure is unchanged and the real-host decision stands. Resource files, half-failed migrations and security reconciliation are slice 2.2C and are not done.
 
 **What it is for.** Later slices use it to prove, with synthetic data on a local machine, that the organization can recover v0.3.0 after an unsuccessful upgrade. It never touches production or staging, reads no application `.env`, holds no host credentials and uses no production data. A local rehearsal does not replace the decision on the real host ([contract §9](../audits/g6/README.md#9-release-track-outside-g6)).
 
@@ -91,7 +91,7 @@ The procedure, for a repeat run:
 
 ## Slice 2.2A: the first half of the recovery cycle
 
-**Status.** Implemented and tested against the fake daemon only. It has not been run against a live Docker daemon, and the PHP harness it relies on has never run against a database: the first live run (L2) needs the owner's separate authorization. It changes no application code, no migration, no deployment behaviour and no runbook.
+**Status.** Implemented, tested against the fake daemon, and run live as part of L2 (passed 2026-11-14; the first attempt stopped at `take-backup` on a defect in the dump check, since corrected: see L2 below). Any further live run needs the owner's separate authorization. It changes no application code, no migration, no deployment behaviour and no runbook.
 
 **What it proves, and what it leaves.** It builds the production baseline (v0.3.0) in the rehearsal database with the v0.3.0 application, takes the backup the runbook describes, upgrades with the current application, and then reproduces WP3-01 ([audit](../audits/g6/wp3-audit.md), finding WP3-01): loading the historical dump over the upgraded database **without clearing it** leaves the 18 newer tables behind. The corrected restore, which clears the schema first and must make the same inventory check pass, is slice 2.2B and reuses the checks below.
 
@@ -151,7 +151,7 @@ The demonstration leaves the database in the defective state; slice 2.2B starts 
 
 ## Slice 2.2B: the corrected restore, the sign-in and the re-upgrade
 
-**Status.** Implemented and tested against the fake daemon. Not run live; L2 needs the owner's separate authorization. No application code, migration, deployment behaviour or runbook is changed.
+**Status.** Implemented, tested against the fake daemon, and run live as part of L2 (passed 2026-11-14). No application code, migration, deployment behaviour or runbook is changed.
 
 ```bash
 scripts/rehearsal/restore-rehearsal.sh restore-historical   # clear exactly the 34 tables, load the verified dump, verify the result
@@ -194,7 +194,52 @@ The fixture's own passwords and TOTP secrets are random and forgotten, so for th
 
 **Restore compatibility with the WP3-01 state.** `restore-historical` accepts exactly the state `reproduce-wp3-01` leaves, and the upgraded state; the tests build both. It never runs a helper before the clearing (a test records which helpers had run at the moment of the `DROP`).
 
-**What is not yet evidence.** The PHP harness (fixture, derived credentials, sign-in, digests) has no test of its own against a real database: the fake-daemon tests simulate its output. A temporary SQLite check of it was used during development and has been retired, because SQLite is not a supported application database and could not show any MariaDB behaviour. The harness refuses any database driver but MariaDB. L2 is the first run of the harness against the real applications on MariaDB.
+**What the fake daemon cannot show.** The PHP harness (fixture, derived credentials, sign-in, digests) has no test of its own against a real database: the fake-daemon tests simulate its output. A temporary SQLite check of it was used during development and has been retired, because SQLite is not a supported application database and could not show any MariaDB behaviour. The harness refuses any database driver but MariaDB. L2 was the first run of the harness against the real applications on MariaDB, and it found one defect the fake daemon had hidden (the dump's `INSERT` layout, below).
+
+## L2: the live recovery rehearsal (passed 2026-11-14)
+
+**Result.** The complete cycle ran once, locally, with the owner's authorization, against synthetic data only, and passed all 12 stages without a retry. It was run at commit `49663ac91f1259677312b452f9f619315d5a3021`, from the scrubbed environment the script requires (`env -i` with `PATH`, `HOME` and `LANG`). Docker 29.9.3 (local, `default` context); MariaDB server 10.11.18 (`10.11.18-MariaDB-ubu2204`, asked of the server) with client 15.1 and `mariadb-dump` 10.19, both 10.11.18; the historical application is v0.3.0 at `2f385b79a7b83323c6f15a6685ee610ccd85b5bf`, the current one `49663ac`. The slice had been independently reviewed (Opus 5.5, verdict READY FOR L2) before the first attempt. No production or staging system, no development database and no application `.env` was touched.
+
+**The first attempt (2026-11-13, at `f98ad7d`) failed safely at `take-backup`.** Stages 1 to 6 passed; the dump check then refused the backup (`G15-data-durable-only`) and removed the dump. A read-only diagnosis reproduced the two dump passes, as the application account and with the same options, and extracted table names and counts only. The dump was correct: 16 `CREATE TABLE` and 16 `DROP TABLE IF EXISTS` statements, `INSERT` statements for exactly the nine durable tables, none for a transient table. The check was wrong: `mariadb-dump` 10.19 ends the first line of each `INSERT` at `VALUES` and writes the rows on the lines after it, and the check required content after `VALUES` on the same line, so it recognised no table. The fake daemon had printed the one-line form and hidden this. The fix (`49663ac`, validator and tests only; no safeguard weakened) is described under Tests. The environment was removed with its own `cleanup`, and the second attempt began from nothing.
+
+**The second attempt (2026-11-14).**
+
+| # | Command | Result | Time |
+|---|---|---|---|
+| 1 | `self-check` | no rehearsal project present | 2 s |
+| 2 | `up` | isolated MariaDB 10.11.18 verified | 14 s |
+| 3 | `self-check` | resource and account identity verified | 3 s |
+| 4 | `prepare` | both commits archived, dependencies installed from each lockfile, `prepared.source` recorded with 3 helper digests | 25 s |
+| 5 | `probe` | all isolation and client checks `ok` | 4 s |
+| 6 | `baseline` | v0.3.0 schema from the v0.3.0 application's own 15 migrations: 16 tables, 15 migration records; fixture complete: 13 Persons | 11 s |
+| 7 | `take-backup` | two-pass dump of 28,702 bytes accepted; manifest agrees with the snapshot | 7 s |
+| 8 | `upgrade` | 34 tables (16 historical, 18 newer), 29 migration records; the 5 `guardian` assignments renamed; marker Person and CRM profile written | 14 s |
+| 9 | `reproduce-wp3-01` | the defect shown, below | 9 s |
+| 10 | `restore-historical` | the 34 tables cleared and the dump loaded; the historical state restored, below | 12 s |
+| 11 | `verify-signin` | password, TOTP and `/me` succeeded; rolled back | 7 s |
+| 12 | `reupgrade` | 34 tables, 29 migration records; the first upgrade's structure and data | 15 s |
+
+Then `cleanup --dry-run` (2 s, exactly the four rehearsal objects), `cleanup` (4 s) and `self-check` (no project). The container, network, volume and image inventories, with identifiers, were identical before and after; no unrelated object was touched. Timings are of this one run on one machine, with a 13-Person fixture; they say nothing about a production database.
+
+**The backup.** Both passes completed. The dump creates and drops exactly the 16 v0.3.0 tables and carries rows for exactly the nine durable tables (all nine `INSERT` statements in the multi-line layout); the seven transient tables have structure only and no rows; no statement names a database. The manifest's dump checksum and byte count equal the file's, it names the v0.3.0 release and commit, and its keyring fingerprints (a current key and one previous key, fingerprints only) are the ones the application reported using. The manifest holds no key, password, run token, TOTP secret or recovery code.
+
+**WP3-01, reproduced.** Loading the dump over the upgraded database without clearing it first: the table-inventory equality failed with exactly the 18 newer tables extra and none missing; the post-upgrade CRM profile survived with no Person behind it; the ledger said 15 migrations while 34 tables existed; and yet the 16 historical tables matched the pre-upgrade snapshot, so a check of those alone would have passed. This is the defect the audit described, shown on a real MariaDB.
+
+**The corrected restore.** Every precondition held before anything was cleared, established by SQL alone: this run's sentinel, token and account; the verified snapshot, manifest and dump; every required key fingerprint in the live keyring; exactly the 34 tables, all plain base tables, with no view, trigger, routine or event. One statement then dropped exactly the 34 named tables, the inventory was empty, the dump's checksum was verified again and the dump was loaded. Afterwards: exactly the 16 historical tables; the ledger the 15 migrations; every durable table identical to the pre-upgrade snapshot (rows and digests, the administrator, role assignments, MFA factors, recovery codes and membership grants included); every transient table present and empty; the structure of all 16 tables the original's; and the marker Person and profile gone (13 Persons). The 18 newer tables were gone.
+
+**Sign-in.** The restored v0.3.0 application accepted the administrator's password, then an authenticator code generated by the tests' independent RFC 6238 implementation, whose secret is encrypted under the previous key and which the current key alone cannot read, and then returned the administrator, with `console.access` and `access.roles.assign`, from `/me`. The transaction was rolled back and the database afterwards was exactly the restored state.
+
+**The re-upgrade.** The current migrations ran on the restored database without the duplicate-table failure, and gave exactly 34 tables and 29 migration records; every v0.3.0 table as expected (roles renamed, durable records preserved, transient tables empty); the structure of all 34 tables equal to the first upgrade's; and no marker (13 Persons, no CRM profile).
+
+**What L2 does not show.**
+
+- **Local synthetic evidence only.** One fixture of 13 Persons, one machine, one run. It does not show that a production host can be recovered, that production-sized data restores in a useful time, or that nothing else would differ in a different failure. The decision on the real host ([contract §9](../audits/g6/README.md#9-release-track-outside-g6)) is unchanged.
+- **The operator procedure is unchanged.** The [deployment runbook](../runbooks/deployment.md) still describes its own design. L2 rehearses the corrected sequence (clear the schema, then load) in this script; it does not put that sequence into the production procedure, and WP3-01 remains a release prerequisite until it is.
+- **The sign-in is in-process and rolled back** (see the Slice 2.2B limits). The independent review accepted this for the recovery criterion.
+- **Host-gateway reachability is unmeasured.** The owner accepted the residual for synthetic data (see Limits).
+- **Slice 2.2C is not done:** the Resource files archive and its manifest fields, a half-failed migration, and the reconciliation of invitations and other security-sensitive changes after a restore.
+
+The run's evidence (each command's sanitised output, exit status and timing, the source and environment record, the backup verification and the before and after Docker inventories) is kept privately, outside the repository, and is not committed. It holds no credential, key, TOTP secret or database content.
 
 ## The safeguards
 
@@ -234,7 +279,7 @@ At the end of slice 2.2A the file has 191 tests and 169 guard mutants, all caugh
 
 Slice 2.2B adds tests for the prepared-source record, the snapshot semantics, the restore, the sign-in and the re-upgrade, and 27 guard markers (the fake daemon gains the schema-object queries, the clearing statement and the sign-in and digest helpers). It leaves 206 tests and 196 guard mutants, all caught, and the full file takes about 10m55s on the same machine, against 4m53s after slice 2.2A. The growth is the number of worlds the new tests build (each stage test runs the real script several times) multiplied by the mutants they must catch; the matrix runs mutants one after another because they share the fake daemon's world.
 
-**L2 finding (2026-11-13) and its fix.** The first live `take-backup` was refused by `dump_problem`: `mariadb-dump` 10.19 (MariaDB 10.11.18) ends the first line of each statement at `INSERT INTO \`t\` VALUES` and puts the rows on the lines after it, and the check required content after `VALUES` on the same line, so it recognised no table. The dump was correct (rows for exactly the 9 durable tables); the check was wrong, and the fake daemon had hidden it by printing one-line statements. The check now accepts both forms and counts every `INSERT` statement before it makes the table names unique, so a statement in any other form is refused as unrecognised (guard `G15-insert-format`) and cannot be read as a table without rows or hide behind a recognised statement for the same table. The fake daemon prints the observed form. The file has 207 tests and 197 guard mutants, all caught; `./flow check repo` took 14m12s in full.
+**The dump check after L2.** The check counts every `INSERT` statement before it makes the table names unique and accepts both the layout `mariadb-dump` prints (the statement's first line ends at `VALUES`, the rows follow on their own lines) and the single-line form; any other form is refused as unrecognised (guard `G15-insert-format`). The fake daemon prints the observed layout. The file now has 207 tests and 197 guard mutants, all caught; the whole `./flow check repo` took 14m12s on the development machine. See L2, above, for how this was found.
 
 The fake daemon fails any call on request (so a failed listing can be tested), rejects an `exec` with no container, renders an absent label as `<no value>` and refuses to render a bind-mounted container, each as the real daemon does.
 
@@ -255,7 +300,7 @@ The fake daemon fails any call on request (so a failed listing can be tested), r
 
 **Slice 2.2A limits.**
 
-- **Never run live.** Everything above is tested against the fake daemon. The PHP harness (`rehearse.php`) has never run against a database: its non-database code (fingerprints, digests, the expected-upgrade lines built from the real `HistoricalSnapshot::expected`) was run on the host, but booting the application in the runner, loading the fixture, and reading `information_schema` are unconfirmed. L2 must confirm them, and also: that `mariadb-dump` as the application account takes both passes (its option names, including `--no-tablespaces`, are in the 10.11.18 binary; the account's privileges for them are not confirmed), that loading the dump leaves the 18 newer tables with the foreign keys the audit measured, that PDO returns integers for the ledger so the expected-upgrade digests match, and the stage timings.
+- **Settled by L2 (2026-11-14, one run):** the harness boots both applications in the runner on MariaDB, loads the fixture and reads `information_schema`; `mariadb-dump` as the application account takes both passes; loading the dump over the upgraded database leaves exactly the 18 newer tables (the check this slice built); the expected-upgrade digests match; and the stage timings are in the L2 table above. The audit's measurement of the foreign keys on the surviving tables was not repeated: L2 showed the tables remain, not their keys.
 - **The prepared source's commits were not recorded in the volume** in this slice; slice 2.2B records them (see above) and every stage checks them.
 - **The snapshot detects, it does not describe.** It is digests, so it says that a table changed, and which, not how.
 - **Not the whole backup.** The dump is not compressed (the checksum is of the file that is loaded), the Resource files archive and its manifest fields are slice 2.2C's, and nothing here reconciles invitations or other security-sensitive changes after a restore.
@@ -264,7 +309,7 @@ The fake daemon fails any call on request (so a failed listing can be tested), r
 
 **Slice 2.2B limits.**
 
-- **Never run live.** The harness has not run against the real applications on MariaDB. L2 must confirm: `information_schema.tables`, `.triggers`, `.routines` and `.events` are readable by the application account and report what the stages expect; the one `DROP TABLE` statement (34 names, foreign keys off for its session) works through the restricted client; the dump loads as the application account with the foreign keys it carries; the structure digests (Laravel's schema introspection on MariaDB) are equal before and after a round trip through the dump; PDO's value types do not matter (digests are of text); the in-process HTTP sign-in works in the runner (read-only root, `session.driver=database`, trusted hosts from `APP_URL`).
+- **Settled by L2 (2026-11-14, one run):** `information_schema.tables`, `.triggers`, `.routines` and `.events` are readable by the application account and report what the stages expect; the one `DROP TABLE` statement (34 names, foreign keys off for its session) works through the restricted client; the dump loads as the application account; the structure digests (Laravel's schema introspection on MariaDB) are equal before and after a round trip through the dump; and the in-process HTTP sign-in works in the runner (read-only root, `session.driver=database`, trusted hosts from `APP_URL`). One run on one machine and one Docker version (29.9.3); another platform is not covered.
 - **The sign-in is in-process.** It uses the application's kernel, middleware, cookies, CSRF check and database session, but not a socket, a web server or a browser, and it runs inside a transaction that is rolled back. It verifies the password step, the TOTP challenge and an authenticated `/me`, and that nothing persists afterwards. It does not independently verify commit-time behaviour or that a sign-in persists across separate transactions (for example an `afterCommit` callback, which a rolled-back transaction discards). The independent S2.2 review found no `afterCommit` use in the v0.3.0 application code, configuration or routes, and accepted this limitation for the recovery criterion.
 - **The administrator's TOTP secret is derived from the run's key** and the previous key encrypts it, so the keyring is exercised for one enrolment; the other factors, and the recovery codes, are verified as restored rows (digests) and not used to sign in.
 - **A docs-only commit after `prepare` needs a new `prepare`**, because the record names `HEAD`.
