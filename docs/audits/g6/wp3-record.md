@@ -595,14 +595,14 @@ The final independent Opus 5.5 verification of `ebc15e8` verified the L3 correct
 
 **Attribution corrected.** §14.2 said the verification of §14.1 returned SAFE FOR PR PREPARATION. That verdict is the one on `3bb7bc4`; the verification of `95dfcf4`, the commit that records §14.1, returned SAFE AFTER BOUNDED REMEDIATION. §14.2 now says so, and §14.1 now credits the `direct` bypass to a re-verification of §14, not to the focused review that returned SAFE FOR PR PREPARATION. §14.2's findings and the owner's deferrals are unchanged.
 
-## WP3c — remaining work: slice 1 is complete; the restoration slices are pending and not yet authorized
+## WP3c — remaining work: slices 1, 2.1 and 2.2 (A and B) are integrated; WP3c stays open
 
-Planned by the triage. Its slice 1, the isolation foundation, is done and recorded in [the section below](#wp3c-slice-1--isolation-foundation-closeout); the later slices (the historical upgrade and restore rehearsal, the corrected in-place restore, the production pre-flight, and the runbook and release documentation) have not started and are not yet authorized. What WP3a and WP3b leave to it:
+Planned by the triage. Its slice 1, the isolation foundation, is done and recorded in [the section below](#wp3c-slice-1--isolation-foundation-closeout). Slices 2.1 (the PHP substrate) and 2.2A and 2.2B (the historical recovery cycle: backup, upgrade, the WP3-01 defect reproduced, the corrected restore, a sign-in with TOTP, the re-upgrade) are done and recorded in [the section after it](#wp3c-slices-21-and-22-a-and-b--recovery-rehearsal-closeout); their live run passed on synthetic data. **Still open and not yet authorized:** slice 2.2C (the Resource files archive, a half-failed migration, the reconciliation of invitations and other security-sensitive changes after a restore), the production pre-flight, and the runbook and release documentation. The list below is the triage's, as it stood when this section was written, with one dated update on WP3-01. What WP3a and WP3b leave to it:
 
 - **WP3c, before any release:**
   - **The read-only production pre-flight** (WP3-10, WP3-12; owner disposition of I1): exact keys by bytes, collation-equal variants of `guardian` and `guardian-full`, the same-Person collision condition, holders by Account status, and the collations of the v0.3.0 tables and columns (§8).
   - **The release-readiness count's MariaDB reading** (§8): the before and after counts match variants as well.
-  - **WP3-01 (MEDIUM), a mandatory release prerequisite:** the corrected in-place restore, rehearsed.
+  - **WP3-01 (MEDIUM), a mandatory release prerequisite:** the corrected in-place restore, rehearsed. *Update (2026-11-14): the corrected sequence has been rehearsed once, locally, on synthetic data (slice 2.2, below). It is not yet in the production operator procedure, and a local rehearsal does not replace the decision on the real host, so the prerequisite stands.*
   - The other WP3c findings as the triage rules them (WP3-04 to WP3-08, WP3-11, WP3-13).
   - What WP3b deliberately does not cover (see its section): the real v0.3.0 application, backup and restore, an in-place rollback, MySQL/MariaDB patch level 10.11.18, and a stopped upgrade's recovery on a host.
 
@@ -662,3 +662,35 @@ At the closeout commit the guard suite ran 115 tests and 84 of 84 mutants were c
 ### What is kept, and where
 
 The live run's evidence (each command's stdout, stderr, exit status and timing; the before, during and after inventories; the event stream; the read-only inspection output) is kept **privately, outside the repository**, and is not committed. It contains no credential and no run token. No password, run token or environment file is recorded here.
+
+## WP3c slices 2.1 and 2.2 (A and B) — recovery rehearsal: closeout
+
+The local recovery rehearsal built on slice 1's isolated database ([`docs/development/restore-rehearsal.md`](../../development/restore-rehearsal.md), which holds the full procedure, the safeguards and the L2 record). Everything ran on a local Docker daemon against synthetic data. **No production or staging system, no development database and no application `.env` was accessed, nothing was deployed, and the production operator procedure and every runbook are unchanged.**
+
+### What was built, reviewed and run
+
+| Step | Commit | Record |
+|---|---|---|
+| Slice 2.1: the PHP execution substrate (a source volume, `prepare`, disposable runners, `probe`) | `bdfb253` (PR #18, squash-merged) | First live validation (L1), 2026-11-12, at `872365150ab1`: passed. No migration or restore was run. |
+| Slice 2.2A: historical baseline, two-pass backup, upgrade, and WP3-01 reproduced | `e40c348` | Fake-daemon tests: 191 tests, 169 guard mutants, all caught. |
+| Slice 2.2B: corrected restore, historical sign-in with TOTP, re-upgrade, recorded prepared source | `535e1e7` | Fake-daemon tests: 206 tests, 196 mutants, all caught. |
+| Independent review of S2.2A and S2.2B (Opus 5.5) | — | **READY FOR L2.** |
+| Post-review preparation: CI timeout 25 to 40 minutes, the temporary SQLite harness check removed, the sign-in limitation stated plainly | `f98ad7d` | — |
+| First L2, 2026-11-13 | `f98ad7d` | **Stopped safely at `take-backup`** (stage 7 of 12), below. |
+| Dump-check correction and its tests | `49663ac` | 207 tests, 197 mutants, all caught; `./flow check repo` green, 14m12s. |
+| Second L2, 2026-11-14 | `49663ac` | **Passed, 12 of 12 stages.** |
+
+The first L2 failed on a defect in the rehearsal's own dump check, not in the dump or the application: `mariadb-dump` writes the rows of an `INSERT` on the lines after `VALUES`, and the check expected them on the same line, so it recognised no table and refused a correct backup. The fake daemon had printed the one-line form. A read-only reproduction of the two dump passes (table names and counts only) established this; the fix accepts both layouts and counts every `INSERT` statement before names are made unique, so an unrecognised form is refused rather than omitted. No safeguard was weakened.
+
+### What the second L2 established
+
+Stage by stage, on MariaDB 10.11.18 (Docker 29.9.3): the v0.3.0 baseline of 16 tables, 15 migration records and 13 Persons; a valid two-pass backup (16 schema definitions, rows for exactly the nine durable tables, none for the seven transient ones, checksum, byte count and manifest agreeing, keyring fingerprints agreeing); the upgrade to 34 tables and 29 migration records; **WP3-01 reproduced** (loading the dump over the upgraded database leaves exactly the 18 newer tables and an orphaned CRM profile, while the 16 historical tables alone would pass); the **corrected restore** (preconditions established by SQL alone, exactly the 34 tables dropped, the dump loaded, exactly the 16 historical tables, durable data and structure identical to the snapshot, transient tables empty, the marker gone); a **historical sign-in** (password, then a TOTP code whose secret needs the previous encryption key, then `/me`) rolled back to the restored state; and the **re-upgrade** (34 tables, 29 migration records, the first upgrade's structure and data, no marker). Cleanup removed exactly the four rehearsal objects and the state directory, and the Docker inventories were identical before and after.
+
+### What it does not establish, and what stays open
+
+- It is local, synthetic, one run on one machine: not production recovery readiness, not a production-sized timing, not the real-host decision.
+- **WP3-01 is not remediated in the production operator procedure.** The rehearsal tested the corrected strategy; writing it into the runbooks, with the rest of the WP3c release documentation, is separate work.
+- The sign-in is in-process and rolled back (it cannot show commit-time behaviour); the host-gateway residual is unmeasured; and slice 2.2C is not done.
+- The earlier audit findings, triage rulings and verdicts in this record are unchanged; this section adds to them.
+
+The live runs' evidence is kept privately, outside the repository, and is not committed; it contains no credential, key, TOTP secret or database content.
