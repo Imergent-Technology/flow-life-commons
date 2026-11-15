@@ -6,9 +6,11 @@ use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Database\ConnectionInterface;
+use Illuminate\Database\QueryException;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Symfony\Component\Console\Output\BufferedOutput;
 use Tests\Support\HistoricalFixture;
 use Tests\Support\HistoricalSnapshot;
 use Tests\Support\Totp;
@@ -25,6 +27,13 @@ use Tests\Support\UpgradeDatabase;
 //                  as they are now. Read-only.
 //   mark           in the CURRENT tree: refuses unless the database is exactly the upgraded schema, then adds one clearly synthetic
 //                  post-upgrade Person and CRM profile, so a recovery can tell the upgraded state from the historical one.
+//   half-migrate   (S2.2C-1) in the CURRENT tree: refuses unless the database is exactly the 16 v0.3.0 tables plus the one stub table the script placed
+//                  in it, with v0.3.0's 15 migrations recorded; runs the real `migrate` (which must FAIL, on the stub) and then runs it AGAIN (which must
+//                  fail too and change nothing). It prints the failure's class, SQLSTATE, driver code and the table the failed statement was creating,
+//                  never its message, and what the ledger and the table list are after each attempt. A `migrate` that succeeds is a refusal.
+//   revoke         (S2.2C-1) in the CURRENT tree: refuses unless the database is exactly the upgraded one and Person 3 still holds the renamed
+//                  `guardian-full`; removes that one role assignment and records the `role.revoked` event the application's RevokeRole records, in ONE
+//                  transaction: an authority-reducing change made AFTER the backup, for a restore to reverse.
 //   signin         in the HISTORICAL tree, after a restore: the restored v0.3.0 application signs the administrator in over its real HTTP
 //                  stack (kernel, middleware, cookies, CSRF, the database session) with the password, then the TOTP code, then reads /me.
 //                  All of it happens inside a transaction that is rolled back, and the table digests after the rollback are printed so the
@@ -50,6 +59,16 @@ const FIXTURE_ROWS = [
     'account_invitations' => 4, 'account_recovery_codes' => 5, 'account_totp_factors' => 3, 'accounts' => 11, 'cache' => 0,
     'cache_locks' => 0, 'failed_jobs' => 0, 'job_batches' => 0, 'jobs' => 0, 'membership_grants' => 5, 'migrations' => 15,
     'password_reset_tokens' => 2, 'people' => 13, 'role_assignments' => 12, 'security_events' => 8, 'sessions' => 3,
+];
+
+/** The stub the script places (tests/Fixtures/rehearsal/half-failed-stub.sql): the third table the Relationships migration creates. */
+const STUB_TABLE = 'person_relationship_field_values';
+
+/** The 15 tables the ten migrations before Relationships and the first two tables of Relationships leave. Written out, not derived from the migrations. */
+const HALF_MIGRATED_TABLES = [
+    'contact_interactions', 'contact_methods', 'contact_profiles', 'contact_tag_assignments', 'contact_tags', 'discussion_messages', 'discussions',
+    'person_relationship_status_changes', 'person_relationships', 'resource_assets', 'resource_card_audiences', 'resource_cards',
+    'resource_categories', 'resource_pack_audiences', 'resource_packs',
 ];
 
 /** The version the upgrade's migrations are recorded under: the 15 historical migrations ran as batch 1, the pending ones run as batch 2. */
@@ -335,6 +354,105 @@ function actionMark(): void
 }
 
 /**
+ * One run of the real `migrate`, expected to fail. Returns the facts of the failure that are safe to print: the class, the SQLSTATE the
+ * exception carries, the driver's own error number and the table the failed `create table` statement was creating (a name read out of
+ * DDL, which holds no data). The message is never returned. A `migrate` that completes is a refusal: the stub did not stop it.
+ *
+ * @return array{class: string, code: string, driver: string, table: string}
+ */
+function failedMigration(Kernel $console): array
+{
+    try {
+        $status = $console->call('migrate', ['--force' => true, '--no-interaction' => true], new BufferedOutput());
+    } catch (QueryException $failure) {
+        $table = preg_match('/^create table `([a-z_]+)`/i', $failure->getSql(), $match) === 1 ? $match[1] : '';
+        $info = is_array($failure->errorInfo) ? $failure->errorInfo : [];
+
+        return ['class' => $failure::class, 'code' => (string) $failure->getCode(), 'driver' => (string) ($info[1] ?? ''), 'table' => $table];
+    }
+    throw new HarnessRefusal("migrate did not fail (exit status $status), so the stub did not stop it and there is no half-failed state");
+}
+
+/** @return array{ledger: int, tables: int, ledger_ok: bool, tables_ok: bool} what the ledger and the table list are, judged against the half-failed state */
+function halfMigratedState(ConnectionInterface $db): array
+{
+    $ledger = ledger($db);
+    $names = tableNames($db);
+    $expectedLedger = migrationNames([...UpgradeDatabase::HISTORICAL, ...array_slice(HistoricalFixture::UPGRADE_MIGRATIONS, 0, 10)]);
+    $expectedTables = [...array_keys(HistoricalSnapshot::TABLES), ...HALF_MIGRATED_TABLES, STUB_TABLE];
+    sort($expectedTables, SORT_STRING);
+
+    return ['ledger' => count($ledger), 'tables' => count($names), 'ledger_ok' => $ledger === $expectedLedger, 'tables_ok' => $names === $expectedTables];
+}
+
+function actionHalfMigrate(): void
+{
+    [$app, $db] = bootApplication();
+    loadSupport();
+    requireInventory($db, [...array_keys(HistoricalSnapshot::TABLES), STUB_TABLE], 'the 16-table v0.3.0 schema and the stub');
+    if (ledger($db) !== migrationNames(UpgradeDatabase::HISTORICAL)) {
+        throw new HarnessRefusal('the migration ledger is not exactly the 15 migrations v0.3.0 shipped');
+    }
+    if ($db->table(STUB_TABLE)->count() !== 0 || array_column($db->getSchemaBuilder()->getColumns(STUB_TABLE), 'name') !== ['stub']) {
+        throw new HarnessRefusal('the stub is not the empty one-column table the script places');
+    }
+    $console = $app->make(Kernel::class);
+
+    foreach (['first', 'second'] as $attempt) {
+        $failure = failedMigration($console);
+        echo "half-migrate:$attempt-failure-class={$failure['class']}\n";
+        echo "half-migrate:$attempt-failure-code={$failure['code']}\n";
+        echo "half-migrate:$attempt-failure-driver-code={$failure['driver']}\n";
+        echo "half-migrate:$attempt-failure-table={$failure['table']}\n";
+        $state = halfMigratedState($db);
+        echo "half-migrate:$attempt-ledger={$state['ledger']}\n";
+        echo "half-migrate:$attempt-tables={$state['tables']}\n";
+        if (! $state['ledger_ok'] || ! $state['tables_ok']) {
+            throw new HarnessRefusal("after the $attempt attempt the ledger or the tables are not the half-failed state this rehearsal means");
+        }
+    }
+    echo "half-migrate:complete=ok\n";
+}
+
+function actionRevoke(): void
+{
+    [, $db] = bootApplication();
+    loadSupport();
+    requireInventory($db, [...array_keys(HistoricalSnapshot::TABLES), ...HistoricalFixture::NEW_TABLES], 'the 34-table upgraded schema');
+    if (ledger($db) !== migrationNames([...UpgradeDatabase::HISTORICAL, ...HistoricalFixture::UPGRADE_MIGRATIONS])) {
+        throw new HarnessRefusal('the migration ledger is not the 29 migrations of an upgrade from v0.3.0');
+    }
+    $assignment = HistoricalFixture::assignment(4);
+    $person = HistoricalFixture::person(3);
+    // Exact bytes, not the collation: the row is the one the upgrade renamed from `guardian`, and the only one this may remove.
+    $held = $db->table('role_assignments')->where('id', $assignment)->where('person_id', $person)->whereRaw('BINARY role_key = ?', ['guardian-full'])->count();
+    if ($held !== 1 || $db->table('role_assignments')->count() !== FIXTURE_ROWS['role_assignments'] || $db->table('security_events')->count() !== FIXTURE_ROWS['security_events']) {
+        throw new HarnessRefusal('the role assignment to revoke is not there exactly as the upgrade left it, or the security tables are not the fixture\'s');
+    }
+    if ($db->table('security_events')->where('type', 'role.revoked')->count() !== 0) {
+        throw new HarnessRefusal('a role.revoked event is already recorded');
+    }
+
+    // What the application's RevokeRole does, and nothing more: the assignment is removed and the event is recorded, together or not at all.
+    $db->transaction(static function () use ($db, $assignment, $person): void {
+        if ($db->table('role_assignments')->where('id', $assignment)->delete() !== 1) {
+            throw new HarnessRefusal('the role assignment was not removed');
+        }
+        $db->table('security_events')->insert([
+            'id' => HistoricalFixture::id('E', 9), 'occurred_at' => '2026-11-01 13:00:00', 'type' => 'role.revoked', 'actor_account_id' => HistoricalFixture::account(1),
+            'actor_client_id' => null, 'subject_person_id' => $person, 'subject_account_id' => null, 'ip' => null, 'user_agent' => null, 'outcome' => 'success',
+            'context' => json_encode(['role' => 'guardian-full'], JSON_THROW_ON_ERROR),
+        ]);
+    });
+    echo "revoke:role-removed=ok\n";
+    if ($db->table('role_assignments')->count() !== FIXTURE_ROWS['role_assignments'] - 1 || $db->table('security_events')->where('type', 'role.revoked')->count() !== 1) {
+        throw new HarnessRefusal('the revocation and its event are not what was written');
+    }
+    echo "revoke:event-recorded=ok\n";
+    echo "revoke:complete=ok\n";
+}
+
+/**
  * A browser stand-in for one process: a cookie jar, and a clean session and guard before every request (as tests/Support/Console does), so
  * nothing passes from one request to the next except what the server put in a cookie or in the database. It sends what the server issued,
  * untouched, and echoes the XSRF-TOKEN cookie as X-XSRF-TOKEN.
@@ -442,9 +560,12 @@ function actionSignin(): void
 
 // Run the action only when this file is the script, so the pure functions above can be exercised by requiring it.
 if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
-    $actions = ['fixture-load' => 'actionFixtureLoad', 'snapshot' => 'actionSnapshot', 'mark' => 'actionMark', 'signin' => 'actionSignin'];
+    $actions = [
+        'fixture-load' => 'actionFixtureLoad', 'snapshot' => 'actionSnapshot', 'mark' => 'actionMark', 'signin' => 'actionSignin',
+        'half-migrate' => 'actionHalfMigrate', 'revoke' => 'actionRevoke',
+    ];
     if ($argc !== 2 || ! isset($actions[$argv[1]])) {
-        fwrite(STDERR, "usage: rehearse.php fixture-load|snapshot|mark|signin\n");
+        fwrite(STDERR, "usage: rehearse.php fixture-load|snapshot|mark|signin|half-migrate|revoke\n");
         exit(64);
     }
     try {

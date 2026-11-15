@@ -19,6 +19,12 @@
 #   restore-rehearsal.sh verify-signin
 #                                     (2.2B) the restored v0.3.0 application signs the administrator in with password and TOTP; nothing changes
 #   restore-rehearsal.sh reupgrade    (2.2B) the current application's migrations on the restored database, judged against the first upgrade
+#   restore-rehearsal.sh half-fail-upgrade
+#                                     (slice 2.2C-1) from the RESTORED database: place one stub table where the Relationships migration will
+#                                     find it, run the real `migrate` twice, and require the half-failed schema that leaves
+#   restore-rehearsal.sh revoke-after-backup
+#                                     (2.2C-1) from the UPGRADED database: remove one role assignment and record its event, after the backup,
+#                                     so that the restore can be seen to reverse it
 #
 # WHAT THIS IS. A rehearsal environment for proving, with synthetic data on a local machine, that the organization can recover
 # v0.3.0 after an unsuccessful upgrade (docs/audits/g6/README.md, WP3c). Slice 1 is the isolated database server and the checks that
@@ -29,8 +35,10 @@
 # backup/restore either, and this script is deliberately not a ./flow command). The statements that change the rehearsal database are
 # exactly these: the application's own migrations, the fixed fixture and marker helper, the loading of the one dump this script took by
 # `reproduce-wp3-01` (which exists to show a defect and is not a restoration), and, in `restore-historical`, the DROP TABLE of exactly the 34
-# tables this script names followed by the loading of that same dump. `restore-historical` takes no argument, no file and no database, works
-# only on the allowlisted rehearsal database, and is not a restore tool for anything else.
+# tables (or, from the one half-failed state `half-fail-upgrade` makes, exactly the 32) this script names followed by the loading of that same dump.
+# Slice 2.2C-1 adds two more, each a fixed statement or helper: the one stub CREATE TABLE of `half-fail-upgrade` and the one role assignment and
+# event of `revoke-after-backup`. `restore-historical` takes no argument, no file and no database, works only on the allowlisted rehearsal
+# database, and is not a restore tool for anything else.
 # It has no production connectivity, reads no application .env, holds no host credentials and uses no production data.
 #
 # THE SAFEGUARDS. Each is one line carrying a `# guard:<ID>` marker, because scripts/tests/rehearsal.sh deletes each marked line in
@@ -74,6 +82,15 @@
 #       confirms they are gone, re-verifies the dump, and then requires the restored database to equal the original snapshot
 #   G18 the restored application signs in over its real HTTP stack, and the database after is exactly what it was
 #   G19 the re-upgrade starts from the verified restored state and must give the first upgrade's inventory, data and structure, with no marker
+#
+#   G20 (slice 2.2C-1) the half-failed upgrade, and the one new state the corrected restore will clear. `half-fail-upgrade` starts only from the verified
+#       restored database, places a stub whose statement is fixed, and requires the real failure (class, SQLSTATE, driver code, the table) twice, the
+#       historical rows and the committed tables' structure unchanged, and the stub not the real table. `restore-historical` then recognises that
+#       state, and only that, by SQL alone: exactly the 32 tables of this script's own lists as plain tables, the 25 migrations in order, the
+#       stub as the stub, every newer table empty, the durable tables' row counts, and the schema and the security tables as `half-fail-upgrade`
+#       recorded them. Anything else, an unknown table or object, a missing or reordered migration, a changed row or structure, is refused.
+#   G21 (slice 2.2C-1) a security change made after the backup: `revoke-after-backup` removes one role assignment and records its `role.revoked` event;
+#       `restore-historical` reports, from the database itself, that the restore reversed both. No reconciliation, replay or repair exists.
 #
 # Exit status: 0 success; 1 a failure; 3 a safeguard refused; 64 usage.
 set -Eeuo pipefail
@@ -120,11 +137,38 @@ readonly DUMP_FILE='historical.dump.sql'
 readonly MANIFEST_FILE='historical.manifest.json'
 readonly PREPARED_FILE='prepared.source'      # slice 2.2B: what `prepare` put in the source volume (the two commits, the helper scripts' digests)
 readonly UPGRADED_FILE='upgraded.structure'   # slice 2.2B: the structure digests of the 34 tables after the first upgrade, for the re-upgrade to equal
+readonly HALF_FILE='halfmigrated.state'       # slice 2.2C-1: what `half-fail-upgrade` observed and verified, for `restore-historical` to compare the database with
+# Slice 2.2C-1. The half-failed upgrade. A stub table is placed where the Relationships migration (the 11th of the 14 after v0.3.0) creates its THIRD table;
+# the ten migrations before it complete and commit (MariaDB commits every DDL statement), the migration creates its first two tables and fails on the
+# third with error 1050, and its record is never written. tests/Upgrade/HalfFailedMigrationTest.php measures exactly this on a real MariaDB with the real
+# migration runner; scripts/tests/rehearsal.sh pins the lists below against the repository's migrations and tables, and STUB_SQL against the fixture the
+# test runs. Nothing in any migration is changed, and the stub is the only thing placed.
+readonly STUB_TABLE='person_relationship_field_values'
+readonly STUB_COMMENT='flc-rehearsal-stub-s22c1'
+readonly STUB_SQL="CREATE TABLE \`$STUB_TABLE\` (\`stub\` CHAR(1) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='$STUB_COMMENT';"
+# What reading the stub back must print: engine, collation, comment, type, the columns, then the counts of its indexes, of foreign keys naming it, and of its rows.
+readonly STUB_EXPECTED=$'InnoDB\tutf8mb4_unicode_ci\t'"$STUB_COMMENT"$'\tBASE TABLE\tstub:char(1):NO\t0\t0\t0'
+# The 15 tables the work before the failure leaves (13 from the ten completed migrations, two from the Relationships migration), besides the stub.
+readonly PARTIAL_NEWER_TABLES=(contact_interactions contact_methods contact_profiles contact_tag_assignments contact_tags discussion_messages discussions person_relationship_status_changes person_relationships resource_assets resource_card_audiences resource_cards resource_categories resource_pack_audiences resource_packs)
+# The ledger of that state: v0.3.0's 15 migrations (batch 1), then the ten that completed (batch 2). The Relationships migration is not in it.
+readonly HISTORICAL_MIGRATIONS=(0001_01_01_000001_create_cache_table 0001_01_01_000002_create_jobs_table 2026_09_19_000001_create_people_table 2026_09_19_000002_create_accounts_table 2026_09_19_000003_create_account_invitations_table 2026_09_20_000001_create_security_events_table 2026_09_20_000002_create_sessions_table 2026_09_20_000003_create_role_assignments_table 2026_09_20_000004_add_role_key_index_to_role_assignments 2026_09_20_000005_create_password_reset_tokens_table 2026_09_21_000001_create_account_totp_factors_table 2026_09_21_000002_create_account_recovery_codes_table 2026_09_22_000001_add_channel_to_account_invitations 2026_09_23_000001_add_security_generation_to_accounts 2026_09_23_000002_create_membership_grants_table)
+readonly PARTIAL_MIGRATIONS=(2026_10_01_000001_create_contact_profiles_table 2026_10_01_000002_create_contact_methods_table 2026_10_01_000003_create_contact_tags_tables 2026_10_02_000001_create_contact_interactions_table 2026_10_02_000002_create_discussions_table 2026_10_02_000003_create_discussion_messages_table 2026_10_04_000001_create_resource_categories_table 2026_10_04_000002_create_resource_packs_tables 2026_10_04_000003_create_resource_cards_tables 2026_10_04_000004_create_resource_assets_table)
+# The row counts of the eight durable tables other than the ledger (account_invitations account_recovery_codes account_totp_factors accounts
+# membership_grants people role_assignments security_events), in that order: the fixture's, which nothing that happens before the failure changes.
+readonly DURABLE_ROWS=$'4\t5\t3\t11\t5\t13\t12\t8'
+# Slice 2.2C-1, the security change made after the backup: Person 3's role assignment (the `guardian` the upgrade renamed to `guardian-full`), by its
+# fixed ids (HistoricalFixture::person(3) and ::assignment(4)). The four numbers it is read as: role assignments, security events, that assignment
+# present by exact bytes under either key, `role.revoked` events. Before the revocation, and after the restore: 12 8 1 0. After the revocation: 11 9 0 1.
+readonly REVOKE_PERSON='01jbp000000000000000000003'
+readonly REVOKE_ASSIGNMENT='01jbr000000000000000000004'
+readonly REVOKE_SQL="SELECT (SELECT COUNT(*) FROM role_assignments), (SELECT COUNT(*) FROM security_events), (SELECT COUNT(*) FROM role_assignments WHERE id = '$REVOKE_ASSIGNMENT' AND person_id = '$REVOKE_PERSON' AND BINARY role_key IN ('guardian', 'guardian-full')), (SELECT COUNT(*) FROM security_events WHERE type = 'role.revoked');"
+readonly REVOKE_BEFORE=$'12\t8\t1\t0'
+readonly REVOKE_AFTER=$'11\t9\t0\t1'
 # The sha256 of an empty row list as the harness digests it: what every transient table must show after a restore.
 EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
 readonly EMPTY_DIGEST
 # Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
-readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE")
+readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE")
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
@@ -174,7 +218,8 @@ Usage: restore-rehearsal.sh <command>
   run <historical|current> <command>
                 Run one approved Artisan command (about, migrate, migrate:status, relationships:check, release:show,
                 resources:assets:prune) or helper (helper:db-ping, helper:fixture-load, helper:snapshot,
-                helper:post-upgrade-mark, helper:sign-in) in a disposable PHP runner. The script supplies every option.
+                helper:post-upgrade-mark, helper:sign-in, helper:half-migrate, helper:revoke) in a disposable PHP runner. The script
+                supplies every option.
   probe         Check the runner and the restricted SQL client are isolated as intended. Read-only.
   baseline      Build the v0.3.0 schema with the v0.3.0 application in the empty rehearsal database, load the synthetic
                 v0.3.0 fixture, and record a snapshot of it.
@@ -184,10 +229,17 @@ Usage: restore-rehearsal.sh <command>
                 Demonstrate the audited WP3-01 defect: load the dump over the upgraded database WITHOUT clearing it, and
                 require that the newer tables remain. This is not a restoration.
   restore-historical
-                The corrected restore. From the upgraded or the WP3-01 state only: clear exactly the 34 tables, load the
-                verified dump, and require the 16 historical tables, the original rows and structure, and no marker.
+                The corrected restore. From the upgraded or the WP3-01 state (clear exactly the 34 tables) or from the half-failed
+                state half-fail-upgrade made (clear exactly the 32): load the verified dump, and require the 16 historical tables,
+                the original rows and structure, and no marker.
   verify-signin The restored v0.3.0 application signs the administrator in (password, then TOTP) and shows /me; rolled back.
   reupgrade     Run the current migrations on the restored database and judge the result against the first upgrade.
+  half-fail-upgrade
+                From the restored database only: place one stub table, run the real migrations (which fail on it), and require
+                the half-failed schema they leave. The one other state restore-historical will clear.
+  revoke-after-backup
+                From the upgraded database only: remove one role assignment and record its event, after the backup, so the
+                restore can be seen to reverse them.
   cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
                 labelled is kept or cannot be removed, cleanup says what remains, keeps its state file and exits 1; run
                 it again once the cause is gone. --stale is needed only when the private state file is gone (the run
@@ -786,9 +838,11 @@ runner_command() {
         helper:snapshot) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" snapshot) ;;
         helper:post-upgrade-mark) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" mark) ;;
         helper:sign-in) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" signin) ;;
+        helper:half-migrate) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" half-migrate) ;;
+        helper:revoke) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" revoke) ;;
         *) ;;
     esac
-    ((${#RUN_CMD[@]} > 0)) || refuse "'$name' is not a command the rehearsal runs. Approved: ${ARTISAN_ALLOWED[*]} helper:db-ping helper:fixture-load helper:snapshot helper:post-upgrade-mark helper:sign-in." # guard:G11-allowlist
+    ((${#RUN_CMD[@]} > 0)) || refuse "'$name' is not a command the rehearsal runs. Approved: ${ARTISAN_ALLOWED[*]} helper:db-ping helper:fixture-load helper:snapshot helper:post-upgrade-mark helper:sign-in helper:half-migrate helper:revoke." # guard:G11-allowlist
     if [[ "${RUN_CMD[1]:-}" == artisan ]]; then
         why="$(artisan_problem "${RUN_CMD[@]:2}")" || refuse "$why." # guard:G11-artisan-policy
     fi
@@ -1828,27 +1882,167 @@ cmd_reproduce_wp3_01() {
 
 # --- slice 2.2B: the corrected restore, the sign-in, and the re-upgrade ------------------------------------------------------------------------
 
-# G17. What the corrected restore may start from, and nothing else: the exact 34-table schema, as plain tables only, with the one of two states
-# the earlier stages leave: the upgraded database (14 Persons, the marker profile, 29 migrations) or what `reproduce-wp3-01` makes of it (13
-# Persons, the marker profile left without its Person, 15 migrations). It is established by SQL alone: a database in the second state has the
-# newer tables and the older ledger, a state no application can be expected to boot against, so nothing here starts one.
+# --- slice 2.2C-1: the half-failed upgrade ------------------------------------------------------------------------------------------------------
+
+# partial_inventory: the 32 tables of a half-failed upgrade, one per line, sorted: the 16 historical, the 15 the completed work leaves, the stub.
+partial_inventory() { sorted_list "${HISTORICAL_TABLES[@]}" "${PARTIAL_NEWER_TABLES[@]}" "$STUB_TABLE"; }
+
+# partial_ledger: the ledger of that state as `SELECT migration, batch FROM migrations ORDER BY id` prints it: v0.3.0's 15 (batch 1), then 10 (batch 2).
+partial_ledger() {
+    local name
+    for name in "${HISTORICAL_MIGRATIONS[@]}"; do printf '%s\t1\n' "$name"; done
+    for name in "${PARTIAL_MIGRATIONS[@]}"; do printf '%s\t2\n' "$name"; done
+}
+
+readonly LEDGER_SQL='SELECT migration, batch FROM migrations ORDER BY id;'
+
+# counts_sql TABLE... : the one statement that counts each table, named from this script's own lists (a name that is not a plain table name is refused).
+counts_sql() {
+    local out='' table
+    for table in "$@"; do
+        [[ "$table" =~ ^[a-z0-9_]+$ ]] || return 1
+        out+="${out:+, }(SELECT COUNT(*) FROM \`$table\`)"
+    done
+    printf 'SELECT %s;\n' "$out"
+}
+
+# rows_sum_sql TABLE... : the same, as one sum (0 if and only if every table is empty).
+rows_sum_sql() {
+    local out='' table
+    for table in "$@"; do
+        [[ "$table" =~ ^[a-z0-9_]+$ ]] || return 1
+        out+="${out:+ + }(SELECT COUNT(*) FROM \`$table\`)"
+    done
+    printf 'SELECT %s;\n' "$out"
+}
+
+# The durable tables other than the ledger, sorted: the eight whose row counts DURABLE_ROWS holds.
+durable_data_tables() { durable_inventory | grep -vx migrations; }
+
+# stub_sql: reads the stub back as the server describes it (compared with STUB_EXPECTED).
+stub_sql() {
+    printf "SELECT t.engine, t.table_collation, t.table_comment, t.table_type, (SELECT GROUP_CONCAT(CONCAT(c.column_name, ':', c.column_type, ':', c.is_nullable) ORDER BY c.ordinal_position SEPARATOR ',') FROM information_schema.columns c WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name), (SELECT COUNT(*) FROM information_schema.statistics s WHERE s.table_schema = t.table_schema AND s.table_name = t.table_name), (SELECT COUNT(*) FROM information_schema.key_column_usage k WHERE k.table_schema = t.table_schema AND (k.table_name = t.table_name OR k.referenced_table_name = t.table_name)), (SELECT COUNT(*) FROM \`%s\`) FROM information_schema.tables t WHERE t.table_schema = '%s' AND t.table_name = '%s';\n" "$STUB_TABLE" "$APP_DB" "$STUB_TABLE"
+}
+
+# The schema as the server reports it: tables, columns, indexes, foreign keys and their rules, five fixed statements about the one database. A digest of
+# their output is what `half-fail-upgrade` records and `restore-historical` compares: SQL alone, so nothing is started against the partial schema.
+schema_sql() { # N (1 to 5)
+    local db="'$APP_DB'"
+    case "$1" in
+        1) printf 'SELECT table_name, table_type, engine, row_format, table_collation, table_comment, create_options FROM information_schema.tables WHERE table_schema = %s ORDER BY table_name;\n' "$db" ;;
+        2) printf "SELECT table_name, ordinal_position, column_name, column_type, is_nullable, IFNULL(column_default, '<null>'), IFNULL(character_set_name, ''), IFNULL(collation_name, ''), column_key, extra FROM information_schema.columns WHERE table_schema = %s ORDER BY table_name, ordinal_position;\n" "$db" ;;
+        3) printf 'SELECT table_name, index_name, seq_in_index, column_name, non_unique, IFNULL(sub_part, 0), index_type FROM information_schema.statistics WHERE table_schema = %s ORDER BY table_name, index_name, seq_in_index;\n' "$db" ;;
+        4) printf 'SELECT table_name, constraint_name, ordinal_position, column_name, referenced_table_name, referenced_column_name FROM information_schema.key_column_usage WHERE table_schema = %s AND referenced_table_name IS NOT NULL ORDER BY table_name, constraint_name, ordinal_position;\n' "$db" ;;
+        5) printf 'SELECT table_name, constraint_name, referenced_table_name, update_rule, delete_rule FROM information_schema.referential_constraints WHERE constraint_schema = %s ORDER BY table_name, constraint_name;\n' "$db" ;;
+        *) return 1 ;;
+    esac
+}
+
+# schema_digest VAR: the sha256 of the five statements' output, in order and separated, in VAR.
+schema_digest() {
+    local part text='' n
+    for n in 1 2 3 4 5; do
+        capture part "reading the schema (part $n)" app_query "$(schema_sql "$n")"
+        text+="--- $n"$'\n'"$part"$'\n'
+    done
+    printf -v "$1" '%s' "$(printf '%s' "$text" | sha256sum | cut -c1-64)"
+}
+
+# security_digest VAR: three MD5 digests (tab-separated) of the text of every row of role_assignments, accounts and security_events: who holds which
+# authority, in what state, and what was recorded about it. Computed by the server, so it needs no application.
+security_digest() {
+    local sql out
+    sql="SELECT (SELECT MD5(IFNULL(GROUP_CONCAT(CONCAT_WS('|', id, person_id, role_key, IFNULL(granted_by_account_id, ''), granted_at) ORDER BY id SEPARATOR ';'), '')) FROM role_assignments), (SELECT MD5(IFNULL(GROUP_CONCAT(CONCAT_WS('|', id, person_id, email_canonical, status, security_generation, IFNULL(disabled_at, '')) ORDER BY id SEPARATOR ';'), '')) FROM accounts), (SELECT MD5(IFNULL(GROUP_CONCAT(CONCAT_WS('|', id, occurred_at, type, IFNULL(actor_account_id, ''), IFNULL(subject_person_id, ''), outcome, IFNULL(context, '')) ORDER BY id SEPARATOR ';'), '')) FROM security_events);"
+    capture out 'reading the security tables' app_query "$sql"
+    [[ "$out" =~ ^[0-9a-f]{32}$'\t'[0-9a-f]{32}$'\t'[0-9a-f]{32}$ ]] || refuse "the security tables could not be digested (the server answered something else)."
+    printf -v "$1" '%s' "$out"
+}
+
+# G20. The SQL-only recognition of a half-failed upgrade, used by `half-fail-upgrade` on what it just made and by `restore-historical` on what it is
+# asked to clear. The 32 tables and the plain-table, trigger, routine and event checks come before it (require_inventory, require_restore_start).
+# Refuses, saying what is not as it must be, and changes nothing.
+require_partial_state() {
+    local ledger stub rows durable tables
+    capture ledger 'reading the migration ledger' app_query "$LEDGER_SQL"
+    [[ "$ledger" == "$(partial_ledger)" ]] || refuse "the migration ledger is not exactly v0.3.0's 15 migrations (batch 1) followed by the 10 that complete before the Relationships migration fails (batch 2), in that order. Nothing was changed." # guard:G20-partial-ledger
+    capture stub 'reading the stub table' app_query "$(stub_sql)"
+    [[ "$stub" == "$STUB_EXPECTED" ]] || refuse "$STUB_TABLE is not the stub this script places (a base table, InnoDB, utf8mb4_unicode_ci, comment '$STUB_COMMENT', one column stub CHAR(1) NOT NULL, no index, no foreign key, no row). Nothing was changed." # guard:G20-stub-identity
+    capture rows 'counting the rows of the newer tables' app_query "$(rows_sum_sql "${PARTIAL_NEWER_TABLES[@]}" "$STUB_TABLE")"
+    [[ "$rows" == 0 ]] || refuse "a table the upgrade made, or the stub, holds rows ($rows); a half-failed upgrade leaves every one of them empty. Nothing was changed." # guard:G20-partial-empty
+    mapfile -t tables < <(durable_data_tables)
+    capture durable 'counting the rows of the durable tables' app_query "$(counts_sql "${tables[@]}")"
+    [[ "$durable" == "$DURABLE_ROWS" ]] || refuse "the durable tables do not hold the fixture's rows (${durable//$'\t'/, }; expected ${DURABLE_ROWS//$'\t'/, } for ${tables[*]}). Nothing was changed." # guard:G20-partial-durable
+}
+
+# G20. The schema and the security tables are what `half-fail-upgrade` recorded and verified (against the snapshot and the first upgrade's structure),
+# and the record is intact: a private file of exactly the shape that stage writes.
+require_partial_record() {
+    local recorded schema security shape
+    state_file_ok "$HALF_FILE" || refuse "'$HALF_FILE' is missing from the state directory, or is not a private file of this script's: this schema was not left and checked by this script's half-fail-upgrade stage, and restore-historical does not clear a partial schema it did not make. Nothing was changed." # guard:G20-partial-recorded
+    recorded="$(<"$ROOT/$HALF_FILE")"
+    shape="^halfmigrated-v1"$'\n'"schema [0-9a-f]{64}"$'\n'"security [0-9a-f]{32}"$'\t'"[0-9a-f]{32}"$'\t'"[0-9a-f]{32}\$"
+    [[ "$recorded" =~ $shape ]] || refuse "'$HALF_FILE' is not exactly what half-fail-upgrade writes. Nothing was changed." # guard:G20-partial-recorded-exact
+    schema_digest schema
+    [[ "$schema" == "$(sed -n 's/^schema //p' <<<"$recorded")" ]] || refuse "the schema is not the one half-fail-upgrade recorded (a table, column, index or foreign key differs). Nothing was changed." # guard:G20-partial-schema
+    security_digest security
+    [[ "$security" == "$(sed -n 's/^security //p' <<<"$recorded")" ]] || refuse "the security tables (role assignments, accounts, security events) are not as half-fail-upgrade recorded them. Nothing was changed." # guard:G20-partial-security
+}
+
+# G21. Called after a restore that cleared a database carrying the revocation `revoke-after-backup` made. It reads the database itself and
+# requires the revocation and its event to be gone, then says what that means: authority revoked after the backup came back.
+report_reversal() {
+    local observed
+    capture observed 'reading the security tables after the restore' app_query "$REVOKE_SQL"
+    [[ "$observed" == "$REVOKE_BEFORE" ]] || refuse "the restore reported success but the security tables are not what the backup held: Person $REVOKE_PERSON's role assignment and the event of its revocation are not as they were (role assignments, security events, the assignment present, role.revoked events: ${observed//$'\t'/, }; expected ${REVOKE_BEFORE//$'\t'/, })." # guard:G21-reversed
+    say "ok   SECURITY STATE REVERSED. Before the restore the database held a revocation made after the backup: Person $REVOKE_PERSON's role assignment ($REVOKE_ASSIGNMENT) was removed and a role.revoked event recorded it (11 role assignments, 9 security events)."
+    say "     After it the assignment is back and the event is gone (12 role assignments, 8 security events), because the backup predates both."
+    say "     An apparently successful restore therefore RESURRECTS authority that was revoked after the backup, and erases the record that it was revoked. Nothing here reconciles"
+    say "     that, replays the event or repairs it. If this were production: keep the service in maintenance, treat the security state as not established, and escalate."
+}
+
+# G17. What the corrected restore may start from, and nothing else: plain tables only, with no view, trigger, routine or event, in one of THREE
+# states, each with the table set and the counts that go with it and no other pairing. Two are the exact 34-table schema: the upgraded database
+# (14 Persons, the marker profile, 29 migrations) and what `reproduce-wp3-01` makes of it (13 Persons, the marker profile left without its Person,
+# 15 migrations). The third (slice 2.2C-1, G20) is the exact 32-table schema a half-failed upgrade leaves, recognised by `require_partial_state`.
+# It is established by SQL alone: a database in the second or third state has newer tables and an older ledger, a state no application can be
+# expected to boot against, so nothing here starts one. Sets RESTORE_FROM to `upgraded` (the first two) or `partial`.
+RESTORE_FROM=''
 require_restore_start() {
-    local counts kinds objects
-    require_inventory "$(upgraded_inventory)" 'the 34 tables of the upgraded schema (the corrected restore starts from the upgraded or the WP3-01 state and from nothing else)' # guard:G17-start-inventory
+    local counts kinds objects actual
+    capture actual 'reading the table inventory' db_inventory
+    RESTORE_FROM=upgraded
+    [[ "$actual" != "$(partial_inventory)" ]] || RESTORE_FROM=partial
+    [[ "$RESTORE_FROM" == partial ]] || require_inventory "$(upgraded_inventory)" 'the 34 tables of the upgraded schema or the 32 tables a half-failed upgrade leaves (the corrected restore starts from the upgraded, the WP3-01 or the half-failed state and from nothing else)' # guard:G17-start-inventory
     capture kinds 'reading the table types' app_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$APP_DB' AND table_type <> 'BASE TABLE';"
     [[ "$kinds" == 0 ]] || refuse "the rehearsal database holds $kinds object(s) that are not plain tables (a view, a sequence or a system-versioned table). The restore clears only what it can name, and does not widen that to them. Nothing was changed." # guard:G17-object-types
     capture objects 'reading the triggers, routines and events' app_query "SELECT (SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = '$APP_DB'), (SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema = '$APP_DB'), (SELECT COUNT(*) FROM information_schema.events WHERE event_schema = '$APP_DB');"
     [[ "$objects" == $'0\t0\t0' ]] || refuse "the rehearsal database holds a trigger, a routine or an event (triggers, routines, events: ${objects//$'\t'/, }). The restore clears tables only. Nothing was changed." # guard:G17-no-other-objects
     capture counts 'reading the state to restore from' app_query "$COUNTS_SQL"
-    [[ "$counts" == "$((FIXTURE_PEOPLE + 1))"$'\t1\t29\t0' || "$counts" == "$FIXTURE_PEOPLE"$'\t1\t15\t1' ]] || refuse "the database is neither the post-upgrade state nor the state reproduce-wp3-01 leaves (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0 or $FIXTURE_PEOPLE, 1, 15, 1). Nothing was changed." # guard:G17-start-state
+    if [[ "$RESTORE_FROM" == partial ]]; then
+        [[ "$counts" == "$FIXTURE_PEOPLE"$'\t0\t25\t0' ]] || refuse "the 32 tables are those of a half-failed upgrade, but the counts are not (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $FIXTURE_PEOPLE, 0, 25, 0). Nothing was changed." # guard:G20-partial-counts
+        require_partial_state
+        require_partial_record
+    else
+        [[ "$counts" == "$((FIXTURE_PEOPLE + 1))"$'\t1\t29\t0' || "$counts" == "$FIXTURE_PEOPLE"$'\t1\t15\t1' ]] || refuse "the database is neither the post-upgrade state nor the state reproduce-wp3-01 leaves (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0 or $FIXTURE_PEOPLE, 1, 15, 1). Nothing was changed." # guard:G17-start-state
+    fi
 }
 
-# The statement that clears the application schema: DROP TABLE for exactly the 34 tables of the verified inventory, named from this script's
-# own lists (never from what the database returned), with foreign keys off for the one session that runs it. There is no IF EXISTS, so a table
-# that is not there is a failure, and no DROP DATABASE: the database, its grants and its sentinel are not touched.
-clear_statement() {
-    local names='' table
-    for table in $(upgraded_inventory); do names+="${names:+, }\`$table\`"; done
+# clear_list STATE: the tables the restore clears from STATE (`upgraded`: the 34; `partial`: the 32), one per line, from this script's own lists.
+clear_list() {
+    case "$1" in
+        upgraded) upgraded_inventory ;;
+        partial) partial_inventory ;;
+        *) return 1 ;;
+    esac
+}
+
+# The statement that clears the application schema: DROP TABLE for exactly the tables of the verified inventory (34 or 32), named from this script's
+# own lists (never from what the database returned and never from the caller), with foreign keys off for the one session that runs it. There is no
+# IF EXISTS, so a table that is not there is a failure, and no DROP DATABASE: the database, its grants and its sentinel are not touched.
+clear_statement() { # STATE
+    local names='' table list
+    list="$(clear_list "$1")" || return 1
+    for table in $list; do names+="${names:+, }\`$table\`"; done
     printf 'SET FOREIGN_KEY_CHECKS=0;\nDROP TABLE %s;\nSET FOREIGN_KEY_CHECKS=1;\n' "$names"
 }
 
@@ -1896,14 +2090,25 @@ cmd_restore_historical() {
     require_backup
     load_keyring
     why="$(keyring_problem)" || refuse "$why. Nothing was changed." # guard:G17-keyring-present
+    local observed statement count revoked=0
     require_restore_start
     why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump is not the one the manifest describes ($why). Nothing was changed." # guard:G17-dump-verified
-    say "ok   every precondition holds: this run's sentinel and account, the verified backup and keyring, and a schema of exactly the 34 plain tables"
+    if [[ "$RESTORE_FROM" == partial ]]; then
+        say "ok   every precondition holds: this run's sentinel and account, the verified backup and keyring, and the 32 plain tables, the 25 migrations, the stub and the recorded schema and security tables of a half-failed upgrade"
+    else
+        say "ok   every precondition holds: this run's sentinel and account, the verified backup and keyring, and a schema of exactly the 34 plain tables"
+    fi
+    if [[ "$RESTORE_FROM" == upgraded ]]; then # is the revocation `revoke-after-backup` makes in the database that is about to be cleared?
+        capture observed 'reading the security tables' app_query "$REVOKE_SQL"
+        [[ "$observed" != "$REVOKE_AFTER" ]] || revoked=1
+    fi
+    capture statement 'building the clearing statement' clear_statement "$RESTORE_FROM"
+    count="$(grep -c . <<<"$(clear_list "$RESTORE_FROM")")"
 
     STAGE=restore-historical
     trap on_stage_exit EXIT
-    say "Clearing the application schema (DROP TABLE for exactly the 34 tables, nothing else) ..."
-    guarded_app_sql "$ROOT" "$APP_DB" <<<"$(clear_statement)" >/dev/null || fail "the application schema could not be cleared" # (a here-string, not a pipe: a refusal inside a pipe would end only the pipe's subshell)
+    say "Clearing the application schema (DROP TABLE for exactly the $count tables, nothing else) ..."
+    guarded_app_sql "$ROOT" "$APP_DB" <<<"$statement" >/dev/null || fail "the application schema could not be cleared" # (a here-string, not a pipe: a refusal inside a pipe would end only the pipe's subshell)
     require_inventory '' 'empty: the intended tables are all gone' # guard:G17-cleared
     say "ok   the rehearsal database holds no table"
     why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump is not the one the manifest describes ($why); it is not loaded." # guard:G17-import-verified-dump
@@ -1913,6 +2118,7 @@ cmd_restore_historical() {
     say "ok   the 16 tables of v0.3.0 and no other; the ledger is the 15 migrations of v0.3.0; the post-upgrade marker Person and profile are gone"
     say "ok   every durable table equals the pre-upgrade snapshot (the administrator, role assignments, MFA factors, recovery codes and membership grants included), and every transient table is present and empty"
     say "ok   the structure of all 16 tables is the original's"
+    if ((revoked == 1)); then report_reversal; fi
     say "Restored. Next: restore-rehearsal.sh verify-signin"
 }
 
@@ -1962,6 +2168,97 @@ cmd_reupgrade() {
     say "Re-upgraded. The cycle is complete: baseline, backup, upgrade, WP3-01 reproduced, restore, sign-in, re-upgrade."
 }
 
+# lines_named TEXT NAMES: the lines of TEXT (`<table> ...`, one per line) whose first word is one of NAMES (one per line).
+lines_named() {
+    awk -v names="$(printf '\n%s\n' "$2")" 'BEGIN { n = split(names, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") want[a[i]] = 1 } $1 in want' <<<"$1"
+}
+
+# half_line OUTPUT KEY: the value of the one `half-migrate:KEY=` line the helper printed (nothing if there is none or more than one).
+half_line() {
+    local found
+    found="$(sed -n "s/^half-migrate:$2=//p" <<<"$1")"
+    [[ -n "$found" && "$found" != *$'\n'* ]] || return 0
+    printf '%s' "$found"
+}
+
+cmd_half_fail_upgrade() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local upgraded_structure out snap_out now_table now_struct diff attempt expected schema security committed
+    require_backup
+    [[ ! -e "$ROOT/$HALF_FILE" && ! -L "$ROOT/$HALF_FILE" ]] || refuse "a half-failed state is already recorded in the state directory and is never overwritten. The rehearsal is disposable: run cleanup, then up, prepare and the stages again. Nothing was changed." # guard:G20-no-overwrite
+    read_state_file upgraded_structure "$UPGRADED_FILE"
+    capture upgraded_structure 'validating the recorded upgrade structure' structure_lines "$upgraded_structure" "$(upgraded_inventory)"
+    say "Checking that the database is the verified restored v0.3.0 database (the stub is placed in nothing else) ..."
+    verify_restored_state
+    say "ok   the database is exactly the restored historical state, and the first upgrade's structure is recorded"
+
+    STAGE=half-fail-upgrade
+    trap on_stage_exit EXIT
+    say "Placing the stub: one table named $STUB_TABLE, the third table the Relationships migration creates (no migration is changed) ..."
+    guarded_app_sql "$ROOT" "$APP_DB" <<<"$STUB_SQL" >/dev/null || fail "the stub could not be created"
+    require_inventory "$(sorted_list "${HISTORICAL_TABLES[@]}" "$STUB_TABLE")" 'the 16 tables of v0.3.0 and the stub' # guard:G20-stub-placed
+    say "Running the current migrations twice; both must fail ..."
+    run_helper current helper:half-migrate out
+    for expected in half-migrate:first-ledger=25 half-migrate:first-tables=32 half-migrate:second-ledger=25 half-migrate:second-tables=32 half-migrate:complete=ok; do
+        grep -Fxq "$expected" <<<"$out" || refuse "the half-migrate helper did not report $expected." # guard:G20-helper-reported
+    done
+    for attempt in first second; do
+        [[ "$(half_line "$out" "$attempt-failure-class")" == 'Illuminate\Database\QueryException' && "$(half_line "$out" "$attempt-failure-code")" == 42S01 && "$(half_line "$out" "$attempt-failure-driver-code")" == 1050 ]] || refuse "the $attempt migration did not fail as a duplicate table does (expected Illuminate\\Database\\QueryException, SQLSTATE 42S01, error 1050; got '$(half_line "$out" "$attempt-failure-class")', '$(half_line "$out" "$attempt-failure-code")', '$(half_line "$out" "$attempt-failure-driver-code")')." # guard:G20-failure-class
+    done
+    [[ "$(half_line "$out" first-failure-table)" == "$STUB_TABLE" ]] || refuse "the first migration failed creating '$(half_line "$out" first-failure-table)', not the stub $STUB_TABLE." # guard:G20-failure-table
+    [[ "$(half_line "$out" second-failure-table)" == person_relationships ]] || refuse "the repeated migration failed creating '$(half_line "$out" second-failure-table)', not person_relationships, the first table the migration creates; it did not refuse as an unrepaired partial schema must." # guard:G20-repeat-refuses
+    say "ok   both runs failed as a duplicate table does: QueryException, SQLSTATE 42S01, error 1050; the first on the stub, the second on person_relationships (the first table of that migration, which now exists)"
+
+    require_inventory "$(partial_inventory)" 'the 32 tables of a half-failed upgrade' # guard:G20-partial-built
+    require_partial_state
+    say "ok   the database holds exactly the 32 tables: v0.3.0's 16, the 13 the ten completed migrations made, the first two Relationships tables and the stub; the ledger is 25 migrations and does not hold the Relationships migration"
+    run_snapshot current snap_out
+    capture now_table 'validating the half-failed snapshot' table_lines table "$snap_out"
+    capture now_struct 'validating the half-failed structure' structure_lines "$snap_out" "$(partial_inventory)"
+    diff="$(restore_state_differences "$SNAPSHOT_TABLES" "$now_table")"
+    [[ "$diff" == migrations ]] || refuse "the historical rows are not as the restored database held them (differs from the snapshot: $(tr '\n' ' ' <<<"$diff"); only the migration ledger may differ)." # guard:G20-historical-preserved
+    say "ok   every historical row is as it was; only the migration ledger differs (25 records, not 15)"
+    diff="$(digest_differences "$SNAPSHOT_STRUCTURE" "$(lines_named "$now_struct" "$(historical_inventory)")")"
+    [[ -z "$diff" ]] || refuse "the structure of the historical tables changed (differs: $(tr '\n' ' ' <<<"$diff"))." # guard:G20-structure-historical
+    committed="$(sorted_list "${PARTIAL_NEWER_TABLES[@]}")"
+    diff="$(digest_differences "$(lines_named "$upgraded_structure" "$committed")" "$(lines_named "$now_struct" "$committed")")"
+    [[ -z "$diff" ]] || refuse "the 15 tables the completed work made are not the structure the first upgrade made (differs: $(tr '\n' ' ' <<<"$diff"))." # guard:G20-structure-committed
+    [[ "$(lines_named "$now_struct" "$STUB_TABLE")" != "$(lines_named "$upgraded_structure" "$STUB_TABLE")" ]] || refuse "the structure of $STUB_TABLE is the real table's: it is not the stub." # guard:G20-stub-is-a-stub
+    say "ok   the structure of the 16 historical tables is the original's, of the 15 committed tables the first upgrade's, and the stub is not the real $STUB_TABLE"
+    schema_digest schema
+    security_digest security
+    write_state_file "$HALF_FILE" "halfmigrated-v1"$'\n'"schema $schema"$'\n'"security $security"
+    say "ok   the schema and the security tables are recorded, for restore-historical to compare the database with"
+    say "Half-failed. The database is in the one partial state restore-historical will clear. Next: restore-rehearsal.sh restore-historical"
+}
+
+cmd_revoke_after_backup() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local counts observed out expected
+    require_backup
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the upgraded schema (the revocation is made in the upgraded database)' # guard:G21-start-inventory
+    capture counts 'reading the upgraded state' app_query "$COUNTS_SQL"
+    [[ "$counts" == "$((FIXTURE_PEOPLE + 1))"$'\t1\t29\t0' ]] || refuse "the database is not the post-upgrade state this stage starts from (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0). Nothing was changed." # guard:G21-start-state
+    capture observed 'reading the security tables' app_query "$REVOKE_SQL"
+    [[ "$observed" == "$REVOKE_BEFORE" ]] || refuse "the security tables are not as the upgrade left them (role assignments, security events, the assignment to revoke present, role.revoked events: ${observed//$'\t'/, }; expected ${REVOKE_BEFORE//$'\t'/, }). Has it already been run? Nothing was changed." # guard:G21-before-state
+
+    STAGE=revoke-after-backup
+    trap on_stage_exit EXIT
+    say "Revoking one role assignment AFTER the backup, as the application's RevokeRole does: remove it and record the event, in one transaction ..."
+    run_helper current helper:revoke out
+    for expected in revoke:role-removed=ok revoke:event-recorded=ok revoke:complete=ok; do
+        grep -Fxq "$expected" <<<"$out" || refuse "the revoke helper did not report $expected." # guard:G21-helper-reported
+    done
+    capture observed 'reading the security tables after the revocation' app_query "$REVOKE_SQL"
+    [[ "$observed" == "$REVOKE_AFTER" ]] || refuse "the security tables are not what the revocation leaves (role assignments, security events, the assignment present, role.revoked events: ${observed//$'\t'/, }; expected ${REVOKE_AFTER//$'\t'/, })." # guard:G21-after-state
+    say "ok   Person $REVOKE_PERSON's role assignment is gone (11 role assignments) and one role.revoked event records it (9 security events); the backup holds neither change"
+    say "Revoked. Next: restore-rehearsal.sh restore-historical, which will say whether the restore reversed it."
+}
+
 main() {
     local command="${1:-}"
     case "$command" in
@@ -1978,6 +2275,8 @@ main() {
         restore-historical) shift; cmd_restore_historical "$@" ;;
         verify-signin) shift; cmd_verify_signin "$@" ;;
         reupgrade) shift; cmd_reupgrade "$@" ;;
+        half-fail-upgrade) shift; cmd_half_fail_upgrade "$@" ;;
+        revoke-after-backup) shift; cmd_revoke_after_backup "$@" ;;
         help | -h | --help) usage ;;
         *) usage >&2; exit 64 ;;
     esac

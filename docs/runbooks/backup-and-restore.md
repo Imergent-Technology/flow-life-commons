@@ -20,8 +20,9 @@ Three words are used in this runbook, and they are not interchangeable. **Contra
 | After the restore: every durable table identical to the backup, every transient table empty, a sign-in that needs the second factor (its secret is encrypted under a *previous* key), and a later upgrade that succeeds | **Rehearsed locally**. The sign-in ran in-process and was rolled back (not through a web server or a browser) |
 | Deriving the list of tables to clear from the live database; loading a **gzipped** dump with the `mysql` client; the `mysql` and `mysqldump` clients on the host | **Not rehearsed.** The rehearsal names the tables from its own fixed list and loads an uncompressed file |
 | **Resource files:** the zero-file backup, the archive, extraction, the full agreement check, moving newer files aside | **Contract only. Not implemented in the rehearsal and not tested.** G6 WP3c slice 2.2C is to rehearse it |
-| **Preserving the failed state, and reconciling security state after a restore** | **Contract only. Not rehearsed.** |
-| What to do when `migrate` stops part-way | The decision table has **not been written yet**; it waits for the half-failed-migration rehearsal. Until then: do not re-run `migrate`, keep maintenance on, and treat it as a failed release |
+| **Preserving the failed state, and reconciling security state after a restore** | **Contract only. Not rehearsed.** That a restore *reverses* a security change made after the backup is demonstrated by the rehearsal's tests (slice 2.2C-1; not yet run live); reconciling it is not, and no command for it exists |
+| Restoring a database that a half-failed `migrate` left (some of a migration's tables committed, its record not) | **Implemented in the rehearsal and tested against the fake daemon; the failure itself was measured on MariaDB. Not yet run live.** The rehearsal clears only the one 32-table half-failed state it made itself. A real half-failed state on the host is not to be cleared by that, or by anything not rehearsed on it |
+| What to do when `migrate` stops part-way | The decision table has **not been written yet**; it waits for the live half-failed-migration rehearsal. Until then: do not re-run `migrate` (measured: it fails again on the first table that now exists and repairs nothing), keep maintenance on, and treat it as a failed release |
 | A complete operational recovery **on the production host** | **Not established.** A local rehearsal does not authorize a production restore or a deployment, and does not replace the owner's decision between a rehearsal on the host and explicit risk acceptance ([next-release checklist, item 5](g10-release-readiness.md#next-release-checklist)) |
 
 ---
@@ -190,7 +191,7 @@ The restore destroys the database as it stands, and that database is the only ev
 
 ## Security state after a restore: stop unless it is established
 
-> **Status: contract only. Not rehearsed.** No part of it is automatic, and none will be: **no automatic replay, no break-glass command and no `tinker` recovery procedure is authorized.**
+> **Status: contract only. Not rehearsed.** No part of it is automatic, and none will be: **no automatic replay, no break-glass command and no `tinker` recovery procedure is authorized.** The first half of the table below, that a restore *undoes* a change made after the backup, is demonstrated for one case (a role revoked after the backup: the assignment comes back and the event of its revocation goes) by the local rehearsal's `revoke-after-backup` and `restore-historical` ([development note](../development/restore-rehearsal.md#slice-22c-1-a-half-failed-upgrade-and-a-security-change-made-after-the-backup)); that is tested against a fake daemon and has not been run live. What the operator does about it is still contract only.
 
 Restoring an older database does not only lose data. It **puts back the security state of the backup moment**, and quietly takes away the record of what changed since. Whatever was done to access after the backup is undone, and the audit trail of it goes with it:
 
