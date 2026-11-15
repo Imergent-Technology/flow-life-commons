@@ -4,7 +4,25 @@
 
 **Owner.** Whoever holds the hosting account.
 
-**Status.** The *contract* below is decided ([ADR 0027](../adr/0027-release-and-deployment-model.md)). The procedure for **taking** a backup is in the [deployment runbook](deployment.md#5-taking-a-backup). **No backup or restore tooling exists**, and `./flow` has no `backup` or `restore` command; both are operator actions, deliberately ([runbooks](README.md)). The **dump command** below is verified on the production host (2026-09-21); the restore contract has never been exercised there.
+**Status.** The *contract* below is decided ([ADR 0027](../adr/0027-release-and-deployment-model.md), corrected by the G6 WP3 triage). The procedure for **taking** a backup is in the [deployment runbook](deployment.md#5-taking-a-backup). **No backup or restore tooling exists**, and `./flow` has no `backup` or `restore` command; both are operator actions, deliberately ([runbooks](README.md)). The **dump command** below is verified on the production host (2026-09-21); **the restore contract has never been exercised there.** [What has and has not been verified](#what-is-established-what-was-rehearsed-and-what-is-not) is set out next, because a documented step is not a tested one.
+
+---
+
+## What is established, what was rehearsed, and what is not
+
+Three words are used in this runbook, and they are not interchangeable. **Contract** is what a restore must satisfy. **Rehearsed locally** means the step was run by the local recovery rehearsal ([development note](../development/restore-rehearsal.md)) on synthetic data, against MariaDB 10.11.18 in an isolated Docker environment, once (its live run L2, 2026-11-14). **Not rehearsed** means exactly that, whatever else is written about it.
+
+| Part of the procedure | Status |
+| --- | --- |
+| The two-pass dump (shape and exclusions) | Verified on the production host (2026-09-21). The rehearsal also took it, uncompressed, with `mariadb-dump` 10.19 |
+| Checksum of the dump; the keyring fingerprint subset test; the schema inventory taken **before** anything is cleared | **Rehearsed locally** |
+| Clearing every application table, then loading the dump, then requiring the inventory to equal the manifest's (the WP3-01 correction) | **Rehearsed locally**, for the 16 tables of v0.3.0 restored over the 34 tables of the next release. The defect it corrects (loading over a database that has newer tables leaves those tables behind) was reproduced there too |
+| After the restore: every durable table identical to the backup, every transient table empty, a sign-in that needs the second factor (its secret is encrypted under a *previous* key), and a later upgrade that succeeds | **Rehearsed locally**. The sign-in ran in-process and was rolled back (not through a web server or a browser) |
+| Deriving the list of tables to clear from the live database; loading a **gzipped** dump with the `mysql` client; the `mysql` and `mysqldump` clients on the host | **Not rehearsed.** The rehearsal names the tables from its own fixed list and loads an uncompressed file |
+| **Resource files:** the zero-file backup, the archive, extraction, the full agreement check, moving newer files aside | **Contract only. Not implemented in the rehearsal and not tested.** G6 WP3c slice 2.2C is to rehearse it |
+| **Preserving the failed state, and reconciling security state after a restore** | **Contract only. Not rehearsed.** |
+| What to do when `migrate` stops part-way | The decision table has **not been written yet**; it waits for the half-failed-migration rehearsal. Until then: do not re-run `migrate`, keep maintenance on, and treat it as a failed release |
+| A complete operational recovery **on the production host** | **Not established.** A local rehearsal does not authorize a production restore or a deployment, and does not replace the owner's decision between a rehearsal on the host and explicit risk acceptance ([next-release checklist, item 5](g10-release-readiness.md#next-release-checklist)) |
 
 ---
 
@@ -18,7 +36,7 @@ Enrolled authenticators are stored as ciphertext under the application key ([ADR
 
 So a backup is a **pair**: the database dump, and the keyring it corresponds to. Store them so that both are available together, and so that restoring the first without the second is not a step anyone can take by accident.
 
-Dating them identically is no longer the mechanism. Every backup carries a manifest recording **non-secret fingerprints of the complete keyring** it depends on, and the restore checks them before touching the database (see [The restore contract](#the-restore-contract)). The fingerprints identify which keys are needed; they do not contain them, and they are not a substitute for key custody.
+Dating them identically is no longer the mechanism. Every backup carries a manifest recording **non-secret fingerprints of the complete keyring** it depends on, and the restore checks them before touching the database (see [The restore contract](#the-restore-contract)). The fingerprints identify which keys are needed; they do not contain them, and they are not a substitute for key custody. How to compute them, with test values, is in the [deployment runbook](deployment.md#the-manifest).
 
 This is survivable, but only because of the escape hatch below. It is still a bad day.
 
@@ -32,14 +50,31 @@ These are not independent tables. A restore that takes some at one point in time
 | `role_assignments` | Authorization is derived live from these. Restoring accounts without them leaves nobody able to administer anything; restoring them without accounts leaves grants pointing at nothing. **Including the last-administrator invariant**: a restore that loses the administrator's assignment locks the platform out of its own administration, recoverable only by `identity:create-administrator` on the server. |
 | `account_totp_factors` | Ciphertext, readable only under the matching keyring (above). Restored *older* than `accounts`, a person who replaced their authenticator gets the old one back. |
 | `account_recovery_codes` | Digests, key-independent. Restored older than the factors, **already-spent codes become usable again** — each is single-use by a `used_at` column, and an old backup un-spends them. |
-| `account_invitations` | An invitation restored after it was accepted becomes usable again, which is a way to set someone's password. Accepted invitations are deleted, so a stale restore resurrects them — which is why reconciliation below is a required step, not a suggestion. |
+| `account_invitations` | Restored with `accounts` from one backup it is consistent with them. Restored *older* than the Account's acceptance, an accepted invitation is pending again (its Account is `invited` again, with no password), and an invitation that was revoked or reissued after the backup is live again. See [Security state after a restore](#security-state-after-a-restore-stop-unless-it-is-established). |
 | `membership_grants` | Durable business data, restored with data ([ADR 0028](../adr/0028-membership-grants-derived-at-query-time.md)). `person_id` is a `RESTRICT` foreign key to `people`, so grants and people must come from the same point in time. Revocation is a later update to the same row (`revoked_at`): restored *older* than the rest, a grant revoked in between is live again. |
 | `security_events` | Append-only history ([ADR 0019](../adr/0019-security-event-auditing-seam.md)). Restoring it *older* than the rest silently erases the record of whatever happened in between — including whatever caused the restore. |
+| `contact_profiles`, `contact_methods`, `contact_tags`, `contact_tag_assignments`, `contact_interactions` (CRM) | Durable ([ADR 0034](../adr/0034-crm-enriches-identity-person.md)). Keyed by `person_id` with `RESTRICT` foreign keys to `people`, so they must come from the same point in time as `people`. **`contact_interactions` holds free-text notes about people**: a backup of it is personal data, and so is the failed-state export below. |
+| `discussions`, `discussion_messages` | Durable ([ADR 0035](../adr/0035-guardian-discussions-are-durable-asynchronous-threads.md)). A message's only foreign key is to its discussion; authors, editors and resolvers are Person ids with no foreign key, so the database will not stop a restore that leaves them naming a Person who is not there. |
+| `person_relationships`, `person_relationship_status_changes`, `person_relationship_field_values`, `person_relationship_role_provisions` **and `sourced_role_grants`** | Durable ([ADR 0038](../adr/0038-organizational-relationships-and-resource-viewing-authority.md)). **Relationships and the grants they source must be restored from one consistent point in time.** A sourced grant exists only while its relationship qualifies; an orphaned sourced grant is honoured by the Authorizer (ADR 0038, K11), so a grant restored without the relationship change that withdrew it stays live. `relationships:check` reports such a departure, on a release that has it. |
 | `resource_*` tables **and the Resource files** | Durable business data ([ADR 0037](../adr/0037-resources-are-audience-targeted-packs-of-cards.md)), and the one case where the database alone is not the record: `resource_assets` names files that live **outside the database**. Restored without the files, every File Card answers `asset_unavailable`; restored with files from a *different* point in time, some Cards lose their file and some files belong to nothing. See [Resource files](#resource-files). |
 
 **Outside the database:** `APP_KEY` and `APP_PREVIOUS_KEYS`, which live in the environment file and are not in any dump. Back them up deliberately and separately from the database, because a single compromised store holding both the ciphertext and the key protects nothing. **And the Resource files** (below), which are part of the same backup as the dump, not a separate concern.
 
+### The complete schema
+
+A restore is verified against a table inventory, so the inventory is written down here. It is the 34 tables of the next release; **production runs v0.3.0, which has the first 16.** Every table added since is **durable**: it carries rows in the dump and is in no `--ignore-table`.
+
+| | Tables |
+| --- | --- |
+| **v0.3.0, rows restored (9)** | `people`, `accounts`, `role_assignments`, `account_totp_factors`, `account_recovery_codes`, `account_invitations`, `membership_grants`, `security_events`, `migrations` |
+| **v0.3.0, structure only (7)** | `sessions`, `cache`, `cache_locks`, `jobs`, `job_batches`, `failed_jobs`, `password_reset_tokens` |
+| **Added since v0.3.0, all rows restored (18)** | CRM: `contact_profiles`, `contact_methods`, `contact_tags`, `contact_tag_assignments`, `contact_interactions`. Discussions: `discussions`, `discussion_messages`. Resources: `resource_categories`, `resource_packs`, `resource_pack_audiences`, `resource_cards`, `resource_card_audiences`, `resource_assets`. Relationships: `person_relationships`, `person_relationship_status_changes`, `person_relationship_field_values`, `person_relationship_role_provisions`. Access: `sourced_role_grants` |
+
+A backup taken by the host running v0.3.0 holds the first 16, and **only those**. That is why loading it over a database that has already been upgraded does not give back v0.3.0.
+
 ## Resource files
+
+> **Status: contract only.** Nothing in this section has been implemented in the recovery rehearsal or tested. The commands and checks are what the contract requires, not a verified procedure. Do not treat them as operationally proven until the rehearsal covers them (G6 WP3c slice 2.2C).
 
 **What they are.** Each File Card owns one file ([ADR 0037](../adr/0037-resources-are-audience-targeted-packs-of-cards.md), decisions 62-68). The file's metadata is a row in `resource_assets` (in the dump, with data, like every durable table); its **bytes** are a file in the private `resources` disk:
 
@@ -49,24 +84,42 @@ These are not independent tables. A restore that takes some at one point in time
 
 One file per asset, named by the asset's id (26 lowercase characters, no extension), mode `0600`, nothing else in the directory. It is under `shared/storage`, so it survives releases ([ADR 0027](../adr/0027-release-and-deployment-model.md)); it is outside the document root and never served except by an authorized Resources route. A stored file is **never changed**: replacing a Card's file writes a new one and removes the old, so a copy of the directory is consistent file by file.
 
-**Taking it, with the dump.** Inside the same maintenance window, immediately after the two-pass dump ([deployment runbook §5](deployment.md#5-taking-a-backup)), so the files and the rows describe one moment (nothing writes while maintenance is up):
+**The directory may not exist.** `resources/` is created when Resources first stores a file. Neither storage skeleton contains it, so a host that has never run a Resources release (production today, on v0.3.0) has no such directory, and a host whose Resources have never held a file may not either.
 
-```bash
-tar -C /home/<user>/commons/shared/storage/app/private -czf "$B/resource-files.tar.gz" resources
-sha256sum "$B/resource-files.tar.gz"
-```
+### The backup is clean only if everything agrees
 
-and record `resource_files_sha256` and the file count in the manifest. A dump without its Resource files is not a full backup of Resources.
+**Before the backup is accepted**, inside the maintenance window, after the dump, the files and the rows must agree completely:
 
-**Restoring it.** With maintenance mode up throughout (the scheduler does not run `resources:assets:prune` in maintenance mode, which is what makes this order safe):
+1. **If the directory exists:** it holds regular files named as storage keys and nothing else (`find resources -mindepth 1 ! -type f` prints nothing: [the prune below](#what-the-prune-command-does-not-do) cannot see a subdirectory or a link).
+2. **The archive is made with its exit status checked** (see [deployment §5](deployment.md#5-taking-a-backup)); a non-zero status means no usable archive, and the backup is incomplete.
+3. **`resources:assets:prune --dry-run` is read in full**, on a release that has the command. `kept` must equal the number of files in the directory, which must equal `COUNT(*)` of `resource_assets`; and **all of** *unreferenced but younger than 24 hours*, *not a Resources storage key*, *orphaned*, *could NOT be removed* and *Asset rows whose file is missing* must be **0**.
+4. **The directory is absent:** that is a legitimate **zero-file backup** only if `resource_assets` has no rows, or the table does not exist (as on v0.3.0). The manifest then records a count of 0 and no checksum. **An absent directory while `resource_assets` has rows is not a zero-file backup: stop.**
+
+Any other result is **not** accepted because it can be written into the manifest. A young orphan may be an upload that failed an hour ago, a missing file means Cards that already cannot be served, and each needs a person to explain it before the upgrade goes ahead. The manifest records what a clean backup looked like; it does not excuse one that was not.
+
+### Restoring files with the database
+
+With maintenance mode up throughout (the scheduler does not run `resources:assets:prune` in maintenance mode, which is what makes this order safe):
 
 1. Restore the database exactly as [the restore contract](#the-restore-contract) says.
-2. Move the live directory aside, never delete it: `mv .../app/private/resources .../app/private/resources.before-restore-$(date -u +%Y%m%dT%H%M%SZ)`.
-3. Verify `resource-files.tar.gz` against `resource_files_sha256`, then extract it into `.../shared/storage/app/private/`, giving `resources/` back.
-4. **Check before anything removes a file:** `php artisan resources:assets:prune --dry-run`. Expect *Asset rows whose file is missing* to be **0** (every Card has its file) and *orphaned, would be removed* to be **0** (no file without a row). Anything else means the files and the dump are not from the same backup: stop and find the right pair.
-5. Only then bring the application up. Remove the moved-aside directory once the restore is accepted, not before.
+2. **Move the live directory aside, never delete it**, if it exists: `mv .../app/private/resources .../app/private/resources.before-restore-$(date -u +%Y%m%dT%H%M%SZ)`. After a failed release this directory holds the files uploaded during it. The restored database does not refer to them, and they are not recoverable from anywhere else.
+3. **A zero-file backup:** nothing is extracted and the directory stays absent. Do not put the moved-aside directory back.
+4. **Otherwise** verify `resource-files.tar.gz` against `resource_files_sha256`, extract it into `.../shared/storage/app/private/`, giving `resources/` back, and check the count against the manifest and the directory against item 1 above.
+5. **Check before anything removes a file**, where the restored release has the command: `php artisan resources:assets:prune --dry-run`, held to the same agreement as a clean backup (item 3 above). Anything else means the files and the dump are not from the same backup: stop and find the right pair. **Never run the real prune as a shortcut to passing this check.**
+6. Only then bring the application up. Remove the moved-aside directory once the restore is accepted, not before.
 
-**The prune after a restore.** `resources:assets:prune` removes files no row refers to, older than a day. After restoring an *older* database over *newer* files, every file uploaded since that backup is exactly such a file, and the prune removes it, **irreversibly**. That is correct for the restored database and wrong if you might yet go back to the newer one. That is why step 2 moves the directory aside, why step 4 is a dry run, and why the daily schedule cannot fire during the maintenance window.
+**Reverting to v0.3.0.** v0.3.0 has no Resources code and **no `resources:assets:prune` command**, and it ignores the directory. So: move the live directory aside (step 2) and keep it separately; skip step 5; and do not invoke any Resources command on the restored release. The restored database has no `resource_*` tables, so nothing refers to those files. They are kept as the record of what was uploaded during the failed release. **Do not put them back before a later upgrade:** with the Resources tables empty every one is an orphan, and the first prune after the 24-hour grace period removes it, irreversibly.
+
+### What the prune command does not do
+
+`resources:assets:prune` is the only check there is, and it is narrower than the contract asks of it:
+
+- **It compares names and modification times, never content.** It does not read a file, compare its size or check `resource_assets.sha256`. Two pairs that agree on every name can still disagree on bytes. The archive checksum protects content; the prune does not.
+- **It lists the top level only.** A subdirectory or a link is not listed, not counted and not reported.
+- **A dry run exits 0 whatever it finds.** It fails only when a real removal fails, so read the lines; do not rely on the status.
+- **It does not exist on v0.3.0.**
+- **The 24-hour grace uses the file's modification time.** `tar` preserves the archive's times on extraction, so an extracted file keeps the age it had.
+- **A real run is irreversible.** After restoring an *older* database over *newer* files, every file uploaded since that backup is exactly the kind of orphan it removes. That is correct for the restored database and wrong if you might yet go back to the newer one, which is why step 2 moves the directory aside, why step 5 is a dry run, and why the daily schedule cannot fire during the maintenance window. It **can** fire the moment the application is up, so the check above must pass first.
 
 **The host's own backups are supplementary.** The authoritative restore pair for Resources is the Commons backup above: the dump, the Resource files archive and the manifest, taken together in one maintenance window. Provider or cPanel home-directory backups, if they exist, are not relied on for Resources, because nothing makes them consistent with a dump. Whether they cover `/home/<user>/commons/shared` is **not confirmed**. When checked on 2026-10-05, the account had no user-level backup exclusion, but listed no retained backups to inspect ([production readiness §4c, F4](production-readiness.md#4c-resources-managed-files-wp3)). Do not plan a Resources restore around them.
 
@@ -82,18 +135,92 @@ This is a **restore policy, not a retention policy**. Nothing here prunes or age
 
 ## The restore contract
 
-Checked **before the database is touched**, in this order. Each step is a stop, not a warning.
+Checked **before the database is touched**, in this order. Each step is a stop, not a warning. Steps 1 to 9 are the database (step 6 preserves the evidence the clearing in step 7 destroys); the Resource files and the security state have their own sections and are steps 10 and 11; step 12 is verification.
 
-1. **Checksum.** `sha256sum` the dump and compare it with `dump_sha256` in the manifest. A backup you have not verified is a hope.
-2. **Compute the live keyring fingerprints** from `APP_KEY` and `APP_PREVIOUS_KEYS` in the environment you are restoring into.
-3. **Subset test — the load-bearing one.** Every key fingerprint the backup requires must be present in the live keyring:
+**Why the schema is cleared first.** The dump's first pass drops and recreates only the tables it names. Loaded over a database that has been upgraded, it restores those tables and **leaves every newer table, and its data, in place** (G6 WP3-01, measured on MariaDB: 34 tables after loading a 16-table dump, the migration ledger saying 15, and a CRM profile surviving for a Person who no longer exists). The old release then runs normally, because it ignores unknown tables, and the next `migrate` fails with `Table ... already exists`. A restore that is judged only by the tables the dump contains passes. The step that matters is clearing first.
+
+1. **Maintenance is on and nothing is writing.** Confirm it as in the [deployment runbook](deployment.md#4-enter-maintenance).
+2. **Checksum.** `sha256sum` the dump and compare it with `dump_sha256` in the manifest. A backup you have not verified is a hope.
+3. **Compute the live keyring fingerprints** from `APP_KEY` and `APP_PREVIOUS_KEYS` in the environment you are restoring into ([how](deployment.md#the-manifest)).
+4. **Subset test — the load-bearing one.** Every key fingerprint the backup requires must be present in the live keyring:
    - **Live ring contains all of them** → proceed. A live ring that is a strict superset is the normal post-rotation case and is safe.
    - **Any fingerprint missing** → **stop.** Name the missing fingerprint and find that key before going further. Restoring anyway leaves every authenticator enrolled under it permanently unreadable, and no administrator can undo that.
-4. **Restore** the dump.
-5. **Reconcile invitations.** List invitations whose account is already `active` and revoke them: the restore may have resurrected an invitation that was already accepted, and an unreconciled one is a way to set someone's password.
-6. **Verify** as after a deployment ([health and release verification](deployment.md#7-health-and-release-verification)), then have someone sign in.
+5. **Name the target and take its inventory, read-only.** Confirm the database is the application's own (`DB_DATABASE` in `shared/.env`), then list everything in it:
+   ```sql
+   SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name;
+   SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = DATABASE();
+   SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema = DATABASE();
+   SELECT COUNT(*) FROM information_schema.events WHERE event_schema = DATABASE();
+   ```
+   Every name must be in [the complete schema](#the-complete-schema): the 16 tables of the backed-up release, and after a failed upgrade some or all of the 18 added ones. Every `table_type` must be `BASE TABLE`, and the three counts must be 0. **Anything else — a table in neither list, a view, a trigger, a routine, an event — is a stop.** Do not widen the clearing to it.
+6. **Preserve the failed state** ([below](#before-anything-is-cleared-preserve-the-failed-state)). The next step destroys it.
+7. **Clear the application schema.** Drop every table of step 5's reviewed list, in one statement, with foreign-key checks off for that session only, with **no `IF EXISTS`** (a name that is not there should fail) and **no `DROP DATABASE`** (cPanel database users usually cannot, and the grants are not yours to recreate):
+   ```sql
+   SET FOREIGN_KEY_CHECKS=0;
+   DROP TABLE `accounts`, `people`, /* ... exactly the reviewed names ... */ `sessions`;
+   SET FOREIGN_KEY_CHECKS=1;
+   ```
+   Then repeat the first query of step 5: it must return **no rows**.
+8. **Load the dump** into the emptied database, for example `gunzip -c "$B/dump.sql.gz" | mysql -u <user> -p <db>` (the password prompt, never the command line). The dump names no database.
+9. **Verify the inventory and the ledger.** The table set must equal the manifest's `tables_with_data` ∪ `tables_schema_only` **exactly**: nothing missing and **no table left over** (restoring v0.3.0 leaves none of the 18 added). `migrations` must hold the restored release's ledger (15 rows for v0.3.0). Every transient table exists and is empty.
+10. **Resource files:** [as above](#restoring-files-with-the-database).
+11. **Establish the security state** ([below](#security-state-after-a-restore-stop-unless-it-is-established)). **The application does not come up until it is established.**
+12. **Verify** as after a deployment ([health and release verification](deployment.md#7-health-and-release-verification)), then have someone sign in **with their second factor**: the fingerprint test shows the right keys are present, and only a TOTP sign-in shows they decrypt. On a release that has it, run `relationships:check` too (v0.3.0 does not).
 
-If step 3 fails and the key genuinely cannot be found, the platform is still recoverable and no passwords are lost — see the next section — but every enrolled authenticator must be reset and re-enrolled.
+**Before the release is attempted again**, the next `migrate` must run against this clean schema. If it fails with `Table ... already exists`, step 7 did not clear everything: stop and find out why.
+
+What was **rehearsed locally** is steps 2 to 4, the inventory in step 5 (by SQL alone, before any destructive statement), the clearing in step 7 (naming the tables from the rehearsal's own list), the load in step 8 (an uncompressed file) and the checks in steps 9 and 12 (the sign-in was in-process and rolled back), followed by a successful re-upgrade. **Not rehearsed:** step 1, deriving the table list from the live database (step 5), steps 6, 10 and 11, a gzipped load, and everything on the production host.
+
+If step 4 fails and the key genuinely cannot be found, the platform is still recoverable and no passwords are lost — see the next section — but every enrolled authenticator must be reset and re-enrolled.
+
+## Before anything is cleared: preserve the failed state
+
+> **Status: contract only. Not rehearsed.**
+
+The restore destroys the database as it stands, and that database is the only evidence of what changed after the backup. It cannot be recovered once step 7 has run.
+
+1. **Write the timeline down first**, from `shared/deploy.log` and the manifest: when `artisan down` was run, the backup's `taken_at`, when `migrate` started and stopped, whether and when `artisan up` was run, when the failure was noticed and when maintenance was re-entered, and every command anyone ran on the server that changes who may sign in (`identity:create-administrator`, `identity:reset-mfa`). Add the web server's access and error logs for the interval **if the host retains them** (not confirmed).
+2. **Export the failed-state database in full, before step 7**, as one complete dump with every table's rows, including the transient ones. Use the same client as a backup, in the same window:
+   ```bash
+   ( umask 077; mysqldump --single-transaction --no-tablespaces <db> > "$B/failed-state.sql" )
+   sha256sum "$B/failed-state.sql"
+   ```
+   If the Resource directory exists, it is moved aside, never deleted ([above](#restoring-files-with-the-database)).
+3. **Handle the export as the most sensitive file you hold.** It contains password hashes, authenticator ciphertext, recovery-code and invitation digests, sessions and reset-token hashes, and personal data, including the free-text notes in `contact_interactions`. Mode `0600`, in a directory outside the document root and outside `releases/`; copied off the host to the owner's secure store and **not into the store that holds the encryption keys**; never in the repository, a chat, a ticket or an email. The owner decides how long it is kept and that it is then destroyed. It is evidence for this one decision, not a second backup.
+
+## Security state after a restore: stop unless it is established
+
+> **Status: contract only. Not rehearsed.** No part of it is automatic, and none will be: **no automatic replay, no break-glass command and no `tinker` recovery procedure is authorized.**
+
+Restoring an older database does not only lose data. It **puts back the security state of the backup moment**, and quietly takes away the record of what changed since. Whatever was done to access after the backup is undone, and the audit trail of it goes with it:
+
+| What was done after the backup | What the restore does | Why it matters |
+| --- | --- | --- |
+| A password changed or reset (`password.changed`, `password.reset_completed`) | The old password hash is back | A credential that was replaced because it was compromised works again |
+| An Account disabled (`account.disabled`) | It is enabled again | Access that was withdrawn is back |
+| A role revoked (`role.revoked`); a relationship withdrawn or its sourced grant withdrawn | The assignment or grant is back | The same |
+| A Membership revoked (`revoked_at`) | The grant is live again | The same |
+| An authenticator replaced or reset; recovery codes regenerated or used (`mfa.*`) | The old authenticator and un-spent codes are back | A second factor that was retired, or a code that was spent, works again |
+| An invitation accepted, reissued or revoked (`invitation.*`) | An accepted invitation is pending again, and its Account is `invited` again; a revoked one is live | Someone holding the old link can set a password. An Account that is not `invited` cannot be activated by an invitation (`AcceptInvitation`), so this is narrower than it sounds, but it is a restored way in |
+| Anything else that reduced, withdrew or replaced access | Undone | |
+
+A change that *grants* access after the backup is simply lost; that is a data loss to record, not a security exposure. **The dangerous direction is access or a credential that was withdrawn coming back.**
+
+**What the operator must establish before the application may come up:**
+
+1. **The exposure interval:** from the backup's `taken_at` to the moment the database was exported (step 6). If maintenance was never lifted after the backup and no server-side command changed access in the interval, it is empty by construction. Show it: the timeline says so, and the exported database has no `security_events` row with `occurred_at` after `taken_at` (times are UTC):
+   ```sql
+   SELECT COUNT(*), MAX(occurred_at) FROM security_events WHERE occurred_at > '<taken_at>';
+   ```
+2. **If the interval is not empty, or the timeline cannot be completed:** compare the failed-state export with the restored database, in the tables that hold access, **by primary key and by the columns that decide it**: `accounts` (`status`, `disabled_at`, `password_hash`, `password_updated_at`, `security_generation`), `role_assignments`, `sourced_role_grants`, the four `person_relationship*` tables, `membership_grants` (`revoked_at`, `ends_at`), `account_totp_factors`, `account_recovery_codes` (`used_at`), `account_invitations` (`accepted_at`, `expires_at`). **Do not rely on `security_events` alone.** It is evidence, not a proven-complete record: a deleted row (a revoked role) leaves no timestamp behind, and whether every access change is audited is not established here. Load the export only into a scratch database made for the purpose, never into the production database, or read the dump directly.
+3. **Corroborate with records that live outside the database:** the deploy log, the host's logs, and the people who administer access.
+
+**The decision is binary.**
+
+- The interval is empty, **or** every difference is explained by trustworthy independent records **and** none of them is access or a credential coming back → record the evidence in the deploy log and proceed.
+- **Anything else — a timeline you cannot complete, an export you did not take or cannot read, a difference you cannot explain, or any access-reducing change the restore has reversed — means the security state is not established. The application stays in maintenance and the operator escalates to the product owner.**
+
+**This runbook gives no way to re-apply a reversed change, on purpose.** The Console is unavailable during maintenance and no bypass exists ([ADR 0027](../adr/0027-release-and-deployment-model.md)); the platform has no server-side command to disable an Account, revoke a role, a grant or a Membership, or revoke an invitation (the commands that exist are `identity:create-administrator`, `identity:reset-mfa`, the two prune commands and the relationship reports). Re-applying through anything else is not documented, tested or authorized. The owner decides what happens next, and records it in `shared/deploy.log`. Reopening the application is that decision, not a step.
 
 ## If a database is restored under the wrong key
 

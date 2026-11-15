@@ -171,6 +171,16 @@ Restoring the dump verbatim is therefore the *correct* action, which is the poin
 
 `account_invitations` is durable and is restored with data — dropping it would strand legitimately pending people. The stale-invitation risk it carries is handled by reconciliation after a restore, not by exclusion.
 
+#### Correction, 2026-11-15 (G6 WP3c): what the dump does and does not restore
+
+The decision above stands as it was recorded. Three statements in it are **incomplete**, and the runbooks now carry the corrected contract ([backup and restore](../runbooks/backup-and-restore.md), [deployment §3 and §5](../runbooks/deployment.md)). This note adds to the record; it does not rewrite it.
+
+- **The two lists are the nine and seven tables of v0.3.0, not the schema.** Every table added since is durable and is restored with data, with no change to the `--ignore-table` list: five CRM tables, two Discussions tables, six Resources tables, four Relationships tables and `sourced_role_grants`, 18 in all, 34 with the 16 above. The complete inventory is in the backup runbook, and a restore is verified against it.
+- **"Restoring the dump verbatim is the correct action" holds for the dump, not for the database it is loaded into.** The first pass drops and recreates only the tables it names, so loaded over a database that has been upgraded it restores those tables and **leaves every newer table, and its data, in place**: the audit measured 34 tables after loading a 16-table dump, the migration ledger at 15 rows, and the next `migrate` failing with `Table ... already exists` (G6 WP3-01). The restore contract therefore requires the application schema to be **cleared before the dump is loaded**, and the restored inventory to equal the manifest's. The corrected sequence was rehearsed locally on synthetic data (MariaDB 10.11.18, 2026-11-14); it has not been exercised on the host.
+- **Reconciliation after a restore is not limited to invitations.** A restore reverses every access change made since the backup (passwords, disabled Accounts, revoked roles, grants and Memberships, authenticators and recovery codes, invitations) and removes the audit record of them. The contract is that the security state is **established before the application reopens**, and that if it cannot be, the application stays in maintenance and the operator escalates. No automatic replay or break-glass command is authorized.
+
+The Resource files ([ADR 0037](0037-resources-are-audience-targeted-packs-of-cards.md)) are part of the recovery pair beside the keyring; their contract is in the backup runbook and is **not yet rehearsed**.
+
 This is a **restore policy, not a retention framework**. Retention and archival for `security_events` remain undesigned and out of scope here.
 
 ### Production operations boundary
