@@ -387,11 +387,11 @@ Nothing is lost.
 
 1. `artisan down` — and confirm it, because everything below assumes no writes are arriving.
 2. Point `current` back at the previous release, as above. No opcache step is needed.
-3. **Restore the pre-release backup** — follow [backup and restore](backup-and-restore.md), including the keyring verification, which happens *before* the database is touched.
-4. Reconcile invitations (see that runbook): revoke any invitation whose account is already active.
-5. CLI verification against `current` (the restored release) and the restored database.
-6. `artisan up`, then HTTP verification.
-7. Record in `shared/deploy.log` what was lost (see below).
+3. **Restore the pre-release backup** — follow [the restore contract](backup-and-restore.md#the-restore-contract) in full. In particular: the keyring verification happens *before* the database is touched; the schema inventory is taken and reviewed; **the failed state is preserved**; and **every application table is cleared before the dump is loaded**, because loading it over an upgraded database leaves the newer tables behind (G6 WP3-01). Then the inventory must equal the manifest's, with no table left over. The Resource files are restored with the database ([Resource files](backup-and-restore.md#resource-files)).
+4. **Establish the security state** ([backup and restore](backup-and-restore.md#security-state-after-a-restore-stop-unless-it-is-established)). It replaces the invitation reconciliation that stood here: a restore can reverse more than invitations. **If it cannot be established, stop here: the application stays in maintenance and the operator escalates to the product owner.** Do not go on to step 6.
+5. CLI verification against `current` (the restored release) and the restored database. `relationships:check` only if the restored release has it (v0.3.0 does not).
+6. `artisan up`, then HTTP verification, including a sign-in that passes its second factor.
+7. Record in `shared/deploy.log` what was lost (see below), and the evidence that the security state was established.
 
 > **Data loss is explicit here.** Everything written between the pre-migration backup and the moment maintenance was re-entered is gone. Because the backup is taken inside the maintenance window, that is normally only what happened during the failed release itself — but if the release was up and serving for a while before the failure was noticed, it includes every sign-in, every audit event and every administrative act in that period.
 >
@@ -401,7 +401,11 @@ Nothing is lost.
 
 > **First deployment is a distinct case of this, and step 3 above does not apply to it.** `--previous none` is always classified `restore-required` ([ADR 0027](../adr/0027-release-and-deployment-model.md)), but the reason is not that a backup exists to restore: on a first deployment the production database **begins empty**, there is no prior application data, and no `code-only` rollback target exists because there is no earlier release's code to fall back to. If first deployment itself fails after migrations have run, step 3's "restore the pre-release backup" does not apply — there is no pre-release application backup, only an empty schema. Recovery there means dropping what the failed migration created and returning the database to that known-empty state, then re-attempting from step 5, not restoring a backup that was never taken because nothing existed yet to back up.
 >
-> **The general `restore-required` procedure above is the decided design, and it has never been rehearsed end to end.** No backup or restore tooling exists in this repository ([backup and restore](backup-and-restore.md)); taking a dump is a documented `mysqldump` command, verified on the host, but loading one back, checking the keyring fingerprints before the database is touched, and reconciling invitations afterward are procedures a person follows by hand, untested against a real failure. **Treat this as explicitly open work**, to be completed and rehearsed before the first *later* release whose classification is `restore-required` — do not assume it is ready merely because the steps are written down.
+> **The general `restore-required` procedure above is the decided design. It has been rehearsed in part, locally, and never on the host.** No backup or restore tooling exists in this repository ([backup and restore](backup-and-restore.md)): taking a dump is a documented `mysqldump` command verified on the host, and the restore is a procedure a person follows by hand.
+>
+> - **Rehearsed locally** (G6 WP3c, 2026-11-14: synthetic data, MariaDB 10.11.18, one isolated run): the checksum and keyring tests before anything is touched, clearing every application table before the load (the correction for WP3-01), loading the dump, requiring the restored inventory and data to match the backup, signing in with a second factor under a previous key, and a later upgrade that succeeds. [Exactly what that covers and what it does not.](backup-and-restore.md#what-is-established-what-was-rehearsed-and-what-is-not)
+> - **Not rehearsed, and not to be treated as verified:** the Resource files (archive, zero-file backup, extraction, the agreement check), preserving the failed state, establishing the security state, a gzipped load, deriving the table list from the live database, and anything on the production host. The decision table for a `migrate` that stops part-way is not written yet.
+> - **A local rehearsal does not authorize a production restore or a deployment.** Whether to rehearse on the host first or to accept the risk explicitly is the owner's decision ([next-release checklist, item 5](g10-release-readiness.md#next-release-checklist)), and it is still open.
 
 ---
 
@@ -494,13 +498,29 @@ mysqldump --no-create-info --single-transaction --quick --no-tablespaces <db> \
 
 gzip "$B/dump.sql"
 sha256sum "$B/dump.sql.gz"
-
-# Resource files (ADR 0037): the bytes File Cards own live outside the database, so they are part of the same backup.
-tar -C /home/<user>/commons/shared/storage/app/private -czf "$B/resource-files.tar.gz" resources
-sha256sum "$B/resource-files.tar.gz"
 ```
 
-The archive is taken in the same window, right after the dump, so the files and the `resource_assets` rows describe one moment. Restoring it, and why the prune must not run in between, is in [backup and restore](backup-and-restore.md#resource-files).
+**Resource files (ADR 0037).** The bytes File Cards own live outside the database, so they are part of the same backup, taken in the same window right after the dump so the files and the `resource_assets` rows describe one moment.
+
+> **Contract only: this part has not been implemented in the rehearsal or tested.** It replaces an unconditional `tar` line that is known to fail on a host without the directory (G6 WP3-04: `tar` exits 2 and writes an archive, which the next line would then have checksummed).
+
+```bash
+P=/home/<user>/commons/shared/storage/app/private
+
+# 1. Is there a directory? On a host that has never stored a Resource file there is none (v0.3.0 has no Resources at all).
+ls -ld "$P/resources"
+
+# 2a. It exists: only regular files may be in it (this must print nothing), then archive it and CHECK THE STATUS.
+find "$P/resources" -mindepth 1 ! -type f
+tar -C "$P" -czf "$B/resource-files.tar.gz" resources; echo "tar exit status: $?"     # anything but 0: the backup is incomplete
+sha256sum "$B/resource-files.tar.gz"
+find "$P/resources" -mindepth 1 -maxdepth 1 -type f | wc -l                              # the file count for the manifest
+
+# 2b. It does not exist: a zero-file backup is legitimate ONLY if resource_assets has no rows or does not exist. Make no archive.
+#     If resource_assets has rows and the directory is missing, STOP: every File Card would be unavailable.
+```
+
+Then, on a release that has `resources:assets:prune`, run it with `--dry-run` and read **every** line: the backup is clean only if `kept` equals the file count equals the number of `resource_assets` rows, and the *younger than 24 hours*, *not a Resources storage key*, *orphaned*, *could NOT be removed* and *Asset rows whose file is missing* lines are all 0 ([why, and what that command cannot see](backup-and-restore.md#the-backup-is-clean-only-if-everything-agrees)). Anything else is explained by a person before the upgrade goes ahead; it is not accepted because it can be written into the manifest. Restoring the files, and why the prune must not run in between, is in [backup and restore](backup-and-restore.md#resource-files).
 
 | Restored with data | Structure only |
 | --- | --- |
@@ -510,6 +530,11 @@ The archive is taken in the same window, right after the dump, so the files and 
 | `membership_grants` | `password_reset_tokens` |
 | `security_events`, `migrations` | |
 | `resource_categories`, `resource_packs`, `resource_pack_audiences`, `resource_cards`, `resource_card_audiences`, `resource_assets` (and the Resource files, archived beside the dump) | |
+| `contact_profiles`, `contact_methods`, `contact_tags`, `contact_tag_assignments`, `contact_interactions` | |
+| `discussions`, `discussion_messages` | |
+| `person_relationships`, `person_relationship_status_changes`, `person_relationship_field_values`, `person_relationship_role_provisions`, `sourced_role_grants` | |
+
+The first rows of that table are the 16 tables of v0.3.0, which is what production runs: **a backup taken before the next release's migrations holds those 16 tables and only those**, and the 18 below them exist only in a backup taken from a release that has been migrated. [The complete schema](backup-and-restore.md#the-complete-schema) lists all 34, and a restore is checked against it.
 
 `migrations` keeps its rows, or the application believes nothing has ever migrated. `password_reset_tokens` is excluded because a restored token is a live credential; the cost is that anyone mid-reset requests a new link.
 
@@ -528,6 +553,7 @@ The archive is taken in the same window, right after the dump, so the files and 
   "dump_bytes": 148213,
   "resource_files_sha256": "…",
   "resource_files_count": 12,
+  "resource_assets_rows": 12,
   "release": { "version": "v0.1.0", "commit": "96c9eb1" },
   "database": { "connection": "mariadb", "name": "…" },
   "keyring": {
@@ -546,14 +572,55 @@ The archive is taken in the same window, right after the dump, so the files and 
 }
 ```
 
+Two notes on this example. It is the **shape**; no tool writes the manifest, the operator does. For a **zero-file backup** (no `resources/` directory, as on v0.3.0) the Resource fields are `"resource_files_count": 0`, `"resource_files_sha256": null` and `"resource_assets_rows": 0`, or `null` where the table does not exist ([backup and restore](backup-and-restore.md#the-backup-is-clean-only-if-everything-agrees)). And `tables_with_data` and `tables_schema_only` list the tables **of the release the host is running**: nine and seven for v0.3.0, as above. A backup of a release that has been migrated lists 27 and seven ([the complete schema](backup-and-restore.md#the-complete-schema)). Those lists are what a restore's inventory is checked against.
+
 **No key material. No database password.** The fingerprints identify *which* keys a restore will need; they do not contain them and cannot recover them. The keys themselves live only in `shared/.env` and the owner's secure secret store — and those two stores must not be the same place as the backup, because a single store holding both the ciphertext and its key protects nothing.
 
 Fingerprints are domain-separated truncated digests, 16 hex characters:
 
 ```
 key_fingerprint(k)  = sha256("flc-key-v1|"  + k)[0:16]
-keyring_fingerprint = sha256("flc-ring-v1|" + join(",", sorted(key_fingerprints)))[0:16]
+keyring_fingerprint = sha256("flc-ring-v1|" + join(",", sorted(unique(key_fingerprints))))[0:16]
 ```
+
+**`k` is the decoded key: the 32 raw bytes** after the `base64:` prefix, **not** the `base64:` text. (The earlier text left `k` undefined, G6 WP3-08; a mismatch fails safe, by stopping, but it was avoidable.) `sorted(unique(...))` means a key listed twice counts once. Hex is lowercase, `[0:16]` is the first 16 characters.
+
+**Test values**, so a computation can be checked before anything depends on it. These are made-up keys, not secrets:
+
+| Key | Fingerprint |
+| --- | --- |
+| `base64:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=` (bytes `00 01 … 1f`) | `2c8a734376e488fb` |
+| `base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=` (32 zero bytes) | `dd55ac8a8f7837a8` |
+| `base64://////////////////////////////////////////8=` (32 bytes of `ff`) | `da15800f513e503f` |
+
+| Keyring | Fingerprint |
+| --- | --- |
+| the first key alone | `aa8b784552ea86fa` |
+| the first and second, in either order | `5fa4bb2695669a8f` |
+| all three | `357d42c365bacbce` |
+
+**Computing it on the host without putting a key in a file, an argument or the shell history** (the keys are read from a prompt that does not echo; list `APP_KEY` and then each key of `APP_PREVIOUS_KEYS`, separated by commas):
+
+```bash
+IFS= read -rs -p 'keys, comma-separated: ' KEYS; echo; export KEYS
+/usr/local/bin/php <<'PHP'
+<?php
+$f = static fn (string $k): string => substr(hash('sha256', 'flc-key-v1|'.base64_decode(substr($k, 7), true)), 0, 16);
+$keys = array_values(array_filter(array_map('trim', explode(',', (string) getenv('KEYS')))));
+foreach ($keys as $k) {
+    if (! str_starts_with($k, 'base64:') || strlen((string) base64_decode(substr($k, 7), true)) !== 32) {
+        fwrite(STDERR, "a key is not base64: plus 32 bytes\n");
+        exit(1);
+    }
+}
+$fp = array_values(array_unique(array_map($f, $keys)));
+sort($fp);
+echo 'keys: ', implode(' ', array_map($f, $keys)), "\n", 'keyring: ', substr(hash('sha256', 'flc-ring-v1|'.implode(',', $fp)), 0, 16), "\n";
+PHP
+unset KEYS
+```
+
+Check it against the test values first (paste the first two test keys, comma-separated: it must print `2c8a734376e488fb dd55ac8a8f7837a8` and keyring `5fa4bb2695669a8f`). The algorithm and these values were computed independently (Python) and pinned in the rehearsal's tests; **the snippet itself has been run only on a development machine, not on the host.** Keys that do not begin `base64:` are refused: stop and find out why before relying on any fingerprint.
 
 ### Verify before you trust it
 
