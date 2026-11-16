@@ -4289,6 +4289,9 @@ t_static_the_new_helpers_agree() {
     done
     grep -qF "half-migrate:contact-methods-structure=" "$SRC/php/rehearse.php" || bad 'the script requires the helper'"'"'s judgement of contact_methods, which rehearse.php never prints'
     grep -qF "'HalfFailedShape'" "$SRC/php/rehearse.php" || bad 'rehearse.php does not load HalfFailedShape from the prepared source'
+    # The helper has no namespace of its own, so the bare name in `HalfFailedShape::check` resolves only through this import.
+    grep -qxF 'use Tests\Support\HalfFailedShape;' "$SRC/php/rehearse.php" || bad 'rehearse.php does not import Tests\Support\HalfFailedShape, so its HalfFailedShape::check resolves in the global namespace'
+    grep -qxF 'namespace Tests\Support;' "$ROOT/apps/platform/tests/Support/HalfFailedShape.php" || bad 'HalfFailedShape.php is not in the Tests\Support namespace the helper imports'
     [[ -f "$ROOT/apps/platform/tests/Support/HalfFailedShape.php" ]] || bad 'HalfFailedShape.php, which the helper loads, is not in the tests support directory'
     grep -qF "'half-migrate' => 'actionHalfMigrate'" "$SRC/php/rehearse.php" || bad 'rehearse.php has no half-migrate action'
     grep -qF "'revoke' => 'actionRevoke'" "$SRC/php/rehearse.php" || bad 'rehearse.php has no revoke action'

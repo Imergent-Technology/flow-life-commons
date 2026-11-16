@@ -11,6 +11,7 @@ use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Symfony\Component\Console\Output\BufferedOutput;
+use Tests\Support\HalfFailedShape;
 use Tests\Support\HistoricalFixture;
 use Tests\Support\HistoricalSnapshot;
 use Tests\Support\Totp;
