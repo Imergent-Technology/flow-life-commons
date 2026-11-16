@@ -85,10 +85,13 @@
 #
 #   G20 (slice 2.2C-1) the half-failed upgrade, and the one new state the corrected restore will clear. `half-fail-upgrade` starts only from the verified
 #       restored database, places a stub whose statement is fixed, and requires the real failure (class, SQLSTATE, driver code, the table) twice, the
-#       historical rows and the committed tables' structure unchanged, and the stub not the real table. `restore-historical` then recognises that
+#       historical rows unchanged, the committed tables' structure unchanged (contact_methods as its CREATING migration left it: the later provenance
+#       migration never runs), and the stub not the real table. `restore-historical` then recognises that
 #       state, and only that, by SQL alone: exactly the 32 tables of this script's own lists as plain tables, the 25 migrations in order, the
 #       stub as the stub, every newer table empty, the durable tables' row counts, and the schema and the security tables as `half-fail-upgrade`
-#       recorded them. Anything else, an unknown table or object, a missing or reordered migration, a changed row or structure, is refused.
+#       recorded them. Anything else, an unknown table or object, a missing or reordered migration, a changed structure or row of the security
+#       columns the digest covers, is refused. A same-count change to a row elsewhere is NOT detected here (only the counts are); `half-fail-upgrade`
+#       checked every row when it made the state, and the restore verifies every row against the snapshot afterwards.
 #   G21 (slice 2.2C-1) a security change made after the backup: `revoke-after-backup` removes one role assignment and records its `role.revoked` event;
 #       `restore-historical` reports, from the database itself, that the restore reversed both. No reconciliation, replay or repair exists.
 #
@@ -150,6 +153,11 @@ readonly STUB_SQL="CREATE TABLE \`$STUB_TABLE\` (\`stub\` CHAR(1) NOT NULL) ENGI
 readonly STUB_EXPECTED=$'InnoDB\tutf8mb4_unicode_ci\t'"$STUB_COMMENT"$'\tBASE TABLE\tstub:char(1):NO\t0\t0\t0'
 # The 15 tables the work before the failure leaves (13 from the ten completed migrations, two from the Relationships migration), besides the stub.
 readonly PARTIAL_NEWER_TABLES=(contact_interactions contact_methods contact_profiles contact_tag_assignments contact_tags discussion_messages discussions person_relationship_status_changes person_relationships resource_assets resource_card_audiences resource_cards resource_categories resource_pack_audiences resource_packs)
+# Of those 15, the 14 that nothing after the Relationships migration changes (their structure equals the first upgrade's), and the one that something does:
+# `2026_10_11_000001_add_provenance_to_contact_methods` (the 29th migration, which the half-failed state never reaches) adds a column to contact_methods.
+# That table is held to the structure its creating migration left (apps/platform/tests/Support/HalfFailedShape.php), not to the first upgrade's.
+readonly PARTIAL_UNCHANGED_TABLES=(contact_interactions contact_profiles contact_tag_assignments contact_tags discussion_messages discussions person_relationship_status_changes person_relationships resource_assets resource_card_audiences resource_cards resource_categories resource_pack_audiences resource_packs)
+readonly PROVENANCE_TABLE=contact_methods
 # The ledger of that state: v0.3.0's 15 migrations (batch 1), then the ten that completed (batch 2). The Relationships migration is not in it.
 readonly HISTORICAL_MIGRATIONS=(0001_01_01_000001_create_cache_table 0001_01_01_000002_create_jobs_table 2026_09_19_000001_create_people_table 2026_09_19_000002_create_accounts_table 2026_09_19_000003_create_account_invitations_table 2026_09_20_000001_create_security_events_table 2026_09_20_000002_create_sessions_table 2026_09_20_000003_create_role_assignments_table 2026_09_20_000004_add_role_key_index_to_role_assignments 2026_09_20_000005_create_password_reset_tokens_table 2026_09_21_000001_create_account_totp_factors_table 2026_09_21_000002_create_account_recovery_codes_table 2026_09_22_000001_add_channel_to_account_invitations 2026_09_23_000001_add_security_generation_to_accounts 2026_09_23_000002_create_membership_grants_table)
 readonly PARTIAL_MIGRATIONS=(2026_10_01_000001_create_contact_profiles_table 2026_10_01_000002_create_contact_methods_table 2026_10_01_000003_create_contact_tags_tables 2026_10_02_000001_create_contact_interactions_table 2026_10_02_000002_create_discussions_table 2026_10_02_000003_create_discussion_messages_table 2026_10_04_000001_create_resource_categories_table 2026_10_04_000002_create_resource_packs_tables 2026_10_04_000003_create_resource_cards_tables 2026_10_04_000004_create_resource_assets_table)
@@ -157,13 +165,16 @@ readonly PARTIAL_MIGRATIONS=(2026_10_01_000001_create_contact_profiles_table 202
 # membership_grants people role_assignments security_events), in that order: the fixture's, which nothing that happens before the failure changes.
 readonly DURABLE_ROWS=$'4\t5\t3\t11\t5\t13\t12\t8'
 # Slice 2.2C-1, the security change made after the backup: Person 3's role assignment (the `guardian` the upgrade renamed to `guardian-full`), by its
-# fixed ids (HistoricalFixture::person(3) and ::assignment(4)). The four numbers it is read as: role assignments, security events, that assignment
-# present by exact bytes under either key, `role.revoked` events. Before the revocation, and after the restore: 12 8 1 0. After the revocation: 11 9 0 1.
+# fixed ids (HistoricalFixture::person(3) and ::assignment(4)), and the event that records it, by its fixed id (HistoricalFixture::id('E', 9)). The five
+# numbers it is read as: role assignments, security events, that assignment present by exact bytes under either key, `role.revoked` events, and the ONE
+# event with that id, of that type, about that Person. The fifth is what ties the event to Person 3: the fourth alone counts any `role.revoked` event.
+# Before the revocation, and after the restore: 12 8 1 0 0. After the revocation: 11 9 0 1 1.
 readonly REVOKE_PERSON='01jbp000000000000000000003'
 readonly REVOKE_ASSIGNMENT='01jbr000000000000000000004'
-readonly REVOKE_SQL="SELECT (SELECT COUNT(*) FROM role_assignments), (SELECT COUNT(*) FROM security_events), (SELECT COUNT(*) FROM role_assignments WHERE id = '$REVOKE_ASSIGNMENT' AND person_id = '$REVOKE_PERSON' AND BINARY role_key IN ('guardian', 'guardian-full')), (SELECT COUNT(*) FROM security_events WHERE type = 'role.revoked');"
-readonly REVOKE_BEFORE=$'12\t8\t1\t0'
-readonly REVOKE_AFTER=$'11\t9\t0\t1'
+readonly REVOKE_EVENT='01jbe000000000000000000009'
+readonly REVOKE_SQL="SELECT (SELECT COUNT(*) FROM role_assignments), (SELECT COUNT(*) FROM security_events), (SELECT COUNT(*) FROM role_assignments WHERE id = '$REVOKE_ASSIGNMENT' AND person_id = '$REVOKE_PERSON' AND BINARY role_key IN ('guardian', 'guardian-full')), (SELECT COUNT(*) FROM security_events WHERE type = 'role.revoked'), (SELECT COUNT(*) FROM security_events WHERE id = '$REVOKE_EVENT' AND type = 'role.revoked' AND subject_person_id = '$REVOKE_PERSON');"
+readonly REVOKE_BEFORE=$'12\t8\t1\t0\t0'
+readonly REVOKE_AFTER=$'11\t9\t0\t1\t1'
 # The sha256 of an empty row list as the harness digests it: what every transient table must show after a restore.
 EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
 readonly EMPTY_DIGEST
@@ -1993,8 +2004,8 @@ require_partial_record() {
 report_reversal() {
     local observed
     capture observed 'reading the security tables after the restore' app_query "$REVOKE_SQL"
-    [[ "$observed" == "$REVOKE_BEFORE" ]] || refuse "the restore reported success but the security tables are not what the backup held: Person $REVOKE_PERSON's role assignment and the event of its revocation are not as they were (role assignments, security events, the assignment present, role.revoked events: ${observed//$'\t'/, }; expected ${REVOKE_BEFORE//$'\t'/, })." # guard:G21-reversed
-    say "ok   SECURITY STATE REVERSED. Before the restore the database held a revocation made after the backup: Person $REVOKE_PERSON's role assignment ($REVOKE_ASSIGNMENT) was removed and a role.revoked event recorded it (11 role assignments, 9 security events)."
+    [[ "$observed" == "$REVOKE_BEFORE" ]] || refuse "the restore reported success but the security tables are not what the backup held: Person $REVOKE_PERSON's role assignment and the event of its revocation are not as they were (role assignments, security events, the assignment present, role.revoked events, the event of Person $REVOKE_PERSON's revocation: ${observed//$'\t'/, }; expected ${REVOKE_BEFORE//$'\t'/, })." # guard:G21-reversed
+    say "ok   SECURITY STATE REVERSED. Before the restore the database held a revocation made after the backup: Person $REVOKE_PERSON's role assignment ($REVOKE_ASSIGNMENT) was removed and that Person's role.revoked event (id $REVOKE_EVENT) recorded it (11 role assignments, 9 security events)."
     say "     After it the assignment is back and the event is gone (12 role assignments, 8 security events), because the backup predates both."
     say "     An apparently successful restore therefore RESURRECTS authority that was revoked after the backup, and erases the record that it was revoked. Nothing here reconciles"
     say "     that, replays the event or repairs it. If this were production: keep the service in maintenance, treat the security state as not established, and escalate."
@@ -2222,11 +2233,13 @@ cmd_half_fail_upgrade() {
     say "ok   every historical row is as it was; only the migration ledger differs (25 records, not 15)"
     diff="$(digest_differences "$SNAPSHOT_STRUCTURE" "$(lines_named "$now_struct" "$(historical_inventory)")")"
     [[ -z "$diff" ]] || refuse "the structure of the historical tables changed (differs: $(tr '\n' ' ' <<<"$diff"))." # guard:G20-structure-historical
-    committed="$(sorted_list "${PARTIAL_NEWER_TABLES[@]}")"
+    committed="$(sorted_list "${PARTIAL_UNCHANGED_TABLES[@]}")"
     diff="$(digest_differences "$(lines_named "$upgraded_structure" "$committed")" "$(lines_named "$now_struct" "$committed")")"
-    [[ -z "$diff" ]] || refuse "the 15 tables the completed work made are not the structure the first upgrade made (differs: $(tr '\n' ' ' <<<"$diff"))." # guard:G20-structure-committed
+    [[ -z "$diff" ]] || refuse "the 14 tables the completed work made, which nothing later changes, are not the structure the first upgrade made (differs: $(tr '\n' ' ' <<<"$diff"))." # guard:G20-structure-committed
+    [[ "$(lines_named "$now_struct" "$PROVENANCE_TABLE")" != "$(lines_named "$upgraded_structure" "$PROVENANCE_TABLE")" ]] || refuse "the structure of $PROVENANCE_TABLE is the fully upgraded table's: the later provenance migration has run, which a half-failed upgrade never reaches." # guard:G20-provenance-not-yet
+    [[ "$(half_line "$out" contact-methods-structure)" == ok ]] || refuse "$PROVENANCE_TABLE is not the structure its creating migration left (the helper reported: '$(half_line "$out" contact-methods-structure)')." # guard:G20-structure-contact-methods
     [[ "$(lines_named "$now_struct" "$STUB_TABLE")" != "$(lines_named "$upgraded_structure" "$STUB_TABLE")" ]] || refuse "the structure of $STUB_TABLE is the real table's: it is not the stub." # guard:G20-stub-is-a-stub
-    say "ok   the structure of the 16 historical tables is the original's, of the 15 committed tables the first upgrade's, and the stub is not the real $STUB_TABLE"
+    say "ok   the structure of the 16 historical tables is the original's, of the 14 committed tables nothing later changes the first upgrade's, of $PROVENANCE_TABLE what its creating migration left (without the later provenance column), and the stub is not the real $STUB_TABLE"
     schema_digest schema
     security_digest security
     write_state_file "$HALF_FILE" "halfmigrated-v1"$'\n'"schema $schema"$'\n'"security $security"
@@ -2244,7 +2257,7 @@ cmd_revoke_after_backup() {
     capture counts 'reading the upgraded state' app_query "$COUNTS_SQL"
     [[ "$counts" == "$((FIXTURE_PEOPLE + 1))"$'\t1\t29\t0' ]] || refuse "the database is not the post-upgrade state this stage starts from (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0). Nothing was changed." # guard:G21-start-state
     capture observed 'reading the security tables' app_query "$REVOKE_SQL"
-    [[ "$observed" == "$REVOKE_BEFORE" ]] || refuse "the security tables are not as the upgrade left them (role assignments, security events, the assignment to revoke present, role.revoked events: ${observed//$'\t'/, }; expected ${REVOKE_BEFORE//$'\t'/, }). Has it already been run? Nothing was changed." # guard:G21-before-state
+    [[ "$observed" == "$REVOKE_BEFORE" ]] || refuse "the security tables are not as the upgrade left them (role assignments, security events, the assignment to revoke present, role.revoked events, the event of Person $REVOKE_PERSON's revocation: ${observed//$'\t'/, }; expected ${REVOKE_BEFORE//$'\t'/, }). Has it already been run? Nothing was changed." # guard:G21-before-state
 
     STAGE=revoke-after-backup
     trap on_stage_exit EXIT
@@ -2254,8 +2267,8 @@ cmd_revoke_after_backup() {
         grep -Fxq "$expected" <<<"$out" || refuse "the revoke helper did not report $expected." # guard:G21-helper-reported
     done
     capture observed 'reading the security tables after the revocation' app_query "$REVOKE_SQL"
-    [[ "$observed" == "$REVOKE_AFTER" ]] || refuse "the security tables are not what the revocation leaves (role assignments, security events, the assignment present, role.revoked events: ${observed//$'\t'/, }; expected ${REVOKE_AFTER//$'\t'/, })." # guard:G21-after-state
-    say "ok   Person $REVOKE_PERSON's role assignment is gone (11 role assignments) and one role.revoked event records it (9 security events); the backup holds neither change"
+    [[ "$observed" == "$REVOKE_AFTER" ]] || refuse "the security tables are not what the revocation leaves (role assignments, security events, the assignment present, role.revoked events, the event of Person $REVOKE_PERSON's revocation: ${observed//$'\t'/, }; expected ${REVOKE_AFTER//$'\t'/, })." # guard:G21-after-state
+    say "ok   Person $REVOKE_PERSON's role assignment is gone (11 role assignments) and the role.revoked event $REVOKE_EVENT about that Person records it (9 security events); the backup holds neither change"
     say "Revoked. Next: restore-rehearsal.sh restore-historical, which will say whether the restore reversed it."
 }
 

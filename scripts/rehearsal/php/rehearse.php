@@ -242,7 +242,7 @@ function bootHttp(): array
 function loadSupport(): void
 {
     $support = dirname(__DIR__).'/current/tests/Support';
-    foreach (['HistoricalFixture', 'HistoricalSnapshot', 'UpgradeDatabase', 'Totp'] as $class) {
+    foreach (['HistoricalFixture', 'HistoricalSnapshot', 'UpgradeDatabase', 'Totp', 'HalfFailedShape'] as $class) {
         if (! is_file("$support/$class.php")) {
             throw new HarnessRefusal("the test support file $class.php is not in the prepared source");
         }
@@ -411,6 +411,9 @@ function actionHalfMigrate(): void
             throw new HarnessRefusal("after the $attempt attempt the ledger or the tables are not the half-failed state this rehearsal means");
         }
     }
+    // The one committed table the later migrations also change: it must be what the migration that made it left, no more (no provenance column
+    // yet) and no less. The 14 others are compared with the first upgrade's structure by the script. Only the differences' names are printed.
+    echo 'half-migrate:contact-methods-structure='.HalfFailedShape::check($db)."\n";
     echo "half-migrate:complete=ok\n";
 }
 

@@ -267,7 +267,7 @@ case "$1 ${2:-}" in
                 *'FROM information_schema.statistics WHERE table_schema'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/schema_3" 2>/dev/null; echo ;;
                 *'referenced_table_name IS NOT NULL'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/schema_4" 2>/dev/null; echo ;;
                 *'information_schema.referential_constraints'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/schema_5" 2>/dev/null; echo ;;
-                *"type = 'role.revoked'"*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; if [[ -f "$W/revoke_counts" ]]; then cat "$W/revoke_counts"; else printf '12\t8\t1\t0\n'; fi ;;
+                *"type = 'role.revoked'"*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; if [[ -f "$W/revoke_counts" ]]; then cat "$W/revoke_counts"; else printf '12\t8\t1\t0\t0\n'; fi ;;
                 *'DROP TABLE IF EXISTS'*) # loading a dump: logged whole, and the world may change as it would
                     printf '%s' "$sql" >"$W/import.sql"; printf 'IMPORT args=[%s]\n' "${*:10}" >>"$W/appsql.log"
                     [[ ! -f "$W/import_fail" ]] || { echo 'ERROR 1050 (42S01): the fake load failed' >&2; exit 1; }
@@ -3510,10 +3510,14 @@ migration_files() { find "$ROOT/apps/platform/database/migrations" -name '*_*.ph
 # The ledger as `SELECT migration, batch ...` prints it for a half-failed upgrade: the first 15 migration files (batch 1), then the next 10 (batch 2).
 ledger_block() { migration_files | awk 'NR <= 15 { print $0 "\t1"; next } NR <= 25 { print $0 "\t2" }'; }
 partial_table_block() { restored_block | sed "s/^table migrations 15 .*/table migrations 25 $(fake_digest migrations-25)/"; }
-partial_structure_block() { # the 16 as they were, the 15 as the first upgrade made them, the stub as something else
+# The 16 as they were, the 14 committed tables nothing later changes as the first upgrade made them, contact_methods as its CREATING migration left it (which is
+# NOT how the first upgrade left it: the 29th migration adds a column the half-failed state never reaches), and the stub as something else.
+partial_structure_block() {
     local t
     for t in "${HIST_TABLES[@]}"; do printf 'structure %s %s\n' "$t" "$(fake_digest "struct-$t-hist")"; done
-    for t in "${PARTIAL_NEWER[@]}"; do printf 'structure %s %s\n' "$t" "$(fake_digest "struct-$t-up")"; done
+    for t in "${PARTIAL_NEWER[@]}"; do
+        if [[ "$t" == contact_methods ]]; then printf 'structure %s %s\n' "$t" "$(fake_digest "struct-$t-partial")"; else printf 'structure %s %s\n' "$t" "$(fake_digest "struct-$t-up")"; fi
+    done
     printf 'structure %s %s\n' "$STUB_NAME" "$(fake_digest "struct-$STUB_NAME-stub")"
 }
 half_output() {
@@ -3530,6 +3534,7 @@ half-migrate:second-failure-driver-code=1050
 half-migrate:second-failure-table=person_relationships
 half-migrate:second-ledger=25
 half-migrate:second-tables=32
+half-migrate:contact-methods-structure=ok
 half-migrate:complete=ok
 OUT
 }
@@ -3580,16 +3585,16 @@ partial_restore_world() {
 reversal_world() {
     restore_world
     printf '14\t1\t29\t0\n' >"$W/counts"
-    printf '11\t9\t0\t1\n' >"$W/revoke_counts"
-    printf 'cp "%s/hist.inv" "%s/inventory"\nprintf "12\\t8\\t1\\t0\\n" >"%s/revoke_counts"\n' "$W" "$W" "$W" >"$W/on_import"
+    printf '11\t9\t0\t1\t1\n' >"$W/revoke_counts"
+    printf 'cp "%s/hist.inv" "%s/inventory"\nprintf "12\\t8\\t1\\t0\\t0\\n" >"%s/revoke_counts"\n' "$W" "$W" "$W" >"$W/on_import"
 }
 revoke_world() {
     stage_world
     up_names >"$W/inventory"
     printf '14\t1\t29\t0\n' >"$W/counts"
-    printf '12\t8\t1\t0\n' >"$W/revoke_counts"
+    printf '12\t8\t1\t0\t0\n' >"$W/revoke_counts"
     printf '%s\n' revoke:role-removed=ok revoke:event-recorded=ok revoke:complete=ok >"$W/out_revoke"
-    printf 'printf "11\\t9\\t0\\t1\\n" >"%s/revoke_counts"\n' "$W" >"$W/after_revoke"
+    printf 'printf "11\\t9\\t0\\t1\\t1\\n" >"%s/revoke_counts"\n' "$W" >"$W/after_revoke"
     install_state snapshot dump.sql manifest.json
 }
 no_stub() {
@@ -3714,10 +3719,28 @@ t_g20_half_fail_outcomes() {
     half_refused_late 'a historical table whose structure changed' 'structure of the historical tables changed'
     expect_has 'the table is named' "$ERR" 'accounts'
     half_world; { partial_table_block; partial_structure_block | sed 's/^\(structure resource_cards \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/'; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
-    half_refused_late 'a committed table that is not what the first upgrade made' 'the 15 tables the completed work made'
+    half_refused_late 'a committed table that is not what the first upgrade made' 'the 14 tables the completed work made'
     expect_has 'the table is named' "$ERR" 'resource_cards'
     half_world; { partial_table_block; partial_structure_block | sed "s/^\\(structure $STUB_NAME \\).*/\\1$(fake_digest "struct-$STUB_NAME-up")/"; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
     half_refused_late 'a stub that is the real table' 'it is not the stub'
+    # contact_methods is held to what its creating migration left, and not just excused from the comparison with the first upgrade:
+    # (a) the faithful world above passes although its digest differs from the first upgrade's (the old comparison of all 15 would have refused it);
+    half_world; [[ "$(grep '^structure contact_methods ' "$W/out_snapshot_current")" != "$(grep '^structure contact_methods ' "$T/root/upgraded.structure")" ]] || bad 'the fake world does not give contact_methods a structure other than the first upgrade'"'"'s'
+    # (b) the fully upgraded table (the provenance migration has run) is not the half-failed table;
+    half_world; { partial_table_block; partial_structure_block | sed "s/^\\(structure contact_methods \\).*/\\1$(fake_digest "struct-contact_methods-up")/"; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
+    half_refused_late 'a contact_methods that already has the provenance column' 'the later provenance migration has run'
+    # (c) the helper's own judgement of the table must be `ok`: any deviation it names ends the stage, and no report at all does too;
+    half_world; sed -i 's/^half-migrate:contact-methods-structure=.*/half-migrate:contact-methods-structure=unexpected column surprise/' "$W/out_half_migrate"
+    half_refused_late 'a contact_methods with an unrelated extra column' 'not the structure its creating migration left'
+    expect_has 'the deviation is named' "$ERR" 'unexpected column surprise'
+    half_world; sed -i 's/^half-migrate:contact-methods-structure=.*/half-migrate:contact-methods-structure=different column label/' "$W/out_half_migrate"
+    half_refused_late 'a contact_methods with a changed column' 'not the structure its creating migration left'
+    half_world; grep -v '^half-migrate:contact-methods-structure=' "$W/out_half_migrate" >"$W/out_half_migrate.new"; mv "$W/out_half_migrate.new" "$W/out_half_migrate"
+    half_refused_late 'a helper that says nothing about contact_methods' 'not the structure its creating migration left'
+    # (d) the other 14 are still held strictly to the first upgrade's, contact_profiles included (the table the later migration is NOT about).
+    half_world; { partial_table_block; partial_structure_block | sed 's/^\(structure contact_profiles \).*/\1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/'; echo 'snapshot:complete=ok'; } >"$W/out_snapshot_current"
+    half_refused_late 'a contact_profiles whose structure changed' 'the 14 tables the completed work made'
+    expect_has 'the table is named' "$ERR" 'contact_profiles'
     # The same recogniser the restore uses judges what the stage made: a stub that is not the stub, and a ledger that is not the 25, end the stage.
     half_world; printf 'InnoDB\tutf8mb4_unicode_ci\t\tBASE TABLE\trelationship_id:char(26):NO,field_key:varchar(64):NO\t1\t1\t0' >"$W/stub_row"
     half_refused_late 'a stub that is the real table, by the server' 'is not the stub this script places'
@@ -3884,7 +3907,7 @@ t_g21_revoke_happy_path() {
     revoke_world
     run_script -- revoke-after-backup
     expect_rc revoke-after-backup 0
-    expect_has 'the change' "$OUT" "role assignment is gone (11 role assignments) and one role.revoked event records it (9 security events)"
+    expect_has 'the change' "$OUT" "role assignment is gone (11 role assignments) and the role.revoked event 01jbe000000000000000000009 about that Person records it (9 security events)"
     expect_has 'the backup holds neither' "$OUT" 'the backup holds neither change'
     expect_has 'the next step' "$OUT" 'restore-historical'
     [[ "$(tr '\n' ' ' <"$W/runs")" == 'revoke ' ]] || bad "the helper did not run once: $(tr '\n' ' ' <"$W/runs")"
@@ -3894,7 +3917,7 @@ t_g21_revoke_happy_path() {
     no_clear_or_import revoke-after-backup
     only_database_left revoke-after-backup
     no_secret_anywhere revoke-after-backup
-    # The same four numbers, read before and after, with the exact ids.
+    # The same five numbers, read before and after, with the exact ids.
     [[ "$(grep -c "type = 'role.revoked'" "$W/appsql.log")" == 2 ]] || bad 'the security tables were not read before and after'
     expect_has 'the assignment is named by its id' "$(<"$W/appsql.log")" "id = '01jbr000000000000000000004' AND person_id = '01jbp000000000000000000003'"
 }
@@ -3912,16 +3935,20 @@ t_g21_revoke_preconditions() {
     revoke_world; printf '14\t0\t29\t0\n' >"$W/counts"
     run_script -- revoke-after-backup
     expect_refused 'a database with no marker profile' 'not the post-upgrade state'
-    revoke_world; printf '11\t9\t0\t1\n' >"$W/revoke_counts"
+    revoke_world; printf '11\t9\t0\t1\t1\n' >"$W/revoke_counts"
     run_script -- revoke-after-backup
     expect_refused 'a revocation that has already been made' 'not as the upgrade left them'
     no_helper_ran 'a revocation already made'
-    revoke_world; printf '12\t8\t0\t0\n' >"$W/revoke_counts"
+    revoke_world; printf '12\t8\t0\t0\t0\n' >"$W/revoke_counts"
     run_script -- revoke-after-backup
     expect_refused 'a role assignment that is not there' 'not as the upgrade left them'
-    revoke_world; printf '12\t9\t1\t0\n' >"$W/revoke_counts"
+    revoke_world; printf '12\t9\t1\t0\t0\n' >"$W/revoke_counts"
     run_script -- revoke-after-backup
     expect_refused "security events that are not the fixture's" 'not as the upgrade left them'
+    revoke_world; printf '12\t8\t1\t0\t1\n' >"$W/revoke_counts"
+    run_script -- revoke-after-backup
+    expect_refused 'the revocation event already there before the revocation' 'not as the upgrade left them'
+    no_helper_ran 'the revocation event already there'
     revoke_world; rm -f "$T/root/historical.manifest.json"
     run_script -- revoke-after-backup
     expect_refused 'no backup (there would be nothing to restore to)' 'no complete backup'
@@ -3939,9 +3966,14 @@ t_g21_revoke_outcomes() {
     revoke_world; : >"$W/after_revoke"
     run_script -- revoke-after-backup
     expect_refused 'a revocation the server does not show' 'not what the revocation leaves'
-    revoke_world; printf 'printf "11\\t9\\t1\\t1\\n" >"%s/revoke_counts"\n' "$W" >"$W/after_revoke"
+    revoke_world; printf 'printf "11\\t9\\t1\\t1\\t1\\n" >"%s/revoke_counts"\n' "$W" >"$W/after_revoke"
     run_script -- revoke-after-backup
     expect_refused 'an assignment that is still there' 'not what the revocation leaves'
+    # An event for ANOTHER Person leaves every overall count as the revocation does (11 role assignments, 9 events, one role.revoked) but is not the
+    # event of this Person's revocation: only the fifth reading, the event by its id, type and subject, tells them apart.
+    revoke_world; printf 'printf "11\\t9\\t0\\t1\\t0\\n" >"%s/revoke_counts"\n' "$W" >"$W/after_revoke"
+    run_script -- revoke-after-backup
+    expect_refused 'a role.revoked event that is not the event of this Person' 'not what the revocation leaves'
     revoke_world; printf '3\n' >"$W/fail_revoke"
     run_script -- revoke-after-backup
     expect_rc 'a helper that refuses' 3
@@ -3967,14 +3999,19 @@ t_g21_the_restore_reverses_it_and_says_so() {
     [[ "$(grep -c "type = 'role.revoked'" "$W/appsql.log")" == 2 ]] || bad 'the security tables were not read before the clear and after the load'
     [[ "$(grep -n "type = 'role.revoked'" "$W/appsql.log" | sed -n 1p | cut -d: -f1)" -lt "$(grep -n '^CLEAR' "$W/appsql.log" | cut -d: -f1)" ]] || bad 'the revocation was looked for after the clear'
     # Where no revocation of this stage was made, nothing is claimed.
-    reversal_world; printf '12\t8\t1\t0\n' >"$W/revoke_counts"
+    reversal_world; printf '12\t8\t1\t0\t0\n' >"$W/revoke_counts"
     run_script -- restore-historical
     expect_rc 'a restore where no revocation was made' 0
     expect_lacks 'no reversal is claimed' "$OUT" 'SECURITY STATE REVERSED'
-    reversal_world; printf '11\t9\t0\t0\n' >"$W/revoke_counts"
+    reversal_world; printf '11\t9\t0\t0\t0\n' >"$W/revoke_counts"
     run_script -- restore-historical
     expect_rc 'a security state that is not the revocation of this stage' 0
     expect_lacks 'no reversal is claimed for another security state' "$OUT" 'SECURITY STATE REVERSED'
+    # The same four overall counts as the revocation, but the role.revoked event is another Person's: it is not this stage's revocation, so no reversal is claimed.
+    reversal_world; printf '11\t9\t0\t1\t0\n' >"$W/revoke_counts"
+    run_script -- restore-historical
+    expect_rc 'an event of another Person with the same overall counts' 0
+    expect_lacks 'no reversal is claimed for an event that is not this Person'"'"'s' "$OUT" 'SECURITY STATE REVERSED'
 }
 
 t_g21_a_reversal_that_did_not_happen_is_not_reported() {
@@ -3983,9 +4020,12 @@ t_g21_a_reversal_that_did_not_happen_is_not_reported() {
     run_script -- restore-historical
     expect_refused 'a restore after which the security tables still show the revocation' 'the restore reported success but the security tables are not what the backup held'
     expect_lacks 'no reversal is claimed' "$OUT" 'SECURITY STATE REVERSED'
-    reversal_world; printf 'cp "%s/hist.inv" "%s/inventory"\nprintf "12\\t8\\t0\\t0\\n" >"%s/revoke_counts"\n' "$W" "$W" "$W" >"$W/on_import"
+    reversal_world; printf 'cp "%s/hist.inv" "%s/inventory"\nprintf "12\\t8\\t0\\t0\\t0\\n" >"%s/revoke_counts"\n' "$W" "$W" "$W" >"$W/on_import"
     run_script -- restore-historical
     expect_refused 'a restore after which the assignment did not come back' 'not what the backup held'
+    reversal_world; printf 'cp "%s/hist.inv" "%s/inventory"\nprintf "12\\t8\\t1\\t0\\t1\\n" >"%s/revoke_counts"\n' "$W" "$W" "$W" >"$W/on_import"
+    run_script -- restore-historical
+    expect_refused 'a restore after which the revocation event is still there (the counts of the assignment and events are the backup'"'"'s)' 'not what the backup held'
 }
 
 # The paths that existed before slice 2.2C-1 do not look for the half-failed state, and the half-failed path does not look for the revocation.
@@ -4187,7 +4227,7 @@ t_guard_registry_comparison() {
 # The lists the half-failed rehearsal holds are the repository's: the tables, the migrations, the stub's statement, the fixture's counts, the fixed ids.
 # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
 t_static_half_failed_lists() {
-    local fixture="$ROOT/apps/platform/tests/Fixtures/rehearsal/half-failed-stub.sql" pest="$ROOT/apps/platform/tests/Upgrade/HalfFailedMigrationTest.php" t counts='' want got
+    local fixture="$ROOT/apps/platform/tests/Fixtures/rehearsal/half-failed-stub.sql" pest="$ROOT/apps/platform/tests/Upgrade/HalfFailedMigrationTest.php" t counts='' want got shape
     run_fn 'printf "%s\n" "${PARTIAL_NEWER_TABLES[@]}" | LC_ALL=C sort'; [[ "$OUT" == "$(printf '%s\n' "${PARTIAL_NEWER[@]}" | LC_ALL=C sort)" ]] || bad "the script's PARTIAL_NEWER_TABLES differ from the tests'"
     # The 15 + the stub + the two tables the failed migration never made are the 18 newer tables, with no overlap.
     want="$(printf '%s\n' "${NEWER_TABLES[@]}" | LC_ALL=C sort)"
@@ -4205,6 +4245,16 @@ t_static_half_failed_lists() {
     [[ "$(grep -c . "$fixture")" == 1 && "$(grep -o ';' "$fixture" | wc -l)" == 1 ]] || bad 'the stub fixture is not exactly one statement'
     grep -qF "'flc-rehearsal-stub-s22c1'" "$fixture" || bad 'the stub fixture does not carry the marker comment the script requires'
     run_fn 'printf "%s" "$STUB_EXPECTED"'; [[ "$OUT" == "$STUB_ROW" ]] || bad "the script's STUB_EXPECTED is not the tests'"
+    # The 14 the first upgrade's structure is compared with, and the one the later provenance migration also changes: together the 15, no overlap.
+    run_fn 'printf "%s\n" "${PARTIAL_UNCHANGED_TABLES[@]}" "$PROVENANCE_TABLE" | LC_ALL=C sort'; [[ "$OUT" == "$(printf '%s\n' "${PARTIAL_NEWER[@]}" | LC_ALL=C sort)" ]] || bad 'the 14 tables compared with the first upgrade and the provenance table are not the 15 committed tables'
+    run_fn 'printf "%s" "${#PARTIAL_UNCHANGED_TABLES[@]}"'; [[ "$OUT" == 14 ]] || bad 'the script does not compare 14 committed tables with the first upgrade'"'"'s structure'
+    # The one that is different is the table the 29th migration adds a column to; the column is the one HalfFailedShape says the half-failed table lacks.
+    shape="$ROOT/apps/platform/tests/Support/HalfFailedShape.php"
+    run_fn 'printf "%s" "$PROVENANCE_TABLE"'; [[ "$OUT" == contact_methods ]] || bad 'the script'"'"'s PROVENANCE_TABLE is not contact_methods'
+    grep -qF "public const TABLE = 'contact_methods';" "$shape" || bad "HalfFailedShape's table is not the script's PROVENANCE_TABLE"
+    grep -qF "public const LATER_COLUMN = 'updated_by_account_id';" "$shape" || bad "HalfFailedShape's later column is not updated_by_account_id"
+    [[ "$(migration_files | awk 'NR == 29')" == 2026_10_11_000001_add_provenance_to_contact_methods ]] || bad 'the 29th migration is not the one that adds the provenance column to contact_methods'
+    grep -qF "\$table->char('updated_by_account_id', 26)->nullable();" "$ROOT/apps/platform/database/migrations/2026_10_11_000001_add_provenance_to_contact_methods.php" || bad 'the provenance migration no longer adds updated_by_account_id as HalfFailedShape assumes'
     # The Pest test measured the same 15.
     got="$(sed -n '/^const HALF_FAILED_NEW_TABLES = \[/,/^\];/p' "$pest" | grep -o "'[a-z_]*'" | tr -d "'" | LC_ALL=C sort)"
     [[ "$got" == "$(printf '%s\n' "${PARTIAL_NEWER[@]}" | LC_ALL=C sort)" ]] || bad "tests/Upgrade/HalfFailedMigrationTest.php's HALF_FAILED_NEW_TABLES are not the script's 15 committed tables"
@@ -4217,6 +4267,14 @@ t_static_half_failed_lists() {
     run_fn 'printf "%s %s" "$REVOKE_ASSIGNMENT" "$REVOKE_PERSON"'; [[ "$OUT" == "$(printf '01jb%s%021d' r 4) $(printf '01jb%s%021d' p 3)" ]] || bad "the revoked ids are not the fixture's assignment 4 and Person 3: $OUT"
     grep -qF "'id' => self::id('E', \$number)" "$ROOT/apps/platform/tests/Support/HistoricalFixture.php" || bad 'the fixture no longer makes event ids as the revoke helper assumes'
     grep -qF "4 => [3, 'guardian']" "$ROOT/apps/platform/tests/Support/HistoricalFixture.php" || bad 'assignment 4 is no longer the guardian role of Person 3'
+    # The revocation event is HistoricalFixture::id('E', 9), and the reading that ties it to Person 3 asks for that id, the type AND the subject.
+    run_fn 'printf "%s" "$REVOKE_EVENT"'; [[ "$OUT" == "$(printf '01jb%s%021d' e 9)" ]] || bad "the script's REVOKE_EVENT is not HistoricalFixture::id('E', 9): $OUT"
+    run_fn 'printf "%s" "$REVOKE_SQL"'
+    expect_has 'the event is asked for by id, type and subject' "$OUT" "id = '01jbe000000000000000000009' AND type = 'role.revoked' AND subject_person_id = '01jbp000000000000000000003'"
+    run_fn 'printf "%s|%s" "$REVOKE_BEFORE" "$REVOKE_AFTER"'; [[ "$OUT" == "$(printf '12\t8\t1\t0\t0|11\t9\t0\t1\t1')" ]] || bad 'the five readings before and after are not 12 8 1 0 0 and 11 9 0 1 1'
+    grep -qF "'id' => HistoricalFixture::id('E', 9)" "$ROOT/scripts/rehearsal/php/rehearse.php" || bad 'the revoke helper no longer records the event with the id the script reads'
+    grep -qF "'type' => 'role.revoked'" "$ROOT/scripts/rehearsal/php/rehearse.php" || bad 'the revoke helper no longer records a role.revoked event'
+    grep -qF "'subject_person_id' => \$person" "$ROOT/scripts/rehearsal/php/rehearse.php" || bad 'the revoke helper no longer records the event about the Person the script reads'
 }
 
 # shellcheck disable=SC2016 # `$attempt` is text to find in the PHP source, and the code in single quotes is run by the inner bash
@@ -4229,6 +4287,9 @@ t_static_the_new_helpers_agree() {
     for line in 'half-migrate:$attempt-failure-class=' 'half-migrate:$attempt-failure-code=' 'half-migrate:$attempt-failure-driver-code=' 'half-migrate:$attempt-failure-table=' 'half-migrate:$attempt-ledger=' 'half-migrate:$attempt-tables='; do
         grep -qF "$line" "$SRC/php/rehearse.php" || bad "the script reads $line, which rehearse.php never prints"
     done
+    grep -qF "half-migrate:contact-methods-structure=" "$SRC/php/rehearse.php" || bad 'the script requires the helper'"'"'s judgement of contact_methods, which rehearse.php never prints'
+    grep -qF "'HalfFailedShape'" "$SRC/php/rehearse.php" || bad 'rehearse.php does not load HalfFailedShape from the prepared source'
+    [[ -f "$ROOT/apps/platform/tests/Support/HalfFailedShape.php" ]] || bad 'HalfFailedShape.php, which the helper loads, is not in the tests support directory'
     grep -qF "'half-migrate' => 'actionHalfMigrate'" "$SRC/php/rehearse.php" || bad 'rehearse.php has no half-migrate action'
     grep -qF "'revoke' => 'actionRevoke'" "$SRC/php/rehearse.php" || bad 'rehearse.php has no revoke action'
     run_fn 'runner_command helper:half-migrate; printf "%s " "${RUN_CMD[@]}"'
@@ -4505,6 +4566,8 @@ declare -A GUARD_TESTS=(
     [G20-historical-preserved]='t_g20_half_fail_outcomes'
     [G20-structure-historical]='t_g20_half_fail_outcomes'
     [G20-structure-committed]='t_g20_half_fail_outcomes'
+    [G20-provenance-not-yet]='t_g20_half_fail_outcomes'
+    [G20-structure-contact-methods]='t_g20_half_fail_outcomes'
     [G20-stub-is-a-stub]='t_g20_half_fail_outcomes'
     [G20-partial-counts]='t_g20_partial_state_preconditions'
     [G20-partial-ledger]='t_g20_partial_state_preconditions'
