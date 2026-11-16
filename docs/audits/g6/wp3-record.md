@@ -709,6 +709,7 @@ Slice 2.2C-1 extends the local recovery rehearsal ([`docs/development/restore-re
 | Focused re-review | — | F1, F4 and F2 accepted; **new finding N1 (HIGH, fails closed):** the helper called `HalfFailedShape::check` without importing it. |
 | N1 correction and a real-PHP probe on the upgrade *test* database | `26e7056` | One `use` line, two static assertions; the real `half-migrate` helper printed both failures and `contact-methods-structure=ok`; `./flow check repo` green. |
 | L3a, 2026-11-16 | `26e7056` | **Passed, 15 of 15 stages**, then cleanup. |
+| CI timeout of the `./flow check` job, 40 to 65 minutes (the only workflow change) | the PR's last commit | The first PR CI run (at `08fa19d`, docs only on top of `26e7056`) was cancelled by the 40-minute limit (annotation: "The job has exceeded the maximum execution time of 40m0s") with no test or mutant failure: the rehearsal guard suite alone, the first long step, had run 38.5 minutes and caught 215 of 225 mutants. |
 
 ### What the review changed
 
