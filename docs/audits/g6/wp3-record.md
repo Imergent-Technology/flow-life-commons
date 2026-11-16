@@ -595,14 +595,14 @@ The final independent Opus 5.5 verification of `ebc15e8` verified the L3 correct
 
 **Attribution corrected.** §14.2 said the verification of §14.1 returned SAFE FOR PR PREPARATION. That verdict is the one on `3bb7bc4`; the verification of `95dfcf4`, the commit that records §14.1, returned SAFE AFTER BOUNDED REMEDIATION. §14.2 now says so, and §14.1 now credits the `direct` bypass to a re-verification of §14, not to the focused review that returned SAFE FOR PR PREPARATION. §14.2's findings and the owner's deferrals are unchanged.
 
-## WP3c — remaining work: slices 1, 2.1 and 2.2 (A and B) are integrated; WP3c stays open
+## WP3c — remaining work: slices 1, 2.1, 2.2 (A and B) and 2.2C-1 are integrated; WP3c stays open
 
-Planned by the triage. Its slice 1, the isolation foundation, is done and recorded in [the section below](#wp3c-slice-1--isolation-foundation-closeout). Slices 2.1 (the PHP substrate) and 2.2A and 2.2B (the historical recovery cycle: backup, upgrade, the WP3-01 defect reproduced, the corrected restore, a sign-in with TOTP, the re-upgrade) are done and recorded in [the section after it](#wp3c-slices-21-and-22-a-and-b--recovery-rehearsal-closeout); their live run passed on synthetic data. **Still open and not yet authorized:** slice 2.2C (the Resource files archive, a half-failed migration, the reconciliation of invitations and other security-sensitive changes after a restore), the production pre-flight, and the runbook and release documentation. The list below is the triage's, as it stood when this section was written, with one dated update on WP3-01. What WP3a and WP3b leave to it:
+Planned by the triage. Its slice 1, the isolation foundation, is done and recorded in [the section below](#wp3c-slice-1--isolation-foundation-closeout). Slices 2.1 (the PHP substrate) and 2.2A and 2.2B (the historical recovery cycle: backup, upgrade, the WP3-01 defect reproduced, the corrected restore, a sign-in with TOTP, the re-upgrade) are done and recorded in [the section after it](#wp3c-slices-21-and-22-a-and-b--recovery-rehearsal-closeout); their live run passed on synthetic data. Slice 2.2C-1 (a half-failed upgrade restored from, and a security change made after the backup reversed by the restore) passed its live run (L3a, 2026-11-16) and is recorded in [the last section](#wp3c-slice-22c-1--half-failed-upgrade-and-security-reversal-closeout). **Still open and not yet authorized:** slices 2.2C-2 and 2.2C-3 (the Resource files archive, its restore and its agreement check), the reconciliation of invitations and other security-sensitive changes after a restore, the production pre-flight, and the runbook and release documentation. The list below is the triage's, as it stood when this section was written, with one dated update on WP3-01. What WP3a and WP3b leave to it:
 
 - **WP3c, before any release:**
   - **The read-only production pre-flight** (WP3-10, WP3-12; owner disposition of I1): exact keys by bytes, collation-equal variants of `guardian` and `guardian-full`, the same-Person collision condition, holders by Account status, and the collations of the v0.3.0 tables and columns (§8).
   - **The release-readiness count's MariaDB reading** (§8): the before and after counts match variants as well.
-  - **WP3-01 (MEDIUM), a mandatory release prerequisite:** the corrected in-place restore, rehearsed. *Update (2026-11-14): the corrected sequence has been rehearsed once, locally, on synthetic data (slice 2.2, below). It is not yet in the production operator procedure, and a local rehearsal does not replace the decision on the real host, so the prerequisite stands.*
+  - **WP3-01 (MEDIUM), a mandatory release prerequisite:** the corrected in-place restore, rehearsed. *Update (2026-11-14): the corrected sequence has been rehearsed once, locally, on synthetic data (slice 2.2, below). It is not yet in the production operator procedure, and a local rehearsal does not replace the decision on the real host, so the prerequisite stands.* *Update (2026-11-16): the restore from a half-failed upgrade has also been rehearsed once (slice 2.2C-1, below); the prerequisite stands for the same reasons.*
   - The other WP3c findings as the triage rules them (WP3-04 to WP3-08, WP3-11, WP3-13).
   - What WP3b deliberately does not cover (see its section): the real v0.3.0 application, backup and restore, an in-place rollback, MySQL/MariaDB patch level 10.11.18, and a stopped upgrade's recovery on a host.
 
@@ -694,3 +694,39 @@ Stage by stage, on MariaDB 10.11.18 (Docker 29.9.3): the v0.3.0 baseline of 16 t
 - The earlier audit findings, triage rulings and verdicts in this record are unchanged; this section adds to them.
 
 The live runs' evidence is kept privately, outside the repository, and is not committed; it contains no credential, key, TOTP secret or database content.
+
+## WP3c slice 2.2C-1 — half-failed upgrade and security reversal: closeout
+
+Slice 2.2C-1 extends the local recovery rehearsal ([`docs/development/restore-rehearsal.md`](../../development/restore-rehearsal.md), which holds the procedure, the safeguards and the full L3a record) with two cases: a half-failed upgrade restored from, and a security change made after the backup that the restore reverses. Everything ran on a local Docker daemon against synthetic data. **No production or staging system, no development database and no application `.env` was accessed, nothing was deployed, and the production operator procedure is unchanged.** The L3a live run needed the owner's separate authorization and was run once. The runbook's status lines were corrected to say so.
+
+### What was built, reviewed and run
+
+| Step | Commit | Record |
+|---|---|---|
+| S2.2C-1 implementation: `half-fail-upgrade`, `revoke-after-backup`, the 32-table recognition in `restore-historical`, G20 and G21 | `58804d1` | Fake-daemon tests; the real failure measured on MariaDB by `HalfFailedMigrationTest`. |
+| Independent review (Opus 5.5) | — | **SAFE FOR L3a AFTER BOUNDED REMEDIATION.** F1 (HIGH), F4 and F2 (LOW) to remediate; F3, F5, F6, F7 accepted. |
+| Remediation: the `contact_methods` structure, the revocation event, the wording | `811bd02` | 222 tests, 225 guard mutants, all caught; `HalfFailedMigrationTest` 6 tests, 100 assertions. |
+| Focused re-review | — | F1, F4 and F2 accepted; **new finding N1 (HIGH, fails closed):** the helper called `HalfFailedShape::check` without importing it. |
+| N1 correction and a real-PHP probe on the upgrade *test* database | `26e7056` | One `use` line, two static assertions; the real `half-migrate` helper printed both failures and `contact-methods-structure=ok`; `./flow check repo` green. |
+| L3a, 2026-11-16 | `26e7056` | **Passed, 15 of 15 stages**, then cleanup. |
+
+### What the review changed
+
+- **F1.** The first implementation compared all 15 committed tables with the first upgrade's structure. The 29th migration adds `updated_by_account_id` to `contact_methods`, which the half-failed state (stopped at the 26th) never reaches, so the comparison would have refused the real state on that table and on nothing else. The 14 other tables are still compared digest for digest; `contact_methods` is held to a written-out structure (`tests/Support/HalfFailedShape.php`) that the helper and the Pest test both run, and must not equal the first upgrade's digest. The fake daemon no longer gives related but different objects identical digests, which had hidden the defect.
+- **F4.** The revocation's readings gained a fifth number tying the one event (fixed id, type, subject Person 3) to the intended Person, so an event for another Person with the same overall counts is refused.
+- **F2.** The documentation no longer claims that any changed row is refused before clearing: it separates the full check made when the state is created, the SQL-only repeated checks before clearing (counts and a digest of named columns) and the complete verification after the restore.
+- **N1.** A missing import that neither the fake daemon nor static analysis could see, found by the re-review and confirmed by running the real helper.
+
+### What L3a established
+
+On MariaDB 10.11.18 (Docker 29.9.3), at `26e7056`: the v0.3.0 baseline and a verified two-pass backup; the upgrade to 34 tables and 29 migration records; a role revoked after the backup, then **reversed by the restore** (the assignment returns and the event of its revocation goes; the restore said so and reconciled nothing); a historical sign-in with a TOTP code encrypted under the previous key; two failing `migrate` runs (`QueryException`, SQLSTATE `42S01`, driver error `1050`; the first on the stub `person_relationship_field_values`, the second on `person_relationships`) leaving exactly 32 tables and 25 migration records; the structural comparison (the 14 unaffected committed tables equal to the first upgrade's, `contact_methods` as its creating migration left it and different from the first upgrade's by the provenance column); the restore from that state, clearing exactly the 32 tables by one `DROP TABLE` after every SQL-only precondition held; a second historical sign-in; and the re-upgrade to 34 tables and 29 migration records equal in structure and data to the first. Cleanup removed exactly the four rehearsal objects and the state directory; network, volume and image inventories were identical, and the only container differences were an unrelated `portal_*` compose project started on the same daemon during the run.
+
+### What it does not establish, and what stays open
+
+- It is local, synthetic, one run on one machine: not production recovery readiness, not a production-sized timing, not the real-host decision.
+- The helper's structure result and the five revocation readings were enforced by guards but not preserved as separate raw evidence, and the half-failed state's per-table structure digests were not retained.
+- Resource-file recovery is untested (slices 2.2C-2 and 2.2C-3 are not done). Security reconciliation is a manual, unverified operator requirement, with no command.
+- The runbook's decision table for a stopped `migrate` is still unwritten; WP3-01 is not remediated in the production operator procedure; the production pre-flight, release authorization and host-rehearsal decision are separate.
+- **WP3c stays open.** The earlier audit findings, triage rulings and verdicts in this record are unchanged; this section adds to them.
+
+The live run's evidence is kept privately, outside the repository (`~/.local/share/flowlife-l3a-evidence/20261116T123221Z`), and is not committed; it contains no credential, key, TOTP secret, dump or database content.
