@@ -25,6 +25,8 @@ BIN="$T/bin"
 REAL_DOCKER="$(command -v docker || true)"
 SUT="$SRC" # the script under test: the repository's, or a mutated copy
 QUIET=0
+# The guard a mutant removed, while the matrix runs: a test of a table of cases may then run only the case written for that guard (want_case).
+CURRENT_GUARD=''
 FAILURES=0
 TEST_FAILS=0
 
@@ -45,6 +47,8 @@ IMG_ID="sha256:$(printf 'd%.0s' {1..64})"
 NAME_SRC='flc-rehearsal-restore-src'
 NAME_R='flc-rehearsal-restore-runner'
 NAME_P='flc-rehearsal-restore-prepare'
+NAME_F='flc-rehearsal-restore-files'
+NAME_FV='flc-rehearsal-restore-files-data'
 RID="$(printf '1%.0s' {1..64})"
 PID_="$(printf '2%.0s' {1..64})"
 # Slice 2.2A. The keys the fixture state holds (bytes 0..31 and 32 zero bytes), their fingerprints and their ring's, as computed independently
@@ -71,6 +75,7 @@ for tool in bash env cat grep awk tr od id mktemp mv chmod rm rmdir mkdir dirnam
     ln -s "$path" "$BIN/$tool"
 done
 REAL_STAT="$(command -v stat)"
+REAL_DATE="$(command -v date)"
 
 # rm, except that a test can ask for an entry to appear in the state directory just before run.lock is removed (a race the real
 # thing leaves to chance): $T/rm-race present means "create $T/root/late-file first".
@@ -97,6 +102,16 @@ fi
 exec "$REAL_STAT" "\$@"
 STUB
 chmod +x "$BIN/stat"
+
+# date, except where a test has asked for another time ($T/fixed-epoch, seconds) or another answer ($T/date-raw, printed whatever the format).
+"$REAL_RM" -f "$BIN/date"
+cat >"$BIN/date" <<STUB
+#!/usr/bin/env bash
+if [[ -f "$T/date-raw" ]]; then cat "$T/date-raw"; exit 0; fi
+if [[ -f "$T/fixed-epoch" ]]; then exec "$REAL_DATE" -d "@\$(cat "$T/fixed-epoch")" "\$@"; fi
+exec "$REAL_DATE" "\$@"
+STUB
+chmod +x "$BIN/date"
 
 # --- the fake daemon -----------------------------------------------------------------------------------------------------------------
 
@@ -252,6 +267,12 @@ case "$1 ${2:-}" in
             hook app_sql
             [[ ! -e "$W/app_cannot_connect" ]] || exit 1
             case "$sql" in
+                *"table_name = 'resource_assets'"*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/assets_table" 2>/dev/null || echo 1 ;; # slice 2.2C-2: does the table exist
+                *'FROM resource_assets ORDER BY storage_key'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/asset_rows" 2>/dev/null ;;
+                *'INSERT INTO resource_assets'*) printf '%s' "$sql" >"$W/assets_insert.sql"; printf 'INSERT args=[%s]\n' "${*:10}" >>"$W/appsql.log"
+                    if [[ -f "$W/runs" ]]; then cp "$W/runs" "$W/runs_at_insert"; else : >"$W/runs_at_insert"; fi
+                    [[ ! -f "$W/insert_fail" ]] || { echo 'ERROR 1062 (23000): the fake insert failed' >&2; exit 1; }
+                    if [[ -f "$W/on_insert" ]]; then bash "$W/on_insert"; fi ;;
                 *'CREATE TABLE `person_relationship_field_values`'*) # slice 2.2C-1: the stub. Logged whole; the helpers that had run by now are recorded; the world may change as it would
                     printf '%s' "$sql" >"$W/stub.sql"; printf 'STUB args=[%s]\n' "${*:10}" >>"$W/appsql.log"
                     if [[ -f "$W/runs" ]]; then cp "$W/runs" "$W/runs_at_stub"; else : >"$W/runs_at_stub"; fi
@@ -404,11 +425,19 @@ case "$1 ${2:-}" in
             *' exec sha256sum -- '*) key=harness_sums ;;
             *'rehearse.php half-migrate'*) key=half_migrate ;;
             *'rehearse.php revoke'*) key=revoke ;;
+            *'harness/files.php check'*) key=files_check ;;
+            *'harness/files.php seed'*) key=files_seed ;;
+            *'harness/files.php archive'*) key=files_archive ;;
+            *'harness/files.php verify-archive'*) key=files_verify_archive ;;
+            *'harness/files.php aside'*) key=files_aside ;;
+            *'harness/files.php restore'*) key=files_restore ;;
             *' migrate --force'*) key="migrate_${wd##*/}" ;;
         esac
         [[ -z "$key" ]] || printf '%s\n' "$key" >>"$W/runs"
+        # Slice 2.2C-2: the files helper is run several times in one command, so out_<key>.<n> (the nth run of that helper) takes precedence over out_<key>.
+        nth=0; [[ -z "$key" ]] || nth="$(grep -c "^$key\$" "$W/runs")"
         if [[ -n "$key" && -f "$W/fail_$key" ]]; then echo 'harness:refused the fake helper was told to fail' >&2; exit "$(cat "$W/fail_$key")"; fi
-        if [[ -n "$key" && -f "$W/out_$key" ]]; then cat "$W/out_$key"; elif [[ -f "$W/run_stdout" ]]; then cat "$W/run_stdout"; else echo ok; fi
+        if [[ -n "$key" && -f "$W/out_$key.$nth" ]]; then cat "$W/out_$key.$nth"; elif [[ -n "$key" && -f "$W/out_$key" ]]; then cat "$W/out_$key"; elif [[ -f "$W/run_stdout" ]]; then cat "$W/run_stdout"; else echo ok; fi
         if [[ -n "$key" && -f "$W/after_$key" ]]; then bash "$W/after_$key"; fi ;;
     "compose "*)
         case " $* " in
@@ -466,7 +495,7 @@ new_world() {
     put "$W" context default
     put "$W" endpoint 'unix:///var/run/docker.sock'
     put "$W" version '10.11.18-MariaDB-ubu2204'
-    rm -rf "${T:?}/root" "${T:?}/home" "${T:?}/stat-override" "${T:?}/rm-race"
+    rm -rf "${T:?}/root" "${T:?}/home" "${T:?}/stat-override" "${T:?}/rm-race" "${T:?}/fixed-epoch" "${T:?}/date-raw"
     mkdir -p "$T/home"
     unset WORLD_ENV
 }
@@ -1909,7 +1938,7 @@ t_g5_malformed_state_recovery_path() {
 
 # A world with the verified PHP image and both commits, with (src_world) or without the prepared source volume.
 # The helper scripts' digests as a container would print them (`sha256sum` of each file of the harness directory under test).
-harness_sums() { (cd "$SUT/php" && sha256sum -- db-ping.php probe.php rehearse.php); }
+harness_sums() { (cd "$SUT/php" && sha256sum -- db-ping.php probe.php rehearse.php files.php); }
 # What `prepare` records, for a state directory that has been prepared: the two commits and each helper script's digest.
 prepared_text() { printf 'prepared-v1\nhistorical=%s\ncurrent=%s\n' "$HIST" "$HEAD_SHA"; harness_sums | sed 's/^/harness /'; }
 put_prepared_source() {
@@ -1930,16 +1959,19 @@ src_world() {
 
 # add_ephemeral ID ROLE [field=value ...]: a runner or preparation container as `docker create` makes it from this script's arguments.
 add_ephemeral() {
-    local id="$1" role="$2" d name="$NAME_R" mode="$NAME_N" rw=false tmpfs kv
+    local id="$1" role="$2" d name="$NAME_R" mode="$NAME_N" rw=false tmpfs kv mounts
     shift 2
     tmpfs='/tmp,/var/www/html/current/bootstrap/cache,/var/www/html/current/storage,/var/www/html/historical/bootstrap/cache,/var/www/html/historical/storage,'
     if [[ "$role" == prepare ]]; then name="$NAME_P" mode=none rw=true tmpfs='/tmp,'; fi
+    mounts="volume:$NAME_SRC:/var/www/html:$rw,"
+    # Slice 2.2C-2: the files container has no network, the source volume read-only at its own path, and the files volume (writable when the action writes).
+    if [[ "$role" == files ]]; then name="$NAME_F" mode=none tmpfs='/tmp,' mounts="volume:$NAME_SRC:/rehearsal/src:false,volume:$NAME_FV:/var/www/html:true,"; fi
     d="$W/c/$id"
     mkdir -p "$d"
     put "$d" id "$id"; put "$d" name "/$name"; put "$d" image "$IMG_ID"; put "$d" l_ns restore-v1; put "$d" l_role "$role"; put "$d" l_token "$TOKEN"
     put "$d" ports 0; put "$d" privileged false; put "$d" capadd null; put "$d" capdrop '["ALL"]'; put "$d" secopt '["no-new-privileges"]'
     put "$d" readonly_root true; put "$d" user 33:33; put "$d" netmode "$mode"; put "$d" nets "$mode,"
-    put "$d" mounts "volume:$NAME_SRC:/var/www/html:$rw,"; put "$d" tmpfs "$tmpfs"
+    put "$d" mounts "$mounts"; put "$d" tmpfs "$tmpfs"
     put "$d" memory 1073741824; put "$d" pids 256; put "$d" nanocpus 1000000000
     for kv in "$@"; do put "$d" "${kv%%=*}" "${kv#*=}"; done
 }
@@ -2206,7 +2238,7 @@ t_g10_prepare_happy_path() {
     done
     # Slice 2.2B: the helper scripts are digested INSIDE the volume (the sixth container, after the harness is copied in), and what prepare
     # records is the two commits and those digests, in a private file.
-    expect_has 'the volume check' "$(tail -n 1 <<<"$creates")" 'exec sha256sum -- "$@" sh /var/www/html/harness db-ping.php probe.php rehearse.php'
+    expect_has 'the volume check' "$(tail -n 1 <<<"$creates")" 'exec sha256sum -- "$@" sh /var/www/html/harness db-ping.php probe.php rehearse.php files.php'
     expect_has 'recorded' "$OUT" 'recorded: both commits'
     [[ "$("$REAL_STAT" -c %a "$T/root/prepared.source")" == 600 ]] || bad 'prepared.source is not mode 600'
     [[ "$(<"$T/root/prepared.source")" == "$(prepared_text)" ]] || bad "prepared.source is not exactly the two commits and the helper digests: $(<"$T/root/prepared.source")"
@@ -4359,7 +4391,908 @@ t_static_substrate() {
     # compose.yaml gains nothing for this slice: still one service, one network, one volume.
     grep -q 'runner\|prepare' "$SRC/compose.yaml" && bad 'compose.yaml mentions the runner or preparation container'
 }
-HARNESS_FILES_EXPECTED=(db-ping.php probe.php rehearse.php)
+# --- tests: slice 2.2C-2, the Resource files ---------------------------------------------------------------------------------------------------
+#
+# The files container (no network, no credential, the prepared source read-only and the files volume), its volume, the files manifest and the four
+# commands, against the fake daemon. What the PHP side refuses is tests/Unit/Rehearsal/ResourceFileArchiveTest.php's (a real directory, the real tar).
+# The fake prints what the files helper is told to print (out_files_<action>, out_files_<action>.<n> for the nth run, fail_files_<action>), so each
+# test states what a well-behaved helper reports and then what a lying or failing one does to the script.
+
+FKEYS=(01jcf000000000000000000001 01jcf000000000000000000002 01jcf000000000000000000003 01jcf000000000000000000004)
+FBYTES=(64 1500 9000 33333)
+FP_RUN="$(printf 'flc-run-v1|%s' "$TOKEN" | sha256sum | cut -c1-16)"
+fsha() { fake_digest "file-$1"; }
+# want_case GUARD: in the mutation matrix, only the case written for the guard that was removed; in an ordinary run, every case.
+want_case() { [[ -z "$CURRENT_GUARD" || "$CURRENT_GUARD" == "$1" ]]; }
+fspec() { # N: the first N files as the helper's file list
+    local i out=''
+    for ((i = 1; i <= $1; i++)); do out+="${out:+,}${FKEYS[i - 1]}:${FBYTES[i - 1]}:$(fsha "$i")"; done
+    printf '%s' "${out:-empty}"
+}
+fout() { # STATE N [LINE...]: what the files helper prints for the first N files
+    local state="$1" n="$2" i line
+    shift 2
+    printf 'files:state=%s\nfiles:count=%s\n' "$state" "$n"
+    for ((i = 1; i <= n; i++)); do printf 'file %s %s %s\n' "${FKEYS[i - 1]}" "${FBYTES[i - 1]}" "$(fsha "$i")"; done
+    for line; do printf '%s\n' "$line"; done
+}
+frows() { # N: the first N asset rows as the SQL client prints them
+    local i
+    for ((i = 1; i <= $1; i++)); do printf '%s\t%s\t%s\n' "${FKEYS[i - 1]}" "${FBYTES[i - 1]}" "$(fsha "$i")"; done
+}
+files_creates() { grep -E "^create .*--name $NAME_F " "$W/calls" || true; }
+no_files_container() { [[ ! -e "$W/runs" ]] || ! grep -q '^files_' "$W/runs" || bad "$1: the files helper ran: $(tr '\n' ' ' <"$W/runs")"; }
+no_files_leftovers() { if compgen -G "$T/root/.files-archive.*" >/dev/null; then bad "$1: a temporary archive file was left in the state directory"; fi; }
+
+# The upgraded database (34 tables, the post-upgrade state), the prepared source, a resource_assets table with no rows, and no files volume yet.
+files_world() {
+    stage_world
+    up_names >"$W/inventory"
+    printf '14\t1\t29\t0\n' >"$W/counts"
+    printf '1\n' >"$W/assets_table"
+    : >"$W/asset_rows"
+}
+seed_world() {
+    files_world
+    fout present 4 files:seed=ok >"$W/out_files_seed"
+    fout present 4 files:check=ok >"$W/out_files_check"
+    frows 4 >"$W/rows_after"
+    printf 'cp "%s/rows_after" "%s/asset_rows"\n' "$W" "$W" >"$W/on_insert"
+}
+# backup_files_world DBSTATE(up|hist) FILESSTATE(absent|present) N: the files helper reports N files and the database holds N asset rows (or no table, at v0.3.0).
+backup_files_world() {
+    files_world
+    if [[ "$1" == hist ]]; then
+        hist_names >"$W/inventory"
+        printf '0\n' >"$W/assets_table"
+    else
+        frows "$3" >"$W/asset_rows"
+    fi
+    fout "$2" "$3" files:check=ok >"$W/out_files_check"
+    if [[ "$2" == present ]]; then
+        printf 'ARCHIVE\x00BYTES\xff' >"$W/out_files_archive"
+        printf 'archive:entries=%s\narchive:verified=ok\n' "$(($3 + 1))" >"$W/out_files_verify_archive"
+    fi
+    printf '1700000000' >"$T/fixed-epoch"
+}
+expected_files_manifest() { # STATE ARCHIVE_SHA ARCHIVE_BYTES ROWS N: written out here, not by the script's own function
+    local state="$1" sha="$2" bytes="$3" rows="$4" n="$5" i archive=null ash=null abytes=null list=''
+    if [[ "$state" == present ]]; then archive='"resources.archive.tar.gz"' ash="\"$sha\"" abytes="$bytes"; fi
+    [[ "$rows" != none ]] || rows=null
+    for ((i = 1; i <= n; i++)); do
+        list+="    { \"key\": \"${FKEYS[i - 1]}\", \"bytes\": ${FBYTES[i - 1]}, \"sha256\": \"$(fsha "$i")\" }"
+        [[ $i == "$n" ]] || list+=','
+        list+=$'\n'
+    done
+    printf '{\n  "files_manifest_version": 1,\n  "taken_at": "2023-11-14T22:13:20Z",\n  "run_token_fingerprint": "%s",\n  "resources_directory": "%s",\n  "resource_files_archive": %s,\n  "resource_files_sha256": %s,\n  "resource_files_bytes": %s,\n  "resource_files_count": %d,\n  "resource_assets_rows": %s,\n  "files": [\n%s  ]\n}' "$FP_RUN" "$state" "$archive" "$ash" "$abytes" "$n" "$rows" "$list"
+}
+
+# --- seed-files ---
+
+t_g22_seed_happy_path() {
+    local creates first second i values='' expected c f
+    seed_world
+    run_script -- seed-files
+    expect_rc seed-files 0
+    expect_has 'the agreement' "$OUT" "4 files in the volume's resources directory and 4 resource_assets rows agree on every key, size and SHA-256"
+    expect_has 'the next step' "$OUT" 'backup-files'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_seed files_check ' ]] || bad "the files helper did not run as seed then check: $(tr '\n' ' ' <"$W/runs")"
+    [[ "$(<"$W/runs_at_insert")" == files_seed ]] || bad 'the asset rows were inserted before the files were written'
+    for ((i = 1; i <= 4; i++)); do
+        values+="${values:+,}('${FKEYS[i - 1]}','${FKEYS[i - 1]}','synthetic-$i.bin','application/octet-stream',${FBYTES[i - 1]},'$(fsha "$i")','01jbp000000000000000000001','2026-01-01 00:00:00')"
+    done
+    expected="START TRANSACTION;"$'\n'"INSERT INTO resource_assets (id, storage_key, original_filename, media_type, byte_size, sha256, uploaded_by_person_id, created_at) VALUES $values;"$'\n'"COMMIT;"
+    [[ "$(<"$W/assets_insert.sql")" == "$expected" ]] || bad "the INSERT is not the one transaction with one row per seeded file: $(<"$W/assets_insert.sql")"
+    creates="$(files_creates)"
+    [[ "$(grep -c . <<<"$creates")" == 2 ]] || bad "expected two files containers (seed, check), got: $creates"
+    first="$(sed -n 1p <<<"$creates")" second="$(sed -n 2p <<<"$creates")"
+    expect_has 'seed writes the files volume' "$first" "--mount type=volume,source=$NAME_FV,target=/var/www/html --tmpfs"
+    expect_has 'check reads the files volume read-only' "$second" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+    expect_has 'seed is fixed' "$first" ' php /rehearsal/src/harness/files.php seed'
+    expect_has 'check is given the asset rows' "$second" " php /rehearsal/src/harness/files.php check $(fspec 4)"
+    for c in "$first" "$second"; do
+        expect_has 'no network' "$c" '--network none'
+        expect_has 'the source is read-only' "$c" "--mount type=volume,source=$NAME_SRC,target=/rehearsal/src,readonly"
+        expect_has 'dropped capabilities' "$c" '--cap-drop ALL'
+        expect_has 'read-only root' "$c" '--read-only'
+        expect_lacks 'no environment at all' "$c" ' -e '
+        expect_lacks 'no env file' "$c" '--env-file'
+        expect_lacks 'no bind mount' "$c" 'type=bind'
+        expect_lacks 'no docker socket' "$c" 'docker.sock'
+    done
+    # The files container is not given the database password, the encryption keys or anything of the caller's.
+    for f in "$W"/create_password_seen.* "$W"/create_appkey_seen.* "$W"/create_previouskeys_seen.*; do [[ ! -s "$f" ]] || bad "a secret reached the docker client that created a files container ($f)"; done
+    for f in "$W"/create_env_names.*; do
+        [[ "$(grep -cE '^(DB_PASSWORD|APP_KEY|APP_PREVIOUS_KEYS)$' "$f" || true)" == 0 ]] || bad "a credential name was in the environment of the client that created a files container ($f)"
+    done
+    [[ "$(grep -c '^volume create ' "$W/calls")" == 1 ]] || bad 'the files volume was not created exactly once'
+    expect_has 'the volume is labelled' "$(grep '^volume create ' "$W/calls")" "--label io.flowlife.rehearsal=restore-v1 --label io.flowlife.rehearsal.role=files-data --label io.flowlife.rehearsal.run-token=$TOKEN $NAME_FV"
+    if [[ -f "$W/sql.log" ]] && grep -qE 'CREATE|DROP|INSERT|DELETE|ALTER|UPDATE|TRUNCATE|GRANT' "$W/sql.log"; then bad 'a root statement changed data or schema'; fi
+    [[ "$(grep -cE 'DROP|ALTER|DELETE|UPDATE|TRUNCATE' "$W/appsql.log" || true)" == 0 ]] || bad 'the application account ran a statement other than the two reads and the one insert'
+    only_database_left seed-files
+    no_secret_anywhere seed-files
+}
+
+t_g22_seed_preconditions() {
+    if want_case G22-seed-inventory; then
+        files_world; hist_names >"$W/inventory"
+        run_script -- seed-files
+        expect_refused 'a database that is not upgraded' 'not exactly the 34 tables'
+        no_files_container 'a database that is not upgraded'
+        [[ ! -e "$W/assets_insert.sql" ]] || bad 'rows were inserted into a database that is not upgraded'
+    fi
+    if want_case G22-seed-state; then
+        files_world; printf '13\t1\t15\t1\n' >"$W/counts"
+        run_script -- seed-files
+        expect_refused 'the WP3-01 state' 'not the post-upgrade state'
+        no_files_container 'the WP3-01 state'
+    fi
+    if want_case G22-seed-assets-empty; then
+        files_world; frows 1 >"$W/asset_rows"
+        run_script -- seed-files
+        expect_refused 'asset rows already there' 'not an existing, empty table'
+        no_files_container 'asset rows already there'
+        files_world; printf '0\n' >"$W/assets_table"
+        run_script -- seed-files
+        expect_refused 'no resource_assets table' 'not an existing, empty table'
+        no_files_container 'no resource_assets table'
+    fi
+    if want_case G22-rows-table-answer; then
+        files_world; printf '7\n' >"$W/assets_table"
+        run_script -- seed-files
+        expect_refused 'a table answer that is neither 0 nor 1' 'did not say whether resource_assets exists'
+        no_files_container 'a table answer that is neither 0 nor 1'
+    fi
+}
+
+t_g22_seed_outcomes() {
+    if want_case G22-seed-reported; then
+        seed_world; fout present 4 >"$W/out_files_seed"
+        run_script -- seed-files
+        expect_refused 'a seed the helper did not report' 'files:seed=ok'
+        [[ ! -e "$W/assets_insert.sql" ]] || bad 'rows were inserted for a seed that was not reported'
+    fi
+    if want_case G22-seed-count; then
+        seed_world; fout present 3 files:seed=ok >"$W/out_files_seed"
+        run_script -- seed-files
+        expect_refused 'a seed of three files' 'did not seed exactly 4 files'
+        [[ ! -e "$W/assets_insert.sql" ]] || bad 'rows were inserted for a seed of the wrong size'
+    fi
+    if want_case G22-seed-rows-match; then
+        seed_world; : >"$W/on_insert"
+        run_script -- seed-files
+        expect_refused 'rows that did not arrive' 'not the files just written'
+    fi
+    if want_case G22-seed-agrees; then
+        seed_world; fout present 4 >"$W/out_files_check"
+        run_script -- seed-files
+        expect_refused 'a final check that does not agree' 'files:check=ok'
+    fi
+    if want_case G22-seed-sql-values; then
+        run_fn 'files_insert_sql "01jcf000000000000000000001:64:'"$(fsha 1)"',01jcf000000000000000000002'"'"'); DROP TABLE people; --:1:'"$(fsha 2)"'"'
+        expect_refused 'a seeded file whose key is not a key' 'nothing was inserted'
+        run_fn 'files_insert_sql "01jcf000000000000000000001:6x:'"$(fsha 1)"'"'
+        expect_refused 'a size that is not a number' 'nothing was inserted'
+        run_fn 'files_insert_sql "01jcf000000000000000000001:64:'"${FKEYS[0]}"'"'
+        expect_refused 'a checksum that is not a SHA-256' 'nothing was inserted'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        # A failing helper ends the stage with its own status, and nothing is inserted.
+        seed_world; printf '3\n' >"$W/fail_files_seed"
+        run_script -- seed-files
+        expect_rc 'a seed the helper refuses (an existing directory)' 3
+        [[ ! -e "$W/assets_insert.sql" ]] || bad 'rows were inserted although the seed failed'
+        seed_world; touch "$W/insert_fail"
+        run_script -- seed-files
+        expect_rc 'an insert that fails' 1
+        expect_has 'what failed' "$ERR" 'could not be inserted'
+    fi
+}
+
+t_g22_database_rows_are_validated() {
+    if want_case G22-rows-shape; then
+        files_world; printf 'NOTAKEY\t64\t%s\n' "$(fsha 1)" >"$W/asset_rows"
+        run_script -- backup-files
+        expect_refused 'a row whose key is not a storage key' 'not a Resources storage key, a size and a SHA-256'
+        no_files_container 'a bad key'
+        files_world; printf '%s\t64\tnothex\n' "${FKEYS[0]}" >"$W/asset_rows"
+        run_script -- backup-files
+        expect_refused 'a row whose checksum is not a SHA-256' 'not a Resources storage key, a size and a SHA-256'
+        files_world; printf '%s\t64\t%s\textra\n' "${FKEYS[0]}" "$(fsha 1)" >"$W/asset_rows"
+        run_script -- backup-files
+        expect_refused 'a row with a fourth column' 'not a Resources storage key, a size and a SHA-256'
+        files_world; printf '%s\t-5\t%s\n' "${FKEYS[0]}" "$(fsha 1)" >"$W/asset_rows"
+        run_script -- backup-files
+        expect_refused 'a negative size' 'not a Resources storage key, a size and a SHA-256'
+    fi
+    if want_case G22-rows-order; then
+        files_world; { frows 2 | tac; } >"$W/asset_rows"
+        run_script -- backup-files
+        expect_refused 'rows out of key order' 'not in key order, or repeat a key'
+        files_world; { frows 1; frows 1; } >"$W/asset_rows"
+        run_script -- backup-files
+        expect_refused 'a repeated row' 'not in key order, or repeat a key'
+        no_files_container 'bad row order'
+    fi
+}
+
+# --- backup-files ---
+
+t_g22_backup_zero_file_states() {
+    local manifest
+    # v0.3.0: no resource_assets table, no directory: the zero-file backup. No archive is made and no archive container is run.
+    backup_files_world hist absent 0
+    run_script -- backup-files
+    expect_rc 'a zero-file backup at v0.3.0' 0
+    expect_has 'zero-file' "$OUT" 'zero-file backup'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check ' ]] || bad "a zero-file backup ran more than the one read-only check: $(tr '\n' ' ' <"$W/runs")"
+    expect_has 'checked against no table' "$(files_creates)" ' php /rehearsal/src/harness/files.php check none'
+    [[ ! -e "$T/root/resources.archive.tar.gz" ]] || bad 'a zero-file backup made an archive'
+    manifest="$T/root/resources.manifest.json"
+    [[ -f "$manifest" && "$("$REAL_STAT" -c %a "$manifest")" == 600 ]] || bad 'the files manifest is not a private file'
+    [[ "$(<"$manifest")" == "$(expected_files_manifest absent '' '' none 0)" ]] || bad "the zero-file manifest is not as the runbook describes it (count 0, no checksum, rows null): $(<"$manifest")"
+    only_database_left 'a zero-file backup'
+    # The upgraded database with the table and no rows: still zero-file, the rows recorded as 0.
+    backup_files_world up absent 0
+    run_script -- backup-files
+    expect_rc 'a zero-file backup with an empty table' 0
+    expect_has 'checked against an empty table' "$(files_creates)" ' php /rehearsal/src/harness/files.php check empty'
+    [[ "$(<"$manifest")" == "$(expected_files_manifest absent '' '' 0 0)" ]] || bad "the zero-file manifest for an empty table is not rows 0: $(<"$manifest")"
+}
+
+t_g22_backup_an_existing_empty_directory() {
+    local sha
+    backup_files_world up present 0
+    run_script -- backup-files
+    expect_rc 'an existing empty directory with no rows' 0
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check files_archive files_verify_archive ' ]] || bad "an empty directory is archived (the runbook's 2a): $(tr '\n' ' ' <"$W/runs")"
+    sha="$(sha256sum <"$T/root/resources.archive.tar.gz" | cut -c1-64)"
+    [[ "$(<"$T/root/resources.manifest.json")" == "$(expected_files_manifest present "$sha" "$(wc -c <"$T/root/resources.archive.tar.gz" | tr -d ' ')" 0 0)" ]] || bad "the manifest for an empty directory is not count 0 with an archive checksum: $(<"$T/root/resources.manifest.json")"
+    expect_has 'the verification is of an empty list' "$(grep -E '^create ' "$W/calls" | tail -n 1)" ' php /rehearsal/src/harness/files.php verify-archive empty'
+}
+
+t_g22_backup_happy_path() {
+    local creates sha bytes archive manifest i
+    backup_files_world up present 4
+    run_script -- backup-files
+    expect_rc backup-files 0
+    expect_has 'the files and the rows agree' "$OUT" 'every file in it has the size and SHA-256 the database and the directory agree on'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check files_archive files_verify_archive ' ]] || bad "the helper did not run as check, archive, verify: $(tr '\n' ' ' <"$W/runs")"
+    archive="$T/root/resources.archive.tar.gz" manifest="$T/root/resources.manifest.json"
+    for i in "$archive" "$manifest"; do [[ -f "$i" && "$("$REAL_STAT" -c %a "$i")" == 600 ]] || bad "$i is not a private file"; done
+    printf 'ARCHIVE\x00BYTES\xff' | cmp -s - "$archive" || bad 'the archive in the state directory is not the bytes the files container wrote to its standard output'
+    sha="$(sha256sum <"$archive" | cut -c1-64)" bytes="$(wc -c <"$archive" | tr -d ' ')"
+    [[ "$(<"$manifest")" == "$(expected_files_manifest present "$sha" "$bytes" 4 4)" ]] || bad "the manifest is not the runbook's Resource fields and the four files' facts: $(<"$manifest")"
+    creates="$(files_creates)"
+    [[ "$(grep -c . <<<"$creates")" == 3 ]] || bad "expected three files containers: $creates"
+    for i in 1 2 3; do expect_has "container $i reads the volume read-only" "$(sed -n "${i}p" <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"; done
+    expect_has 'the archive action is given the rows' "$(sed -n 2p <<<"$creates")" " php /rehearsal/src/harness/files.php archive $(fspec 4)"
+    expect_has 'the verification reads standard input' "$(sed -n 3p <<<"$creates")" ' -i '
+    expect_lacks 'only the verification reads standard input' "$(sed -n 2p <<<"$creates")" ' -i '
+    expect_has 'the verification is of the listed files' "$(sed -n 3p <<<"$creates")" " php /rehearsal/src/harness/files.php verify-archive $(fspec 4)"
+    printf 'ARCHIVE\x00BYTES\xff' | cmp -s - "$W/stdin.3" || bad 'the verification was not given the archive on its standard input'
+    expect_lacks 'a database dump is not part of this' "$(<"$W/appsql.log")" 'INSERT'
+    no_files_leftovers 'a backup'
+    only_database_left backup-files
+    no_secret_anywhere backup-files
+}
+
+t_g22_backup_is_never_overwritten() {
+    backup_files_world up present 4
+    run_script -- backup-files
+    expect_rc 'the first backup' 0
+    cp -p "$T/root/resources.manifest.json" "$T/before.manifest"
+    run_script -- backup-files
+    expect_refused 'a second backup' 'never overwritten'
+    cmp -s "$T/before.manifest" "$T/root/resources.manifest.json" || bad 'a second backup changed the manifest'
+    # Either file alone is enough to refuse.
+    backup_files_world up present 4; printf 'x' >"$T/root/resources.archive.tar.gz"; chmod 600 "$T/root/resources.archive.tar.gz"
+    run_script -- backup-files
+    expect_refused 'a leftover archive' 'never overwritten'
+    no_files_container 'a leftover archive'
+}
+
+t_g22_backup_needs_a_known_database_state() {
+    backup_files_world up present 4
+    { hist_names; printf '%s\n' "${NEWER_TABLES[@]:0:5}"; } | LC_ALL=C sort >"$W/inventory"
+    run_script -- backup-files
+    expect_refused 'a half-migrated database' 'neither the 16 tables of v0.3.0 nor the 34 of the upgraded schema'
+    no_files_container 'a half-migrated database'
+}
+
+t_g22_backup_refusals() {
+    if want_case G22-backup-check-reported; then
+        backup_files_world up present 4; fout present 4 >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'a check the helper did not report' 'files:check=ok'
+        [[ ! -e "$T/root/resources.manifest.json" ]] || bad 'a manifest was written after a check that was not reported'
+    fi
+    if want_case G22-backup-agrees; then
+        # The helper says it agrees, but what it listed is not what the database holds (the second file's checksum differs): the script compares them itself.
+        backup_files_world up present 4
+        fout present 4 files:check=ok | sed "s/ $(fsha 2)\$/ $(fsha 9)/" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'a listing that is not the rows' 'not the asset rows the database holds'
+        ! grep -q '^files_archive' "$W/runs" || bad 'an archive was made from a listing that does not agree with the rows'
+        backup_files_world up absent 0; frows 1 >"$W/asset_rows"
+        run_script -- backup-files
+        expect_refused 'an absent directory while a row exists' 'not the asset rows the database holds'
+        backup_files_world hist present 1
+        run_script -- backup-files
+        expect_refused 'files with no table to belong to' 'not the asset rows the database holds'
+    fi
+    if want_case G22-backup-archive-nonempty; then
+        backup_files_world up present 4; : >"$W/out_files_archive"
+        run_script -- backup-files
+        expect_refused 'an archive of no bytes' 'the archive is empty'
+        [[ ! -e "$T/root/resources.manifest.json" && ! -e "$T/root/resources.archive.tar.gz" ]] || bad 'a backup was recorded from an empty archive'
+        no_files_leftovers 'an empty archive'
+    fi
+    if want_case G22-backup-archive-verified; then
+        backup_files_world up present 4; printf 'archive:entries=5\n' >"$W/out_files_verify_archive"
+        run_script -- backup-files
+        expect_refused 'an archive that was not reported verified' 'not verified against the files it was made from'
+        [[ ! -e "$T/root/resources.manifest.json" && ! -e "$T/root/resources.archive.tar.gz" ]] || bad 'a backup was recorded from an unverified archive'
+        no_files_leftovers 'an unverified archive'
+        backup_files_world up present 4; printf 'archive:entries=4\narchive:verified=ok\n' >"$W/out_files_verify_archive"
+        run_script -- backup-files
+        expect_refused 'an archive with the wrong number of entries' 'not verified against the files it was made from'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        # An unsafe state is the helper's refusal, and it ends the backup with it: no archive is attempted.
+        backup_files_world up present 4; printf '3\n' >"$W/fail_files_check"
+        run_script -- backup-files
+        expect_rc 'a directory the helper refuses' 3
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check ' ]] || bad "an archive was attempted after the check refused: $(tr '\n' ' ' <"$W/runs")"
+        [[ ! -e "$T/root/resources.manifest.json" ]] || bad 'a manifest was written after the check refused'
+        # A failed archive command (tar exits non-zero in the container, the helper refuses): no backup, and no temporary file.
+        backup_files_world up present 4; printf '3\n' >"$W/fail_files_archive"
+        run_script -- backup-files
+        expect_rc 'an archive the container could not make' 3
+        [[ ! -e "$T/root/resources.manifest.json" && ! -e "$T/root/resources.archive.tar.gz" ]] || bad 'a backup was recorded although the archive command failed'
+        no_files_leftovers 'a failed archive'
+        expect_has 'recovery is named' "$ERR" 'cleanup'
+        only_database_left 'a failed archive'
+    fi
+}
+
+# shellcheck disable=SC2001 # line-anchored patterns on a listing, not a substitution of a variable's text
+t_g22_the_helper_output_is_validated() {
+    local good
+    good="$(fout present 4 files:check=ok)"
+    if want_case G22-f-protocol-line; then
+        backup_files_world up present 4; sed "s/^file ${FKEYS[1]} /file ${FKEYS[1]}x /" <<<"$good" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'a file line with a bad key' 'file line of the files helper is malformed'
+        backup_files_world up present 4; sed "s/^\(file ${FKEYS[1]} [0-9]*\) .*/\1 nothex/" <<<"$good" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'a file line with a bad checksum' 'file line of the files helper is malformed'
+        backup_files_world up present 4; sed "s/^\(file ${FKEYS[1]} .*\)/\1 extra/" <<<"$good" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'a file line with an extra field' 'file line of the files helper is malformed'
+        ! grep -q '^files_archive' "$W/runs" || bad 'an archive was attempted after a malformed listing'
+    fi
+    if want_case G22-f-protocol-order; then
+        backup_files_world up present 4
+        fout present 4 files:check=ok | awk 'NR==3 { held = $0; next } NR==4 { print; print held; next } { print }' >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'files listed out of order' 'out of order or twice'
+        backup_files_world up present 4
+        fout present 4 files:check=ok | awk 'NR==3 { print; print; next } { print }' >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'a file listed twice' 'out of order or twice'
+    fi
+    if want_case G22-f-protocol-state; then
+        backup_files_world up present 4; grep -v '^files:state=' <<<"$good" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'no state' 'exactly one state'
+        backup_files_world up present 4; { echo files:state=present; echo "$good"; } >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'two states' 'exactly one state'
+        backup_files_world up present 4; sed 's/^files:state=present/files:state=elsewhere/' <<<"$good" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'a state that is neither' 'exactly one state'
+    fi
+    if want_case G22-f-protocol-count; then
+        backup_files_world up present 4; sed 's/^files:count=4/files:count=5/' <<<"$good" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'a count that is not the number of lines' 'count is not the number of files it listed'
+        backup_files_world up present 4; grep -v '^files:count=' <<<"$good" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'no count' 'count is not the number of files it listed'
+    fi
+    if want_case G22-f-protocol-absent; then
+        backup_files_world up present 4; sed 's/^files:state=present/files:state=absent/' <<<"$good" >"$W/out_files_check"
+        run_script -- backup-files
+        expect_refused 'files in an absent directory' 'listed files in a directory it reported absent'
+    fi
+}
+
+# --- the files manifest and the archive, as a restore finds them ---
+
+FILES_CACHE=0
+# ensure_files_cache: one backup of four files and one zero-file backup, made by the script itself, kept for the tests of the manifest and the restore.
+ensure_files_cache() {
+    [[ "$FILES_CACHE" == 0 ]] || return 0
+    backup_files_world up present 4
+    run_script -- backup-files
+    [[ "$RC" == 0 ]] || bad "preparing the cached files backup: exit $RC: ${ERR:0:300}"
+    rm -rf "${T:?}/fcache"
+    mkdir -p "$T/fcache/zero"
+    cp -p "$T/root/resources.manifest.json" "$T/root/resources.archive.tar.gz" "$T/fcache/"
+    backup_files_world hist absent 0
+    run_script -- backup-files
+    [[ "$RC" == 0 ]] || bad "preparing the cached zero-file backup: exit $RC: ${ERR:0:300}"
+    cp -p "$T/root/resources.manifest.json" "$T/fcache/zero/"
+    FILES_CACHE=1
+}
+# restore_files_world [zero]: the prepared source, the files volume's helper told what a restore reports, and the cached backup installed in the state directory.
+restore_files_world() {
+    files_world
+    fout present 4 restore:extracted=ok >"$W/out_files_restore"
+    fout present 4 files:check=ok >"$W/out_files_check"
+    printf 'archive:entries=5\narchive:verified=ok\n' >"$W/out_files_verify_archive"
+    if [[ "${1:-}" == zero ]]; then
+        cp -p "$T/fcache/zero/resources.manifest.json" "$T/root/"
+        fout absent 0 files:check=ok >"$W/out_files_check"
+    else
+        cp -p "$T/fcache/resources.manifest.json" "$T/fcache/resources.archive.tar.gz" "$T/root/"
+    fi
+}
+corrupt_manifest() { # SED_EXPRESSION: the cached manifest with one change, installed
+    restore_files_world
+    sed -i "$1" "$T/root/resources.manifest.json"
+}
+manifest_refused() { # NEEDLE
+    run_script -- restore-files
+    expect_refused "a manifest changed by: $CASE" "$1"
+    no_files_container "a manifest changed by: $CASE"
+    [[ ! -e "$W/started" ]] || bad "$CASE: a container was started"
+}
+
+t_g22_the_manifest_is_validated() {
+    ensure_files_cache
+    CASE='nothing: the cached manifest as it is'
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        restore_files_world; run_script -- restore-files; expect_rc 'the unchanged manifest' 0
+    fi
+    if want_case G22-manifest-version; then CASE='version'; corrupt_manifest 's/"files_manifest_version": 1/"files_manifest_version": 2/'; manifest_refused 'files_manifest_version is not 1'; fi
+    if want_case G22-manifest-run; then CASE='run'; corrupt_manifest 's/"run_token_fingerprint": "[0-9a-f]*"/"run_token_fingerprint": "0000000000000000"/'; manifest_refused "not this run's"; fi
+    if want_case G22-manifest-taken; then CASE='taken'; corrupt_manifest 's/"taken_at": "[^"]*"/"taken_at": "yesterday"/'; manifest_refused 'not a UTC time'; fi
+    if want_case G22-manifest-state; then CASE='state'; corrupt_manifest 's/"resources_directory": "present"/"resources_directory": "maybe"/'; manifest_refused 'neither absent nor present'; fi
+    if want_case G22-manifest-count; then CASE='count'; corrupt_manifest 's/"resource_files_count": 4/"resource_files_count": 5/'; manifest_refused 'not the number of files it lists'; fi
+    if want_case G22-manifest-zero; then CASE='zero'; corrupt_manifest 's/"resources_directory": "present"/"resources_directory": "absent"/'; manifest_refused 'an absent directory records an archive'; fi
+    if want_case G22-manifest-archive-name; then CASE='archive-name'; corrupt_manifest 's/"resource_files_archive": "resources.archive.tar.gz"/"resource_files_archive": "other.tar.gz"/'; manifest_refused 'its archive is not resources.archive.tar.gz'; fi
+    if want_case G22-manifest-archive-facts; then CASE='archive-facts'; corrupt_manifest 's/"resource_files_sha256": "[0-9a-f]*"/"resource_files_sha256": "abc"/'; manifest_refused 'not a SHA-256 and a positive byte count'; fi
+    if want_case G22-manifest-rows; then CASE='rows'; corrupt_manifest 's/"resource_assets_rows": 4/"resource_assets_rows": 3/'; manifest_refused 'resource_assets_rows is not its file count'; fi
+    if want_case G22-manifest-no-table; then CASE='no-table'; corrupt_manifest 's/"resource_assets_rows": 4/"resource_assets_rows": null/'; manifest_refused 'records files but no resource_assets table'; fi
+    if want_case G22-manifest-exact; then CASE='exact'; corrupt_manifest 's/^  "files": \[/  "note": "an extra line",\n  "files": [/'; manifest_refused 'not exactly what this script writes'; fi
+    if want_case G22-archive-sha; then
+        CASE='archive-sha'; restore_files_world; printf 'x' >>"$T/root/resources.archive.tar.gz"
+        manifest_refused "SHA-256 is not the manifest's"
+    fi
+    if want_case G22-archive-bytes; then
+        CASE='archive-bytes'; corrupt_manifest 's/"resource_files_bytes": \([0-9]*\)/"resource_files_bytes": 9\1/'
+        manifest_refused "size is not the manifest's"
+    fi
+    if want_case G22-restore-backup-required; then
+        CASE='no manifest'; restore_files_world; rm -f "$T/root/resources.manifest.json"
+        manifest_refused 'no Resource-files backup'
+        CASE='a manifest that is world-readable'; restore_files_world; chmod 644 "$T/root/resources.manifest.json"
+        manifest_refused 'no Resource-files backup'
+    fi
+    if want_case G22-restore-archive-required; then
+        CASE='no archive'; restore_files_world; rm -f "$T/root/resources.archive.tar.gz"
+        manifest_refused 'is missing from the state directory'
+    fi
+    if want_case G22-restore-zero-no-archive; then
+        CASE='a zero-file backup with an archive beside it'; restore_files_world zero; printf 'stray' >"$T/root/resources.archive.tar.gz"
+        manifest_refused 'a zero-file backup, but an archive exists'
+    fi
+    if want_case G22-manifest-archive-facts; then
+        CASE='a size of zero'; corrupt_manifest 's/"resource_files_bytes": [0-9]*/"resource_files_bytes": 0/'; manifest_refused 'not a SHA-256 and a positive byte count'
+    fi
+}
+
+# --- restore-files ---
+
+t_g22_restore_happy_path() {
+    local creates i
+    ensure_files_cache
+    restore_files_world
+    run_script -- restore-files
+    expect_rc restore-files 0
+    expect_has 'the files are read back' "$OUT" '4 file(s) restored to the Resources directory and read back'
+    expect_has 'the database restore is not part of it' "$OUT" "next slice's"
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_verify_archive files_restore files_check ' ]] || bad "the restore did not verify first, then extract, then read back: $(tr '\n' ' ' <"$W/runs")"
+    creates="$(files_creates)"
+    [[ "$(grep -c . <<<"$creates")" == 3 ]] || bad "expected three files containers: $creates"
+    expect_has 'the verification is read-only' "$(sed -n 1p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+    expect_has 'the extraction writes the volume' "$(sed -n 2p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html --tmpfs"
+    expect_has 'the read-back is read-only' "$(sed -n 3p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+    for i in 1 2; do expect_has "container $i reads the archive from standard input" "$(sed -n "${i}p" <<<"$creates")" ' -i '; done
+    expect_has 'the verification is of the manifest' "$(sed -n 1p <<<"$creates")" " php /rehearsal/src/harness/files.php verify-archive $(fspec 4)"
+    expect_has 'the extraction is of the manifest' "$(sed -n 2p <<<"$creates")" " php /rehearsal/src/harness/files.php restore $(fspec 4)"
+    for i in 1 2; do cmp -s "$T/fcache/resources.archive.tar.gz" "$W/stdin.$i" || bad "container $i was not given the archive the manifest describes on standard input"; done
+    [[ ! -e "$W/assets_insert.sql" && ! -e "$W/import.sql" && ! -e "$W/clear.sql" ]] || bad 'the file restore touched the database'
+    only_database_left restore-files
+    no_secret_anywhere restore-files
+}
+
+t_g22_restore_refusals() {
+    if want_case G22-restore-verified-first; then
+        ensure_files_cache
+        restore_files_world; printf 'archive:entries=5\n' >"$W/out_files_verify_archive"
+        run_script -- restore-files
+        expect_refused 'an archive that was not verified' 'Nothing was extracted'
+        ! grep -q '^files_restore' "$W/runs" || bad 'an archive that was not verified was extracted'
+        restore_files_world; printf 'archive:entries=3\narchive:verified=ok\n' >"$W/out_files_verify_archive"
+        run_script -- restore-files
+        expect_refused 'an archive with the wrong number of entries' 'Nothing was extracted'
+        ! grep -q '^files_restore' "$W/runs" || bad 'an archive with the wrong number of entries was extracted'
+        restore_files_world; printf '3\n' >"$W/fail_files_verify_archive"
+        run_script -- restore-files
+        expect_rc 'an archive the helper refuses' 3
+        ! grep -q '^files_restore' "$W/runs" || bad 'an archive the helper refused was extracted'
+    fi
+    if want_case G22-restore-reported; then
+        ensure_files_cache
+        restore_files_world; fout present 4 >"$W/out_files_restore"
+        run_script -- restore-files
+        expect_refused 'an extraction that was not reported' 'restore:extracted=ok'
+    fi
+    if want_case G22-restore-result; then
+        ensure_files_cache
+        restore_files_world; fout present 4 restore:extracted=ok | sed "s/ $(fsha 3)\$/ $(fsha 9)/" >"$W/out_files_restore"
+        run_script -- restore-files
+        expect_refused 'a restored file that is not the manifest' 'not what the manifest records'
+        restore_files_world; fout present 3 restore:extracted=ok >"$W/out_files_restore"
+        run_script -- restore-files
+        expect_refused 'a restore that lost a file' 'not what the manifest records'
+        restore_files_world; fout absent 0 restore:extracted=ok >"$W/out_files_restore"
+        run_script -- restore-files
+        expect_refused 'a restore that created nothing' 'not what the manifest records'
+    fi
+    if want_case G22-restore-recheck; then
+        ensure_files_cache
+        restore_files_world; fout present 4 files:check=ok | sed "s/ $(fsha 4)\$/ $(fsha 9)/" >"$W/out_files_check"
+        run_script -- restore-files
+        expect_refused 'a second look that differs' 'second, read-only look'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        ensure_files_cache
+        # A refused extraction (the Resources directory exists) ends the restore with the helper's status; nothing is read back.
+        restore_files_world; printf '3\n' >"$W/fail_files_restore"
+        run_script -- restore-files
+        expect_rc 'an extraction the helper refuses' 3
+        ! grep -q '^files_check' "$W/runs" || bad 'a refused extraction was read back as if it had happened'
+    fi
+}
+
+t_g22_a_zero_file_restore_extracts_nothing() {
+    ensure_files_cache
+    if want_case G22-restore-zero-absent || [[ -z "$CURRENT_GUARD" ]]; then
+        restore_files_world zero
+        run_script -- restore-files
+        expect_rc 'a zero-file restore with the directory absent' 0
+        expect_has 'nothing to extract' "$OUT" 'nothing to extract, and the Resources directory is absent'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check ' ]] || bad "a zero-file restore ran more than the one read-only check: $(tr '\n' ' ' <"$W/runs")"
+        expect_has 'read-only' "$(files_creates)" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+        restore_files_world zero; fout present 2 files:check=ok >"$W/out_files_check"
+        run_script -- restore-files
+        expect_refused 'a zero-file restore with a directory present' 'a Resources directory exists. It is not removed'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check ' ]] || bad "a directory was touched by a zero-file restore: $(tr '\n' ' ' <"$W/runs")"
+    fi
+}
+
+# --- aside-files ---
+
+t_g22_aside_happy_path() {
+    local creates
+    files_world
+    printf '1700000000' >"$T/fixed-epoch"
+    printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n' >"$W/out_files_aside"
+    fout absent 0 files:check=ok >"$W/out_files_check"
+    run_script -- aside-files
+    expect_rc aside-files 0
+    expect_has 'the new name' "$OUT" 'resources moved to resources.before-restore-20231114T221320Z (renamed; nothing deleted)'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_aside files_check ' ]] || bad "the aside did not run as aside then check: $(tr '\n' ' ' <"$W/runs")"
+    creates="$(files_creates)"
+    expect_has 'the aside is given the stamp' "$(sed -n 1p <<<"$creates")" ' php /rehearsal/src/harness/files.php aside 20231114T221320Z'
+    expect_has 'the aside writes the volume' "$(sed -n 1p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html --tmpfs"
+    expect_has 'the check is read-only' "$(sed -n 2p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+    only_database_left aside-files
+}
+
+t_g22_aside_refusals() {
+    if want_case G22-aside-stamp; then
+        files_world; printf 'not-a-time\n' >"$T/date-raw"
+        run_script -- aside-files
+        expect_refused 'a time that is not a UTC stamp' 'did not come out as a UTC stamp'
+        no_files_container 'a bad stamp'
+    fi
+    if want_case G22-aside-reported; then
+        files_world; printf '1700000000' >"$T/fixed-epoch"; fout absent 0 files:check=ok >"$W/out_files_check"
+        printf 'aside:name=resources.before-restore-20200101T000000Z\naside:complete=ok\n' >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'an aside under another name' 'did not report moving the directory to resources.before-restore-20231114T221320Z'
+        files_world; printf '1700000000' >"$T/fixed-epoch"; fout absent 0 files:check=ok >"$W/out_files_check"
+        printf 'aside:name=resources.before-restore-20231114T221320Z\n' >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'an aside that did not complete' 'did not report moving the directory'
+    fi
+    if want_case G22-aside-result; then
+        files_world; printf '1700000000' >"$T/fixed-epoch"; fout present 4 files:check=ok >"$W/out_files_check"
+        printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n' >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'a directory still in place' 'still where it was'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        files_world; printf '1700000000' >"$T/fixed-epoch"; printf '3\n' >"$W/fail_files_aside"
+        run_script -- aside-files
+        expect_rc 'an aside the helper refuses (no directory, or the name taken)' 3
+        ! grep -q '^files_check' "$W/runs" || bad 'a refused aside was read back as if it had happened'
+    fi
+}
+
+# --- the files container and its volume ---
+
+t_g22_the_files_container_is_verified_before_it_starts() {
+    local i
+    local -a overrides=() names=() whys=()
+    # Each deviation is applied to the container exactly as `docker create` made it, and the script must refuse before it starts: no network (not
+    # even the database's), the two mounts and nothing else, read-only exactly when the action is.
+    deviation() { overrides+=("$1"); names+=("$2"); whys+=("$3"); }
+    deviation $'netmode bridge\nnets bridge,' 'a files container on the default bridge' 'its network is'
+    deviation "netmode $NAME_N"$'\n'"nets $NAME_N," 'a files container on the database network' 'its network is'
+    deviation "mounts volume:$NAME_SRC:/rehearsal/src:false,volume:$NAME_FV:/var/www/html:true," 'a writable files volume for a read-only action' 'its mounts are'
+    deviation "mounts volume:$NAME_FV:/var/www/html:false," 'no source volume' 'its mounts are'
+    deviation "mounts volume:$NAME_SRC:/rehearsal/src:true,volume:$NAME_FV:/var/www/html:false," 'a writable source volume' 'its mounts are'
+    deviation "mounts volume:$NAME_SRC:/rehearsal/src:false,volume:$NAME_FV:/var/www/html:false,bind::/var/run/docker.sock:true," 'a Docker socket' 'its mounts are'
+    deviation "mounts volume:$NAME_SRC:/rehearsal/src:false,volume:$NAME_V:/var/www/html:false," "the database's volume instead of the files volume" 'its mounts are'
+    deviation 'tmpfs /tmp,/var/www/html/current/storage,' 'an extra temporary filesystem' 'its temporary filesystems are'
+    deviation 'user 0:0' 'root' 'runs as'
+    deviation 'l_role runner' "the runner's role" 'its labels are'
+    deviation "name /$NAME_R" "the runner's name" 'its name is'
+    for i in "${!overrides[@]}"; do
+        backup_files_world up absent 0
+        printf '%s\n' "${overrides[i]}" >"$W/create_override"
+        run_script -- backup-files
+        expect_refused "${names[i]}" 'was not created as asked'
+        expect_has "${names[i]}" "$ERR" "${whys[i]}"
+        [[ ! -e "$W/started" ]] || bad "${names[i]}: the container was started"
+        only_database_left "${names[i]}"
+    done
+}
+
+t_g22_only_actions_that_write_may_write() {
+    local action rw stdin
+    for spec in 'check|false|0' 'archive|false|0' 'verify-archive|false|1' 'seed|true|0' 'aside|true|0' 'restore|true|1'; do
+        IFS='|' read -r action rw stdin <<<"$spec"
+        run_fn "files_action_policy $action; echo \"\$FILES_RW \$FILES_STDIN\""
+        expect_rc "action $action" 0
+        [[ "$OUT" == "$rw $stdin" ]] || bad "action $action: expected writable=$rw stdin=$stdin, got '$OUT'"
+    done
+    if want_case G22-f-allowlist || [[ -z "$CURRENT_GUARD" ]]; then
+        for action in format delete prune '' 'check;id' restore-historical helper:revoke; do
+            run_fn "files_action_policy '$action'"
+            expect_refused "action '$action'" 'is not a files action the rehearsal runs'
+        done
+    fi
+}
+
+t_g22_the_files_volume_is_proven_before_use() {
+    # Each is a volume of the files volume's name that is not the rehearsal's, found by the identity check, not overwritten by the create.
+    if want_case G22-v-name; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=other" l_role=files-data
+        run_script -- backup-files
+        expect_refused 'a volume under another name' "the files volume is not the rehearsal's: its name is 'other'"
+    fi
+    if want_case G22-v-options; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data options=1
+        run_script -- backup-files
+        expect_refused 'a volume with driver options (a host path)' 'not a plain local volume'
+        no_files_container 'a volume with driver options'
+    fi
+    if want_case G22-v-label; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=database-data
+        run_script -- backup-files
+        expect_refused 'a volume with another role' 'its labels are not this script'
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data l_ns=
+        run_script -- backup-files
+        expect_refused 'an unlabelled volume of the same name' 'its labels are not this script'
+    fi
+    if want_case G22-v-token; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data l_token="$OTHER_TOKEN"
+        run_script -- backup-files
+        expect_refused 'a volume of another run' 'run token differs'
+        no_files_container 'a volume of another run'
+    fi
+    if want_case G22-v-users-list; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+        inject_failure "ps -aq --no-trunc --filter volume=$NAME_FV" # the files volume's own listing; the source volume's is the source check's and must not answer for it
+        run_script -- backup-files
+        expect_refused 'a listing of the volume users that fails' "the files volume is not the rehearsal's: the containers using it cannot be listed"
+    fi
+    if want_case G22-v-in-use; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+        add_container "$FOREIGN" "name=/intruder" "l_ns=" "mounts=volume:$NAME_FV:/data,"
+        run_script -- backup-files
+        expect_refused 'a volume a foreign container uses' 'that is not ours uses it'
+        no_files_container 'a volume a foreign container uses'
+    fi
+    if want_case G22-f-volume; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data l_token="$OTHER_TOKEN"
+        run_script -- backup-files
+        expect_refused 'a volume that is not the rehearsal'"'"'s' "the files volume is not the rehearsal's"
+        # The same volume, as the script would have made it, is accepted and is not created again.
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+        run_script -- backup-files
+        expect_rc 'the files volume the rehearsal made' 0
+        [[ "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad 'a volume that already existed and verified was created again'
+    fi
+}
+
+t_g22_files_containers_run_only_beside_the_database() {
+    if want_case G22-f-no-leftover; then
+        backup_files_world up absent 0
+        add_ephemeral "$RID" runner
+        run_script -- backup-files
+        expect_refused 'a runner left over from an interrupted run' 'a rehearsal container other than the database exists'
+        no_files_container 'a leftover runner'
+        backup_files_world up absent 0
+        add_ephemeral "$RID" files
+        run_script -- backup-files
+        expect_refused 'a files container left over from an interrupted run' 'a rehearsal container other than the database exists'
+    fi
+    if want_case G22-f-src-volume; then
+        backup_files_world up absent 0; rm -rf "${W:?}/v/$NAME_SRC"
+        run_script -- backup-files
+        expect_refused 'no source volume (prepare has not been run)' "the source volume is not the rehearsal's (has 'prepare' been run?)"
+        no_files_container 'no source volume'
+        backup_files_world up absent 0; add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source l_token="$OTHER_TOKEN"
+        run_script -- backup-files
+        expect_refused 'a source volume of another run' "the source volume is not the rehearsal's"
+    fi
+}
+
+# --- cleanup and self-check ---
+
+t_g22_cleanup_removes_the_files_objects_and_only_those() {
+    backup_files_world up absent 0
+    add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+    add_ephemeral "$RID" files
+    printf 'x' >"$T/root/resources.archive.tar.gz"; printf 'x' >"$T/root/resources.manifest.json"
+    run_script -- cleanup --dry-run
+    expect_rc 'a dry cleanup' 0
+    expect_has 'the files container is named' "$OUT" "would remove container ${RID:0:12} ($NAME_F)"
+    expect_has 'the files volume is named' "$OUT" "would remove volume $NAME_FV"
+    [[ -d "$W/c/$RID" && -d "$W/v/$NAME_FV" ]] || bad 'a dry run removed a files object'
+    run_script -- cleanup
+    expect_rc 'cleanup of the files objects' 0
+    [[ ! -d "$W/c/$RID" ]] || bad 'the files container was not removed'
+    if want_case G22-cleanup-dispatch || [[ -z "$CURRENT_GUARD" ]]; then [[ ! -d "$W/v/$NAME_FV" ]] || bad 'the files volume was not removed'; fi
+    [[ ! -e "$T/root" ]] || bad "the state directory was kept: $(find "$T/root" -mindepth 1 -maxdepth 1 2>/dev/null | tr '\n' ' ')"
+    expect_has 'the volume is reported removed' "$OUT" "removed volume $NAME_FV"
+}
+
+t_g22_cleanup_keeps_files_objects_that_do_not_verify() {
+    backup_files_world up absent 0
+    add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data l_token="$OTHER_TOKEN"
+    run_script -- cleanup
+    expect_rc 'cleanup with a files volume of another run' 1
+    [[ -d "$W/v/$NAME_FV" ]] || bad 'a files volume of another run was removed'
+    backup_files_world up absent 0
+    add_ephemeral "$RID" files "mounts=volume:$NAME_SRC:/rehearsal/src:false,volume:$NAME_FV:/var/www/html:true,bind::/var/run/docker.sock:true,"
+    run_script -- cleanup
+    expect_rc 'cleanup with a files container that does not verify' 1
+    [[ -d "$W/c/$RID" ]] || bad 'a files container that does not verify was removed'
+    backup_files_world up absent 0
+    add_ephemeral "$RID" files netmode=bridge nets=bridge,
+    run_script -- cleanup
+    expect_rc 'cleanup with a files container that had a network' 1
+    [[ -d "$W/c/$RID" ]] || bad 'a files container with a network was removed'
+    backup_files_world up absent 0
+    add_container "$FOREIGN" "name=/$NAME_F" "l_ns=" "mounts=volume:elsewhere:/x,"
+    run_script -- cleanup
+    expect_rc 'cleanup beside an unlabelled container named like the files container' 0
+    [[ -d "$W/c/$FOREIGN" ]] || bad 'an unlabelled container named like the files container was removed'
+    backup_files_world up absent 0
+    mkdir -p "$W/v/$NAME_FV"; put "$W/v/$NAME_FV" name "$NAME_FV"; put "$W/v/$NAME_FV" l_ns ''
+    run_script -- self-check
+    expect_refused 'an unlabelled volume named like the files volume' 'cannot prove it created'
+}
+
+t_g22_self_check_verifies_the_files_volume() {
+    backup_files_world up absent 0
+    add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+    run_script -- self-check
+    expect_rc 'a self-check with the files volume' 0
+    expect_has 'the files volume is verified' "$OUT" 'files volume is a plain local volume used by no container'
+    if want_case G22-selfcheck-files || [[ -z "$CURRENT_GUARD" ]]; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data l_token="$OTHER_TOKEN"
+        run_script -- self-check
+        expect_refused 'a files volume of another run' "the files volume is not the rehearsal's"
+    fi
+}
+
+# --- what cannot be asked of it ---
+
+t_g22_surface() {
+    local c
+    for c in seed-files backup-files aside-files restore-files; do
+        new_world
+        run_script -- "$c" an-argument
+        expect_rc "$c with an argument" 64
+        assert_no_docker_call "$c with an argument"
+        run_script -- --help
+        expect_has "$c is in the usage" "$OUT" "$c"
+    done
+    # The files helper is not reachable through `run`, and `run` still allows exactly what it allowed.
+    src_world
+    for c in helper:files-check helper:files helper:files-seed files.php 'files.php check none'; do
+        run_script -- run current "$c"
+        expect_refused "run current $c" "is not a command the rehearsal runs"
+    done
+    no_helper_ran 'run of a files helper'
+    new_world
+    run_script -- restore-files
+    expect_refused 'a restore with no state directory at all' 'there is no rehearsal state'
+    assert_read_only_calls_only 'a restore with no state directory at all'
+}
+assert_read_only_calls_only() { # DESC: nothing but listing and inspecting happened
+    local line
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        case "$line" in
+            "context show" | "context inspect "* | "info "* | "ps "* | "inspect --type container --format "* | "network ls "* | "network inspect --format "* | "volume ls "* | "volume inspect --format "*) ;;
+            *) bad "$1: a mutating or unexpected docker call was made: $line" ;;
+        esac
+    done <"$W/calls"
+}
+
+# shellcheck disable=SC2016 # the patterns are for grep, and their $ are literal
+t_g22_static_the_files_slice_is_what_the_contract_says() {
+    local script="$SRC/restore-rehearsal.sh" helper="$SRC/php/files.php" support="$ROOT/apps/platform/tests/Support/ResourceFileArchive.php" disk
+    # The volume's root is the application's storage/app/private, so `resources` in it is the private Resources disk's root.
+    disk="$(grep -A3 "'resources' => \[" "$ROOT/apps/platform/config/filesystems.php" | grep "'root'" || true)"
+    [[ "$disk" == *"storage_path('app/private/resources')"* ]] || bad "the application's Resources disk is not rooted at storage/app/private/resources: $disk"
+    grep -q "^readonly FILES_STORE_DIR='resources' " "$script" || bad "FILES_STORE_DIR is not the last component of the application's Resources disk root"
+    grep -q "public const string STORE = 'resources';" "$support" || bad "the support class's STORE is not 'resources'"
+    grep -q "^const FILES_ROOT = '/var/www/html';" "$helper" || bad 'the helper has no fixed root'
+    grep -q "^readonly FILES_MOUNT='/var/www/html'" "$script" || bad 'the files volume is not mounted at the helper'"'"'s fixed root'
+    [[ "$(grep -c '/var/www/html' "$helper")" == 1 ]] || bad "the helper names its root other than in its one constant: $(grep -n '/var/www/html' "$helper")"
+    # No caller chooses a directory, an archive or a statement: the helper takes only the action and its list or stamp, and the root is a constant.
+    if grep -nE '\$argv\[[2-9]\]|getenv|\$_ENV|\$_SERVER\[.(argv|PATH)' "$helper" | grep -v '^[0-9]*:[[:space:]]*//' | grep -q .; then bad 'the helper reads an argument beyond the action and its one value, or the environment'; fi
+    if grep -nE '\b(curl_|fsockopen|stream_socket_client|socket_create|gethostbyname|file_get_contents\(.https?:|mysqli|new PDO|shell_exec|passthru|system\(|exec\(|popen|proc_open|unlink\()' "$helper" | grep -v '^[0-9]*:[[:space:]]*//' | grep -v "@unlink(\$archive)" | grep -q .; then bad 'the helper has a network, database, shell or delete call'; fi
+    if grep -nE '\b(unlink|rmdir|rename|exec|shell_exec|system|passthru|popen)\(' "$support" | grep -v '^[0-9]*:[[:space:]]*\*' | grep -v '@unlink(\$temporary)' | grep -v 'rename(\$from' | grep -q .; then bad 'the support class deletes, renames or runs something other than its one temporary file, its one rename and its tar'; fi
+    # What the script reads from the helper is what the helper prints (the lesson of N1: a script and a helper that agree only because each was written to
+    # match the other's description). Every protocol line the script greps for or parses is a literal the helper prints.
+    local token
+    for token in 'files:state=' 'files:count=' 'files:check=ok' 'files:seed=ok' 'archive:verified=ok' 'archive:entries=' 'aside:name=' 'aside:complete=ok' 'restore:extracted=ok'; do
+        grep -qF "$token" "$helper" || bad "the helper never prints '$token', which the script reads"
+        grep -qF "$token" "$script" || bad "the script never reads '$token', which the helper prints"
+    done
+    grep -qF 'file %s %d %s' "$helper" || bad 'the helper does not print file lines as "file <key> <bytes> <sha256>"'
+    # Standard output is protocol and, for `archive`, the archive: nothing else may reach it, so diagnostics go to standard error and a warning is an error.
+    { grep -q "ini_set('display_errors', 'stderr')" "$helper" && grep -q 'set_error_handler' "$helper"; } || bad 'the helper does not keep warnings off standard output'
+    # The files container is created only by run_files, from fixed arguments, and has no environment, no env file and no published port.
+    [[ "$(grep -c 'create_verified "\$ROOT" "\$token" files' "$script")" == 1 ]] || bad 'the files container is created other than by run_files'
+    [[ "$(grep -c 'harness/files.php' "$script")" == 1 ]] || bad 'the files helper is named other than where the files container is created'
+    sed -n '/^run_files() {/,/^}/p' "$script" >"$T/run_files.txt"
+    if grep -nE '(^|[[:space:]])-e[[:space:]]|--env|-p[[:space:]]|--publish|--privileged|--network host|docker\.sock|type=bind|--volumes-from' "$T/run_files.txt" | grep -q .; then bad 'run_files gives the container an environment, a port, privilege, a bind mount or the socket'; fi
+    grep -q -- '--network none' "$T/run_files.txt" || bad 'run_files does not give the container no network'
+    grep -q 'plain_docker' "$T/run_files.txt" || bad 'the files container is not created by the credential-free launcher'
+    ! grep -q 'launch_docker' "$T/run_files.txt" || bad 'the files container is created by the launcher that carries the database password and keys'
+    # The two new state files are the only ones added, and cleanup lists them.
+    grep -q 'STATE_FILES=.*"\$FILES_ARCHIVE_FILE" "\$FILES_MANIFEST_FILE")' "$script" || bad 'the state files do not include the archive and its manifest'
+    # The compose file gains nothing: the files volume is not Compose's, and nothing in it names a files object.
+    ! grep -qi 'files' "$SRC/compose.yaml" || bad 'compose.yaml mentions the files volume or container'
+    # `php -l` where there is a php.
+    if command -v php >/dev/null 2>&1; then php -l "$helper" >/dev/null 2>&1 || bad 'files.php does not parse'; fi
+}
+
+HARNESS_FILES_EXPECTED=(db-ping.php probe.php rehearse.php files.php)
 
 declare -A GUARD_TESTS=(
     [G1-context]='t_g1_context t_g1_applies_to_every_command'
@@ -4447,19 +5380,19 @@ declare -A GUARD_TESTS=(
     [G9-selfcheck-state]='t_g9_selfcheck_state'
     [G9-selfcheck-lookalikes]='t_g9_selfcheck_state'
     [G2-substrate]='t_g2_substrate_commands_refuse_inherited_variables'
-    [G10-e-name]='t_g10_e_name'
+    [G10-e-name]='t_g10_e_name t_g22_the_files_container_is_verified_before_it_starts'
     [G10-e-image]='t_g10_e_image'
-    [G10-e-label]='t_g10_e_label'
+    [G10-e-label]='t_g10_e_label t_g22_the_files_container_is_verified_before_it_starts'
     [G10-e-token]='t_g10_e_token'
     [G10-e-ports]='t_g10_e_ports'
     [G10-e-privilege]='t_g10_e_privilege'
     [G10-e-capdrop]='t_g10_e_capdrop'
     [G10-e-nnp]='t_g10_e_nnp'
     [G10-e-readonly]='t_g10_e_readonly'
-    [G10-e-user]='t_g10_e_user'
-    [G10-e-network]='t_g10_e_network'
-    [G10-e-mounts]='t_g10_e_mounts'
-    [G10-e-tmpfs]='t_g10_e_tmpfs'
+    [G10-e-user]='t_g10_e_user t_g22_the_files_container_is_verified_before_it_starts'
+    [G10-e-network]='t_g10_e_network t_g22_the_files_container_is_verified_before_it_starts'
+    [G10-e-mounts]='t_g10_e_mounts t_g22_the_files_container_is_verified_before_it_starts'
+    [G10-e-tmpfs]='t_g10_e_tmpfs t_g22_the_files_container_is_verified_before_it_starts'
     [G10-e-limits]='t_g10_e_limits'
     [G10-image-id]='t_g10_the_image_must_resolve_to_an_id'
     [G10-password-format]='t_g10_password_must_be_the_generated_form'
@@ -4587,6 +5520,65 @@ declare -A GUARD_TESTS=(
     [G21-helper-reported]='t_g21_revoke_outcomes'
     [G21-after-state]='t_g21_revoke_outcomes'
     [G21-reversed]='t_g21_a_reversal_that_did_not_happen_is_not_reported'
+    [G22-v-name]='t_g22_the_files_volume_is_proven_before_use'
+    [G22-v-options]='t_g22_the_files_volume_is_proven_before_use'
+    [G22-v-label]='t_g22_the_files_volume_is_proven_before_use'
+    [G22-v-token]='t_g22_the_files_volume_is_proven_before_use'
+    [G22-v-users-list]='t_g22_the_files_volume_is_proven_before_use'
+    [G22-v-in-use]='t_g22_the_files_volume_is_proven_before_use'
+    [G22-f-volume]='t_g22_the_files_volume_is_proven_before_use'
+    [G22-f-allowlist]='t_g22_only_actions_that_write_may_write'
+    [G22-f-no-leftover]='t_g22_files_containers_run_only_beside_the_database'
+    [G22-f-src-volume]='t_g22_files_containers_run_only_beside_the_database'
+    [G22-f-readonly-mount]='t_g22_backup_happy_path t_g22_seed_happy_path'
+    [G22-f-protocol-line]='t_g22_the_helper_output_is_validated'
+    [G22-f-protocol-order]='t_g22_the_helper_output_is_validated'
+    [G22-f-protocol-state]='t_g22_the_helper_output_is_validated'
+    [G22-f-protocol-count]='t_g22_the_helper_output_is_validated'
+    [G22-f-protocol-absent]='t_g22_the_helper_output_is_validated'
+    [G22-rows-table-answer]='t_g22_seed_preconditions'
+    [G22-rows-shape]='t_g22_database_rows_are_validated'
+    [G22-rows-order]='t_g22_database_rows_are_validated'
+    [G22-seed-inventory]='t_g22_seed_preconditions'
+    [G22-seed-state]='t_g22_seed_preconditions'
+    [G22-seed-assets-empty]='t_g22_seed_preconditions'
+    [G22-seed-reported]='t_g22_seed_outcomes'
+    [G22-seed-count]='t_g22_seed_outcomes'
+    [G22-seed-rows-match]='t_g22_seed_outcomes'
+    [G22-seed-agrees]='t_g22_seed_outcomes'
+    [G22-seed-sql-values]='t_g22_seed_outcomes'
+    [G22-backup-no-overwrite]='t_g22_backup_is_never_overwritten'
+    [G22-backup-db-state]='t_g22_backup_needs_a_known_database_state'
+    [G22-backup-check-reported]='t_g22_backup_refusals'
+    [G22-backup-agrees]='t_g22_backup_refusals'
+    [G22-backup-archive-nonempty]='t_g22_backup_refusals'
+    [G22-backup-archive-verified]='t_g22_backup_refusals'
+    [G22-manifest-version]='t_g22_the_manifest_is_validated'
+    [G22-manifest-run]='t_g22_the_manifest_is_validated'
+    [G22-manifest-taken]='t_g22_the_manifest_is_validated'
+    [G22-manifest-state]='t_g22_the_manifest_is_validated'
+    [G22-manifest-count]='t_g22_the_manifest_is_validated'
+    [G22-manifest-zero]='t_g22_the_manifest_is_validated'
+    [G22-manifest-archive-name]='t_g22_the_manifest_is_validated'
+    [G22-manifest-archive-facts]='t_g22_the_manifest_is_validated'
+    [G22-manifest-rows]='t_g22_the_manifest_is_validated'
+    [G22-manifest-no-table]='t_g22_the_manifest_is_validated'
+    [G22-manifest-exact]='t_g22_the_manifest_is_validated'
+    [G22-archive-sha]='t_g22_the_manifest_is_validated'
+    [G22-archive-bytes]='t_g22_the_manifest_is_validated'
+    [G22-restore-backup-required]='t_g22_the_manifest_is_validated'
+    [G22-restore-archive-required]='t_g22_the_manifest_is_validated'
+    [G22-restore-zero-no-archive]='t_g22_the_manifest_is_validated'
+    [G22-restore-verified-first]='t_g22_restore_refusals'
+    [G22-restore-reported]='t_g22_restore_refusals'
+    [G22-restore-result]='t_g22_restore_refusals'
+    [G22-restore-recheck]='t_g22_restore_refusals'
+    [G22-restore-zero-absent]='t_g22_a_zero_file_restore_extracts_nothing'
+    [G22-aside-stamp]='t_g22_aside_refusals'
+    [G22-aside-reported]='t_g22_aside_refusals'
+    [G22-aside-result]='t_g22_aside_refusals'
+    [G22-cleanup-dispatch]='t_g22_cleanup_removes_the_files_objects_and_only_those'
+    [G22-selfcheck-files]='t_g22_self_check_verifies_the_files_volume'
 )
 
 # registry_differences MARKERS REGISTERED (one ID per line each): `unregistered ID` for a marker no GUARD_TESTS entry covers, `unmarked ID` for an entry
@@ -4659,6 +5651,7 @@ for id in "${MARKERS[@]}"; do
     SUT="$mutant"
     QUIET=1
     caught=''
+    CURRENT_GUARD="$id"
     rm -f "$T/first_bad"
     for t in ${GUARD_TESTS[$id]}; do
         # In a subshell, so that the first failed assertion can end the test at once; nothing a test changes needs to outlive it here.
@@ -4669,6 +5662,7 @@ for id in "${MARKERS[@]}"; do
         fi
     done
     QUIET=0
+    CURRENT_GUARD=''
     SUT="$SRC"
     if [[ -n "$caught" ]]; then
         printf '  ok    %-26s caught by %s: %s\n' "$id" "${caught#t_}" "${FIRST_BAD:0:100}"
