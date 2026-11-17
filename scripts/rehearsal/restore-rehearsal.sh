@@ -29,7 +29,8 @@
 #                                     volume and one asset row for each
 #   restore-rehearsal.sh backup-files (2.2C-2) the Resource-files half of a backup: the directory held to the asset rows, then a zero-file record, or
 #                                     an archive (the runbook's tar command) and a manifest
-#   restore-rehearsal.sh aside-files  (2.2C-2) rename the live Resources directory to resources.before-restore-<UTC time>; nothing is deleted
+#   restore-rehearsal.sh aside-files  (2.2C-2) with a verified files backup: rename the live Resources directory to resources.before-restore-<UTC time>,
+#                                     measure that what moved is what was there; nothing is deleted
 #   restore-rehearsal.sh restore-files
 #                                     (2.2C-2) verify the files backup, then extract it where there is no Resources directory (the database restore
 #                                     is not part of it)
@@ -148,6 +149,7 @@ readonly FILES_SRC_MOUNT='/rehearsal/src' # the prepared source in the files con
 readonly FILES_STORE_DIR='resources'      # inside the volume: storage/app/private/resources, the private `resources` disk's root (config/filesystems.php)
 readonly FILES_ARCHIVE_FILE='resources.archive.tar.gz'
 readonly FILES_MANIFEST_FILE='resources.manifest.json'
+readonly FILES_VOLUME_MARKER='files.volume' # written once the files volume has been created and verified: from then on a missing volume is refused, never recreated
 readonly FILES_SEED_COUNT=4
 readonly FILES_SEED_PERSON='01jbp000000000000000000001' # HistoricalFixture::person(1), the administrator: provenance only, there is no foreign key
 readonly KEY_RE='^[0-7][0-9a-hjkmnp-tv-z]{25}$'          # App\Modules\Resources\Domain\StorageKey::PATTERN
@@ -212,7 +214,7 @@ readonly REVOKE_AFTER=$'11\t9\t0\t1\t1'
 EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
 readonly EMPTY_DIGEST
 # Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
-readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE")
+readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER")
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
@@ -288,7 +290,8 @@ Usage: restore-rehearsal.sh <command>
                 volume and one asset row for each, so that the files and the rows agree. (Slice 2.2C-2.)
   backup-files  The Resource-files half of a backup: hold the Resources directory to the asset rows (an absent directory is a
                 zero-file backup only with no rows), then record that, or archive the directory and write its manifest.
-  aside-files   Rename the live Resources directory to resources.before-restore-<UTC time> in the files volume. Nothing is deleted.
+  aside-files   Needs a verified files backup. Rename the live Resources directory to resources.before-restore-<UTC time> in the files volume,
+                read it before and after, and require the two to be identical. Nothing is deleted.
   restore-files Verify the files backup, then extract it into a files volume that has no Resources directory (or, for a zero-file
                 backup, require there to be none). The database restore is not part of it.
   cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
@@ -2362,14 +2365,25 @@ files_action_policy() {
     [[ -n "$FILES_RW" ]] || refuse "'$1' is not a files action the rehearsal runs." # guard:G22-f-allowlist
 }
 
-# The files volume, created labelled if it does not exist and then proven to be the rehearsal's. Creating a volume that exists changes nothing, so
-# a foreign volume of this name is found by the identity check, not overwritten by the create.
+# The files volume, proven to be the rehearsal's before every use. It is CREATED only by the first files action of `seed-files` or `backup-files` (the caller
+# says so with FILES_CREATE_OK=1 in the environment of that one call), and only while the state directory holds no record that it was ever established
+# (`files.volume`, written once the volume has been created and verified, or found and verified). A volume that is missing after that, or missing when no
+# command may create it, is a refusal: a new, empty volume is never silently put where an established one was. Creating a volume that exists changes
+# nothing, so a foreign volume of this name is found by the identity check, not overwritten by the create.
 files_volume_ready() { # TOKEN
-    local token="$1" why
+    local token="$1" why recorded=0 expected
+    expected="files-volume-v1"$'\n'"$(token_fingerprint "$token")"
+    if [[ -e "$ROOT/$FILES_VOLUME_MARKER" || -L "$ROOT/$FILES_VOLUME_MARKER" ]]; then
+        { state_file_ok "$FILES_VOLUME_MARKER" && [[ "$(<"$ROOT/$FILES_VOLUME_MARKER")" == "$expected" ]]; } || refuse "the record of the files volume in the state directory is not this run's." # guard:G22-f-marker
+        recorded=1
+    fi
     if ! dkr volume inspect "$FILES_VOLUME_NAME" >/dev/null 2>&1; then
+        [[ $recorded == 0 ]] || refuse "the files volume $FILES_VOLUME_NAME was established earlier in this run and is now missing. It is never recreated: its files are gone. Run cleanup and start again." # guard:G22-f-volume-gone
+        [[ "${FILES_CREATE_OK:-0}" == 1 ]] || refuse "there is no files volume, and only the first files action of seed-files or backup-files may create it. Run one of those first, or cleanup and start again." # guard:G22-f-volume-not-established
         dkr volume create --label "$LABEL_NS_KEY=$LABEL_NS_VALUE" --label "$LABEL_NS_KEY.role=files-data" --label "$LABEL_NS_KEY.run-token=$token" "$FILES_VOLUME_NAME" >/dev/null || fail "the files volume could not be created"
     fi
     why="$(files_volume_identity_problem "$FILES_VOLUME_NAME" "$token" '')" || refuse "the files volume is not the rehearsal's: $why." # guard:G22-f-volume
+    [[ $recorded == 1 ]] || write_state_file "$FILES_VOLUME_MARKER" "$expected"
 }
 
 # run_files ACTION [ARGUMENT]: one fixed action of files.php in ONE disposable files container, after the checks. The container has no network and no
@@ -2400,14 +2414,14 @@ run_files() {
 # files_report TEXT: validates the files helper's state, count and file lines and sets FILES_STATE (absent|present), FILES_COUNT and FILES_SPEC
 # (`key:bytes:sha256,...` in key order, or `empty`). A line that is malformed, a key out of order or repeated, a count that is not the number of lines, or
 # files in an absent directory is a refusal: nothing is read from a helper's output that was not checked.
-files_report() {
-    local text="$1" line state='' states=0 count='' counts=0 n=0 previous='' spec='' key bytes sha extra
+files_report() { # TEXT [PREFIX]: the lines are the ones that begin with PREFIX (`before:` or `after:` for the two inventories `aside` prints), or with none
+    local text="$1" prefix="${2:-}" line state='' states=0 count='' counts=0 n=0 previous='' spec='' key bytes sha extra
     while IFS= read -r line; do
         case "$line" in
-            files:state=*) state="${line#files:state=}" states=$((states + 1)) ;;
-            files:count=*) count="${line#files:count=}" counts=$((counts + 1)) ;;
-            'file '*)
-                IFS=' ' read -r _ key bytes sha extra <<<"$line"
+            "${prefix}files:state="*) state="${line#"${prefix}files:state="}" states=$((states + 1)) ;;
+            "${prefix}files:count="*) count="${line#"${prefix}files:count="}" counts=$((counts + 1)) ;;
+            "${prefix}file "*)
+                IFS=' ' read -r _ key bytes sha extra <<<"${line#"$prefix"}"
                 [[ -z "$extra" && "$key" =~ $KEY_RE && "$bytes" =~ ^(0|[1-9][0-9]{0,11})$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || refuse "a file line of the files helper is malformed." # guard:G22-f-protocol-line
                 [[ -z "$previous" || "$key" > "$previous" ]] || refuse "the files helper listed a key out of order or twice." # guard:G22-f-protocol-order
                 previous="$key" n=$((n + 1)) spec+="${spec:+,}$key:$bytes:$sha"
@@ -2566,7 +2580,7 @@ cmd_seed_files() {
     STAGE=seed-files
     trap on_files_exit EXIT
     say "Seeding $FILES_SEED_COUNT synthetic files as uploads made after the upgrade, then their asset rows ..."
-    capture seeded 'seeding the Resources directory' run_files seed
+    FILES_CREATE_OK=1 capture seeded 'seeding the Resources directory' run_files seed
     grep -Fxq 'files:seed=ok' <<<"$seeded" || refuse "the files helper did not report files:seed=ok." # guard:G22-seed-reported
     files_report "$seeded"
     [[ "$FILES_STATE" == present && "$FILES_COUNT" == "$FILES_SEED_COUNT" ]] || refuse "the files helper did not seed exactly $FILES_SEED_COUNT files." # guard:G22-seed-count
@@ -2596,7 +2610,7 @@ cmd_backup_files() {
     STAGE=backup-files
     trap on_files_exit EXIT
     say "Checking the Resources directory against the database ($( [[ "$DB_ROWS_SPEC" == none ]] && echo 'there is no resource_assets table' || echo "resource_assets: ${DB_ROWS_COUNT} row(s)" )) ..."
-    capture checked 'checking the Resources directory' run_files check "$DB_ROWS_SPEC"
+    FILES_CREATE_OK=1 capture checked 'checking the Resources directory' run_files check "$DB_ROWS_SPEC"
     grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok." # guard:G22-backup-check-reported
     files_report "$checked"
     if [[ "$DB_ROWS_SPEC" == none || "$DB_ROWS_SPEC" == empty ]]; then
@@ -2636,12 +2650,16 @@ cmd_backup_files() {
 }
 
 # aside-files: step 2 of the runbook's file restore: the live Resources directory is RENAMED to resources.before-restore-<UTC time>, inside the files volume.
-# Nothing is deleted, merged or overwritten; the files in it are exactly what they were.
+# Nothing is deleted, merged or overwritten. It starts only when a verified Resource-files backup exists (there must be something to restore to before the live
+# files are moved), and it MEASURES the preservation: the helper reads the directory immediately before the rename and the renamed directory immediately
+# after, and prints both inventories; this script validates each, requires them to be exactly the same keys, sizes and SHA-256 values, and requires the
+# original place to be empty. A failure after the rename leaves the moved directory where it is: nothing is renamed back or removed.
 cmd_aside_files() {
     [[ $# -eq 0 ]] || { usage >&2; exit 64; }
     preflight
     require_prepared_source
-    local stamp out checked want reported=0
+    local stamp out checked want reported=0 before_state before_spec after_state after_spec moved
+    files_backup_required # guard:G22-aside-backup-required
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
     [[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || refuse "the time of day did not come out as a UTC stamp ('${stamp:0:30}')." # guard:G22-aside-stamp
     STAGE=aside-files
@@ -2649,11 +2667,16 @@ cmd_aside_files() {
     capture out 'moving the Resources directory aside' run_files aside "$stamp"
     want="$FILES_STORE_DIR.before-restore-$stamp"
     if [[ "$(grep -c '^aside:name=' <<<"$out" || true)" == 1 ]] && grep -Fxq "aside:name=$want" <<<"$out" && grep -Fxq 'aside:complete=ok' <<<"$out"; then reported=1; fi
-    [[ $reported == 1 ]] || refuse "the files helper did not report moving the directory to $want." # guard:G22-aside-reported
+    [[ $reported == 1 ]] || refuse "the files helper did not report moving the directory to $want. The directory, wherever it now is, was not touched further." # guard:G22-aside-reported
+    files_report "$out" before:
+    before_state="$FILES_STATE" before_spec="$FILES_SPEC"
+    files_report "$out" after:
+    after_state="$FILES_STATE" after_spec="$FILES_SPEC" moved="$FILES_COUNT"
+    [[ "$before_state" == present && "$after_state" == present && "$before_spec" == "$after_spec" ]] || refuse "what was moved aside is not what was there: the inventory of the renamed directory is not the one read just before the rename. The moved directory $want was left exactly where it is; nothing was renamed back or removed." # guard:G22-aside-preserved
     capture checked 'checking that the Resources directory is gone from its place' run_files check empty
     files_report "$checked"
     [[ "$FILES_STATE" == absent ]] || refuse "the Resources directory is still where it was after being moved aside." # guard:G22-aside-result
-    say "ok   $FILES_STORE_DIR moved to $want (renamed; nothing deleted); the Resources directory is now absent"
+    say "ok   $FILES_STORE_DIR moved to $want (renamed; nothing deleted): $moved file(s), read before the rename and again after it, identical in every key, size and SHA-256; the Resources directory is now absent"
 }
 
 # files_backup_required: the Resource-files backup an earlier stage took is present, this run's, consistent, and its archive (if it has one) is the one the

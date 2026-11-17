@@ -275,8 +275,11 @@ it('archives with the runbook command, reads the archive back, and restores it b
     Files::verifyArchive($gz, $inventory['files']);
 
     // The restore: the live directory is moved aside (never deleted), the archive is extracted, and what comes back is what went in.
-    $name = Files::setAside($root, '20261116T120000Z');
+    $aside = Files::setAside($root, '20261116T120000Z');
+    $name = $aside['name'];
     expect($name)->toBe('resources.before-restore-20261116T120000Z')->and(is_dir($root.'/'.$name))->toBeTrue()->and(file_exists($root.'/resources'))->toBeFalse();
+    // Measured, not assumed: the inventory read just before the rename and the one read of the renamed directory are the same, key by key.
+    expect($aside['before'])->toBe($inventory)->and($aside['after'])->toBe($inventory);
     Files::extract($gz, $root, $inventory['files']);
     expect(Files::inventory($root))->toBe($inventory);
     foreach (array_keys($inventory['files']) as $key) {
@@ -340,10 +343,79 @@ it('keeps the application\'s own Resources disk and this layout in agreement', f
 it('never deletes: moving aside and restoring leave every file that was there', function (): void {
     $root = s22c2_seeded();
     $before = s22c2_rows($root);
-    $name = Files::setAside($root, '20261116T120002Z');
+    $aside = Files::setAside($root, '20261116T120002Z');
 
     expect(Files::inventory($root))->toBe(['state' => 'absent', 'files' => []]);
-    expect(s22c2_inventory_of($root.'/'.$name))->toBe($before);
+    expect(s22c2_inventory_of($root.'/'.$aside['name']))->toBe($before)->and($aside['after']['files'])->toBe($before);
+    foreach (Files::fixture() as $key => $file) {
+        expect(file_get_contents($root.'/'.$aside['name'].'/'.$key))->toBe($file['content']);
+    }
+});
+
+it('measures what was moved aside against what was there, with real bytes, and refuses each kind of difference', function (): void {
+    $original = Files::inventory(s22c2_seeded());
+    // A second real directory, made by copying the first, and then changed in one way at a time.
+    $changed = static function (Closure $change): array {
+        $root = s22c2_seeded();
+        $change($root.'/resources');
+
+        return Files::inventory($root);
+    };
+    $key = array_key_first($original['files']);
+    $last = array_key_last($original['files']);
+    $cases = [
+        'a file with the same name and size and other bytes' => $changed(fn (string $d) => file_put_contents($d.'/'.$key, str_repeat('Z', $original['files'][$key]['bytes']))),
+        'a file with other bytes and another size' => $changed(fn (string $d) => file_put_contents($d.'/'.$key, 'short')),
+        'a file lost' => $changed(fn (string $d) => unlink($d.'/'.$last)),
+        'a file that was not there' => $changed(fn (string $d) => file_put_contents($d.'/'.s22c2_key(9), 'new')),
+        'a directory that is not there' => ['state' => 'absent', 'files' => []],
+    ];
+    Files::verifyPreserved($original, $original);
+    foreach ($cases as $label => $after) {
+        expect(s22c2_outcome(fn () => Files::verifyPreserved($original, $after)))->toBeInstanceOf(ResourceFileRefusal::class, $label);
+    }
+});
+
+it('leaves a moved directory exactly where it is when its check fails after the rename, and renames nothing back', function (): void {
+    $root = s22c2_seeded();
+    $key = array_key_first(Files::fixture());
+    $outcome = s22c2_outcome(fn () => Files::setAside($root, '20261116T120003Z', function (string $aside) use ($key): void {
+        file_put_contents($aside.'/'.$key, str_repeat('Z', Files::fixture()[$key]['bytes']));
+    }));
+
+    expect($outcome)->toBeInstanceOf(ResourceFileRefusal::class);
+    assert($outcome !== null);
+    expect($outcome->getMessage())->toContain('not the content it was');
+    expect(file_exists($root.'/resources'))->toBeFalse()->and(is_dir($root.'/resources.before-restore-20261116T120003Z'))->toBeTrue();
+    expect(file_get_contents($root.'/resources.before-restore-20261116T120003Z/'.$key))->toBe(str_repeat('Z', Files::fixture()[$key]['bytes']));
+    expect(scandir($root.'/resources.before-restore-20261116T120003Z'))->toHaveCount(Files::FIXTURE_FILES + 2);
+});
+
+it('refuses before any rename when the directory holds something the inventory refuses, or cannot be read', function (): void {
+    $root = s22c2_seeded();
+    symlink($root.'/resources/'.array_key_first(Files::fixture()), $root.'/resources/'.s22c2_key(5));
+    expect(s22c2_outcome(fn () => Files::setAside($root, '20261116T120004Z')))->toBeInstanceOf(ResourceFileRefusal::class);
+    expect(is_dir($root.'/resources'))->toBeTrue()->and(file_exists($root.'/resources.before-restore-20261116T120004Z'))->toBeFalse();
+
+    if (function_exists('posix_geteuid') && posix_geteuid() !== 0) {
+        $root = s22c2_seeded();
+        $key = array_key_first(Files::fixture());
+        chmod($root.'/resources/'.$key, 0000);
+        expect(s22c2_outcome(fn () => Files::setAside($root, '20261116T120005Z')))->toBeInstanceOf(ResourceFileRefusal::class);
+        expect(is_dir($root.'/resources'))->toBeTrue()->and(file_exists($root.'/resources.before-restore-20261116T120005Z'))->toBeFalse();
+        chmod($root.'/resources/'.$key, 0600);
+    }
+});
+
+it('reports the number of entries the archive reader accepted, not a number derived from the list it was given', function (): void {
+    [$gz, $rows] = s22c2_real_archive();
+    expect(Files::verifyArchive($gz, $rows))->toBe(Files::FIXTURE_FILES + 1)->and(count(Files::readArchive($gz)))->toBe(Files::FIXTURE_FILES + 1);
+
+    $empty = s22c2_dir();
+    mkdir($empty.'/resources', 0700);
+    $to = s22c2_dir().'/e.tar.gz';
+    Files::createArchive($empty, $to, Files::inventory($empty));
+    expect(Files::verifyArchive((string) file_get_contents($to), []))->toBe(1);
 });
 
 // --- 2. refusal, before anything is written ------------------------------------------------------------------------------------------
@@ -617,6 +689,40 @@ function s22c2_scenarios(): array
         'F-aside-stamp' => ['not a UTC time', fn (string $c) => $c::setAside(s22c2_seeded(), 'yesterday')],
         'F-aside-root' => ['files root is not a directory', fn (string $c) => $c::setAside('/nonexistent/flc-s22c2', '20261116T120000Z')],
         'F-aside-source' => ['no Resources directory to move aside', fn (string $c) => $c::setAside(s22c2_dir(), '20261116T120000Z')],
+        'F-aside-verifies' => ['not the content it was', function (string $c): void {
+            $key = array_key_first(Files::fixture());
+            $c::setAside(s22c2_seeded(), '20261116T120000Z', function (string $aside) use ($key): void {
+                file_put_contents($aside.'/'.$key, str_repeat('Z', Files::fixture()[$key]['bytes']));
+            });
+        }],
+        'F-preserved-present' => ['moved-aside directory is not there', function (string $c): void {
+            $before = Files::inventory(s22c2_seeded());
+            $c::verifyPreserved($before, ['state' => 'absent', 'files' => []]);
+        }],
+        'F-preserved-missing' => ['missing from the moved-aside directory', function (string $c): void {
+            $before = Files::inventory(s22c2_seeded());
+            $after = $before;
+            unset($after['files'][array_key_last($after['files'])]);
+            $c::verifyPreserved($before, $after);
+        }],
+        'F-preserved-extra' => ['was not there before', function (string $c) use ($key5): void {
+            $before = Files::inventory(s22c2_seeded());
+            $after = $before;
+            $after['files'][$key5] = ['bytes' => 1, 'sha256' => str_repeat('0', 64)];
+            $c::verifyPreserved($before, $after);
+        }],
+        'F-preserved-size' => ['not the size it was', function (string $c): void {
+            $before = Files::inventory(s22c2_seeded());
+            $after = $before;
+            $after['files'][array_key_first($after['files'])]['bytes']++;
+            $c::verifyPreserved($before, $after);
+        }],
+        'F-preserved-content' => ['not the content it was', function (string $c): void {
+            $before = Files::inventory(s22c2_seeded());
+            $after = $before;
+            $after['files'][array_key_first($after['files'])]['sha256'] = str_repeat('f', 64);
+            $c::verifyPreserved($before, $after);
+        }],
         'F-aside-target' => ['aside name is taken', function (string $c): void {
             $root = s22c2_seeded();
             mkdir($root.'/resources.before-restore-20261116T120000Z');

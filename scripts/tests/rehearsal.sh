@@ -4826,13 +4826,19 @@ ensure_files_cache() {
     cp -p "$T/root/resources.manifest.json" "$T/fcache/zero/"
     FILES_CACHE=1
 }
-# restore_files_world [zero]: the prepared source, the files volume's helper told what a restore reports, and the cached backup installed in the state directory.
+# restore_files_world [zero] [novolume]: the prepared source, the files volume (established: a restore never creates it), the files helper told what a restore
+# reports, and the cached backup installed in the state directory.
 restore_files_world() {
+    local flag zero=0 volume=1
+    for flag in "$@"; do
+        case "$flag" in zero) zero=1 ;; novolume) volume=0 ;; *) ;; esac
+    done
     files_world
+    [[ $volume == 0 ]] || add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
     fout present 4 restore:extracted=ok >"$W/out_files_restore"
     fout present 4 files:check=ok >"$W/out_files_check"
     printf 'archive:entries=5\narchive:verified=ok\n' >"$W/out_files_verify_archive"
-    if [[ "${1:-}" == zero ]]; then
+    if [[ $zero == 1 ]]; then
         cp -p "$T/fcache/zero/resources.manifest.json" "$T/root/"
         fout absent 0 files:check=ok >"$W/out_files_check"
     else
@@ -4987,51 +4993,169 @@ t_g22_a_zero_file_restore_extracts_nothing() {
 
 # --- aside-files ---
 
+# aside_out BEFORE_N AFTER_N [NAME]: what the helper prints for an aside: the inventory read before the rename, the one read after it, the name, completion.
+aside_out() {
+    fout present "$1" | sed 's/^/before:/'
+    fout present "$2" | sed 's/^/after:/'
+    printf 'aside:name=%s\naside:complete=ok\n' "${3:-resources.before-restore-20231114T221320Z}"
+}
+# aside_world: a verified files backup (installed from the cache) and an established files volume holding four files; the helper reports an exact aside.
+aside_world() {
+    ensure_files_cache
+    restore_files_world
+    printf '1700000000' >"$T/fixed-epoch"
+    aside_out 4 4 >"$W/out_files_aside"
+    fout absent 0 files:check=ok >"$W/out_files_check"
+}
+
 t_g22_aside_happy_path() {
     local creates
-    files_world
-    printf '1700000000' >"$T/fixed-epoch"
-    printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n' >"$W/out_files_aside"
-    fout absent 0 files:check=ok >"$W/out_files_check"
+    aside_world
     run_script -- aside-files
     expect_rc aside-files 0
     expect_has 'the new name' "$OUT" 'resources moved to resources.before-restore-20231114T221320Z (renamed; nothing deleted)'
+    expect_has 'the measurement' "$OUT" '4 file(s), read before the rename and again after it, identical in every key, size and SHA-256'
     [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_aside files_check ' ]] || bad "the aside did not run as aside then check: $(tr '\n' ' ' <"$W/runs")"
     creates="$(files_creates)"
     expect_has 'the aside is given the stamp' "$(sed -n 1p <<<"$creates")" ' php /rehearsal/src/harness/files.php aside 20231114T221320Z'
     expect_has 'the aside writes the volume' "$(sed -n 1p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html --tmpfs"
     expect_has 'the check is read-only' "$(sed -n 2p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+    [[ "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad 'an aside created a volume'
     only_database_left aside-files
 }
 
 t_g22_aside_refusals() {
+    if want_case G22-aside-backup-required; then
+        # No verified backup, no aside: refused before the files helper runs, and nothing is synthesized to satisfy the precondition.
+        aside_world; rm -f "$T/root/resources.manifest.json"
+        run_script -- aside-files
+        expect_refused 'no files backup' 'no Resource-files backup'
+        no_files_container 'no files backup'
+        [[ ! -e "$T/root/resources.manifest.json" ]] || bad 'a manifest was made for an aside that had none'
+        aside_world; sed -i 's/"resource_files_count": 4/"resource_files_count": 5/' "$T/root/resources.manifest.json"
+        run_script -- aside-files
+        expect_refused 'a manifest that is not consistent' 'cannot be relied on'
+        no_files_container 'a bad manifest'
+        aside_world; printf 'x' >>"$T/root/resources.archive.tar.gz"
+        run_script -- aside-files
+        expect_refused 'an archive that is not the manifest'"'"'s' 'cannot be relied on'
+        no_files_container 'a bad archive'
+    fi
     if want_case G22-aside-stamp; then
-        files_world; printf 'not-a-time\n' >"$T/date-raw"
+        aside_world; printf 'not-a-time\n' >"$T/date-raw"
         run_script -- aside-files
         expect_refused 'a time that is not a UTC stamp' 'did not come out as a UTC stamp'
         no_files_container 'a bad stamp'
     fi
     if want_case G22-aside-reported; then
-        files_world; printf '1700000000' >"$T/fixed-epoch"; fout absent 0 files:check=ok >"$W/out_files_check"
-        printf 'aside:name=resources.before-restore-20200101T000000Z\naside:complete=ok\n' >"$W/out_files_aside"
+        aside_world; aside_out 4 4 resources.before-restore-20200101T000000Z >"$W/out_files_aside"
         run_script -- aside-files
         expect_refused 'an aside under another name' 'did not report moving the directory to resources.before-restore-20231114T221320Z'
-        files_world; printf '1700000000' >"$T/fixed-epoch"; fout absent 0 files:check=ok >"$W/out_files_check"
-        printf 'aside:name=resources.before-restore-20231114T221320Z\n' >"$W/out_files_aside"
+        aside_world; printf 'aside:name=resources.before-restore-20231114T221320Z\n' >"$W/out_files_aside"
         run_script -- aside-files
         expect_refused 'an aside that did not complete' 'did not report moving the directory'
     fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        aside_world; { fout present 4 | sed 's/^before:*//; s/^/before:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n'; } >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'an aside with no inventory of the renamed directory' 'exactly one state'
+        aside_world; { fout present 4 | sed 's/^/after:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n'; } >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'an aside with no inventory of the original' 'exactly one state'
+        aside_world; aside_out 4 4 | sed "s/^after:file ${FKEYS[1]} \([0-9]*\) .*/after:file ${FKEYS[1]} \1 nothex/" >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'a malformed inventory of the renamed directory' 'file line of the files helper is malformed'
+        aside_world; printf '3\n' >"$W/fail_files_aside"
+        run_script -- aside-files
+        expect_rc 'an aside the helper refuses (no directory, the name taken, or a directory the inventory refuses)' 3
+        ! grep -q '^files_check' "$W/runs" || bad 'a refused aside was read back as if it had happened'
+    fi
+    if want_case G22-aside-preserved; then
+        # What was moved is not what was there: refused, and the script says the moved directory was left exactly where it is.
+        aside_world; aside_out 4 3 >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'a file lost in the move' 'not what was there'
+        expect_has 'nothing is renamed back or removed' "$ERR" 'nothing was renamed back or removed'
+        ! grep -q '^files_check' "$W/runs" || bad 'an aside that did not preserve was read back as a success'
+        aside_world; { aside_out 4 4 | sed "s/^after:file ${FKEYS[2]} \([0-9]*\) .*/after:file ${FKEYS[2]} \1 $(fsha 9)/"; } >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'a file whose content changed in the move' 'not what was there'
+        aside_world; aside_out 3 4 >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'a file that was not there before' 'not what was there'
+        aside_world; { fout absent 0 | sed 's/^/before:/'; fout present 4 | sed 's/^/after:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n'; } >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'an aside of a directory that was reported absent' 'not what was there'
+        aside_world; { fout present 4 | sed 's/^/before:/'; fout absent 0 | sed 's/^/after:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n'; } >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_refused 'a renamed directory that was reported absent' 'not what was there'
+    fi
     if want_case G22-aside-result; then
-        files_world; printf '1700000000' >"$T/fixed-epoch"; fout present 4 files:check=ok >"$W/out_files_check"
-        printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n' >"$W/out_files_aside"
+        aside_world; fout present 4 files:check=ok >"$W/out_files_check"
         run_script -- aside-files
         expect_refused 'a directory still in place' 'still where it was'
     fi
-    if [[ -z "$CURRENT_GUARD" ]]; then
-        files_world; printf '1700000000' >"$T/fixed-epoch"; printf '3\n' >"$W/fail_files_aside"
+}
+
+# --- the files volume is established once and never silently replaced ---
+
+t_g22_a_missing_volume_is_never_recreated() {
+    local creates runs_before
+    if want_case G22-f-volume-gone; then
+        # seed-files establishes the volume (and records it); the volume is then removed behind the script's back.
+        seed_world
+        run_script -- seed-files
+        expect_rc 'seed-files, which establishes the volume' 0
+        [[ -f "$T/root/files.volume" && "$("$REAL_STAT" -c %a "$T/root/files.volume")" == 600 ]] || bad 'the establishment of the files volume was not recorded in a private file'
+        rm -rf "${W:?}/v/$NAME_FV"
+        creates="$(grep -c '^volume create ' "$W/calls")"
+        runs_before="$(wc -l <"$W/runs")"
+        rm -f "$T/root/resources.archive.tar.gz" "$T/root/resources.manifest.json"
+        run_script -- backup-files
+        expect_refused 'a backup after the volume vanished (a first action that may create)' 'was established earlier in this run and is now missing'
+        [[ "$(grep -c '^volume create ' "$W/calls")" == "$creates" ]] || bad 'a files volume was created again after it had been removed'
+        [[ "$(wc -l <"$W/runs")" == "$runs_before" ]] || bad 'the files helper ran although the volume had vanished'
+        # The same for the commands that never create: a restore and an aside, from a backup that exists.
+        ensure_files_cache
+        restore_files_world; rm -rf "${W:?}/v/$NAME_FV"; printf 'files-volume-v1\n%s' "$(printf 'flc-run-v1|%s' "$TOKEN" | sha256sum | cut -c1-16)" >"$T/root/files.volume"; chmod 600 "$T/root/files.volume"
+        run_script -- restore-files
+        expect_refused 'a restore after the volume vanished' 'was established earlier in this run and is now missing'
+        aside_world; rm -rf "${W:?}/v/$NAME_FV"; printf 'files-volume-v1\n%s' "$(printf 'flc-run-v1|%s' "$TOKEN" | sha256sum | cut -c1-16)" >"$T/root/files.volume"; chmod 600 "$T/root/files.volume"
         run_script -- aside-files
-        expect_rc 'an aside the helper refuses (no directory, or the name taken)' 3
-        ! grep -q '^files_check' "$W/runs" || bad 'a refused aside was read back as if it had happened'
+        expect_refused 'an aside after the volume vanished' 'was established earlier in this run and is now missing'
+        [[ "$(grep -c '^volume create ' "$W/calls")" == 0 ]] || bad 'a restore or an aside created a files volume'
+        no_files_container 'a restore or an aside after the volume vanished'
+    fi
+    if want_case G22-f-volume-not-established; then
+        ensure_files_cache
+        restore_files_world novolume
+        run_script -- restore-files
+        expect_refused 'a restore with no files volume at all' 'only the first files action of seed-files or backup-files may create it'
+        no_files_container 'a restore with no volume'
+        [[ "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad 'a restore created the files volume'
+        aside_world; rm -rf "${W:?}/v/$NAME_FV"; rm -f "$T/root/files.volume"
+        run_script -- aside-files
+        expect_refused 'an aside with no files volume at all' 'only the first files action of seed-files or backup-files may create it'
+        [[ ! -e "$T/root/files.volume" ]] || bad 'a record of the files volume was written for a volume that does not exist'
+        # Only the FIRST files action of a command may create: a volume that disappears between its check and its archive is refused, not recreated.
+        backup_files_world up present 4
+        printf 'rm -rf "%s/v/%s"\n' "$W" "$NAME_FV" >"$W/after_files_check"
+        run_script -- backup-files
+        expect_refused 'a volume that vanished between the check and the archive' 'was established earlier in this run and is now missing'
+        [[ "$(grep -c '^volume create ' "$W/calls")" == 1 ]] || bad 'the volume was created again between the check and the archive'
+        [[ ! -e "$T/root/resources.manifest.json" ]] || bad 'a manifest was written for a backup whose volume vanished'
+    fi
+    if want_case G22-f-marker; then
+        backup_files_world up absent 0; printf 'garbage\n' >"$T/root/files.volume"; chmod 600 "$T/root/files.volume"
+        run_script -- backup-files
+        expect_refused 'a record of another run' "record of the files volume in the state directory is not this run's"
+        no_files_container 'a bad record'
+        backup_files_world up absent 0; printf 'files-volume-v1\n%s' "$(printf 'flc-run-v1|%s' "$TOKEN" | sha256sum | cut -c1-16)" >"$T/root/files.volume"; chmod 644 "$T/root/files.volume"
+        run_script -- backup-files
+        expect_refused 'a record that is not private' "record of the files volume in the state directory is not this run's"
+        backup_files_world up absent 0; ln -s /etc/hostname "$T/root/files.volume"
+        run_script -- backup-files
+        expect_refused 'a record that is a link' "record of the files volume in the state directory is not this run's"
     fi
 }
 
@@ -5162,7 +5286,7 @@ t_g22_cleanup_removes_the_files_objects_and_only_those() {
     backup_files_world up absent 0
     add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
     add_ephemeral "$RID" files
-    printf 'x' >"$T/root/resources.archive.tar.gz"; printf 'x' >"$T/root/resources.manifest.json"
+    printf 'x' >"$T/root/resources.archive.tar.gz"; printf 'x' >"$T/root/resources.manifest.json"; printf 'x' >"$T/root/files.volume"
     run_script -- cleanup --dry-run
     expect_rc 'a dry cleanup' 0
     expect_has 'the files container is named' "$OUT" "would remove container ${RID:0:12} ($NAME_F)"
@@ -5274,6 +5398,10 @@ t_g22_static_the_files_slice_is_what_the_contract_says() {
         grep -qF "$token" "$script" || bad "the script never reads '$token', which the helper prints"
     done
     grep -qF 'file %s %d %s' "$helper" || bad 'the helper does not print file lines as "file <key> <bytes> <sha256>"'
+    # The entry count the helper prints is the one the reader measured, not one derived from the list it was asked to verify (L3).
+    { grep -qF '$accepted = ResourceFileArchive::verifyArchive(' "$helper" && grep -qF "'archive:entries='.\$accepted" "$helper" && ! grep -qF 'count(archiveRows(' "$helper"; } || bad 'the helper prints an archive entry count that is not the reader'"'"'s'
+    # The aside is measured: both inventories are printed, with their own prefixes, and the class returns them.
+    { grep -qF "printInventory(\$aside['before'], 'before:')" "$helper" && grep -qF "printInventory(\$aside['after'], 'after:')" "$helper"; } || bad 'the helper does not print the inventories before and after the aside'
     # Standard output is protocol and, for `archive`, the archive: nothing else may reach it, so diagnostics go to standard error and a warning is an error.
     { grep -q "ini_set('display_errors', 'stderr')" "$helper" && grep -q 'set_error_handler' "$helper"; } || bad 'the helper does not keep warnings off standard output'
     # The files container is created only by run_files, from fixed arguments, and has no environment, no env file and no published port.
@@ -5285,7 +5413,7 @@ t_g22_static_the_files_slice_is_what_the_contract_says() {
     grep -q 'plain_docker' "$T/run_files.txt" || bad 'the files container is not created by the credential-free launcher'
     ! grep -q 'launch_docker' "$T/run_files.txt" || bad 'the files container is created by the launcher that carries the database password and keys'
     # The two new state files are the only ones added, and cleanup lists them.
-    grep -q 'STATE_FILES=.*"\$FILES_ARCHIVE_FILE" "\$FILES_MANIFEST_FILE")' "$script" || bad 'the state files do not include the archive and its manifest'
+    grep -q 'STATE_FILES=.*"\$FILES_ARCHIVE_FILE" "\$FILES_MANIFEST_FILE" "\$FILES_VOLUME_MARKER")' "$script" || bad 'the state files do not include the archive, its manifest and the record of the files volume'
     # The compose file gains nothing: the files volume is not Compose's, and nothing in it names a files object.
     ! grep -qi 'files' "$SRC/compose.yaml" || bad 'compose.yaml mentions the files volume or container'
     # `php -l` where there is a php.
@@ -5574,8 +5702,13 @@ declare -A GUARD_TESTS=(
     [G22-restore-result]='t_g22_restore_refusals'
     [G22-restore-recheck]='t_g22_restore_refusals'
     [G22-restore-zero-absent]='t_g22_a_zero_file_restore_extracts_nothing'
-    [G22-aside-stamp]='t_g22_aside_refusals'
+    [G22-aside-backup-required]='t_g22_aside_refusals'
     [G22-aside-reported]='t_g22_aside_refusals'
+    [G22-aside-preserved]='t_g22_aside_refusals'
+    [G22-f-volume-gone]='t_g22_a_missing_volume_is_never_recreated'
+    [G22-f-volume-not-established]='t_g22_a_missing_volume_is_never_recreated'
+    [G22-f-marker]='t_g22_a_missing_volume_is_never_recreated'
+    [G22-aside-stamp]='t_g22_aside_refusals'
     [G22-aside-result]='t_g22_aside_refusals'
     [G22-cleanup-dispatch]='t_g22_cleanup_removes_the_files_objects_and_only_those'
     [G22-selfcheck-files]='t_g22_self_check_verifies_the_files_volume'

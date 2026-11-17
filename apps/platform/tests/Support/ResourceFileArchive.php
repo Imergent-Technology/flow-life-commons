@@ -102,6 +102,18 @@ final class ResourceFileArchive
         if (! file_exists($store)) {
             return ['state' => 'absent', 'files' => []];
         }
+
+        return self::readStore($store);
+    }
+
+    /**
+     * What an existing directory holds, by the one set of rules inventory() applies to `resources`: also used on the moved-aside directory, so what is
+     * checked there is no weaker.
+     *
+     * @return Inventory
+     */
+    private static function readStore(string $store): array
+    {
         self::must(is_dir($store), 'the Resources path exists and is not a directory'); // guard:F-store-dir
         $names = scandir($store);
         self::must($names !== false, 'the Resources directory cannot be listed');
@@ -119,7 +131,7 @@ final class ResourceFileArchive
             self::must($type === self::TYPE_FILE, 'the Resources directory holds an entry that is not a regular file'); // guard:F-entry-regular
             self::must(preg_match(self::KEY_PATTERN, $name) === 1, 'the Resources directory holds a file that is not named as a storage key'); // guard:F-entry-name
             self::must($stat['nlink'] === 1, 'the Resources directory holds a file with more than one hard link (key '.$name.')'); // guard:F-entry-hardlink
-            $sha = hash_file('sha256', $path);
+            $sha = @hash_file('sha256', $path);
             self::must($sha !== false, 'a stored file cannot be read (key '.$name.')');
             $files[$name] = ['bytes' => $stat['size'], 'sha256' => $sha];
         }
@@ -279,14 +291,16 @@ final class ResourceFileArchive
     }
 
     /**
-     * The archive holds exactly these files, each with the size and SHA-256 given, and nothing else.
+     * The archive holds exactly these files, each with the size and SHA-256 given, and nothing else. Returns the number of entries the reader
+     * ACCEPTED (the directory entry and each file), counted from the archive itself and not from what the caller expected.
      *
      * @param  Rows  $expected
      */
-    public static function verifyArchive(string $gz, array $expected): void
+    public static function verifyArchive(string $gz, array $expected): int
     {
         $found = [];
-        foreach (self::readArchive($gz) as $entry) {
+        $entries = self::readArchive($gz);
+        foreach ($entries as $entry) {
             if ($entry['type'] === 'file' && $entry['key'] !== null && $entry['sha256'] !== null) {
                 $found[$entry['key']] = ['bytes' => $entry['bytes'], 'sha256' => $entry['sha256']];
             }
@@ -299,6 +313,8 @@ final class ResourceFileArchive
             self::must($found[$key]['bytes'] === $facts['bytes'], 'an archived file is not the recorded size (key '.$key.')'); // guard:F-archive-entry-size
             self::must($found[$key]['sha256'] === $facts['sha256'], 'an archived file is not the recorded content (key '.$key.')'); // guard:F-archive-entry-content
         }
+
+        return count($entries);
     }
 
     /**
@@ -328,18 +344,54 @@ final class ResourceFileArchive
         self::agree($inventory, $expected); // guard:F-extract-result
     }
 
-    /** Renames `resources` to `resources.before-restore-<stamp>` and returns the new name. A rename: nothing is deleted, merged or overwritten. */
-    public static function setAside(string $root, string $stamp): string
+    /**
+     * Renames `resources` to `resources.before-restore-<stamp>`, having read what it holds first and read the renamed directory again, and holds the two
+     * to one another. A rename: nothing is deleted, merged or overwritten, and a failure after the rename leaves the moved directory exactly where it is
+     * (it is not renamed back). The name is built here from the validated stamp; no path comes from the caller. $afterRename is a seam for tests only.
+     *
+     * @param  (callable(string): void)|null  $afterRename  called with the aside directory's path once it has been renamed
+     * @return array{name: string, before: Inventory, after: Inventory}
+     */
+    public static function setAside(string $root, string $stamp, ?callable $afterRename = null): array
     {
         self::must(preg_match(self::STAMP_PATTERN, $stamp) === 1, 'the stamp is not a UTC time of the form YYYYMMDDTHHMMSSZ'); // guard:F-aside-stamp
         self::must(is_dir($root) && ! is_link($root), 'the files root is not a directory'); // guard:F-aside-root
         $from = $root.'/'.self::STORE;
         self::must(is_dir($from) && ! is_link($from), 'there is no Resources directory to move aside'); // guard:F-aside-source
         $name = self::ASIDE_PREFIX.$stamp;
-        self::must(! file_exists($root.'/'.$name) && ! is_link($root.'/'.$name), 'the aside name is taken and is never overwritten or merged'); // guard:F-aside-target
-        self::must(rename($from, $root.'/'.$name), 'the directory could not be moved aside');
+        $to = $root.'/'.$name;
+        self::must(! file_exists($to) && ! is_link($to), 'the aside name is taken and is never overwritten or merged'); // guard:F-aside-target
+        $before = self::inventory($root);
+        self::must(rename($from, $to), 'the directory could not be moved aside');
+        if ($afterRename !== null) {
+            $afterRename($to);
+        }
+        clearstatcache(true);
+        self::must(! is_link($to), 'the moved-aside path is a symbolic link');
+        $after = self::readStore($to);
+        self::verifyPreserved($before, $after); // guard:F-aside-verifies
 
-        return $name;
+        return ['name' => $name, 'before' => $before, 'after' => $after];
+    }
+
+    /**
+     * What was moved aside is what was there: the same keys, byte sizes and SHA-256 values, in a directory that exists. A difference is a refusal that
+     * changes nothing.
+     *
+     * @param  Inventory  $before
+     * @param  Inventory  $after
+     */
+    public static function verifyPreserved(array $before, array $after): void
+    {
+        self::must($after['state'] === 'present' && $before['state'] === 'present', 'the moved-aside directory is not there'); // guard:F-preserved-present
+        $missing = array_keys(array_diff_key($before['files'], $after['files']));
+        self::must($missing === [], 'a file is missing from the moved-aside directory (key '.($missing[0] ?? '').', '.count($missing).' in all)'); // guard:F-preserved-missing
+        $extra = array_keys(array_diff_key($after['files'], $before['files']));
+        self::must($extra === [], 'the moved-aside directory holds a file that was not there before (key '.($extra[0] ?? '').', '.count($extra).' in all)'); // guard:F-preserved-extra
+        foreach ($before['files'] as $key => $facts) {
+            self::must($after['files'][$key]['bytes'] === $facts['bytes'], 'a moved-aside file is not the size it was (key '.$key.')'); // guard:F-preserved-size
+            self::must($after['files'][$key]['sha256'] === $facts['sha256'], 'a moved-aside file is not the content it was (key '.$key.')'); // guard:F-preserved-content
+        }
     }
 
     /**

@@ -16,7 +16,8 @@ use Tests\Support\ResourceFileRefusal;
 //   archive <rows>         `check`, then the runbook's `tar -C <root> -czf <archive> resources`, its status checked, the archive read back by the
 //                          strict reader and held to the inventory. The archive's bytes are the ONLY thing written to standard output.
 //   verify-archive <rows>  the archive on standard input holds exactly these files, nothing else, and nothing outside `resources/`. Read-only.
-//   aside <stamp>          renames `resources` to `resources.before-restore-<stamp>`. Nothing is deleted.
+//   aside <stamp>          reads `resources`, renames it to `resources.before-restore-<stamp>`, reads the renamed directory and requires the two to be the
+//                          same (keys, sizes, SHA-256). Prints both inventories (`before:` and `after:` lines). Nothing is deleted.
 //   restore <rows>         the archive on standard input, verified first, extracted into a root with no `resources`; the result held to <rows>.
 //
 // <rows> is `none` (no resource_assets table), `empty`, or `key:bytes:sha256[,...]`. The root is a constant here: it is not an argument, and it
@@ -66,12 +67,12 @@ function archiveRows(string $spec): array
 }
 
 /** @param  array{state: string, files: array<string, array{bytes: int, sha256: string}>}  $inventory */
-function printInventory(array $inventory): void
+function printInventory(array $inventory, string $prefix = ''): void
 {
-    echo 'files:state='.$inventory['state']."\n";
-    echo 'files:count='.count($inventory['files'])."\n";
+    echo $prefix.'files:state='.$inventory['state']."\n";
+    echo $prefix.'files:count='.count($inventory['files'])."\n";
     foreach ($inventory['files'] as $key => $facts) {
-        echo sprintf("file %s %d %s\n", $key, $facts['bytes'], $facts['sha256']);
+        echo sprintf("%sfile %s %d %s\n", $prefix, $key, $facts['bytes'], $facts['sha256']);
     }
 }
 
@@ -144,12 +145,15 @@ function run(array $args): void
             echo $bytes;
             break;
         case 'verify-archive':
-            ResourceFileArchive::verifyArchive(archiveFromStdin(), archiveRows($argument));
-            echo 'archive:entries='.(count(archiveRows($argument)) + 1)."\n";
+            $accepted = ResourceFileArchive::verifyArchive(archiveFromStdin(), archiveRows($argument));
+            echo 'archive:entries='.$accepted."\n"; // what the reader accepted, not what was asked for
             echo "archive:verified=ok\n";
             break;
         case 'aside':
-            echo 'aside:name='.ResourceFileArchive::setAside(FILES_ROOT, $argument)."\n";
+            $aside = ResourceFileArchive::setAside(FILES_ROOT, $argument);
+            printInventory($aside['before'], 'before:'); // what the directory held immediately before the rename
+            printInventory($aside['after'], 'after:'); // what the renamed directory holds
+            echo 'aside:name='.$aside['name']."\n";
             echo "aside:complete=ok\n";
             break;
         case 'restore':
