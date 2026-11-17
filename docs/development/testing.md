@@ -115,6 +115,16 @@ The lazy-loaded editor is proved at three layers, because a source assertion alo
 
 `scripts/tests/rehearsal.sh` covers the isolation foundation of the local recovery rehearsal ([G6 WP3c](restore-rehearsal.md)). It runs the script against a fake `docker` and creates no container, network, volume or database, and it mutates each marked safeguard in a scratch copy to prove a test fails without it. It is part of `./flow check repo`.
 
+**How the mutation matrix runs.** The ordinary tests run once, in the main process. The matrix (one mutant per marked safeguard; each must be caught) is shared among worker processes that run while the ordinary tests do. A worker is the same script started with `--worker INDEX COUNT ID...` (arguments, never the environment), with a temporary directory, fake daemon and mutation copies of its own, so workers share no mutable state. The main process then requires that **every** mutant was reported exactly once, by the worker it was assigned to, as caught, and that every worker finished with matching counts and the exit status those counts imply; a missing, duplicated, extra or failed mutant, or a crashed worker, fails the run. Results are printed in guard order, so the output does not depend on which worker finished first.
+
+| `REHEARSAL_WORKERS` | |
+| --- | --- |
+| unset | The number of CPUs this process can really use (affinity and any cgroup quota), less one for the ordinary tests, at most 4, and at most one per 512 MiB of available memory; 0 when that leaves none |
+| `0` | Sequential: every mutant in this process, one after another. The mode for debugging and for checking the others against |
+| `1` to `16` | That many workers. Anything else is refused |
+
+`REHEARSAL_TESTS="t_a t_b"` runs just those tests (no matrix), whatever `REHEARSAL_WORKERS` says; `REHEARSAL_SRC` names the script directory under test. `t_matrix_*` in the same file test the runner itself: the shares are a partition of the real mutant list, every marker is a mutant exactly once, a worker's results are judged as the main process judges them (including a crashed or incomplete worker), and one worker and two workers reach the same verdicts on real mutants, including one that cannot be caught.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on pushes to `main`, on pull requests (docs-only changes are skipped), and on manual dispatch, cancels superseded runs on the same ref, uses Linux runners, resolves development images from Google's public cache / GHCR so shared runner IPs do not receive anonymous Docker Hub 429s, caches the PHP image layers, and runs `./flow setup --skip-build` then `./flow check --pgsql`. See also [Docker environment](docker.md#ci-parity). No deployment happens from CI.

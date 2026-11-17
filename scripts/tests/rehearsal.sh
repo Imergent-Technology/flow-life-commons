@@ -12,12 +12,29 @@
 # script, replaces that line with `:` and runs the tests listed for the ID in GUARD_TESTS; at least one must fail, or the guard is
 # not tested. Both directions are enforced: a marker with no entry here, and an entry whose marker is gone, fail the run. Nothing
 # is mutated in the repository: the copy is in a temporary directory.
+#
+# Running it. The ordinary tests run once. The mutation matrix runs each mutant exactly once, in one of two ways that must give the same answer:
+#
+#   REHEARSAL_WORKERS=0   sequential: every mutant in this process, in order. The debugging and verification mode.
+#   REHEARSAL_WORKERS=N   N worker processes (1 to 16), each given a fixed, disjoint share of the mutants, while this process runs the ordinary
+#                         tests. A worker is this same script started as `rehearsal.sh --worker INDEX COUNT ID...` (arguments, never the
+#                         environment, so nothing inherited can turn a gate run into a worker), with a temporary directory, fake daemon and
+#                         mutation copies of its own. The parent reads every worker's output and fails unless each mutant was reported exactly
+#                         once, as caught, by the worker it was assigned to, and every worker finished.
+#   (unset)               N = the CPUs this process may really use (affinity and any cgroup quota) minus one for the ordinary tests, at most 4,
+#                         and at most one worker per 512 MiB of available memory; 0 when that leaves none.
+#
+# REHEARSAL_TESTS="t_a t_b" runs just those tests (no matrix). REHEARSAL_SRC names the script directory under test.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+THIS_SCRIPT="$ROOT/scripts/tests/rehearsal.sh"
 SRC="${REHEARSAL_SRC:-$ROOT/scripts/rehearsal}"
 T="$(mktemp -d)"
-trap 'rm -rf "$T"' EXIT
+# The workers this process started, so that an interrupted run does not leave them behind. Each worker removes only its own $T.
+WORKER_PIDS=()
+trap 'if declare -F stop_workers >/dev/null; then stop_workers; fi; rm -rf "$T"' EXIT
+trap 'exit 143' TERM INT HUP
 # Run from a throwaway directory. A mutant with a path guard removed would otherwise create its "relative" state directory here.
 mkdir "$T/cwd"
 cd "$T/cwd"
@@ -4256,6 +4273,203 @@ t_guard_registry_comparison() {
     [[ "$matrix" != *'grep -q'* && "$matrix" != *'grep -x'* ]] || bad 'the matrix pipes into an early-exiting grep again'
 }
 
+# --- the matrix runner itself (WU0): sharing the mutants among workers must not change which mutants run or what is concluded ---------------------------
+# These tests are about the machinery that runs the matrix, not about the rehearsal script, so no GUARD_TESTS entry points at them.
+
+# The shares: for any number of workers they are disjoint, together they are every mutant, they differ in size by at most one, and the same inputs always
+# give the same shares. Over the real mutant list and over lists of other sizes (none, one, fewer than the workers, many).
+t_matrix_shares_are_a_partition() {
+    local -a ids=() share=() again=() all=()
+    local n i size min max list sizes
+    local -a real=()
+    mapfile -t ids < <(matrix_mutants)
+    ((${#ids[@]} >= 280)) || bad "the matrix found only ${#ids[@]} mutants to share; the rehearsal has well over 280 guards"
+    for list in real 0 1 2 5 17 289; do
+        if [[ "$list" == real ]]; then real=("${ids[@]}"); else real=() && mapfile -t real < <(seq 1 "$list" | sed 's/^/G-/' | { grep . || true; }); fi
+        for n in 1 2 3 4 5 7 16; do
+            all=() min=999999 max=0 sizes=''
+            for ((i = 0; i < n; i++)); do
+                mapfile -t share < <(shard_of "$n" "$i" ${real[@]+"${real[@]}"})
+                mapfile -t again < <(shard_of "$n" "$i" ${real[@]+"${real[@]}"})
+                [[ "${share[*]}" == "${again[*]}" ]] || bad "the share $i of $n changed between two calls (list: $list)"
+                size=${#share[@]}
+                ((size >= min)) || min=$size
+                ((size <= max)) || max=$size
+                sizes+="$size "
+                all+=(${share[@]+"${share[@]}"})
+            done
+            ((${#all[@]} == ${#real[@]})) || bad "$n workers were given ${#all[@]} mutants between them, not ${#real[@]} (list: $list; shares: $sizes)"
+            [[ "$(printf '%s\n' ${all[@]+"${all[@]}"} | LC_ALL=C sort | { grep . || true; } | uniq -d | wc -l)" == 0 ]] || bad "a mutant was given to two of $n workers (list: $list)"
+            [[ "$(printf '%s\n' ${all[@]+"${all[@]}"} | LC_ALL=C sort)" == "$(printf '%s\n' ${real[@]+"${real[@]}"} | LC_ALL=C sort)" ]] || bad "the shares of $n workers are not the whole list (list: $list)"
+            ((${#real[@]} == 0 || max - min <= 1)) || bad "the shares of $n workers differ by more than one mutant ($sizes; list: $list)"
+        done
+    done
+}
+
+# Every marker in the script has tests, so every marker is a mutant, and each of them is in exactly one worker's share for the worker counts that matter.
+t_matrix_every_marker_is_a_mutant_exactly_once() {
+    local -a markers=() ids=() all=() share=()
+    local id n i
+    mapfile -t markers < <(matrix_markers)
+    mapfile -t ids < <(matrix_mutants)
+    ((${#markers[@]} > 0)) || bad 'the script has no guard markers'
+    [[ "${markers[*]}" == "${ids[*]}" ]] || bad "the mutants are not exactly the script's markers, in order (markers ${#markers[@]}, mutants ${#ids[@]})"
+    for id in "${markers[@]}"; do
+        [[ -n "${GUARD_TESTS[$id]:-}" ]] || bad "$id is a marker with no tests, so it would not be mutated"
+    done
+    for n in 1 2 3 4 8 16; do
+        all=()
+        for ((i = 0; i < n; i++)); do
+            mapfile -t share < <(shard_of "$n" "$i" "${ids[@]}")
+            all+=("${share[@]}")
+        done
+        [[ "$(printf '%s\n' "${all[@]}" | LC_ALL=C sort)" == "$(printf '%s\n' "${markers[@]}" | LC_ALL=C sort)" ]] || bad "with $n workers the mutants are not exactly the markers, each once"
+    done
+}
+
+# How many workers: bounded by the CPUs (one is kept for the ordinary tests), by 4, and by memory; never negative; and REHEARSAL_WORKERS is refused unless it
+# is a whole number from 0 to 16.
+t_matrix_worker_count() {
+    local cpus mem want got value c
+    local -a cases=('1 16000 0' '2 16000 1' '3 16000 2' '4 16000 3' '5 16000 4' '16 16000 4' '64 16000 4' '16 1024 2' '16 511 0' '8 1000 1' '4 100000 3' '0 16000 0')
+    for c in "${cases[@]}"; do
+        read -r cpus mem want <<<"$c"
+        got="$(default_workers "$cpus" "$mem")"
+        [[ "$got" == "$want" ]] || bad "default_workers $cpus $mem gave $got, not $want"
+    done
+    got="$(available_cpus)"
+    if ! [[ "$got" =~ ^[1-9][0-9]*$ ]] || ((got > $(nproc))); then bad "available_cpus gave '$got'"; fi
+    got="$(available_memory_mb)"
+    [[ "$got" =~ ^[0-9]+$ ]] || bad "available_memory_mb gave '$got'"
+    for value in 0 1 4 16; do
+        got="$(REHEARSAL_WORKERS=$value matrix_workers)" || bad "REHEARSAL_WORKERS=$value was refused"
+        [[ "$got" == "$value" ]] || bad "REHEARSAL_WORKERS=$value gave $got workers"
+    done
+    for value in '' 17 -1 abc 1.5 ' 2' '2 ' '01' '1;2' 100; do
+        got="$(REHEARSAL_WORKERS="$value" matrix_workers 2>&1)" && bad "REHEARSAL_WORKERS='$value' was accepted ($got)"
+        [[ "$got" == *'REHEARSAL_WORKERS must be a whole number'* ]] || bad "REHEARSAL_WORKERS='$value' was refused without saying why ($got)"
+    done
+}
+
+# What the parent concludes from a worker's output: only a worker that printed every assigned mutant once as caught, closed with matching counts, and exited
+# with the status those imply, is accepted. Each kind of incomplete, duplicated, extra or crashed worker is a problem of its own.
+t_matrix_worker_results_are_checked() {
+    local ok_a='  ok    A                          caught by g1_a: it did' ok_b='  ok    B                          caught by g1_b: it did'
+    local fail_b='  FAIL  B                          survived: none of [t_x] failed without the guard' trailer='worker 1/3: assigned=2 caught=2 failed=0'
+    matrix_case() { # DESC STATUS OUTPUT EXPECTED_SUBSTRING ('' = right)
+        worker_problems 1 3 'A B' "$2" "$3"
+        if [[ -z "$4" ]]; then
+            [[ -z "$WORKER_PROBLEMS" ]] || bad "$1: a right worker was reported as wrong: ${WORKER_PROBLEMS:0:300}"
+        else
+            [[ "$WORKER_PROBLEMS" == *"$4"* ]] || bad "$1: expected a problem mentioning '$4', got: ${WORKER_PROBLEMS:0:300}"
+        fi
+    }
+    MUTANT_LINE=()
+    matrix_case 'a right worker' 0 "$ok_a"$'\n'"$ok_b"$'\n'"$trailer" ''
+    [[ "${MUTANT_LINE[A]:-}" == "$ok_a" && "${MUTANT_LINE[B]:-}" == "$ok_b" ]] || bad 'the results of a right worker were not kept'
+    matrix_case 'noise around the results' 0 $'some warning\n'"$ok_a"$'\nok, but not a result line\n'"$ok_b"$'\n'"$trailer"$'\n' ''
+    matrix_case 'a mutant not run (and a closing line that says so)' 1 "$ok_a"$'\n''worker 1/3: assigned=2 caught=1 failed=0' 'produced no result for: B'
+    matrix_case 'a mutant not run (and a closing line that hides it)' 0 "$ok_a"$'\n'"$trailer" 'produced no result for: B'
+    matrix_case 'a mutant reported twice' 0 "$ok_a"$'\n'"$ok_a"$'\n'"$ok_b"$'\n'"$trailer" 'A more than once'
+    matrix_case 'a mutant nobody assigned' 0 "$ok_a"$'\n'"$ok_b"$'\n''  ok    C                          caught by x: y'$'\n'"$trailer" 'C, which was not assigned'
+    matrix_case 'a worker that crashed (no closing line)' 137 "$ok_a" 'did not finish'
+    matrix_case 'a worker that printed nothing' 0 '' 'produced no result for: A B'
+    matrix_case 'a closing line printed twice' 0 "$ok_a"$'\n'"$ok_b"$'\n'"$trailer"$'\n'"$trailer" 'did not finish'
+    matrix_case 'counts that do not match the results' 0 "$ok_a"$'\n'"$ok_b"$'\n''worker 1/3: assigned=2 caught=1 failed=1' 'closed with'
+    matrix_case 'a closing line for another worker' 0 "$ok_a"$'\n'"$ok_b"$'\n''worker 0/3: assigned=2 caught=2 failed=0' 'closed with'
+    matrix_case 'a mutant that survived, reported as success' 0 "$ok_a"$'\n'"$fail_b"$'\n''worker 1/3: assigned=2 caught=1 failed=1' 'exited 0 though it reported 1 failed'
+    matrix_case 'a mutant that survived, reported honestly' 1 "$ok_a"$'\n'"$fail_b"$'\n''worker 1/3: assigned=2 caught=1 failed=1' ''
+    matrix_case 'a worker that exits badly after succeeding' 2 "$ok_a"$'\n'"$ok_b"$'\n'"$trailer" 'exited with status 2'
+    unset -f matrix_case
+    MUTANT_LINE=()
+}
+
+# Workers started as the parent starts them, on real mutants: each has a temporary directory of its own and removes it, they reach the same verdicts as one
+# worker running the same mutants alone, a mutant that survives is reported by both, REHEARSAL_SRC is honoured, and a worker killed part-way is found out.
+t_matrix_workers_are_isolated_and_equivalent() {
+    local -a ids=(G1-context-env G1-host G1-tls G2-env G1-context G1-endpoint) first=() second=()
+    local copy="$T/matrix-src" tmp="$T/matrix-tmp" id i out_all out_a out_b rc_all=0 rc_a=0 rc_b=0 pid_a pid_b seen=0 dir_a dir_b
+    mkdir -p "$tmp"
+    cp -r "$SRC" "$copy"
+    sed -i 's/ # guard:G1-tls$//' "$copy/restore-rehearsal.sh" # its mutation then changes nothing: a mutant that cannot be caught
+    for id in "${ids[@]}"; do [[ -n "${GUARD_TESTS[$id]:-}" ]] || bad "the guard $id used by this test is not registered"; done
+    mapfile -t first < <(shard_of 2 0 "${ids[@]}")
+    mapfile -t second < <(shard_of 2 1 "${ids[@]}")
+
+    out_all="$(TMPDIR="$tmp" REHEARSAL_SRC="$copy" bash "$THIS_SCRIPT" --worker 0 1 "${ids[@]}" 2>&1)" || rc_all=$?
+    [[ -z "$(find "$tmp" -mindepth 1 -maxdepth 1)" ]] || bad "a worker left its temporary directory behind: $(find "$tmp" -mindepth 1 -maxdepth 1 | head -n 3 | tr '\n' ' ')"
+    TMPDIR="$tmp" REHEARSAL_SRC="$copy" bash "$THIS_SCRIPT" --worker 0 2 "${first[@]}" >"$T/matrix-a.out" 2>&1 &
+    pid_a=$!
+    TMPDIR="$tmp" REHEARSAL_SRC="$copy" bash "$THIS_SCRIPT" --worker 1 2 "${second[@]}" >"$T/matrix-b.out" 2>&1 &
+    pid_b=$!
+    for _ in {1..100}; do # both are running at once, each in a temporary directory of its own: a worker's working directory is inside its own
+        dir_a="$(readlink "/proc/$pid_a/cwd" 2>/dev/null || true)" dir_b="$(readlink "/proc/$pid_b/cwd" 2>/dev/null || true)"
+        if [[ "$dir_a" == "$tmp"/*/cwd && "$dir_b" == "$tmp"/*/cwd && "$dir_a" != "$dir_b" ]]; then seen=2; break; fi
+        sleep 0.1
+    done
+    { wait "$pid_a" || rc_a=$?; } 2>/dev/null
+    { wait "$pid_b" || rc_b=$?; } 2>/dev/null
+    ((seen >= 2)) || bad 'the two workers were never seen running at once in two different temporary directories of their own'
+    [[ -z "$(find "$tmp" -mindepth 1 -maxdepth 1)" ]] || bad "a worker left its temporary directory behind: $(find "$tmp" -mindepth 1 -maxdepth 1 | head -n 3 | tr '\n' ' ')"
+    out_a="$(<"$T/matrix-a.out")" out_b="$(<"$T/matrix-b.out")"
+
+    # One worker alone and two together: the same verdicts, for the same tests. (What follows the colon is the first failed assertion's text.)
+    local verdicts_all verdicts_two
+    verdicts_all="$(grep -E '^  (ok|FAIL) ' <<<"$out_all" | sed 's/:.*//; s/ \{2,\}/ /g' | LC_ALL=C sort)"
+    verdicts_two="$(grep -E '^  (ok|FAIL) ' <<<"$out_a"$'\n'"$out_b" | sed 's/:.*//; s/ \{2,\}/ /g' | LC_ALL=C sort)"
+    [[ "$verdicts_all" == "$verdicts_two" ]] || bad "one worker and two workers did not reach the same verdicts: [$verdicts_all] against [$verdicts_two]"
+    [[ "$(grep -c '^ ok ' <<<"$verdicts_all" || true)" == 5 ]] || bad "expected five caught mutants of the six: $verdicts_all"
+    [[ "$verdicts_all" == *' FAIL G1-tls'* ]] || bad 'the mutant that cannot be caught was not reported as failing'
+    [[ "$out_all" == *'G1-tls'*'the mutation changed nothing'* ]] || bad 'the surviving mutant did not say why'
+    # A worker runs mutants and nothing else: none of the ordinary tests (they are run once, by the parent) is among what it prints.
+    ! grep -qE '^  (ok|FAIL) +[a-z]' <<<"$out_all"$'\n'"$out_a"$'\n'"$out_b" || bad 'a worker ran an ordinary test, which only the parent runs'
+    ((rc_all == 1)) || bad "a worker with a failing mutant exited $rc_all, not 1"
+    ((rc_a + rc_b == 1 || rc_a + rc_b == 2)) || bad "the two workers exited $rc_a and $rc_b"
+    # Judged as the parent judges them.
+    MUTANT_LINE=()
+    worker_problems 0 1 "${ids[*]}" "$rc_all" "$out_all"
+    [[ -z "$WORKER_PROBLEMS" ]] || bad "one worker, honestly reporting its failing mutant, was found wrong: ${WORKER_PROBLEMS:0:300}"
+    worker_problems 0 2 "${first[*]}" "$rc_a" "$out_a"
+    [[ -z "$WORKER_PROBLEMS" ]] || bad "worker 0 of 2 was found wrong: ${WORKER_PROBLEMS:0:300}"
+    worker_problems 1 2 "${second[*]}" "$rc_b" "$out_b"
+    [[ -z "$WORKER_PROBLEMS" ]] || bad "worker 1 of 2 was found wrong: ${WORKER_PROBLEMS:0:300}"
+    MUTANT_LINE=()
+
+    # A worker killed part-way is not accepted, whatever it had printed by then.
+    TMPDIR="$tmp" REHEARSAL_SRC="$SRC" bash "$THIS_SCRIPT" --worker 0 1 G1-context-env G1-host G1-tls G2-env G1-context G1-endpoint >"$T/matrix-killed.out" 2>&1 &
+    pid_a=$!
+    sleep 1
+    kill -KILL "$pid_a" 2>/dev/null || true
+    rc_a=0
+    { wait "$pid_a" || rc_a=$?; } 2>/dev/null
+    ((rc_a != 0)) || bad 'the killed worker exited 0'
+    worker_problems 0 1 "${ids[*]}" "$rc_a" "$(<"$T/matrix-killed.out")"
+    [[ "$WORKER_PROBLEMS" == *'did not finish'* ]] || bad "a worker killed part-way was accepted: ${WORKER_PROBLEMS:0:300}"
+    MUTANT_LINE=()
+    rm -rf "$tmp" || true
+}
+
+# A worker is chosen by arguments and by nothing else, a malformed or repeated share is refused before anything runs, and the other ways of running the
+# file keep their meaning: REHEARSAL_TESTS runs just those tests (no matrix), whatever the environment says about workers; a bad REHEARSAL_WORKERS stops the
+# run at once, before any test.
+t_matrix_modes_keep_their_meaning() {
+    local out rc args
+    for args in '2 2 G1-host' 'x 2 G1-host' '0 0 G1-host' '0 1 NOT-A-GUARD' '0 1 G1-host G1-host' '0 1 ../x' ''; do
+        rc=0
+        # shellcheck disable=SC2086 # the words are the point
+        out="$(timeout 120 bash "$THIS_SCRIPT" --worker $args 2>&1)" || rc=$?
+        [[ "$rc" == 2 ]] || bad "a worker given '$args' exited $rc, not 2 (it printed: ${out:0:200})"
+        [[ "$out" != *'  ok '* ]] || bad "a worker given '$args' ran a mutant"
+    done
+    rc=0
+    out="$(REHEARSAL_WORKER=1 REHEARSAL_WORKERS=3 REHEARSAL_TESTS=t_guard_registry_comparison timeout 300 bash "$THIS_SCRIPT" 2>&1)" || rc=$?
+    [[ "$rc" == 0 ]] || bad "REHEARSAL_TESTS with worker variables in the environment exited $rc: ${out:0:300}"
+    [[ "$out" == *'ok    guard_registry_comparison'* && "$out" != *'Mutation matrix'* && "$out" != *'worker'* ]] || bad "REHEARSAL_TESTS did not run just that test, or started workers: ${out:0:300}"
+    rc=0
+    out="$(env -u REHEARSAL_TESTS REHEARSAL_WORKERS=17 timeout 60 bash "$THIS_SCRIPT" 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" == *'REHEARSAL_WORKERS must be a whole number'* && "$out" != *'  ok '* ]] || bad "REHEARSAL_WORKERS=17 did not stop the run at once (exit $rc): ${out:0:300}"
+}
+
 # The lists the half-failed rehearsal holds are the repository's: the tables, the migrations, the stub's statement, the fixture's counts, the fixed ids.
 # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
 t_static_half_failed_lists() {
@@ -5744,46 +5958,103 @@ run_test() {
 
 all_tests() { declare -F | awk '{print $3}' | grep '^t_' | sort; }
 
-printf 'Rehearsal guard tests (fake daemon; no container, network, volume or database is created)\n'
-# REHEARSAL_TESTS="t_a t_b" runs just those (no mutation matrix), for working on one test.
-if [[ -n "${REHEARSAL_TESTS:-}" ]]; then
-    for t in $REHEARSAL_TESTS; do run_test "$t" || FAILURES=$((FAILURES + 1)); done
-    ((FAILURES == 0)) || exit 1
-    exit 0
-fi
-for t in $(all_tests); do run_test "$t" || FAILURES=$((FAILURES + 1)); done
+# --- the mutation matrix: one mutant, its sharing among workers, and the check that every mutant was run -----------------------------------------------
 
-printf '\nMutation matrix (each safeguard line replaced by ":" in a scratch copy; its tests must then fail)\n'
-SCRIPT_FILE="$SRC/restore-rehearsal.sh"
-mapfile -t MARKERS < <(sed -n 's/.*# guard:\([A-Za-z0-9-]*\)$/\1/p' "$SCRIPT_FILE" | sort -u)
-# Both directions of the registry, by exact membership (see registry_differences: no pipeline whose reader can stop early).
-while IFS= read -r problem; do
-    [[ -n "$problem" ]] || continue
-    case "$problem" in
-        'unregistered '*) printf '  FAIL  %s has no tests in GUARD_TESTS\n' "${problem#unregistered }" >&2 ;;
-        'unmarked '*) printf '  FAIL  GUARD_TESTS lists %s, which has no marker in the script\n' "${problem#unmarked }" >&2 ;;
-    esac
-    FAILURES=$((FAILURES + 1))
-done < <(registry_differences "$(printf '%s\n' "${MARKERS[@]}")" "$(printf '%s\n' "${!GUARD_TESTS[@]}")" | LC_ALL=C sort)
-for id in "${MARKERS[@]}"; do
-    [[ -n "${GUARD_TESTS[$id]:-}" ]] || continue
-    mutant="$T/mutant-$id"
+# matrix_markers: the guard markers of the script under test, sorted and unique, one per line.
+matrix_markers() { sed -n 's/.*# guard:\([A-Za-z0-9-]*\)$/\1/p' "$SRC/restore-rehearsal.sh" | sort -u; }
+
+# matrix_mutants: the guards the matrix mutates: the markers that have tests, in marker order. A marker with no entry in GUARD_TESTS is reported by the
+# registry check and is not mutated; this list, and nothing else, is what the workers share between them.
+matrix_mutants() {
+    local id
+    while IFS= read -r id; do
+        [[ -z "${GUARD_TESTS[$id]:-}" ]] || printf '%s\n' "$id"
+    done < <(matrix_markers)
+}
+
+# shard_of COUNT INDEX ID...: the IDs whose position (counting from 0) leaves INDEX when divided by COUNT, in the order given. A pure function of its
+# arguments: the shares of INDEX 0..COUNT-1 are disjoint, together they are every ID, and they differ in size by at most one.
+shard_of() {
+    local count="$1" index="$2" id n=0
+    shift 2
+    for id in "$@"; do
+        if ((n % count == index)); then printf '%s\n' "$id"; fi
+        n=$((n + 1))
+    done
+}
+
+# available_cpus: the CPUs this process can really use: the affinity mask (`nproc`), lowered by a cgroup CPU quota where there is one. A machine's CPU
+# count is not what a container or a hosted runner may use.
+available_cpus() {
+    local cpus quota period limit
+    cpus="$(nproc 2>/dev/null || echo 1)"
+    [[ "$cpus" =~ ^[1-9][0-9]*$ ]] || cpus=1
+    if [[ -r /sys/fs/cgroup/cpu.max ]]; then
+        read -r quota period </sys/fs/cgroup/cpu.max || true
+    elif [[ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us && -r /sys/fs/cgroup/cpu/cpu.cfs_period_us ]]; then
+        quota="$(</sys/fs/cgroup/cpu/cpu.cfs_quota_us)" period="$(</sys/fs/cgroup/cpu/cpu.cfs_period_us)"
+    fi
+    if [[ "${quota:-}" =~ ^[1-9][0-9]*$ && "${period:-}" =~ ^[1-9][0-9]*$ ]]; then
+        limit=$(((quota + period - 1) / period))
+        ((limit >= cpus)) || cpus=$limit
+    fi
+    printf '%d' "$cpus"
+}
+
+# available_memory_mb: what is left to use, in MiB: the lower of the kernel's estimate and any cgroup limit less what the cgroup already uses.
+available_memory_mb() {
+    local kb limit used mb=0
+    kb="$(awk '/^MemAvailable:/ { print $2 }' /proc/meminfo 2>/dev/null || true)"
+    [[ "$kb" =~ ^[0-9]+$ ]] && mb=$((kb / 1024))
+    if [[ -r /sys/fs/cgroup/memory.max && -r /sys/fs/cgroup/memory.current ]]; then
+        limit="$(</sys/fs/cgroup/memory.max)" used="$(</sys/fs/cgroup/memory.current)"
+        if [[ "$limit" =~ ^[0-9]+$ && "$used" =~ ^[0-9]+$ ]] && ((limit > used)); then
+            ((mb > 0 && mb <= (limit - used) / 1048576)) || mb=$(((limit - used) / 1048576))
+        fi
+    fi
+    printf '%d' "$mb"
+}
+
+# default_workers CPUS MEMORY_MB: one CPU is left for the ordinary tests, which run in this process while the workers run; at most 4 workers; at most one
+# per 512 MiB; and 0 (sequential) when that leaves none.
+default_workers() {
+    local workers=$(($1 - 1))
+    ((workers <= 4)) || workers=4
+    (($2 / 512 >= workers)) || workers=$(($2 / 512))
+    ((workers >= 0)) || workers=0
+    printf '%d' "$workers"
+}
+
+# matrix_workers: how many worker processes to use. REHEARSAL_WORKERS says so (0 is sequential), and anything else than a whole number from 0 to 16 is
+# refused rather than guessed at.
+matrix_workers() {
+    if [[ -n "${REHEARSAL_WORKERS+x}" ]]; then
+        [[ "$REHEARSAL_WORKERS" =~ ^([0-9]|1[0-6])$ ]] || { printf 'REHEARSAL_WORKERS must be a whole number from 0 (sequential) to 16, not %s\n' "${REHEARSAL_WORKERS:0:20}" >&2; return 2; }
+        printf '%d' "$REHEARSAL_WORKERS"
+        return 0
+    fi
+    default_workers "$(available_cpus)" "$(available_memory_mb)"
+}
+
+# run_mutant ID: replace the one line that carries the guard ID in a scratch copy of the script, and run the tests written for it until one fails. Prints
+# one line: `  ok    ID caught by TEST: WHY`, or `  FAIL  ID ...` and returns 1 when the mutation changed nothing, does not parse, or was not noticed by any test.
+# Everything it writes is under $T, which belongs to this process alone.
+run_mutant() {
+    local id="$1" script_file="$SRC/restore-rehearsal.sh" mutant="$T/mutant-$1" t caught=''
+    [[ -n "${GUARD_TESTS[$id]:-}" ]] || { printf '  FAIL  %-26s has no tests in GUARD_TESTS\n' "$id" >&2; return 1; }
     rm -rf "$mutant"
-    cp -r "$SRC" "$mutant"
-    sed -i "s/^.*# guard:${id}\$/:/" "$mutant/restore-rehearsal.sh"
-    if cmp -s "$SCRIPT_FILE" "$mutant/restore-rehearsal.sh"; then
+    cp -r "$SRC" "$mutant" || { printf '  FAIL  %-26s the scratch copy could not be made\n' "$id" >&2; return 1; }
+    sed -i "s/^.*# guard:${id}\$/:/" "$mutant/restore-rehearsal.sh" || { printf '  FAIL  %-26s the mutation could not be applied\n' "$id" >&2; return 1; }
+    if cmp -s "$script_file" "$mutant/restore-rehearsal.sh"; then
         printf '  FAIL  %-26s the mutation changed nothing\n' "$id" >&2
-        FAILURES=$((FAILURES + 1))
-        continue
+        return 1
     fi
     if ! bash -n "$mutant/restore-rehearsal.sh" 2>/dev/null; then
         printf '  FAIL  %-26s the mutant does not parse, so it proves nothing\n' "$id" >&2
-        FAILURES=$((FAILURES + 1))
-        continue
+        return 1
     fi
     SUT="$mutant"
     QUIET=1
-    caught=''
     CURRENT_GUARD="$id"
     rm -f "$T/first_bad"
     for t in ${GUARD_TESTS[$id]}; do
@@ -5797,14 +6068,192 @@ for id in "${MARKERS[@]}"; do
     QUIET=0
     CURRENT_GUARD=''
     SUT="$SRC"
+    rm -rf "$mutant"
     if [[ -n "$caught" ]]; then
         printf '  ok    %-26s caught by %s: %s\n' "$id" "${caught#t_}" "${FIRST_BAD:0:100}"
-    else
-        printf '  FAIL  %-26s survived: none of [%s] failed without the guard\n' "$id" "${GUARD_TESTS[$id]}" >&2
-        FAILURES=$((FAILURES + 1))
+        return 0
     fi
-    rm -rf "$mutant"
-done
+    printf '  FAIL  %-26s survived: none of [%s] failed without the guard\n' "$id" "${GUARD_TESTS[$id]}" >&2
+    return 1
+}
+
+# worker_main INDEX COUNT ID...: a worker. Runs exactly the mutants it was given and says how many it ran, so that the process that started it can check.
+# The arguments are validated, not trusted: a malformed share, a repeated ID or an ID with no tests is refused (exit 2) before anything runs.
+worker_main() {
+    local index="${1:-}" count="${2:-}" id assigned=0 caught=0 failed=0
+    if ! [[ "$index" =~ ^[0-9]+$ && "$count" =~ ^[1-9][0-9]*$ ]] || ((index >= count)); then
+        printf 'usage: rehearsal.sh --worker INDEX COUNT ID...\n' >&2
+        return 2
+    fi
+    shift 2
+    local -A given=()
+    for id in "$@"; do
+        [[ "$id" =~ ^[A-Za-z0-9-]+$ && -n "${GUARD_TESTS[$id]:-}" ]] || { printf 'worker %s/%s: %s is not a guard with tests\n' "$index" "$count" "${id:0:40}" >&2; return 2; }
+        [[ -z "${given[$id]:-}" ]] || { printf 'worker %s/%s: %s was given twice\n' "$index" "$count" "$id" >&2; return 2; }
+        given[$id]=1
+    done
+    for id in "$@"; do
+        assigned=$((assigned + 1))
+        if run_mutant "$id"; then caught=$((caught + 1)); else failed=$((failed + 1)); fi
+    done
+    printf 'worker %s/%s: assigned=%d caught=%d failed=%d\n' "$index" "$count" "$assigned" "$caught" "$failed"
+    ((failed == 0 && caught == assigned))
+}
+
+# MUTANT_LINE[ID]: the result line a worker printed for ID, for the parent to print in guard order. WORKER_PROBLEMS: what worker_problems found. Both are
+# filled in the calling shell, not in a command substitution, which would lose them.
+declare -A MUTANT_LINE=()
+WORKER_PROBLEMS=''
+add_problem() {
+    local message
+    # shellcheck disable=SC2059 # the callers' formats are literals in this file
+    printf -v message "$@"
+    WORKER_PROBLEMS+="$message"$'\n'
+}
+
+# worker_problems INDEX COUNT "ID ..." STATUS OUTPUT: what is wrong with a worker's run, one problem per line in WORKER_PROBLEMS (empty when it is right). A
+# worker is right only when it exited with the status its results imply, printed its closing line, and reported every mutant it was assigned exactly once,
+# and nothing else. Whatever else it printed is not evidence and is not looked at. Fills MUTANT_LINE.
+worker_problems() {
+    local index="$1" count="$2" assigned="$3" status="$4" text="$5" line id verdict trailers=0 t_index='' t_count='' t_assigned='' t_caught='' t_failed=''
+    local n_assigned=0 n_ok=0 n_fail=0 missing=''
+    local -A want=() seen=()
+    WORKER_PROBLEMS=''
+    for id in $assigned; do
+        want[$id]=1
+        n_assigned=$((n_assigned + 1))
+    done
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^\ \ (ok|FAIL)\ +([A-Za-z0-9-]+)(\ |$) ]]; then
+            verdict="${BASH_REMATCH[1]}" id="${BASH_REMATCH[2]}"
+            if [[ -z "${want[$id]:-}" ]]; then
+                add_problem 'worker %s/%s reported %s, which was not assigned to it' "$index" "$count" "$id"
+            elif [[ -n "${seen[$id]:-}" ]]; then
+                add_problem 'worker %s/%s reported %s more than once' "$index" "$count" "$id"
+            else
+                seen[$id]="$verdict"
+                MUTANT_LINE[$id]="$line"
+                if [[ "$verdict" == ok ]]; then n_ok=$((n_ok + 1)); else n_fail=$((n_fail + 1)); fi
+            fi
+        elif [[ "$line" =~ ^worker\ ([0-9]+)/([0-9]+):\ assigned=([0-9]+)\ caught=([0-9]+)\ failed=([0-9]+)$ ]]; then
+            trailers=$((trailers + 1))
+            t_index="${BASH_REMATCH[1]}" t_count="${BASH_REMATCH[2]}" t_assigned="${BASH_REMATCH[3]}" t_caught="${BASH_REMATCH[4]}" t_failed="${BASH_REMATCH[5]}"
+        fi
+    done <<<"$text"
+    for id in $assigned; do
+        [[ -n "${seen[$id]:-}" ]] || missing+="${missing:+ }$id"
+    done
+    [[ -z "$missing" ]] || add_problem 'worker %s/%s produced no result for: %s' "$index" "$count" "$missing"
+    if ((trailers != 1)); then
+        add_problem 'worker %s/%s did not finish: it printed its closing line %d times, not once' "$index" "$count" "$trailers"
+    elif [[ "$t_index/$t_count/$t_assigned/$t_caught/$t_failed" != "$index/$count/$n_assigned/$n_ok/$n_fail" ]]; then
+        add_problem 'worker %s/%s closed with %s/%s assigned=%s caught=%s failed=%s, but its results are assigned=%d caught=%d failed=%d' "$index" "$count" "$t_index" "$t_count" "$t_assigned" "$t_caught" "$t_failed" "$n_assigned" "$n_ok" "$n_fail"
+    fi
+    if ((n_fail == 0 && status != 0)); then
+        add_problem 'worker %s/%s exited with status %s though it reported no failed mutant' "$index" "$count" "$status"
+    elif ((n_fail > 0 && status == 0)); then
+        add_problem 'worker %s/%s exited 0 though it reported %d failed mutant(s)' "$index" "$count" "$n_fail"
+    fi
+}
+
+# stop_workers: ends the workers this process started and is still waiting for. Each removes only its own temporary directory (its TERM trap runs its EXIT trap).
+stop_workers() {
+    local pid
+    for pid in ${WORKER_PIDS[@]+"${WORKER_PIDS[@]}"}; do
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    for pid in ${WORKER_PIDS[@]+"${WORKER_PIDS[@]}"}; do
+        wait "$pid" 2>/dev/null || true
+    done
+    WORKER_PIDS=()
+}
+
+# A worker (see the top of this file): the mutants it was given and nothing else. Selected by ARGUMENTS only, so that nothing in the environment can make a
+# gate run skip its tests and its registry check.
+if [[ "${1:-}" == --worker ]]; then
+    shift
+    worker_main "$@" || exit "$?"
+    exit 0
+fi
+
+printf 'Rehearsal guard tests (fake daemon; no container, network, volume or database is created)\n'
+# REHEARSAL_TESTS="t_a t_b" runs just those (no mutation matrix), for working on one test.
+if [[ -n "${REHEARSAL_TESTS:-}" ]]; then
+    for t in $REHEARSAL_TESTS; do run_test "$t" || FAILURES=$((FAILURES + 1)); done
+    ((FAILURES == 0)) || exit 1
+    exit 0
+fi
+
+# The registry, once, in this process: every marker in the script has an entry in GUARD_TESTS and every entry has a marker (by exact membership: see
+# registry_differences). Its findings are printed with the matrix, where they have always been.
+mapfile -t MARKERS < <(matrix_markers)
+REGISTRY_PROBLEMS="$(registry_differences "$(printf '%s\n' "${MARKERS[@]}")" "$(printf '%s\n' "${!GUARD_TESTS[@]}")" | LC_ALL=C sort)"
+mapfile -t MUTANT_IDS < <(matrix_mutants)
+WORKERS="$(matrix_workers)" || exit "$?"
+if ((WORKERS > ${#MUTANT_IDS[@]})); then WORKERS=${#MUTANT_IDS[@]}; fi
+
+# With workers: each gets its own share and its own output file (made here, written by that worker alone), and they run while this process runs the
+# ordinary tests. Output is read back only after they have finished, and printed in marker order, so it does not depend on which finished first.
+SHARD_OUT=() SHARD_IDS=() SHARD_STATUS=()
+if ((WORKERS > 0)); then
+    printf 'Starting %d mutation worker(s) for %d mutant(s) (REHEARSAL_WORKERS=0 runs them one after another, in this process)\n' "$WORKERS" "${#MUTANT_IDS[@]}"
+    for ((i = 0; i < WORKERS; i++)); do
+        SHARD_OUT[i]="$T/shard-$i.out"
+        mapfile -t share < <(shard_of "$WORKERS" "$i" "${MUTANT_IDS[@]}")
+        SHARD_IDS[i]="${share[*]}"
+        : >"${SHARD_OUT[i]}"
+        REHEARSAL_SRC="$SRC" bash "$THIS_SCRIPT" --worker "$i" "$WORKERS" "${share[@]}" >"${SHARD_OUT[i]}" 2>&1 &
+        WORKER_PIDS[i]=$!
+    done
+fi
+
+for t in $(all_tests); do run_test "$t" || FAILURES=$((FAILURES + 1)); done
+
+printf '\nMutation matrix (each safeguard line replaced by ":" in a scratch copy; its tests must then fail)\n'
+while IFS= read -r problem; do
+    [[ -n "$problem" ]] || continue
+    case "$problem" in
+        'unregistered '*) printf '  FAIL  %s has no tests in GUARD_TESTS\n' "${problem#unregistered }" >&2 ;;
+        'unmarked '*) printf '  FAIL  GUARD_TESTS lists %s, which has no marker in the script\n' "${problem#unmarked }" >&2 ;;
+    esac
+    FAILURES=$((FAILURES + 1))
+done <<<"$REGISTRY_PROBLEMS"
+
+if ((WORKERS == 0)); then
+    for id in "${MUTANT_IDS[@]}"; do
+        run_mutant "$id" || FAILURES=$((FAILURES + 1))
+    done
+else
+    for ((i = 0; i < WORKERS; i++)); do
+        status=0
+        wait "${WORKER_PIDS[i]}" || status=$?
+        SHARD_STATUS[i]="$status"
+    done
+    WORKER_PIDS=()
+    ran=0
+    for ((i = 0; i < WORKERS; i++)); do
+        shard_text="$(<"${SHARD_OUT[i]}")"
+        worker_problems "$i" "$WORKERS" "${SHARD_IDS[i]}" "${SHARD_STATUS[i]}" "$shard_text"
+        if [[ -n "$WORKER_PROBLEMS" ]]; then
+            while IFS= read -r problem; do
+                [[ -z "$problem" ]] || { printf '  FAIL  %s\n' "$problem" >&2; FAILURES=$((FAILURES + 1)); }
+            done <<<"$WORKER_PROBLEMS"
+            printf '        the last lines worker %d printed:\n' "$i" >&2
+            tail -n 5 "${SHARD_OUT[i]}" | sed 's/^/        | /' >&2
+        fi
+    done
+    # Printed in marker order. A mutant that no worker reported is missing from here and has been counted as a failure above, with its worker.
+    for id in "${MUTANT_IDS[@]}"; do
+        [[ -n "${MUTANT_LINE[$id]:-}" ]] || continue
+        ran=$((ran + 1))
+        case "${MUTANT_LINE[$id]}" in
+            '  ok '*) printf '%s\n' "${MUTANT_LINE[$id]}" ;;
+            *) printf '%s\n' "${MUTANT_LINE[$id]}" >&2; FAILURES=$((FAILURES + 1)) ;;
+        esac
+    done
+    ((ran == ${#MUTANT_IDS[@]})) || { printf '  FAIL  %d of %d mutant(s) have a result, so %d did not run\n' "$ran" "${#MUTANT_IDS[@]}" "$((${#MUTANT_IDS[@]} - ran))" >&2; FAILURES=$((FAILURES + 1)); }
+    if ((ran == ${#MUTANT_IDS[@]} && FAILURES == 0)); then printf '  %d mutant(s) run by %d worker(s), each exactly once\n' "$ran" "$WORKERS"; fi
+fi
 
 printf '\n'
 if ((FAILURES > 0)); then
