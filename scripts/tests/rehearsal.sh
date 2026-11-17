@@ -4449,6 +4449,106 @@ t_matrix_workers_are_isolated_and_equivalent() {
     rm -rf "$tmp" || true
 }
 
+# The sequential run and a worker give the same answer, with the same reason, for guards whose tests depend on the fixture caches (the manifest's and the
+# half-failed state's): in-process, with the caches made from the unmutated script, and in a worker, which makes them itself before its first mutant. If a worker
+# made a cache under a mutation (or let one mutant's cache reach the next) its reasons would differ here, though the verdicts would not. The reasons are compared
+# whole: only the temporary directory's name is normalised, and the worker's has the length of this process's, so the 100-character cut of a reason falls alike.
+t_matrix_sequential_and_worker_give_the_same_reasons() {
+    local -a ids=(G22-manifest-run G22-manifest-state G22-manifest-taken G20-partial-counts)
+    local id line sequential='' worker='' rc=0 saved_digest="$CACHE_DIGEST" shown
+    for id in "${ids[@]}"; do [[ -n "${GUARD_TESTS[$id]:-}" ]] || bad "the guard $id used by this test is not registered"; done
+    prepare_caches fresh || bad 'the caches could not be prepared from the unmutated script'
+    for id in "${ids[@]}"; do sequential+="$(run_mutant "$id" 2>&1)"$'\n'; done
+    worker="$(REHEARSAL_SRC="$SRC" TMPDIR="$(dirname "$T")" bash "$THIS_SCRIPT" --worker 0 1 "${ids[@]}" 2>&1)" || rc=$?
+    CACHE_DIGEST="$saved_digest"
+    [[ "$rc" == 0 ]] || bad "a worker given these mutants exited $rc: ${worker:0:300}"
+    sequential="$(grep -E '^  (ok|FAIL) ' <<<"$sequential" | sed "s#$T#<T>#g")"
+    worker="$(grep -E '^  (ok|FAIL) ' <<<"$worker" | sed -E "s#$(dirname "$T")/tmp\.[A-Za-z0-9]+#<T>#g")"
+    [[ "$(grep -c . <<<"$sequential")" == "${#ids[@]}" ]] || bad "the sequential run did not give one result for each of the ${#ids[@]} mutants: $sequential"
+    while IFS= read -r line; do
+        [[ "$line" =~ ^\ \ ok\ +[A-Za-z0-9-]+\ +caught\ by\ [a-z0-9_]+:\ .+ ]] || bad "a mutant was not caught, or not for a stated reason: $line"
+    done <<<"$sequential"
+    if [[ "$sequential" != "$worker" ]]; then
+        shown="$(diff <(printf '%s\n' "$sequential") <(printf '%s\n' "$worker") | head -n 6 | cut -c1-220 | tr '\n' '|' || true)"
+        bad "the sequential run and a worker gave different results (< sequential, > worker): $shown"
+    fi
+}
+
+# The caches are made before the first mutant and are kept as they were: a worker that cannot make them stops without a closing line (so the parent finds it
+# unfinished) and runs no mutant, an incomplete cache is not accepted, and a mutant whose tests changed a cache fails.
+t_matrix_the_caches_are_made_before_the_mutants_and_kept() {
+    local copy="$T/cache-src" out rc=0 saved_digest="$CACHE_DIGEST" file="$T/cache/historical.manifest.json"
+    rm -rf "$copy"
+    cp -r "$SRC" "$copy"
+    sed -i '1a exit 7' "$copy/restore-rehearsal.sh" # every stage now fails, so no cache can be made
+    out="$(REHEARSAL_SRC="$copy" TMPDIR="$T" timeout 300 bash "$THIS_SCRIPT" --worker 0 1 G1-host 2>&1)" || rc=$?
+    ((rc != 0)) || bad 'a worker that could not make its caches exited 0'
+    [[ "$out" == *'could not be prepared'* ]] || bad "a worker that could not make its caches did not say so: ${out:0:300}"
+    [[ "$out" != *'worker 0/1:'* && "$out" != *'  ok '* ]] || bad "a worker that could not make its caches printed a result or a closing line: ${out:0:300}"
+    worker_problems 0 1 G1-host "$rc" "$out"
+    [[ "$WORKER_PROBLEMS" == *'did not finish'* ]] || bad "the parent would accept a worker that could not make its caches: ${WORKER_PROBLEMS:0:300}"
+    # Whole caches are made from the unmutated script, and a mutant that changes one is a failure. The caches are this process's own and the ordinary tests use
+    # them, so they are put back exactly as they were (a copy of the directories, with their times and modes) after the damage this test does to them.
+    prepare_caches fresh || bad 'the caches could not be prepared'
+    [[ -n "$CACHE_DIGEST" ]] || bad 'no digest of the caches was kept'
+    rm -rf "${T:?}/cache.keep" "${T:?}/fcache.keep"
+    cp -a "$T/cache" "$T/cache.keep"
+    cp -a "$T/fcache" "$T/fcache.keep"
+    out="$(run_mutant G1-host 2>&1)" || bad "a mutant with the caches untouched failed: ${out:0:300}"
+    printf 'changed\n' >>"$file"
+    rc=0
+    out="$(run_mutant G1-host 2>&1)" || rc=$?
+    [[ "$rc" == 1 && "$out" == *'changed the fixture caches'* ]] || bad "a mutant whose tests changed a cache was not failed (exit $rc): ${out:0:300}"
+    rm -rf "${T:?}/cache" "${T:?}/fcache"
+    cp -a "$T/cache.keep" "$T/cache"
+    cp -a "$T/fcache.keep" "$T/fcache"
+    [[ "$(cache_digest)" == "$CACHE_DIGEST" ]] || bad 'the caches were not put back as they were'
+    rm -f "$file"
+    if prepare_caches >/dev/null 2>&1; then bad 'an incomplete cache (a state file missing) was accepted'; fi
+    rm -rf "${T:?}/cache" "${T:?}/fcache"
+    cp -a "$T/cache.keep" "$T/cache"
+    cp -a "$T/fcache.keep" "$T/fcache"
+    rm -rf "${T:?}/cache.keep" "${T:?}/fcache.keep"
+    [[ "$(cache_digest)" == "$CACHE_DIGEST" ]] || bad 'the caches were not put back as they were'
+    CACHE_DIGEST="$saved_digest"
+}
+
+# What the parent makes of the workers' reports: the failures it counts. Synthetic reports go through the same two steps the parent takes (account_worker,
+# report_mutants), with the failure count local to this test. Complete, honest reports of caught mutants add no failure; an honestly reported survivor, or a
+# worker's missing result, does; and complete reports cannot hide a failure the run already had.
+t_matrix_parent_counts_failures() {
+    local FAILURES=0 TALLY=''
+    local -a MUTANT_IDS=(A B C)
+    local -A MUTANT_LINE=()
+    local ok_a='  ok    A                          caught by g1_a: it did' ok_b='  ok    B                          caught by g1_b: it did' ok_c='  ok    C                          caught by g1_c: it did'
+    local fail_b='  FAIL  B                          survived: none of [t_x] failed without the guard'
+    tally() { # BEFORE STATUS0 TEXT0 STATUS1 TEXT1: worker 0 of 2 has A and C, worker 1 has B; the failure count starts at BEFORE
+        FAILURES="$1" MUTANT_LINE=()
+        printf '%s\n' "$3" >"$T/tally-0.out"
+        printf '%s\n' "$5" >"$T/tally-1.out"
+        {
+            account_worker 0 2 'A C' "$2" "$T/tally-0.out"
+            account_worker 1 2 'B' "$4" "$T/tally-1.out"
+            report_mutants 2
+        } >"$T/tally.out" 2>&1
+        TALLY="$(<"$T/tally.out")"
+    }
+    local trailer0='worker 0/2: assigned=2 caught=2 failed=0' trailer1='worker 1/2: assigned=1 caught=1 failed=0'
+    tally 0 0 "$ok_a"$'\n'"$ok_c"$'\n'"$trailer0" 0 "$ok_b"$'\n'"$trailer1"
+    ((FAILURES == 0)) || bad "complete, honest reports of caught mutants were counted as $FAILURES failure(s): ${TALLY:0:300}"
+    [[ "$TALLY" == *'3 mutant(s) run by 2 worker(s), each exactly once'* ]] || bad "a clean run did not say so: ${TALLY:0:300}"
+    tally 0 0 "$ok_a"$'\n'"$ok_c"$'\n'"$trailer0" 1 "$fail_b"$'\n''worker 1/2: assigned=1 caught=0 failed=1'
+    ((FAILURES > 0)) || bad "a surviving mutant, honestly reported, did not fail the run: ${TALLY:0:300}"
+    [[ "$TALLY" == *'FAIL  B'*'survived'* && "$TALLY" != *'each exactly once'* ]] || bad "a surviving mutant was not reported, or the run was called clean: ${TALLY:0:300}"
+    tally 1 0 "$ok_a"$'\n'"$ok_c"$'\n'"$trailer0" 0 "$ok_b"$'\n'"$trailer1"
+    ((FAILURES == 1)) || bad "complete reports changed a failure the run already had: FAILURES=$FAILURES"
+    [[ "$TALLY" != *'each exactly once'* ]] || bad "complete reports hid a failure the run already had: ${TALLY:0:300}"
+    tally 0 0 "$ok_a"$'\n'"$ok_c"$'\n'"$trailer0" 0 "$trailer1"
+    ((FAILURES > 0)) || bad "a worker with a mutant missing, and an exit status of 0, did not fail the run: ${TALLY:0:300}"
+    [[ "$TALLY" == *'did not run'* ]] || bad "a mutant that was never reported was not said to have not run: ${TALLY:0:300}"
+    unset -f tally
+}
+
 # A worker is chosen by arguments and by nothing else, a malformed or repeated share is refused before anything runs, and the other ways of running the
 # file keep their meaning: REHEARSAL_TESTS runs just those tests (no matrix), whatever the environment says about workers; a bad REHEARSAL_WORKERS stops the
 # run at once, before any test.
@@ -6069,6 +6169,10 @@ run_mutant() {
     CURRENT_GUARD=''
     SUT="$SRC"
     rm -rf "$mutant"
+    if [[ -n "$CACHE_DIGEST" && "$(cache_digest)" != "$CACHE_DIGEST" ]]; then
+        printf '  FAIL  %-26s its tests changed the fixture caches, which every mutant shares\n' "$id" >&2
+        return 1
+    fi
     if [[ -n "$caught" ]]; then
         printf '  ok    %-26s caught by %s: %s\n' "$id" "${caught#t_}" "${FIRST_BAD:0:100}"
         return 0
@@ -6092,6 +6196,8 @@ worker_main() {
         [[ -z "${given[$id]:-}" ]] || { printf 'worker %s/%s: %s was given twice\n' "$index" "$count" "$id" >&2; return 2; }
         given[$id]=1
     done
+    # Before any mutant, from the unmutated script. A worker that cannot prepare them stops here, without a closing line, so that the parent finds it unfinished.
+    prepare_caches || return 1
     for id in "$@"; do
         assigned=$((assigned + 1))
         if run_mutant "$id"; then caught=$((caught + 1)); else failed=$((failed + 1)); fi
@@ -6168,6 +6274,69 @@ stop_workers() {
     WORKER_PIDS=()
 }
 
+# account_worker INDEX COUNT "ID ..." STATUS OUTFILE: judges one finished worker (see worker_problems) and counts each problem it finds as a failure. Fills MUTANT_LINE.
+account_worker() {
+    local index="$1" count="$2" file="$5" problem
+    worker_problems "$index" "$count" "$3" "$4" "$(<"$file")"
+    [[ -n "$WORKER_PROBLEMS" ]] || return 0
+    while IFS= read -r problem; do
+        [[ -z "$problem" ]] || { printf '  FAIL  %s\n' "$problem" >&2; FAILURES=$((FAILURES + 1)); }
+    done <<<"$WORKER_PROBLEMS"
+    printf '        the last lines worker %d printed:\n' "$index" >&2
+    tail -n 5 "$file" | sed 's/^/        | /' >&2
+}
+
+# report_mutants WORKERS: prints the results the workers reported, in marker order (MUTANT_IDS), and counts every mutant that did not pass, and every one that has
+# no result, as a failure. A mutant that no worker reported is missing from the printout and has been counted by account_worker, with its worker. The closing line
+# is printed only when every mutant has a result and nothing, here or earlier in the run, has failed.
+report_mutants() {
+    local id ran=0
+    for id in "${MUTANT_IDS[@]}"; do
+        [[ -n "${MUTANT_LINE[$id]:-}" ]] || continue
+        ran=$((ran + 1))
+        case "${MUTANT_LINE[$id]}" in
+            '  ok '*) printf '%s\n' "${MUTANT_LINE[$id]}" ;;
+            *) printf '%s\n' "${MUTANT_LINE[$id]}" >&2; FAILURES=$((FAILURES + 1)) ;;
+        esac
+    done
+    ((ran == ${#MUTANT_IDS[@]})) || { printf '  FAIL  %d of %d mutant(s) have a result, so %d did not run\n' "$ran" "${#MUTANT_IDS[@]}" "$((${#MUTANT_IDS[@]} - ran))" >&2; FAILURES=$((FAILURES + 1)); }
+    if ((ran == ${#MUTANT_IDS[@]} && FAILURES == 0)); then printf '  %d mutant(s) run by %d worker(s), each exactly once\n' "$ran" "$1"; fi
+}
+
+# The fixture caches (ensure_cache, ensure_files_cache, ensure_half_state) are made from the script under test, once, by whichever test needs them first. In the
+# ordinary tests that is the script as it is. A mutant must never be what makes them: a cache made under a mutation would hold the mutant's output, and the next
+# mutant would be tried against it. So before the first mutant, in a worker and in a sequential run alike, prepare_caches makes all three from the unmutated
+# script (SUT=$SRC), in this process's own temporary directory, and records their digest; run_mutant then requires that no mutant's tests changed them.
+# A sequential run asks for them fresh: what the ordinary tests left in its directory is not trusted, since the digest would then record any damage as normal.
+# It fails (and says why) if any cache could not be made or is incomplete: `bad` here only counts, since nothing is being aborted, so the count is read.
+CACHE_DIGEST=''
+cache_digest() { (cd "$T" && find cache fcache -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum); }
+prepare_caches() { # [fresh]: with 'fresh', whatever caches exist are discarded and made again
+    local fails="$TEST_FAILS" first="$FIRST_BAD" problem='' f
+    if [[ "${1:-}" == fresh ]]; then
+        rm -rf "${T:?}/cache" "${T:?}/fcache"
+        CACHE_READY=0 FILES_CACHE=0
+    fi
+    SUT="$SRC"
+    ABORT_ON_BAD=0 # (it is 0 wherever this is called; a failed `bad` must be counted here, not end the process)
+    TEST_FAILS=0
+    FIRST_BAD=''
+    CURRENT_GUARD='' # the caches are the whole fixtures, not the narrowed ones of one guard
+    ensure_cache
+    ensure_files_cache
+    ensure_half_state
+    if ((TEST_FAILS > 0)); then problem="$FIRST_BAD"; fi
+    for f in cache/historical.snapshot cache/historical.dump.sql cache/historical.manifest.json cache/halfmigrated.state fcache/resources.manifest.json fcache/resources.archive.tar.gz fcache/zero/resources.manifest.json; do
+        [[ -s "$T/$f" ]] || problem+="${problem:+; }$f is missing or empty"
+    done
+    TEST_FAILS="$fails" FIRST_BAD="$first"
+    if [[ -n "$problem" ]]; then
+        printf 'the fixture caches could not be prepared from the unmutated script: %s\n' "${problem:0:300}" >&2
+        return 1
+    fi
+    CACHE_DIGEST="$(cache_digest)"
+}
+
 # A worker (see the top of this file): the mutants it was given and nothing else. Selected by ARGUMENTS only, so that nothing in the environment can make a
 # gate run skip its tests and its registry check.
 if [[ "${1:-}" == --worker ]]; then
@@ -6220,9 +6389,15 @@ while IFS= read -r problem; do
 done <<<"$REGISTRY_PROBLEMS"
 
 if ((WORKERS == 0)); then
-    for id in "${MUTANT_IDS[@]}"; do
-        run_mutant "$id" || FAILURES=$((FAILURES + 1))
-    done
+    # The same lifecycle as a worker's: the caches are made again, from the script as it is, before the first mutant (not the ordinary tests' own, whatever state they are in).
+    if prepare_caches fresh; then
+        for id in "${MUTANT_IDS[@]}"; do
+            run_mutant "$id" || FAILURES=$((FAILURES + 1))
+        done
+    else
+        printf '  FAIL  the mutants were not run\n' >&2
+        FAILURES=$((FAILURES + 1))
+    fi
 else
     for ((i = 0; i < WORKERS; i++)); do
         status=0
@@ -6230,29 +6405,8 @@ else
         SHARD_STATUS[i]="$status"
     done
     WORKER_PIDS=()
-    ran=0
-    for ((i = 0; i < WORKERS; i++)); do
-        shard_text="$(<"${SHARD_OUT[i]}")"
-        worker_problems "$i" "$WORKERS" "${SHARD_IDS[i]}" "${SHARD_STATUS[i]}" "$shard_text"
-        if [[ -n "$WORKER_PROBLEMS" ]]; then
-            while IFS= read -r problem; do
-                [[ -z "$problem" ]] || { printf '  FAIL  %s\n' "$problem" >&2; FAILURES=$((FAILURES + 1)); }
-            done <<<"$WORKER_PROBLEMS"
-            printf '        the last lines worker %d printed:\n' "$i" >&2
-            tail -n 5 "${SHARD_OUT[i]}" | sed 's/^/        | /' >&2
-        fi
-    done
-    # Printed in marker order. A mutant that no worker reported is missing from here and has been counted as a failure above, with its worker.
-    for id in "${MUTANT_IDS[@]}"; do
-        [[ -n "${MUTANT_LINE[$id]:-}" ]] || continue
-        ran=$((ran + 1))
-        case "${MUTANT_LINE[$id]}" in
-            '  ok '*) printf '%s\n' "${MUTANT_LINE[$id]}" ;;
-            *) printf '%s\n' "${MUTANT_LINE[$id]}" >&2; FAILURES=$((FAILURES + 1)) ;;
-        esac
-    done
-    ((ran == ${#MUTANT_IDS[@]})) || { printf '  FAIL  %d of %d mutant(s) have a result, so %d did not run\n' "$ran" "${#MUTANT_IDS[@]}" "$((${#MUTANT_IDS[@]} - ran))" >&2; FAILURES=$((FAILURES + 1)); }
-    if ((ran == ${#MUTANT_IDS[@]} && FAILURES == 0)); then printf '  %d mutant(s) run by %d worker(s), each exactly once\n' "$ran" "$WORKERS"; fi
+    for ((i = 0; i < WORKERS; i++)); do account_worker "$i" "$WORKERS" "${SHARD_IDS[i]}" "${SHARD_STATUS[i]}" "${SHARD_OUT[i]}"; done
+    report_mutants "$WORKERS"
 fi
 
 printf '\n'
