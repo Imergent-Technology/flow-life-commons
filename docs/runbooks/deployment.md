@@ -502,7 +502,7 @@ sha256sum "$B/dump.sql.gz"
 
 **Resource files (ADR 0037).** The bytes File Cards own live outside the database, so they are part of the same backup, taken in the same window right after the dump so the files and the `resource_assets` rows describe one moment.
 
-> **Contract only: this part has not been implemented in the rehearsal or tested.** It replaces an unconditional `tar` line that is known to fail on a host without the directory (G6 WP3-04: `tar` exits 2 and writes an archive, which the next line would then have checksummed).
+> **Rehearsed locally in part, not a verified procedure: the recovery rehearsal has code for this part (G6 WP3c slice 2.2C-2, tested against a fake daemon and a real directory with the real `tar`) and it passed one live run on a local Docker daemon with synthetic files (L3b, 2026-11-17), but it has not run together with a database restore, on a host or against real Resource files.** It replaces an unconditional `tar` line that is known to fail on a host without the directory (G6 WP3-04: `tar` exits 2 and writes an archive, which the next line would then have checksummed).
 
 ```bash
 P=/home/<user>/commons/shared/storage/app/private

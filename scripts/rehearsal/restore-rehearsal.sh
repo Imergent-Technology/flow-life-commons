@@ -25,6 +25,15 @@
 #   restore-rehearsal.sh revoke-after-backup
 #                                     (2.2C-1) from the UPGRADED database: remove one role assignment and record its event, after the backup,
 #                                     so that the restore can be seen to reverse it
+#   restore-rehearsal.sh seed-files   (slice 2.2C-2) from the UPGRADED database: four synthetic files (uploads made after the upgrade) in the files
+#                                     volume and one asset row for each
+#   restore-rehearsal.sh backup-files (2.2C-2) the Resource-files half of a backup: the directory held to the asset rows, then a zero-file record, or
+#                                     an archive (the runbook's tar command) and a manifest
+#   restore-rehearsal.sh aside-files  (2.2C-2) with a verified files backup: rename the live Resources directory to resources.before-restore-<UTC time>,
+#                                     measure that what moved is what was there; nothing is deleted
+#   restore-rehearsal.sh restore-files
+#                                     (2.2C-2) verify the files backup, then extract it where there is no Resources directory (the database restore
+#                                     is not part of it)
 #
 # WHAT THIS IS. A rehearsal environment for proving, with synthetic data on a local machine, that the organization can recover
 # v0.3.0 after an unsuccessful upgrade (docs/audits/g6/README.md, WP3c). Slice 1 is the isolated database server and the checks that
@@ -37,7 +46,7 @@
 # `reproduce-wp3-01` (which exists to show a defect and is not a restoration), and, in `restore-historical`, the DROP TABLE of exactly the 34
 # tables (or, from the one half-failed state `half-fail-upgrade` makes, exactly the 32) this script names followed by the loading of that same dump.
 # Slice 2.2C-1 adds two more, each a fixed statement or helper: the one stub CREATE TABLE of `half-fail-upgrade` and the one role assignment and
-# event of `revoke-after-backup`. `restore-historical` takes no argument, no file and no database, works only on the allowlisted rehearsal
+# event of `revoke-after-backup`. Slice 2.2C-2 adds one: the INSERT of the four asset rows of `seed-files`, from values it has validated twice. `restore-historical` takes no argument, no file and no database, works only on the allowlisted rehearsal
 # database, and is not a restore tool for anything else.
 # It has no production connectivity, reads no application .env, holds no host credentials and uses no production data.
 #
@@ -95,6 +104,14 @@
 #   G21 (slice 2.2C-1) a security change made after the backup: `revoke-after-backup` removes one role assignment and records its `role.revoked` event;
 #       `restore-historical` reports, from the database itself, that the restore reversed both. No reconciliation, replay or repair exists.
 #
+#   G22 (slice 2.2C-2) the Resource files. A files volume of the rehearsal's own and a files container with no network, no credential and no application,
+#       both proven before use and removed only if proven; the files helper's output validated before anything relies on it; the database rows read by two
+#       fixed statements and refused unless each is a storage key, a size and a SHA-256; `seed-files` only from the exact post-upgrade state; `backup-files`
+#       only from the 16- or 34-table database, only when the directory and the rows agree on every key, size and checksum, never overwriting; a files
+#       manifest and archive validated against the run, the contract and each other before a restore relies on them; `restore-files` verifies before it
+#       writes and extracts only into a volume with no Resources directory; `aside-files` renames and deletes nothing. The file and archive logic itself is
+#       apps/platform/tests/Support/ResourceFileArchive.php, whose own guards (`F-*`) are held by tests/Unit/Rehearsal/ResourceFileArchiveTest.php.
+#
 # Exit status: 0 success; 1 a failure; 3 a safeguard refused; 64 usage.
 set -Eeuo pipefail
 
@@ -120,7 +137,25 @@ readonly EPHEMERAL_USER='33:33'               # www-data in the PHP image
 readonly APP_USER='flc_rehearsal'
 readonly APP_TREE='apps/platform'
 readonly HISTORICAL_COMMIT='2f385b79a7b83323c6f15a6685ee610ccd85b5bf' # v0.3.0, what production runs
-readonly HARNESS_FILES=(db-ping.php probe.php rehearse.php)
+readonly HARNESS_FILES=(db-ping.php probe.php rehearse.php files.php)
+# Slice 2.2C-2. The Resource FILES: one more rehearsal-owned, labelled volume (the files volume, whose root is the application's storage/app/private, so its
+# `resources` directory is the private Resources disk's root) and one more disposable container (the files container: no network, no credentials, no
+# application, no Docker socket; the prepared source read-only and the files volume, read-only unless the action writes). tests/Support/ResourceFileArchive.php
+# does the work; scripts/rehearsal/php/files.php is its fixed command line.
+readonly FILES_NAME='flc-rehearsal-restore-files'
+readonly FILES_VOLUME_NAME='flc-rehearsal-restore-files-data'
+readonly FILES_MOUNT='/var/www/html'      # an existing www-data-owned directory of the image, so a new volume copies its ownership here, as the source volume does at SRC_MOUNT
+readonly FILES_SRC_MOUNT='/rehearsal/src' # the prepared source in the files container; only the helper and its two support classes are read from it
+readonly FILES_STORE_DIR='resources'      # inside the volume: storage/app/private/resources, the private `resources` disk's root (config/filesystems.php)
+readonly FILES_ARCHIVE_FILE='resources.archive.tar.gz'
+readonly FILES_MANIFEST_FILE='resources.manifest.json'
+readonly FILES_VOLUME_MARKER='files.volume' # written once the files volume has been created and verified: from then on a missing volume is refused, never recreated
+readonly FILES_SEED_COUNT=4
+readonly FILES_SEED_PERSON='01jbp000000000000000000001' # HistoricalFixture::person(1), the administrator: provenance only, there is no foreign key
+readonly KEY_RE='^[0-7][0-9a-hjkmnp-tv-z]{25}$'          # App\Modules\Resources\Domain\StorageKey::PATTERN
+readonly FILE_LINE_RE='^    \{ "key": "([0-7][0-9a-hjkmnp-tv-z]{25})", "bytes": (0|[1-9][0-9]{0,11}), "sha256": "([0-9a-f]{64})" \},?$'
+readonly FILES_TABLE_SQL="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$APP_DB' AND table_name = 'resource_assets';"
+readonly FILES_ROWS_SQL='SELECT storage_key, byte_size, sha256 FROM resource_assets ORDER BY storage_key;'
 readonly EPHEMERAL_MEMORY=1073741824
 readonly EPHEMERAL_NANOCPUS=1000000000
 readonly EPHEMERAL_PIDS=256
@@ -179,7 +214,7 @@ readonly REVOKE_AFTER=$'11\t9\t0\t1\t1'
 EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
 readonly EMPTY_DIGEST
 # Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
-readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE")
+readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER")
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
@@ -251,6 +286,14 @@ Usage: restore-rehearsal.sh <command>
   revoke-after-backup
                 From the upgraded database only: remove one role assignment and record its event, after the backup, so the
                 restore can be seen to reverse them.
+  seed-files    From the upgraded database only: write four synthetic files (uploads made after the upgrade) into the rehearsal's files
+                volume and one asset row for each, so that the files and the rows agree. (Slice 2.2C-2.)
+  backup-files  The Resource-files half of a backup: hold the Resources directory to the asset rows (an absent directory is a
+                zero-file backup only with no rows), then record that, or archive the directory and write its manifest.
+  aside-files   Needs a verified files backup. Rename the live Resources directory to resources.before-restore-<UTC time> in the files volume,
+                read it before and after, and require the two to be identical. Nothing is deleted.
+  restore-files Verify the files backup, then extract it into a files volume that has no Resources directory (or, for a zero-file
+                backup, require there to be none). The database restore is not part of it.
   cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
                 labelled is kept or cannot be removed, cleanup says what remains, keeps its state file and exits 1; run
                 it again once the cause is gone. --stale is needed only when the private state file is gone (the run
@@ -528,7 +571,7 @@ inventory() {
 foreign_lookalikes() {
     local labelled_c="${1:-}" labelled_n="${2:-}" labelled_v="${3:-}" id name listing
     local cname vname
-    for cname in "$CONTAINER_NAME" "$RUNNER_NAME" "$PREPARE_NAME"; do
+    for cname in "$CONTAINER_NAME" "$RUNNER_NAME" "$PREPARE_NAME" "$FILES_NAME"; do
         listing="$(dkr ps -a --no-trunc --filter "name=$cname" --format '{{.ID}} {{.Names}}')" || return 1
         while read -r id name; do
             if [[ "$name" == "$cname" || "$name" == "/$cname" ]] && ! in_list "$id" "$labelled_c"; then say "container ${id:0:12} named $cname"; fi
@@ -538,7 +581,7 @@ foreign_lookalikes() {
     while read -r id name; do
         if [[ "$name" == "$NETWORK_NAME" ]] && ! in_list "$id" "$labelled_n"; then say "network ${id:0:12} named $NETWORK_NAME"; fi
     done <<<"$listing"
-    for vname in "$VOLUME_NAME" "$SRC_VOLUME_NAME"; do
+    for vname in "$VOLUME_NAME" "$SRC_VOLUME_NAME" "$FILES_VOLUME_NAME"; do
         listing="$(dkr volume ls --filter "name=$vname" --format '{{.Name}}')" || return 1
         while read -r name; do
             if [[ "$name" == "$vname" ]] && ! in_list "$name" "$labelled_v"; then say "volume named $vname"; fi
@@ -654,13 +697,15 @@ artisan_problem() {
 # database network) or as a source-preparation container (ROLE prepare, NETMODE none or bridge, never the database network). The template
 # never prints the environment, so the application password cannot appear here. Prints the first problem and returns 1.
 ephemeral_identity_problem() {
-    local id="$1" token="${2:-}" role="$3" netmode="$4" want_image="${5:-$PHP_IMAGE_ID}" out
+    local id="$1" token="${2:-}" role="$3" netmode="$4" want_image="${5:-$PHP_IMAGE_ID}" files_rw="${6:-${FILES_RW:-false}}" out
     out="$(dkr inspect --type container --format "$EPHEMERAL_FMT" "$id" 2>/dev/null)" || { echo "cannot be inspected"; return 1; }
     local name image l_ns l_role l_token ports privileged capadd capdrop secopt readonly_root user mode networks mounts tmpfs memory pids cpus
     IFS='|' read -r _ name image l_ns l_role l_token ports privileged capadd capdrop secopt readonly_root user mode networks mounts tmpfs memory pids cpus <<<"$out"
     local want_name="$RUNNER_NAME" want_rw=false want_tmpfs='/tmp,/var/www/html/current/bootstrap/cache,/var/www/html/current/storage,/var/www/html/historical/bootstrap/cache,/var/www/html/historical/storage,'
     if [[ "$role" == prepare ]]; then
         want_name="$PREPARE_NAME" want_rw=true want_tmpfs='/tmp,'
+    elif [[ "$role" == files ]]; then
+        want_name="$FILES_NAME" want_tmpfs='/tmp,' netmode=none # the files container has no network at all: not the database's, and not a route out
     else
         netmode="$NETWORK_NAME"
     fi
@@ -676,12 +721,15 @@ ephemeral_identity_problem() {
     [[ "$user" == "$EPHEMERAL_USER" ]] || { echo "it runs as '$user', not '$EPHEMERAL_USER'"; return 1; } # guard:G10-e-user
     [[ "$mode" == "$netmode" && "$networks" == "$netmode," ]] || { echo "its network is '$networks' (mode '$mode'), not '$netmode'"; return 1; } # guard:G10-e-network
     # Whether the daemon lists tmpfs mounts among .Mounts varies, so they are set aside here and checked by their own field below.
-    local entry kept='' entries=()
+    # Sorted, because the daemon does not promise an order and the files container has two.
+    local entry kept='' entries=() want_kept="volume:$SRC_VOLUME_NAME:$SRC_MOUNT:$want_rw,"
     IFS=',' read -ra entries <<<"$mounts"
     for entry in ${entries[@]+"${entries[@]}"}; do
-        [[ "$entry" == tmpfs:* ]] || kept+="$entry,"
+        [[ "$entry" == tmpfs:* ]] || kept+="$entry"$'\n'
     done
-    [[ "$kept" == "volume:$SRC_VOLUME_NAME:$SRC_MOUNT:$want_rw," ]] || { echo "its mounts are '$kept', not only the source volume (writable: $want_rw)"; return 1; } # guard:G10-e-mounts
+    kept="$(printf '%s' "$kept" | LC_ALL=C sort | tr '\n' ',')"
+    [[ "$role" != files ]] || want_kept="volume:$FILES_VOLUME_NAME:$FILES_MOUNT:$files_rw,volume:$SRC_VOLUME_NAME:$FILES_SRC_MOUNT:false,"
+    [[ "$kept" == "$want_kept" ]] || { echo "its mounts are '$kept', not '$want_kept'"; return 1; } # guard:G10-e-mounts
     [[ "$tmpfs" == "$want_tmpfs" ]] || { echo "its temporary filesystems are '$tmpfs', not '$want_tmpfs'"; return 1; } # guard:G10-e-tmpfs
     [[ "$memory" == "$EPHEMERAL_MEMORY" && "$pids" == "$EPHEMERAL_PIDS" && "$cpus" == "$EPHEMERAL_NANOCPUS" ]] || { echo "its memory, process or CPU limit is not the one this script sets"; return 1; } # guard:G10-e-limits
     return 0
@@ -701,6 +749,25 @@ source_volume_identity_problem() {
     [[ $users_failed == 0 ]] || { echo "the containers using it cannot be listed"; return 1; } # guard:G10-s-users-list
     while IFS= read -r user; do
         [[ -z "$user" || ",$allowed," == *",$user,"* ]] || { echo "container ${user:0:12} that is not ours uses it"; return 1; } # guard:G10-s-in-use
+    done <<<"$users"
+    return 0
+}
+
+# files_volume_identity_problem NAME TOKEN ALLOWED_USERS: the labelled files volume (slice 2.2C-2), plain and local, used by no container but ours. Its own guards:
+# it holds the files a restore is rehearsed with, and cleanup removes it, so what it is must be proven as the source volume's is.
+files_volume_identity_problem() {
+    local name="$1" token="${2:-}" allowed="${3:-}" out user users='' users_failed=0
+    out="$(dkr volume inspect --format "$VOLUME_FMT" "$name" 2>/dev/null)" || { echo "cannot be inspected"; return 1; }
+    local v_name driver options l_ns l_role l_token
+    IFS='|' read -r v_name driver options l_ns l_role l_token <<<"$out"
+    [[ "$v_name" == "$FILES_VOLUME_NAME" ]] || { echo "its name is '$v_name', not '$FILES_VOLUME_NAME'"; return 1; } # guard:G22-v-name
+    [[ "$driver" == local && "$options" == 0 ]] || { echo "it is not a plain local volume (it carries driver options such as a host path)"; return 1; } # guard:G22-v-options
+    [[ "$l_ns" == "$LABEL_NS_VALUE" && "$l_role" == files-data ]] || { echo "its labels are not this script's"; return 1; } # guard:G22-v-label
+    [[ -z "$token" || "$l_token" == "$token" ]] || { echo "its run token differs from this state directory's"; return 1; } # guard:G22-v-token
+    users="$(dkr ps -aq --no-trunc --filter "volume=$name")" || users_failed=1
+    [[ $users_failed == 0 ]] || { echo "the containers using it cannot be listed"; return 1; } # guard:G22-v-users-list
+    while IFS= read -r user; do
+        [[ -z "$user" || ",$allowed," == *",$user,"* ]] || { echo "container ${user:0:12} that is not ours uses it"; return 1; } # guard:G22-v-in-use
     done <<<"$users"
     return 0
 }
@@ -754,6 +821,7 @@ create_verified() { # ROOT TOKEN ROLE NETMODE LAUNCHER -- ARGS...
     local root="$1" token="$2" role="$3" netmode="$4" launcher="$5" id why name="$RUNNER_NAME"
     shift 6
     [[ "$role" != prepare ]] || name="$PREPARE_NAME"
+    [[ "$role" != files ]] || name="$FILES_NAME"
     id="$("$launcher" "$root" create \
         --name "$name" \
         --label "$LABEL_NS_KEY=$LABEL_NS_VALUE" --label "$LABEL_NS_KEY.role=$role" --label "$LABEL_NS_KEY.run-token=$token" \
@@ -996,13 +1064,17 @@ cmd_self_check() {
     why="$(network_identity_problem "$networks" "$token" "$CID")" || refuse "the network is not the rehearsal's: $why." # guard:G4-selfcheck-network
     ok_line "network is internal and holds only the rehearsal database"
     local data_volume
-    data_volume="$(grep -vxF -- "$SRC_VOLUME_NAME" <<<"$volumes" || true)"
+    data_volume="$(grep -vxF -e "$SRC_VOLUME_NAME" -e "$FILES_VOLUME_NAME" <<<"$volumes" || true)"
     [[ -n "$data_volume" && "$data_volume" != *$'\n'* ]] || refuse "expected exactly one rehearsal data volume."
     why="$(volume_identity_problem "$data_volume" "$token" "$CID")" || refuse "the volume is not the rehearsal's: $why." # guard:G4-selfcheck-volume
     ok_line "volume is a plain local volume used only by the rehearsal database"
     if in_list "$SRC_VOLUME_NAME" "$volumes"; then
         why="$(source_volume_identity_problem "$SRC_VOLUME_NAME" "$token" '')" || refuse "the source volume is not the rehearsal's: $why." # guard:G10-selfcheck-source
         ok_line "source volume is a plain local volume used by no container"
+    fi
+    if in_list "$FILES_VOLUME_NAME" "$volumes"; then
+        why="$(files_volume_identity_problem "$FILES_VOLUME_NAME" "$token" '')" || refuse "the files volume is not the rehearsal's: $why." # guard:G22-selfcheck-files
+        ok_line "files volume is a plain local volume used by no container"
     fi
     why="$(server_version_problem "$CID")" || refuse "$why."
     ok_line "the server itself reports MariaDB 10.11.18"
@@ -1024,6 +1096,7 @@ cleanup_container_problem() {
     case "$role" in
         runner) ephemeral_identity_problem "$id" "$token" runner "$NETWORK_NAME" any ;;
         prepare) ephemeral_identity_problem "$id" "$token" prepare none any >/dev/null || ephemeral_identity_problem "$id" "$token" prepare bridge any ;;
+        files) ephemeral_identity_problem "$id" "$token" files none any true >/dev/null || ephemeral_identity_problem "$id" "$token" files none any false ;;
         *) container_identity_problem "$id" "$token" ;;
     esac
 }
@@ -1033,11 +1106,13 @@ verified_container_name() {
     case "$(dkr inspect --type container --format "$ROLE_FMT" "$1" 2>/dev/null)" in
         runner) printf '%s' "$RUNNER_NAME" ;;
         prepare) printf '%s' "$PREPARE_NAME" ;;
+        files) printf '%s' "$FILES_NAME" ;;
         *) printf '%s' "$CONTAINER_NAME" ;;
     esac
 }
 
 cleanup_volume_problem() {
+    if [[ "$1" == "$FILES_VOLUME_NAME" ]]; then files_volume_identity_problem "$@"; return; fi # guard:G22-cleanup-dispatch
     if [[ "$1" == "$SRC_VOLUME_NAME" ]]; then source_volume_identity_problem "$@"; else volume_identity_problem "$@"; fi
 }
 
@@ -2272,6 +2347,388 @@ cmd_revoke_after_backup() {
     say "Revoked. Next: restore-rehearsal.sh restore-historical, which will say whether the restore reversed it."
 }
 
+# --- slice 2.2C-2: the Resource files --------------------------------------------------------------------------------------------------------
+
+# files_action_policy ACTION: what each files action may do. The three read-only actions get the files volume read-only; the three that write get
+# it writable; a name not listed is refused. Sets FILES_RW (true or false) and FILES_STDIN (1 when the action reads an archive from standard input).
+files_action_policy() {
+    FILES_RW='' FILES_STDIN=0
+    case "$1" in
+        check | archive | verify-archive) FILES_RW=false ;;
+        seed | aside | restore) FILES_RW=true ;;
+        *) ;;
+    esac
+    case "$1" in
+        verify-archive | restore) FILES_STDIN=1 ;;
+        *) ;;
+    esac
+    [[ -n "$FILES_RW" ]] || refuse "'$1' is not a files action the rehearsal runs." # guard:G22-f-allowlist
+}
+
+# The files volume, proven to be the rehearsal's before every use. It is CREATED only by the first files action of `seed-files` or `backup-files` (the caller
+# says so with FILES_CREATE_OK=1 in the environment of that one call), and only while the state directory holds no record that it was ever established
+# (`files.volume`, written once the volume has been created and verified, or found and verified). A volume that is missing after that, or missing when no
+# command may create it, is a refusal: a new, empty volume is never silently put where an established one was. Creating a volume that exists changes
+# nothing, so a foreign volume of this name is found by the identity check, not overwritten by the create.
+files_volume_ready() { # TOKEN
+    local token="$1" why recorded=0 expected
+    expected="files-volume-v1"$'\n'"$(token_fingerprint "$token")"
+    if [[ -e "$ROOT/$FILES_VOLUME_MARKER" || -L "$ROOT/$FILES_VOLUME_MARKER" ]]; then
+        { state_file_ok "$FILES_VOLUME_MARKER" && [[ "$(<"$ROOT/$FILES_VOLUME_MARKER")" == "$expected" ]]; } || refuse "the record of the files volume in the state directory is not this run's." # guard:G22-f-marker
+        recorded=1
+    fi
+    if ! dkr volume inspect "$FILES_VOLUME_NAME" >/dev/null 2>&1; then
+        [[ $recorded == 0 ]] || refuse "the files volume $FILES_VOLUME_NAME was established earlier in this run and is now missing. It is never recreated: its files are gone. Run cleanup and start again." # guard:G22-f-volume-gone
+        [[ "${FILES_CREATE_OK:-0}" == 1 ]] || refuse "there is no files volume, and only the first files action of seed-files or backup-files may create it. Run one of those first, or cleanup and start again." # guard:G22-f-volume-not-established
+        dkr volume create --label "$LABEL_NS_KEY=$LABEL_NS_VALUE" --label "$LABEL_NS_KEY.role=files-data" --label "$LABEL_NS_KEY.run-token=$token" "$FILES_VOLUME_NAME" >/dev/null || fail "the files volume could not be created"
+    fi
+    why="$(files_volume_identity_problem "$FILES_VOLUME_NAME" "$token" '')" || refuse "the files volume is not the rehearsal's: $why." # guard:G22-f-volume
+    [[ $recorded == 1 ]] || write_state_file "$FILES_VOLUME_MARKER" "$expected"
+}
+
+# run_files ACTION [ARGUMENT]: one fixed action of files.php in ONE disposable files container, after the checks. The container has no network and no
+# credential; its output and exit status are the action's. The ARGUMENT is built by this script from values it has validated (a file list, or a stamp).
+# Standard input goes to the container for the two actions that read an archive.
+run_files() {
+    local action="$1" argument="${2:-}" token why ids id interactive=() ro_opt=''
+    files_action_policy "$action"
+    ((FILES_STDIN == 0)) || interactive=(-i)
+    resolve_project_container "$ROOT"
+    token="$(state_token "$ROOT")"
+    inventory ids 'the labelled containers' labelled_containers
+    [[ "$ids" == "$CID" ]] || refuse "a rehearsal container other than the database exists (an interrupted run). Run: restore-rehearsal.sh cleanup --dry-run, then cleanup." # guard:G22-f-no-leftover
+    why="$(source_volume_identity_problem "$SRC_VOLUME_NAME" "$token" '')" || refuse "the source volume is not the rehearsal's (has 'prepare' been run?): $why." # guard:G22-f-src-volume
+    files_volume_ready "$token"
+    resolve_php_image
+    [[ "$FILES_RW" == true ]] || ro_opt=',readonly' # guard:G22-f-readonly-mount
+    id="$(create_verified "$ROOT" "$token" files none plain_docker -- \
+        --network none \
+        --mount "type=volume,source=$SRC_VOLUME_NAME,target=$FILES_SRC_MOUNT,readonly" \
+        --mount "type=volume,source=$FILES_VOLUME_NAME,target=$FILES_MOUNT$ro_opt" \
+        --tmpfs /tmp:rw,noexec,nosuid,size=64m,uid=33,gid=33 \
+        ${interactive[@]+"${interactive[@]}"} \
+        "$PHP_IMAGE_ID" php "$FILES_SRC_MOUNT/harness/files.php" "$action" ${argument:+"$argument"})" || exit "$?"
+    start_and_remove "$id" ${interactive[@]+"${interactive[@]}"}
+}
+
+# files_report TEXT: validates the files helper's state, count and file lines and sets FILES_STATE (absent|present), FILES_COUNT and FILES_SPEC
+# (`key:bytes:sha256,...` in key order, or `empty`). A line that is malformed, a key out of order or repeated, a count that is not the number of lines, or
+# files in an absent directory is a refusal: nothing is read from a helper's output that was not checked.
+files_report() { # TEXT [PREFIX]: the lines are the ones that begin with PREFIX (`before:` or `after:` for the two inventories `aside` prints), or with none
+    local text="$1" prefix="${2:-}" line state='' states=0 count='' counts=0 n=0 previous='' spec='' key bytes sha extra
+    while IFS= read -r line; do
+        case "$line" in
+            "${prefix}files:state="*) state="${line#"${prefix}files:state="}" states=$((states + 1)) ;;
+            "${prefix}files:count="*) count="${line#"${prefix}files:count="}" counts=$((counts + 1)) ;;
+            "${prefix}file "*)
+                IFS=' ' read -r _ key bytes sha extra <<<"${line#"$prefix"}"
+                [[ -z "$extra" && "$key" =~ $KEY_RE && "$bytes" =~ ^(0|[1-9][0-9]{0,11})$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || refuse "a file line of the files helper is malformed." # guard:G22-f-protocol-line
+                [[ -z "$previous" || "$key" > "$previous" ]] || refuse "the files helper listed a key out of order or twice." # guard:G22-f-protocol-order
+                previous="$key" n=$((n + 1)) spec+="${spec:+,}$key:$bytes:$sha"
+                ;;
+            *) ;;
+        esac
+    done <<<"$text"
+    [[ $states == 1 && ( "$state" == absent || "$state" == present ) ]] || refuse "the files helper did not report exactly one state, absent or present." # guard:G22-f-protocol-state
+    [[ $counts == 1 && "$count" == "$n" ]] || refuse "the files helper's count is not the number of files it listed." # guard:G22-f-protocol-count
+    [[ "$state" == present || $n == 0 ]] || refuse "the files helper listed files in a directory it reported absent." # guard:G22-f-protocol-absent
+    FILES_STATE="$state" FILES_COUNT="$n" FILES_SPEC="${spec:-empty}"
+}
+
+# files_db_rows: what the database says about the files, as the files helper takes it: DB_ROWS_SPEC is `none` (no resource_assets table, as at v0.3.0), `empty`
+# or `key:bytes:sha256,...`; DB_ROWS_COUNT is the number of rows (empty when there is no table). Two fixed read-only statements; a row that is not a Resources
+# storage key, a size and a SHA-256 is a refusal, never skipped.
+files_db_rows() {
+    local has rows key bytes sha extra spec='' n=0 previous=''
+    capture has 'checking for the resource_assets table' app_query "$FILES_TABLE_SQL"
+    if [[ "$has" == 0 ]]; then
+        DB_ROWS_SPEC=none DB_ROWS_COUNT=''
+        return 0
+    fi
+    [[ "$has" == 1 ]] || refuse "the database did not say whether resource_assets exists ('${has:0:20}')." # guard:G22-rows-table-answer
+    capture rows 'reading the resource_assets rows' app_query "$FILES_ROWS_SQL"
+    while IFS=$'\t' read -r key bytes sha extra; do
+        [[ -n "$key$bytes$sha$extra" ]] || continue
+        [[ -z "$extra" && "$key" =~ $KEY_RE && "$bytes" =~ ^(0|[1-9][0-9]{0,11})$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || refuse "an asset row is not a Resources storage key, a size and a SHA-256, so the files cannot be compared with it." # guard:G22-rows-shape
+        [[ -z "$previous" || "$key" > "$previous" ]] || refuse "the asset rows are not in key order, or repeat a key." # guard:G22-rows-order
+        previous="$key" n=$((n + 1)) spec+="${spec:+,}$key:$bytes:$sha"
+    done <<<"$rows"
+    DB_ROWS_SPEC="${spec:-empty}" DB_ROWS_COUNT=$n
+}
+
+# files_insert_sql SPEC: the one transaction that gives each seeded file its asset row, from values already validated and re-validated here, because
+# they are interpolated: the id and the storage key are the same ULID (StorageKey::for), the rest are fixed.
+files_insert_sql() {
+    local entry entries=() key bytes sha i=0 values=''
+    IFS=',' read -ra entries <<<"$1"
+    for entry in "${entries[@]}"; do
+        IFS=: read -r key bytes sha <<<"$entry"
+        [[ "$key" =~ $KEY_RE && "$bytes" =~ ^(0|[1-9][0-9]{0,11})$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || refuse "a seeded file's facts are not a key, a size and a SHA-256; nothing was inserted." # guard:G22-seed-sql-values
+        i=$((i + 1))
+        values+="${values:+,}('$key','$key','synthetic-$i.bin','application/octet-stream',$bytes,'$sha','$FILES_SEED_PERSON','2026-01-01 00:00:00')"
+    done
+    printf 'START TRANSACTION;\nINSERT INTO resource_assets (id, storage_key, original_filename, media_type, byte_size, sha256, uploaded_by_person_id, created_at) VALUES %s;\nCOMMIT;\n' "$values"
+}
+
+# --- the files manifest: the runbook's Resource fields (deployment runbook, "The manifest"), and the per-file facts the archive is held to ----------------
+# One fact per line, like the database manifest. No key, no password, no token: the run token's fingerprint only.
+
+# files_manifest_text STATE ARCHIVE_SHA256 ARCHIVE_BYTES ROWS SPEC TAKEN_AT TOKEN_FINGERPRINT (ROWS is the number of asset rows, or `none`)
+files_manifest_text() {
+    local state="$1" sha="$2" bytes="$3" rows="$4" spec="$5" taken="$6" fp="$7"
+    local archive=null archive_sha=null archive_bytes=null rows_json=null list='' entry entries=() key size digest count=0
+    if [[ "$state" == present ]]; then archive="\"$FILES_ARCHIVE_FILE\"" archive_sha="\"$sha\"" archive_bytes="$bytes"; fi
+    [[ "$rows" == none ]] || rows_json="$rows"
+    if [[ "$spec" != empty ]]; then
+        IFS=',' read -ra entries <<<"$spec"
+        for entry in "${entries[@]}"; do
+            IFS=: read -r key size digest <<<"$entry"
+            list+="    { \"key\": \"$key\", \"bytes\": $size, \"sha256\": \"$digest\" },"$'\n'
+            count=$((count + 1))
+        done
+        list="${list%,$'\n'}"
+    fi
+    printf '{\n  "files_manifest_version": 1,\n  "taken_at": "%s",\n  "run_token_fingerprint": "%s",\n  "resources_directory": "%s",\n' "$taken" "$fp" "$state"
+    printf '  "resource_files_archive": %s,\n  "resource_files_sha256": %s,\n  "resource_files_bytes": %s,\n  "resource_files_count": %d,\n  "resource_assets_rows": %s,\n  "files": [\n' "$archive" "$archive_sha" "$archive_bytes" "$count" "$rows_json"
+    [[ -z "$list" ]] || printf '%s\n' "$list"
+    printf '  ]\n}\n'
+}
+
+# files_manifest_entries FILE: sets MANIFEST_SPEC (`key:bytes:sha256,...` in file order, or `empty`) and MANIFEST_LINES from the file lines of a manifest.
+files_manifest_entries() {
+    local line spec='' n=0
+    while IFS= read -r line; do
+        if [[ "$line" =~ $FILE_LINE_RE ]]; then
+            spec+="${spec:+,}${BASH_REMATCH[1]}:${BASH_REMATCH[2]}:${BASH_REMATCH[3]}"
+            n=$((n + 1))
+        fi
+    done <"$1"
+    MANIFEST_SPEC="${spec:-empty}" MANIFEST_LINES=$n
+}
+
+# files_manifest_problem FILE: the manifest is this run's, internally consistent, and holds nothing the script would not have written. A manifest is
+# never accepted because it records a state: an absent directory records no archive, a directory records its archive and a count that is the number of
+# files listed, and the asset-row count, where there is a table, is that same number.
+files_manifest_problem() {
+    local file="$1" value state archive sha bytes count rows taken fp spec lines
+    value="$(manifest_value "$file" files_manifest_version)" && [[ "$value" == 1 ]] || { echo "its files_manifest_version is not 1"; return 1; } # guard:G22-manifest-version
+    fp="$(manifest_value "$file" run_token_fingerprint)" && [[ "$fp" == "$(token_fingerprint "$(state_token "$ROOT")")" ]] || { echo "it is not this run's (its run token fingerprint differs)"; return 1; } # guard:G22-manifest-run
+    taken="$(manifest_value "$file" taken_at)" && [[ "$taken" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { echo "its taken_at is not a UTC time"; return 1; } # guard:G22-manifest-taken
+    state="$(manifest_value "$file" resources_directory)" && [[ "$state" == absent || "$state" == present ]] || { echo "its resources_directory is neither absent nor present"; return 1; } # guard:G22-manifest-state
+    archive="$(manifest_value "$file" resource_files_archive)" || archive=''
+    sha="$(manifest_value "$file" resource_files_sha256)" || sha=''
+    bytes="$(manifest_value "$file" resource_files_bytes)" || bytes=''
+    count="$(manifest_value "$file" resource_files_count)" || count=''
+    rows="$(manifest_value "$file" resource_assets_rows)" || rows=''
+    files_manifest_entries "$file"
+    spec="$MANIFEST_SPEC" lines="$MANIFEST_LINES"
+    [[ "$count" =~ ^[0-9]+$ && "$count" == "$lines" ]] || { echo "its resource_files_count is not the number of files it lists"; return 1; } # guard:G22-manifest-count
+    if [[ "$state" == absent ]]; then
+        [[ "$archive/$sha/$bytes" == null/null/null && "$count" == 0 ]] || { echo "an absent directory records an archive, a checksum or files"; return 1; } # guard:G22-manifest-zero
+    else
+        [[ "$archive" == "$FILES_ARCHIVE_FILE" ]] || { echo "its archive is not $FILES_ARCHIVE_FILE"; return 1; } # guard:G22-manifest-archive-name
+        [[ "$sha" =~ ^[0-9a-f]{64}$ && "$bytes" =~ ^[1-9][0-9]*$ ]] || { echo "its archive checksum or size is not a SHA-256 and a positive byte count"; return 1; } # guard:G22-manifest-archive-facts
+    fi
+    [[ "$rows" == null || "$rows" == "$count" ]] || { echo "its resource_assets_rows is not its file count"; return 1; } # guard:G22-manifest-rows
+    [[ "$rows" != null || "$count" == 0 ]] || { echo "it records files but no resource_assets table for them"; return 1; } # guard:G22-manifest-no-table
+    [[ "$(<"$file")" == "$(files_manifest_text "$state" "$sha" "$bytes" "${rows/null/none}" "$spec" "$taken" "$fp")" ]] || { echo "it is not exactly what this script writes (an extra, missing or reordered line)"; return 1; } # guard:G22-manifest-exact
+    return 0
+}
+
+# files_archive_matches_manifest ARCHIVE MANIFEST: the archive's byte count and SHA-256 are the ones the manifest recorded. Nothing is extracted from an
+# archive that has not just passed this.
+files_archive_matches_manifest() {
+    local sha bytes
+    sha="$(sha256sum <"$1" | cut -c1-64)"
+    bytes="$(wc -c <"$1" | tr -d ' ')"
+    [[ "$sha" == "$(manifest_value "$2" resource_files_sha256)" ]] || { echo "its SHA-256 is not the manifest's"; return 1; } # guard:G22-archive-sha
+    [[ "$bytes" == "$(manifest_value "$2" resource_files_bytes)" ]] || { echo "its size is not the manifest's"; return 1; } # guard:G22-archive-bytes
+    return 0
+}
+
+# files_verified_ok TEXT COUNT: the verify-archive action reported the archive verified, with the directory entry and COUNT files.
+files_verified_ok() {
+    grep -Fxq 'archive:verified=ok' <<<"$1" && grep -Fxq "archive:entries=$(($2 + 1))" <<<"$1"
+}
+
+FILES_TMP=''
+on_files_exit() {
+    local status=$?
+    [[ -z "$FILES_TMP" ]] || rm -f -- "$FILES_TMP"
+    if ((status != 0)); then
+        warn "$STAGE did not finish. The rehearsal files and database may be partly changed and nothing was removed. The rehearsal is disposable: run"
+        warn "  restore-rehearsal.sh cleanup --dry-run ; cleanup ; then up, prepare and the stages again."
+    fi
+}
+
+# --- the four commands ------------------------------------------------------------------------------------------------------------------------
+
+# seed-files: from the UPGRADED database, simulate uploads made after the upgrade: the four synthetic files, then one asset row for each, so that the files
+# and the rows agree and can be backed up, archived and held to one another. It starts only from the exact post-upgrade state with no asset row and no
+# Resources directory, and writes nothing else.
+cmd_seed_files() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local counts seeded checked sql
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the upgraded schema (the files are seeded as uploads made after the upgrade)' # guard:G22-seed-inventory
+    capture counts 'reading the upgraded state' app_query "$COUNTS_SQL"
+    [[ "$counts" == "$((FIXTURE_PEOPLE + 1))"$'\t1\t29\t0' ]] || refuse "the database is not the post-upgrade state this stage starts from (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0). Nothing was changed." # guard:G22-seed-state
+    files_db_rows
+    [[ "$DB_ROWS_SPEC" == empty ]] || refuse "resource_assets is not an existing, empty table, so there is nothing to seed. Nothing was changed." # guard:G22-seed-assets-empty
+
+    STAGE=seed-files
+    trap on_files_exit EXIT
+    say "Seeding $FILES_SEED_COUNT synthetic files as uploads made after the upgrade, then their asset rows ..."
+    FILES_CREATE_OK=1 capture seeded 'seeding the Resources directory' run_files seed
+    grep -Fxq 'files:seed=ok' <<<"$seeded" || refuse "the files helper did not report files:seed=ok." # guard:G22-seed-reported
+    files_report "$seeded"
+    [[ "$FILES_STATE" == present && "$FILES_COUNT" == "$FILES_SEED_COUNT" ]] || refuse "the files helper did not seed exactly $FILES_SEED_COUNT files." # guard:G22-seed-count
+    sql="$(files_insert_sql "$FILES_SPEC")" || exit "$?"
+    printf '%s' "$sql" | guarded_app_sql "$ROOT" "$APP_DB" >/dev/null || fail "the asset rows could not be inserted"
+    files_db_rows
+    [[ "$DB_ROWS_SPEC" == "$FILES_SPEC" ]] || refuse "the asset rows read back are not the files just written." # guard:G22-seed-rows-match
+    capture checked 'checking the seeded files against their rows' run_files check "$DB_ROWS_SPEC"
+    grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok for the seeded files." # guard:G22-seed-agrees
+    say "ok   $FILES_COUNT files in the volume's resources directory and $DB_ROWS_COUNT resource_assets rows agree on every key, size and SHA-256"
+    say "Seeded. Next: restore-rehearsal.sh backup-files."
+}
+
+# backup-files: the Resource files half of a backup (deployment runbook §5, "Resource files"): from the 16-table or the 34-table database, hold the Resources
+# directory to the asset rows (an absent directory is a zero-file backup only with no rows), and then either record the zero-file state or archive the directory
+# with the runbook's command, read the archive back, and write the manifest. Never overwrites a backup. Refuses any state that is not clean.
+cmd_backup_files() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    [[ ! -e "$ROOT/$FILES_ARCHIVE_FILE" && ! -e "$ROOT/$FILES_MANIFEST_FILE" ]] || refuse "a Resource-files backup already exists in the state directory and is never overwritten. The rehearsal is disposable: run cleanup, then start again." # guard:G22-backup-no-overwrite
+    local inventory_now checked verified taken fp sha='' bytes='' why rows_field agrees=0
+    capture inventory_now 'reading the table inventory' db_inventory
+    [[ "$inventory_now" == "$(historical_inventory)" || "$inventory_now" == "$(upgraded_inventory)" ]] || refuse "the database is neither the 16 tables of v0.3.0 nor the 34 of the upgraded schema, so the asset rows cannot be taken as they should be. Nothing was changed." # guard:G22-backup-db-state
+    files_db_rows
+
+    STAGE=backup-files
+    trap on_files_exit EXIT
+    say "Checking the Resources directory against the database ($( [[ "$DB_ROWS_SPEC" == none ]] && echo 'there is no resource_assets table' || echo "resource_assets: ${DB_ROWS_COUNT} row(s)" )) ..."
+    FILES_CREATE_OK=1 capture checked 'checking the Resources directory' run_files check "$DB_ROWS_SPEC"
+    grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok." # guard:G22-backup-check-reported
+    files_report "$checked"
+    if [[ "$DB_ROWS_SPEC" == none || "$DB_ROWS_SPEC" == empty ]]; then
+        [[ "$FILES_COUNT" == 0 ]] && agrees=1
+    else
+        [[ "$FILES_SPEC" == "$DB_ROWS_SPEC" ]] && agrees=1
+    fi
+    [[ $agrees == 1 ]] || refuse "the files the helper listed are not the asset rows the database holds." # guard:G22-backup-agrees
+    taken="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fp="$(token_fingerprint "$(state_token "$ROOT")")"
+
+    if [[ "$FILES_STATE" == present ]]; then
+        say "Archiving the $FILES_COUNT file(s) with the runbook's command (tar -C <private> -czf <archive> resources), then reading the archive back ..."
+        FILES_TMP="$(umask 077 && mktemp -- "$ROOT/.files-archive.XXXXXX")"
+        run_files archive "$DB_ROWS_SPEC" >"$FILES_TMP"
+        [[ -s "$FILES_TMP" ]] || refuse "the archive is empty." # guard:G22-backup-archive-nonempty
+        capture verified 'verifying the archive' run_files verify-archive "$FILES_SPEC" <"$FILES_TMP"
+        files_verified_ok "$verified" "$FILES_COUNT" || refuse "the archive was not verified against the files it was made from." # guard:G22-backup-archive-verified
+        sha="$(sha256sum <"$FILES_TMP" | cut -c1-64)"
+        bytes="$(wc -c <"$FILES_TMP" | tr -d ' ')"
+        mv -- "$FILES_TMP" "$ROOT/$FILES_ARCHIVE_FILE"
+        FILES_TMP=''
+    else
+        say "There is no Resources directory and no asset row: a zero-file backup. No archive is made."
+    fi
+    rows_field=none
+    [[ "$DB_ROWS_SPEC" == none ]] || rows_field="$DB_ROWS_COUNT"
+    write_state_file "$FILES_MANIFEST_FILE" "$(files_manifest_text "$FILES_STATE" "$sha" "$bytes" "$rows_field" "$FILES_SPEC" "$taken" "$fp")"
+    why="$(files_manifest_problem "$ROOT/$FILES_MANIFEST_FILE")" || refuse "the manifest just written is not consistent: $why."
+    if [[ "$FILES_STATE" == present ]]; then
+        why="$(files_archive_matches_manifest "$ROOT/$FILES_ARCHIVE_FILE" "$ROOT/$FILES_MANIFEST_FILE")" || refuse "the archive just written does not match its manifest: $why."
+        say "ok   $FILES_COUNT file(s), archive $bytes bytes, sha256 ${sha:0:16}...; every file in it has the size and SHA-256 the database and the directory agree on"
+    else
+        say "ok   zero-file manifest: count 0, no checksum, no archive"
+    fi
+    say "Files backup done: $FILES_MANIFEST_FILE$([[ "$FILES_STATE" == present ]] && echo " and $FILES_ARCHIVE_FILE") in the state directory."
+}
+
+# aside-files: step 2 of the runbook's file restore: the live Resources directory is RENAMED to resources.before-restore-<UTC time>, inside the files volume.
+# Nothing is deleted, merged or overwritten. It starts only when a verified Resource-files backup exists (there must be something to restore to before the live
+# files are moved), and it MEASURES the preservation: the helper reads the directory immediately before the rename and the renamed directory immediately
+# after, and prints both inventories; this script validates each, requires them to be exactly the same keys, sizes and SHA-256 values, and requires the
+# original place to be empty. A failure after the rename leaves the moved directory where it is: nothing is renamed back or removed.
+cmd_aside_files() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local stamp out checked want reported=0 before_state before_spec after_state after_spec moved
+    files_backup_required # guard:G22-aside-backup-required
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    [[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || refuse "the time of day did not come out as a UTC stamp ('${stamp:0:30}')." # guard:G22-aside-stamp
+    STAGE=aside-files
+    trap on_files_exit EXIT
+    capture out 'moving the Resources directory aside' run_files aside "$stamp"
+    want="$FILES_STORE_DIR.before-restore-$stamp"
+    if [[ "$(grep -c '^aside:name=' <<<"$out" || true)" == 1 ]] && grep -Fxq "aside:name=$want" <<<"$out" && grep -Fxq 'aside:complete=ok' <<<"$out"; then reported=1; fi
+    [[ $reported == 1 ]] || refuse "the files helper did not report moving the directory to $want. The directory, wherever it now is, was not touched further." # guard:G22-aside-reported
+    files_report "$out" before:
+    before_state="$FILES_STATE" before_spec="$FILES_SPEC"
+    files_report "$out" after:
+    after_state="$FILES_STATE" after_spec="$FILES_SPEC" moved="$FILES_COUNT"
+    [[ "$before_state" == present && "$after_state" == present && "$before_spec" == "$after_spec" ]] || refuse "what was moved aside is not what was there: the inventory of the renamed directory is not the one read just before the rename. The moved directory $want was left exactly where it is; nothing was renamed back or removed." # guard:G22-aside-preserved
+    capture checked 'checking that the Resources directory is gone from its place' run_files check empty
+    files_report "$checked"
+    [[ "$FILES_STATE" == absent ]] || refuse "the Resources directory is still where it was after being moved aside." # guard:G22-aside-result
+    say "ok   $FILES_STORE_DIR moved to $want (renamed; nothing deleted): $moved file(s), read before the rename and again after it, identical in every key, size and SHA-256; the Resources directory is now absent"
+}
+
+# files_backup_required: the Resource-files backup an earlier stage took is present, this run's, consistent, and its archive (if it has one) is the one the
+# manifest describes. Sets FILES_MANIFEST_STATE and MANIFEST_SPEC.
+files_backup_required() {
+    local why
+    state_file_ok "$FILES_MANIFEST_FILE" || refuse "there is no Resource-files backup in the state directory (backup-files has not finished). Nothing was changed." # guard:G22-restore-backup-required
+    why="$(files_manifest_problem "$ROOT/$FILES_MANIFEST_FILE")" || refuse "the Resource-files manifest cannot be relied on: $why. Nothing was changed."
+    FILES_MANIFEST_STATE="$(manifest_value "$ROOT/$FILES_MANIFEST_FILE" resources_directory)"
+    files_manifest_entries "$ROOT/$FILES_MANIFEST_FILE"
+    if [[ "$FILES_MANIFEST_STATE" == present ]]; then
+        state_file_ok "$FILES_ARCHIVE_FILE" || refuse "the manifest records an archive but '$FILES_ARCHIVE_FILE' is missing from the state directory or is not a private file of this script's. Nothing was changed." # guard:G22-restore-archive-required
+        why="$(files_archive_matches_manifest "$ROOT/$FILES_ARCHIVE_FILE" "$ROOT/$FILES_MANIFEST_FILE")" || refuse "the archive cannot be relied on: $why. Nothing was changed."
+    else
+        [[ ! -e "$ROOT/$FILES_ARCHIVE_FILE" && ! -L "$ROOT/$FILES_ARCHIVE_FILE" ]] || refuse "the manifest records a zero-file backup, but an archive exists beside it. Nothing was changed." # guard:G22-restore-zero-no-archive
+    fi
+}
+
+# restore-files: the file half of the restore (runbook, "Restoring files with the database", steps 3 and 4), WITHOUT the database restore or the prune check,
+# which are the next slice's. A zero-file backup extracts nothing and requires the directory to be absent; otherwise the archive is verified against the
+# manifest FIRST, and extracted only into a volume with no Resources directory (move it aside first); the result is held to the manifest twice.
+cmd_restore_files() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local verified out checked
+    files_backup_required
+    STAGE=restore-files
+    trap on_files_exit EXIT
+    if [[ "$FILES_MANIFEST_STATE" == absent ]]; then
+        capture checked 'checking the Resources directory' run_files check empty
+        files_report "$checked"
+        [[ "$FILES_STATE" == absent ]] || refuse "the backup is a zero-file one, which extracts nothing, but a Resources directory exists. It is not removed: run aside-files first, then restore-files." # guard:G22-restore-zero-absent
+        say "ok   zero-file backup: nothing to extract, and the Resources directory is absent"
+        return 0
+    fi
+    say "Verifying the archive against the manifest before anything is written ..."
+    capture verified 'verifying the archive' run_files verify-archive "$MANIFEST_SPEC" <"$ROOT/$FILES_ARCHIVE_FILE"
+    files_verified_ok "$verified" "$MANIFEST_LINES" || refuse "the archive was not verified against the manifest. Nothing was extracted." # guard:G22-restore-verified-first
+    say "Extracting into a volume with no Resources directory ..."
+    capture out 'extracting the archive' run_files restore "$MANIFEST_SPEC" <"$ROOT/$FILES_ARCHIVE_FILE"
+    grep -Fxq 'restore:extracted=ok' <<<"$out" || refuse "the files helper did not report restore:extracted=ok." # guard:G22-restore-reported
+    files_report "$out"
+    [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$MANIFEST_SPEC" ]] || refuse "what was extracted is not what the manifest records." # guard:G22-restore-result
+    capture checked 'reading the restored directory again' run_files check "$MANIFEST_SPEC"
+    files_report "$checked"
+    [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$MANIFEST_SPEC" ]] || refuse "a second, read-only look at the restored directory does not match the manifest." # guard:G22-restore-recheck
+    say "ok   $FILES_COUNT file(s) restored to the Resources directory and read back: every key, size and SHA-256 is the manifest's"
+    say "Restored files only. The database restore, the prune dry-run check and the reopening are the next slice's."
+}
+
+
 main() {
     local command="${1:-}"
     case "$command" in
@@ -2290,6 +2747,10 @@ main() {
         reupgrade) shift; cmd_reupgrade "$@" ;;
         half-fail-upgrade) shift; cmd_half_fail_upgrade "$@" ;;
         revoke-after-backup) shift; cmd_revoke_after_backup "$@" ;;
+        seed-files) shift; cmd_seed_files "$@" ;;
+        backup-files) shift; cmd_backup_files "$@" ;;
+        aside-files) shift; cmd_aside_files "$@" ;;
+        restore-files) shift; cmd_restore_files "$@" ;;
         help | -h | --help) usage ;;
         *) usage >&2; exit 64 ;;
     esac
