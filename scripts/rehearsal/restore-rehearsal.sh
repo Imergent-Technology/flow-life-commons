@@ -991,7 +991,7 @@ run_in_runner() {
     shift 2
     if runner_may_read_files "$workdir" "$@"; then with_files=1; fi
     # The prune dry-run is only run where it is given the files volume. In the historical tree it would not be: it would report an empty store whatever the volume
-    # holds (or fail, for want of the command), which reads as a finding and is not one. Refused here, before anything is asked of Docker.
+    # holds (or fail, for want of the command), which reads as a finding and is not one. Refused here, before any rehearsal object is inspected or created.
     if [[ "$workdir" != current ]] && prune_vector "$@"; then
         refuse "the Resources prune dry-run is only run in the current tree, where it is given the files volume to read; in the '$workdir' tree it would see an empty store whatever the volume holds. Run: restore-rehearsal.sh run current resources:assets:prune" # guard:G24-historical-prune
     fi

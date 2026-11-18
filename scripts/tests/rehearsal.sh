@@ -5336,8 +5336,7 @@ t_g24_cleanup_recognises_both_runner_layouts() {
         expect_has "the way on" "$ERR" 'cleanup is NOT complete'
         ! grep -qE "^(stop|rm) $RID" "$W/calls" || bad "stop or rm was called on a runner mounting $row"
     done
-    # A runner that is not the rehearsal's in some other way is kept in either layout (another run's token, an unlabelled one, a runner on the bridge, one with the
-    # image's own root writable, or one with a network port).
+    # A runner that is not the rehearsal's in some other way is kept in either layout (another run's token, a writable root filesystem, a published port, or user 0).
     for row in "$plain" "$prune"; do
         for kind in 'l_token=other' 'readonly_root=false' 'ports=1' 'user=0:0'; do
             prune_world
@@ -5385,8 +5384,8 @@ t_g24_cleanup_rechecks_the_runner_layout_before_removing_it() {
     done
 }
 
-# `run historical resources:assets:prune` would not be given the files volume: it would see an empty store whatever the volume holds. It is refused, before anything is asked of
-# Docker; the same command in the current tree is the one that runs, and no other command's policy changes.
+# `run historical resources:assets:prune` would not be given the files volume: it would see an empty store whatever the volume holds. It is refused, before any rehearsal object is inspected or
+# created; the same command in the current tree is the one that runs, and no other command's policy changes.
 t_g24_the_historical_prune_is_refused() {
     local name
     prune_world
