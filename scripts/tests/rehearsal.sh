@@ -4778,7 +4778,13 @@ t_g23_creating_the_files_container_is_a_recorded_change() {
         [[ "$RC" == 143 ]] || bad "a stage that was terminated did not exit 143: $RC"
         trailer_cautious 'a stage interrupted after the create had begun'
         [[ -z "$(find "$T/int-tmp" -mindepth 1)" ]] || bad 'an interrupted stage left its change record behind'
-        ! files_container_exists || ! grep -q "$NAME_F" "$W/started" 2>/dev/null || bad 'an interrupted stage started the files container'
+        # Bash runs a trap after the foreground command that is running has finished, so the `check` whose create the signal arrived in may run to its end (start,
+        # then removal) before the stage exits. What matters is what does not follow: no files container is left behind, the stage does not go on to its next files
+        # action (`archive`), and exactly one files container was ever created.
+        ! files_container_exists || bad 'an interrupted stage left a files container behind'
+        [[ "$(grep -c "^create --name $NAME_F " "$W/calls")" == 1 ]] || bad 'an interrupted stage created more than one files container'
+        ! grep -q "files.php archive" "$W/calls" || bad 'an interrupted stage went on to the archive action'
+        [[ "$(grep -c "^rm " "$W/calls")" == "$(grep -c "^start " "$W/calls")" ]] || bad 'a container that an interrupted stage started was not removed'
     else
         bad "the interruption could not be carried out: $INT_WHY"
     fi
