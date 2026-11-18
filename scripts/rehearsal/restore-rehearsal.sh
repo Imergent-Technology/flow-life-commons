@@ -151,6 +151,11 @@ readonly FILES_VOLUME_NAME='flc-rehearsal-restore-files-data'
 readonly FILES_MOUNT='/var/www/html'      # an existing www-data-owned directory of the image, so a new volume copies its ownership here, as the source volume does at SRC_MOUNT
 readonly FILES_SRC_MOUNT='/rehearsal/src' # the prepared source in the files container; only the helper and its two support classes are read from it
 readonly FILES_STORE_DIR='resources'      # inside the volume: storage/app/private/resources, the private `resources` disk's root (config/filesystems.php)
+# Slice 2.2C-3 (WU2). The PHP runner may see the files volume for exactly one operation, `resources:assets:prune --dry-run` in the current tree, read-only. The volume
+# is mounted at a path of its own, NOT under the application, because Docker copies an image directory's content into an empty named volume that is mounted over it,
+# and because the files volume's root is storage/ (not the Resources directory), so the application's `storage/app/private/resources` is a link, made inside the
+# runner's own temporary storage (a tmpfs, gone with the container), to the directory of that name in the volume. See RUNNER_FILES_SETUP.
+readonly RUNNER_FILES_MOUNT='/rehearsal/files'
 readonly FILES_ARCHIVE_FILE='resources.archive.tar.gz'
 readonly FILES_MANIFEST_FILE='resources.manifest.json'
 readonly FILES_VOLUME_MARKER='files.volume' # written once the files volume has been created and verified: from then on a missing volume is refused, never recreated
@@ -675,6 +680,9 @@ SQL
 # --- G7: artisan, deny by default ---------------------------------------------------------------------------------------------------
 
 readonly ARTISAN_ALLOWED=(about migrate migrate:status relationships:check release:show resources:assets:prune)
+# The one operation that may see the files volume. runner_command builds its vector from this, and run_in_runner compares what it is asked to run with it, element
+# by element, so the two cannot drift apart.
+readonly PRUNE_DRY_RUN_CMD=(php artisan resources:assets:prune --dry-run)
 
 # artisan_problem ARGS...: why the rehearsal refuses to run `php artisan ARGS`, or nothing. The first argument must be one of the exact
 # names above: Symfony Console resolves abbreviations (`res:ass:pru` is the prune command), so refusing the prune command by name would
@@ -701,7 +709,7 @@ artisan_problem() {
 # database network) or as a source-preparation container (ROLE prepare, NETMODE none or bridge, never the database network). The template
 # never prints the environment, so the application password cannot appear here. Prints the first problem and returns 1.
 ephemeral_identity_problem() {
-    local id="$1" token="${2:-}" role="$3" netmode="$4" want_image="${5:-$PHP_IMAGE_ID}" files_rw="${6:-${FILES_RW:-false}}" out
+    local id="$1" token="${2:-}" role="$3" netmode="$4" want_image="${5:-$PHP_IMAGE_ID}" files_rw="${6:-${FILES_RW:-false}}" runner_files="${7:-${RUNNER_FILES:-0}}" out
     out="$(dkr inspect --type container --format "$EPHEMERAL_FMT" "$id" 2>/dev/null)" || { echo "cannot be inspected"; return 1; }
     local name image l_ns l_role l_token ports privileged capadd capdrop secopt readonly_root user mode networks mounts tmpfs memory pids cpus
     IFS='|' read -r _ name image l_ns l_role l_token ports privileged capadd capdrop secopt readonly_root user mode networks mounts tmpfs memory pids cpus <<<"$out"
@@ -733,6 +741,10 @@ ephemeral_identity_problem() {
     done
     kept="$(printf '%s' "$kept" | LC_ALL=C sort | tr '\n' ',')"
     [[ "$role" != files ]] || want_kept="volume:$FILES_VOLUME_NAME:$FILES_MOUNT:$files_rw,volume:$SRC_VOLUME_NAME:$FILES_SRC_MOUNT:false,"
+    # The runner of the prune dry-run (and only that one) has the files volume as well, and read-only: a writable mount, or another path, is refused like any other.
+    if [[ "$role" == runner && "$runner_files" == 1 ]]; then
+        want_kept="$(printf '%s\n' "volume:$FILES_VOLUME_NAME:$RUNNER_FILES_MOUNT:false" "volume:$SRC_VOLUME_NAME:$SRC_MOUNT:false" | LC_ALL=C sort | tr '\n' ',')" # guard:G24-e-runner-files-mounts
+    fi
     [[ "$kept" == "$want_kept" ]] || { echo "its mounts are '$kept', not '$want_kept'"; return 1; } # guard:G10-e-mounts
     [[ "$tmpfs" == "$want_tmpfs" ]] || { echo "its temporary filesystems are '$tmpfs', not '$want_tmpfs'"; return 1; } # guard:G10-e-tmpfs
     [[ "$memory" == "$EPHEMERAL_MEMORY" && "$pids" == "$EPHEMERAL_PIDS" && "$cpus" == "$EPHEMERAL_NANOCPUS" ]] || { echo "its memory, process or CPU limit is not the one this script sets"; return 1; } # guard:G10-e-limits
@@ -916,7 +928,7 @@ runner_command() {
     case "$name" in
         about | migrate:status | relationships:check | release:show) RUN_CMD=(php artisan "$name") ;;
         migrate) RUN_CMD=(php artisan migrate --force --no-interaction) ;;
-        resources:assets:prune) RUN_CMD=(php artisan resources:assets:prune --dry-run) ;;
+        resources:assets:prune) RUN_CMD=("${PRUNE_DRY_RUN_CMD[@]}") ;;
         helper:db-ping) RUN_CMD=(php "$SRC_MOUNT/harness/db-ping.php") ;;
         helper:fixture-load) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" fixture-load) ;;
         helper:snapshot) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" snapshot) ;;
@@ -932,11 +944,46 @@ runner_command() {
     fi
 }
 
+# What the runner runs first, inside the container: the writable directories Laravel needs beneath its (temporary) storage, then the command itself. Fixed text; the
+# caller supplies nothing.
+readonly RUNNER_SETUP='mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs 2>/dev/null; exec "$@"'
+# The same for the prune dry-run, which has the files volume at $1 (RUNNER_FILES_MOUNT, a constant of this script) and sees the application's Resources directory
+# as a link to the volume's: the application resolves its `resources` disk through storage_path('app/private/resources'), which is a path in the runner's tmpfs and
+# so would otherwise be empty. The link is made in that tmpfs only (the mount is read-only and nothing is written to it), and both ends are proven before the
+# command runs: the directory in the volume must be a plain directory whose physical path is exactly the one expected (not a link to somewhere else in the
+# container), and the link must resolve to it. A volume with no Resources directory at all is the zero-file state: no link is made, and the application finds the
+# empty store it would find on a new installation. Anything else stops here with status 70, and nothing is run. POSIX sh only.
+# shellcheck disable=SC2016 # the text is run by `sh` inside the container, which expands it
+readonly RUNNER_FILES_SETUP='store=$1; shift
+mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs 2>/dev/null
+dir="$store/storage/app/private/resources"
+if [ -e "$dir" ] || [ -L "$dir" ]; then
+  [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$dir" ] || { echo "restore-rehearsal: the Resources directory in the files volume is not a plain directory; nothing was run." >&2; exit 70; }
+  mkdir -p storage/app/private && ln -s "$dir" storage/app/private/resources && [ "$(cd storage/app/private/resources 2>/dev/null && pwd -P)" = "$dir" ] || { echo "restore-rehearsal: the Resources directory could not be made visible to the application; nothing was run." >&2; exit 70; }
+fi
+exec "$@"'
+
+# runner_may_read_files WORKDIR CMD...: true for exactly one operation, the Resources prune dry-run in the current tree. What is compared is the vector the runner is
+# about to run, element by element, not a name a caller supplied.
+runner_may_read_files() {
+    local workdir="$1" i
+    shift
+    [[ "$workdir" == current ]] || return 1 # guard:G24-files-current-only
+    (($# == ${#PRUNE_DRY_RUN_CMD[@]})) || return 1 # guard:G24-files-exact-length
+    for i in "${!PRUNE_DRY_RUN_CMD[@]}"; do
+        [[ "$1" == "${PRUNE_DRY_RUN_CMD[i]}" ]] || return 1 # guard:G24-files-exact-vector
+        shift
+    done
+    return 0
+}
+
 # run_in_runner ROOT WORKDIR CMD...: the checks, then one disposable runner on the rehearsal network with the application password, the
-# read-only source and nothing else. Output and exit status are the command's.
+# read-only source and nothing else; the prune dry-run's runner also has the files volume, read-only (runner_may_read_files). Output and exit status are the
+# command's.
 run_in_runner() {
-    local root="$1" workdir="$2" token why ids net_id id
+    local root="$1" workdir="$2" token why ids net_id id with_files=0 files_args=() setup="$RUNNER_SETUP" lead=()
     shift 2
+    if runner_may_read_files "$workdir" "$@"; then with_files=1; fi
     assert_sql_target "$root" "$APP_DB" # container, version and sentinel, before anything can touch the database
     token="$(state_token "$root")"
     why="$(app_account_problem "$CID")" || refuse "$why." # guard:G12-before-run
@@ -946,13 +993,26 @@ run_in_runner() {
     [[ -n "$net_id" && "$net_id" != *$'\n'* ]] || refuse "expected exactly one rehearsal network."
     why="$(network_identity_problem "$net_id" "$token" "$CID")" || refuse "the network is not the rehearsal's: $why."
     why="$(source_volume_identity_problem "$SRC_VOLUME_NAME" "$token" '')" || refuse "the source volume is not the rehearsal's (has 'prepare' been run?): $why." # guard:G10-run-volume
+    if ((with_files == 1)); then
+        # The files volume must already be an established one of this run: this operation never creates it, and a volume that is missing is refused, never taken for an
+        # empty store. files_volume_ready is called with no permission to create, and finds a volume that is missing, foreign, unlabelled, optioned or shared.
+        [[ -e "$root/$FILES_VOLUME_MARKER" || -L "$root/$FILES_VOLUME_MARKER" ]] || refuse "no files volume has been established in this run, so there is nothing for the prune dry-run to read. Run seed-files or backup-files first." # guard:G24-files-record
+        files_volume_ready "$token" 0 # guard:G24-files-ready
+        files_args=(--mount "type=volume,source=$FILES_VOLUME_NAME,target=$RUNNER_FILES_MOUNT,readonly")
+        setup="$RUNNER_FILES_SETUP" lead=("$RUNNER_FILES_MOUNT")
+    fi
+    RUNNER_FILES="$with_files"
     resolve_php_image
     app_password "$root" >/dev/null # refuses a malformed password here, in this shell, before anything is created
     state_key "$root" REHEARSAL_APP_KEY >/dev/null # and a missing or malformed key, for the same reason
     state_key "$root" REHEARSAL_APP_PREVIOUS_KEY >/dev/null
+    # Docker sets up a container's mounts when it is created, and makes a named volume that is missing then (empty, unlabelled): whatever the command does, from the
+    # moment the create is attempted a volume of the rehearsal may have changed, and a stage that is armed says so first. Every refusal above came before it.
+    mutation_begins # guard:G24-runner-create-mutation
     id="$(create_verified "$root" "$token" runner "$NETWORK_NAME" launch_docker -- \
         --network "$NETWORK_NAME" \
         --mount "type=volume,source=$SRC_VOLUME_NAME,target=$SRC_MOUNT,readonly" \
+        ${files_args[@]+"${files_args[@]}"} \
         --tmpfs /tmp:rw,noexec,nosuid,size=64m,uid=33,gid=33 \
         --tmpfs "$SRC_MOUNT/historical/storage:rw,noexec,nosuid,size=64m,uid=33,gid=33" \
         --tmpfs "$SRC_MOUNT/historical/bootstrap/cache:rw,noexec,nosuid,size=16m,uid=33,gid=33" \
@@ -964,8 +1024,22 @@ run_in_runner() {
         -e DB_CONNECTION=mariadb -e "DB_HOST=$CONTAINER_NAME" -e DB_PORT=3306 -e "DB_DATABASE=$APP_DB" -e "DB_USERNAME=$APP_USER" -e DB_PASSWORD \
         -e APP_KEY -e APP_PREVIOUS_KEYS \
         "$PHP_IMAGE_ID" \
-        sh -c 'mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs 2>/dev/null; exec "$@"' sh "$@")" || exit "$?"
+        sh -c "$setup" sh ${lead[@]+"${lead[@]}"} "$@")" || exit "$?"
+    runner_mounts_recheck "$id" "$token" "$with_files"
     start_and_remove "$id"
+}
+
+# runner_mounts_recheck ID TOKEN WITH_FILES: what files_mounts_recheck does for the files container, for the runner. The source volume (and, for the prune dry-run's
+# runner, the files volume) was proven before the create and is proven again now that the create has returned, with the new container as the only consumer
+# allowed: a volume that was missing was made by Docker (empty, unlabelled), one that was replaced is not the one that was proven, one that gained a user is shared.
+# Nothing starts when any of that is found.
+runner_mounts_recheck() {
+    local id="$1" token="$2" with_files="$3" problem='' why
+    why="$(source_volume_identity_problem "$SRC_VOLUME_NAME" "$token" "$id")" || problem="the source volume is no longer the rehearsal's: $why" # guard:G24-r-recheck-source
+    if [[ -z "$problem" && "$with_files" == 1 ]]; then
+        why="$(files_volume_identity_problem "$FILES_VOLUME_NAME" "$token" "$id")" || problem="the files volume is no longer the rehearsal's: $why" # guard:G24-r-recheck-files
+    fi
+    [[ -z "$problem" ]] || refuse_after_create "$id" "$token" runner "$NETWORK_NAME" "$problem" # guard:G24-r-recheck-refuses
 }
 
 # --- commands -------------------------------------------------------------------------------------------------------------------------
@@ -2498,26 +2572,32 @@ run_files() {
 # files_mounts_recheck ID TOKEN: the identity of the files volume and of the source volume was proven BEFORE the container was created, and Docker creates a
 # named volume that is missing when it sets up a mount (empty, unlabelled, plain local). So once the create has returned both are proven again, with the new
 # container as the only consumer allowed: a volume that vanished and was replaced in between, or that gained another user, is found here, before anything
-# starts. Nothing starts. This script touches no volume, the replacement included: it is evidence. Only the container this script has just created is removed, and
-# only if it is still what create_verified verified; a container that is not is left where it is, and the refusal says so.
+# starts (refuse_after_create says what is then done and not done).
 files_mounts_recheck() {
-    local id="$1" token="$2" problem='' why removable=0 outcome
+    local id="$1" token="$2" problem='' why
     why="$(files_volume_identity_problem "$FILES_VOLUME_NAME" "$token" "$id")" || problem="the files volume is no longer the rehearsal's: $why" # guard:G22-f-recheck-files-volume
     if [[ -z "$problem" ]]; then
         why="$(source_volume_identity_problem "$SRC_VOLUME_NAME" "$token" "$id")" || problem="the source volume is no longer the rehearsal's: $why" # guard:G22-f-recheck-source-volume
     fi
-    [[ -n "$problem" ]] || return 0
-    ephemeral_identity_problem "$id" "$token" files none >/dev/null 2>&1 && removable=1 # guard:G22-f-recheck-removable
+    [[ -z "$problem" ]] || refuse_after_create "$id" "$token" files none "$problem"
+}
+
+# refuse_after_create ID TOKEN ROLE NETMODE PROBLEM: the refusal both rechecks end with. Nothing starts. This script touches no volume, the replacement included: it is
+# evidence. Only the container this script has just created is removed, and only if it is still what create_verified verified; a container that is not is left where
+# it is, and the refusal says so.
+refuse_after_create() {
+    local id="$1" token="$2" role="$3" netmode="$4" problem="$5" removable=0 outcome
+    ephemeral_identity_problem "$id" "$token" "$role" "$netmode" >/dev/null 2>&1 && removable=1 # guard:G22-f-recheck-removable
     if ((removable == 1)); then
         if dkr rm "$id" >/dev/null 2>&1; then
-            outcome="The files container ${id:0:12}, which this script had just created, was removed and not started."
+            outcome="The $role container ${id:0:12}, which this script had just created, was removed and not started."
         else
-            outcome="The files container ${id:0:12}, which this script had just created, could not be removed and was not started: remove it with cleanup."
+            outcome="The $role container ${id:0:12}, which this script had just created, could not be removed and was not started: remove it with cleanup."
         fi
     else
         outcome="The container ${id:0:12} is no longer what this script created, so it was left where it is, and was not started."
     fi
-    refuse "after the files container was created, $problem. $outcome This script removed no volume; Docker may have made a named volume again while it created the container, and the volume that is there now has been left as it is, for investigation. Run: restore-rehearsal.sh cleanup --dry-run." # guard:G22-f-recheck-refuses
+    refuse "after the $role container was created, $problem. $outcome This script removed no volume; Docker may have made a named volume again while it created the container, and the volume that is there now has been left as it is, for investigation. Run: restore-rehearsal.sh cleanup --dry-run." # guard:G22-f-recheck-refuses
 }
 
 # files_report TEXT: validates the files helper's state, count and file lines and sets FILES_STATE (absent|present), FILES_COUNT and FILES_SPEC

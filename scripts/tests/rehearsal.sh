@@ -442,6 +442,7 @@ case "$1 ${2:-}" in
             *'rehearse.php signin'*) key=signin ;;
             *' exec sha256sum -- '*'tests/Support'*) key=support_sums ;; # slice 2.2C-3 (WU1): the support classes' digests as the volume holds them
             *' exec sha256sum -- '*) key=harness_sums ;;
+            *'artisan resources:assets:prune'*) key=prune ;; # slice 2.2C-3 (WU2): the Resources prune dry-run (out_prune, fail_prune)
             *'rehearse.php half-migrate'*) key=half_migrate ;;
             *'rehearse.php revoke'*) key=revoke ;;
             *'harness/files.php check'*) key=files_check ;;
@@ -4890,6 +4891,338 @@ t_g23_the_read_only_helpers_are_exactly_these() {
     [[ "$OUT" == 1 ]] || bad 'helper_is_read_only has more than one place that says a command is read-only'
 }
 
+# --- WU2: the runner's read-only access to the Resources volume, for one operation, and the post-create verification of every runner ----------------------------
+
+# A rehearsal with the prepared source and an established files volume (the state seed-files or backup-files leaves).
+prune_world() {
+    src_world
+    add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+    established_files_volume
+}
+# Nothing was created, started or removed: a refusal before the create is a refusal before Docker is asked for anything of the runner.
+no_runner_created() { # DESC
+    ! grep -qE '^(create|volume create|volume rm|rm|start) ' "$W/calls" || bad "$1: a container or volume was created, started or removed: $(grep -E '^(create|volume create|volume rm|rm|start) ' "$W/calls" | head -n 2 | cut -c1-120 | tr '\n' ';')"
+    [[ ! -e "$W/started" ]] || bad "$1: a container was started"
+}
+# The representative output of the dry-run (PruneAssetsCommand's own wording): kept, recent, ignored, orphaned, failed and missing, and the warning that goes with it.
+PRUNE_OUTPUT='Resources file store: 5 file(s) found (dry run: nothing is removed).
+  referenced by an asset, kept: 2
+  unreferenced but younger than 24 hour(s), left alone: 1
+    01jc0000000000000000000003
+  not a Resources storage key, left alone: 1
+    notes.txt
+  orphaned, would be removed: 1
+    01jb0000000000000000000002
+  orphaned, could NOT be removed (tried again next run): 0
+Asset rows whose file is missing from the store (asset_unavailable): 1
+    01jd0000000000000000000004
+Restore those files from the backup taken with the database; they cannot be served until then.'
+
+t_g24_the_prune_dry_run_reads_the_files_volume_read_only() {
+    local create flag
+    prune_world
+    printf '%s\n' "$PRUNE_OUTPUT" >"$W/out_prune"
+    run_script -- run current resources:assets:prune
+    expect_rc 'the prune dry-run' 0
+    [[ "$OUT" == "$PRUNE_OUTPUT" ]] || bad "the dry-run's output was not relayed exactly: ${OUT:0:200}"
+    only_database_left 'the prune dry-run'
+    create="$(grep -E '^create ' "$W/calls" || true)"
+    [[ "$(grep -c . <<<"$create")" == 1 ]] || bad "the prune dry-run: expected exactly one create, got: $create"
+    # Exactly two volumes, both read-only, the files volume at a path of its own; nothing from the host.
+    expect_has 'the files volume, read-only' "$create" "--mount type=volume,source=$NAME_FV,target=/rehearsal/files,readonly "
+    expect_has 'the source volume, read-only' "$create" "--mount type=volume,source=$NAME_SRC,target=/var/www/html,readonly "
+    [[ "$(grep -o 'type=volume' <<<"$create" | wc -l)" == 2 ]] || bad 'the prune dry-run runner has other than the two volumes'
+    expect_lacks 'a host mount' "$create" 'type=bind'
+    expect_lacks 'a volume option' "$create" ' -v '
+    expect_has 'the command and its link setup' "$(<"$W/calls")" ' sh /rehearsal/files php artisan resources:assets:prune --dry-run' # (the setup text has newlines: the log has more than one line for the create)
+    for flag in '--read-only' '--cap-drop ALL' '--security-opt no-new-privileges' '--user 33:33' '--pids-limit 256' '--memory 1g' '--pull never' "--network $NAME_N" \
+        '--workdir /var/www/html/current' '-e DB_PASSWORD '; do
+        expect_has 'the prune dry-run runner is as isolated as any' "$create" "$flag"
+    done
+    ! grep -qE '^volume (create|rm) ' "$W/calls" || bad 'the prune dry-run created or removed a volume'
+    [[ "$(cat "$W/started")" == "/$NAME_R" ]] || bad "the runner was not started exactly once: $(cat "$W/started" 2>/dev/null)"
+    no_secret_anywhere 'the prune dry-run'
+    # The command's own status and output are the answer, whatever they are: a failure is relayed, and so is a store with no file.
+    prune_world
+    printf '1' >"$W/fail_prune"
+    run_script -- run current resources:assets:prune
+    expect_rc 'a failing dry-run' 1
+    only_database_left 'a failing dry-run'
+    prune_world
+    printf 'Resources file store: 0 file(s) found (dry run: nothing is removed).\n  referenced by an asset, kept: 0\n' >"$W/out_prune"
+    run_script -- run current resources:assets:prune
+    expect_rc 'a store with no file' 0
+    expect_has 'a store with no file' "$OUT" '0 file(s) found'
+    # A daemon that made the files volume writable, or left it out, or put it elsewhere, is refused like any other deviation (the recheck of create_verified).
+    for flag in "volume:$NAME_FV:/rehearsal/files:true,volume:$NAME_SRC:/var/www/html:false," "volume:$NAME_SRC:/var/www/html:false," "volume:$NAME_FV:/var/www/html:false,volume:$NAME_SRC:/var/www/html:false," \
+        "volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_SRC:/var/www/html:true,"; do
+        prune_world
+        printf 'mounts %s\n' "$flag" >"$W/create_override"
+        run_script -- run current resources:assets:prune
+        expect_refused "mounts $flag" 'its mounts are'
+        [[ ! -e "$W/started" ]] || bad "mounts $flag: the runner was started"
+    done
+}
+
+# runner_may_read_files is a decision about the vector the runner is about to run, not about a name. The table is the complete argument for "exactly one".
+t_g24_the_files_volume_is_only_for_the_prune_dry_run() {
+    local row ok want many
+    may_read() { # WORKDIR CMD...: prints yes or no
+        run_fn "runner_may_read_files $(printf '%q ' "$@")"
+        if [[ "$RC" == 0 ]]; then echo yes; else echo no; fi
+    }
+    [[ "$(may_read current php artisan resources:assets:prune --dry-run)" == yes ]] || bad 'the prune dry-run in the current tree was not allowed the files volume'
+    for row in 'historical php artisan resources:assets:prune --dry-run' 'harness php artisan resources:assets:prune --dry-run' 'main php artisan resources:assets:prune --dry-run' \
+        'current php artisan resources:assets:prune' 'current php artisan resources:assets:prune --dry-run --force' 'current php artisan resources:assets:prune --dry-run extra' \
+        'current php artisan resources:assets:prune --dry-run=1' 'current php artisan --dry-run resources:assets:prune' 'current php artisan about' \
+        'current php artisan schedule:run' 'current php artisan res:ass:pru --dry-run' 'current php artisan resources:assets:prun --dry-run' \
+        'current /usr/bin/php artisan resources:assets:prune --dry-run' 'current php /var/www/html/harness/rehearse.php snapshot' 'current php artisan migrate --force --no-interaction' \
+        'current php artisan resources:assets:prune dry-run' 'current php artisan' 'current php' 'current'; do
+        # shellcheck disable=SC2086 # the words are the point
+        [[ "$(may_read $row)" == no ]] || bad "the files volume was allowed for: $row"
+    done
+    many=(current php artisan 'resources:assets:prune --dry-run')
+    [[ "$(may_read "${many[@]}")" == no ]] || bad 'a single word holding the whole operation was allowed the files volume'
+    many=(current php artisan resources:assets:prune ' --dry-run')
+    [[ "$(may_read "${many[@]}")" == no ]] || bad 'an option with a leading space was allowed the files volume'
+    # And from the outside: no other approved command, in either tree, has the volume, or so much as asks Docker about it.
+    for want in 'current about' 'current migrate:status' 'current helper:db-ping' 'current migrate' 'historical resources:assets:prune' 'historical about'; do
+        prune_world
+        # shellcheck disable=SC2086
+        run_script -- run $want
+        expect_rc "run $want" 0
+        ok="$(grep -E '^create ' "$W/calls" || true)"
+        expect_lacks "run $want" "$ok" "$NAME_FV"
+        expect_lacks "run $want" "$ok" '/rehearsal/files'
+        ! grep -q "$NAME_FV" "$W/calls" || bad "run $want: the files volume was looked at for a command that does not read it"
+    done
+}
+
+t_g24_the_prune_runner_needs_an_established_valid_files_volume() {
+    local fp case_name field value needle
+    fp="$(printf 'flc-run-v1|%s' "$OTHER_TOKEN" | sha256sum | cut -c1-16)"
+    # No files volume has ever been established, and none exists: this operation does not make one.
+    if want_case G24-files-record; then
+        src_world
+        run_script -- run current resources:assets:prune
+        expect_refused 'no files volume at all' 'no files volume has been established'
+        no_runner_created 'no files volume at all'
+        # A volume of the right name with no record of it is not adopted either.
+        src_world; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+        run_script -- run current resources:assets:prune
+        expect_refused 'a volume with no record' 'no files volume has been established'
+        no_runner_created 'a volume with no record'
+        [[ ! -e "$T/root/files.volume" ]] || bad 'a record of the files volume was written by a runner'
+    fi
+    if want_case G24-files-ready; then
+        # Established and then gone: never replaced by an empty one, never read as an empty store, never recreated.
+        src_world; established_files_volume
+        run_script -- run current resources:assets:prune
+        expect_refused 'an established volume that is gone' 'is now missing'
+        no_runner_created 'an established volume that is gone'
+        # Not the rehearsal's volume, in each of the ways it can differ.
+        for case_name in 'token|l_token|'"$OTHER_TOKEN"'|run token differs' 'role|l_role|source|labels are not' 'label|l_ns|other|labels are not' 'options|options|1|plain local volume' \
+            'driver|driver|nfs|plain local volume' 'name|name|someone-else|its name is'; do
+            IFS='|' read -r _ field value needle <<<"$case_name"
+            prune_world
+            printf '%s' "$value" >"$W/v/$NAME_FV/$field"
+            run_script -- run current resources:assets:prune
+            expect_refused "a files volume whose $field differs" "$needle"
+            no_runner_created "a files volume whose $field differs"
+        done
+        # Used by a container that is not ours.
+        prune_world
+        mkdir -p "$W/c/$FOREIGN"
+        put "$W/c/$FOREIGN" id "$FOREIGN"; put "$W/c/$FOREIGN" name /intruder; put "$W/c/$FOREIGN" mounts "volume:$NAME_FV:/data,"
+        run_script -- run current resources:assets:prune
+        expect_refused 'a files volume with a foreign user' 'is not ours'
+        no_runner_created 'a files volume with a foreign user'
+        # A record that is not this run's.
+        prune_world
+        printf 'files-volume-v1\n%s' "$fp" >"$T/root/files.volume"
+        run_script -- run current resources:assets:prune
+        expect_refused 'a record of another run' "the record of the files volume in the state directory is not this run's"
+        no_runner_created 'a record of another run'
+    fi
+}
+
+t_g24_every_runner_rechecks_the_source_volume_after_create() {
+    local cmd
+    # The source volume is replaced by an unlabelled one while the runner is created: the recheck refuses, the runner is not started, and only the container just
+    # created is removed. The volume that is there now is evidence.
+    for cmd in 'current about' 'historical migrate:status'; do
+        src_world
+        replace_volume_hook "$NAME_SRC"
+        # shellcheck disable=SC2086 # the words are the point
+        run_script -- run $cmd
+        expect_refused "a source volume replaced while the runner for '$cmd' was created" "after the runner container was created, the source volume is no longer the rehearsal's: its labels are not this script's"
+        expect_has "'$cmd'" "$ERR" 'was removed and not started'
+        [[ ! -e "$W/started" ]] || bad "'$cmd': the runner was started although its source volume was replaced"
+        only_database_left "'$cmd'"
+        [[ -d "$W/v/$NAME_SRC" ]] || bad "'$cmd': the replacement volume was removed: it is evidence and is never deleted"
+        ! grep -q '^volume rm ' "$W/calls" || bad "'$cmd': a volume was removed"
+        [[ "$(grep -c '^create ' "$W/calls")" == 1 ]] || bad "'$cmd': more than the one runner was created"
+    done
+    # A container that is not ours that began using the source volume in the window.
+    src_world
+    printf 'mkdir -p "%s/c/%s"; cd "%s/c/%s"; printf %%s %s >id; printf /intruder >name; printf %%s "volume:%s:/data," >mounts\n' "$W" "$FOREIGN" "$W" "$FOREIGN" "$FOREIGN" "$NAME_SRC" >"$W/hook_create"
+    run_script -- run current about
+    expect_refused 'a foreign container that began using the source volume' "the source volume is no longer the rehearsal's: container"
+    [[ ! -e "$W/started" ]] || bad 'the runner was started although a foreign container used its source volume'
+    [[ -d "$W/c/$FOREIGN" ]] || bad 'the foreign container was removed'
+    # The runner is only removed if it is still what was created; one that changed is left where it is, and the refusal says so.
+    if want_case G24-r-recheck-refuses; then
+        src_world
+        replace_volume_hook "$NAME_SRC"
+        # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+        printf 'ok=1; for d in "%s"/c/*; do if [[ "$(cat "$d/name" 2>/dev/null)" == "/%s" ]]; then printf %%s someone-else >"$d/l_role"; ok=0; fi; done; exit $ok\n' "$W" "$NAME_R" >"$W/hook_inspect_c"
+        run_script -- run current about
+        expect_refused 'a runner that changed during the create' 'is no longer what this script created, so it was left where it is'
+        ! grep -q '^rm ' "$W/calls" || bad 'a container was removed although it could not be proven to be the one created'
+        [[ ! -e "$W/started" ]] || bad 'a runner that changed was started'
+        # A removal that fails says so.
+        src_world
+        replace_volume_hook "$NAME_SRC"
+        inject_failure 'rm *'
+        run_script -- run current about
+        expect_refused 'a created runner that cannot be removed' 'could not be removed and was not started'
+    fi
+    # Nothing was weakened: a source volume that is wrong BEFORE the create is refused before it, as before.
+    src_world
+    printf 'other' >"$W/v/$NAME_SRC/l_ns"
+    run_script -- run current about
+    expect_refused 'a source volume that is wrong before the create' 'the source volume is not the rehearsal'"'"'s'
+    [[ "$(grep -c '^create ' "$W/calls" || true)" == 0 ]] || bad 'a runner was created although the source volume was already wrong'
+}
+
+t_g24_the_prune_runner_rechecks_the_files_volume_too() {
+    # The files volume is replaced while the runner that is to read it is created (as Docker would make a missing one: empty, unlabelled).
+    prune_world
+    replace_volume_hook "$NAME_FV"
+    run_script -- run current resources:assets:prune
+    expect_refused 'a files volume replaced while the runner was created' "after the runner container was created, the files volume is no longer the rehearsal's: its labels are not this script's"
+    expect_has 'the runner is said to be removed, not started' "$ERR" 'was removed and not started'
+    [[ ! -e "$W/started" ]] || bad 'the runner was started although the files volume it was to read had been replaced'
+    only_database_left 'a replaced files volume'
+    [[ -d "$W/v/$NAME_FV" ]] || bad 'the replacement files volume was removed: it is evidence and is never deleted'
+    ! grep -q '^volume rm ' "$W/calls" || bad 'a volume was removed'
+    # A container that is not ours that began using it.
+    prune_world
+    printf 'mkdir -p "%s/c/%s"; cd "%s/c/%s"; printf %%s %s >id; printf /intruder >name; printf %%s "volume:%s:/data," >mounts\n' "$W" "$FOREIGN" "$W" "$FOREIGN" "$FOREIGN" "$NAME_FV" >"$W/hook_create"
+    run_script -- run current resources:assets:prune
+    expect_refused 'a foreign container that began using the files volume' "the files volume is no longer the rehearsal's: container"
+    [[ ! -e "$W/started" ]] || bad 'the runner was started although a foreign container used the files volume'
+    # And the source volume, for this runner as for every other.
+    prune_world
+    replace_volume_hook "$NAME_SRC"
+    run_script -- run current resources:assets:prune
+    expect_refused 'a source volume replaced while the prune runner was created' "the source volume is no longer the rehearsal's"
+    [[ ! -e "$W/started" ]] || bad 'the prune runner was started although the source volume was replaced'
+}
+
+# The create of a runner is a recorded change: Docker may make a missing volume when it sets up the mounts, so an armed stage says "may be partly changed" from the
+# moment the create is attempted, whatever the command is, and says it changed nothing only for a refusal that came before. (cmd_run and cmd_probe arm nothing: a
+# stage is armed by the stages that call run_in_runner, so the function is run here under an armed stage of its own.)
+t_g24_a_runner_create_is_a_recorded_change() {
+    local seen
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    local code='preflight; arm_stage probe-stage on_stage_exit; run_in_runner "$ROOT" current php artisan about'
+    mkdir -p "$T/marker-tmp"
+    prune_world
+    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+    printf 'for f in "%s"/*.changed; do [[ -e "$f" ]] && echo "$f"; done >"%s/marker_at_create"\n' "$T/marker-tmp" "$W" >"$W/hook_create"
+    run_fn "$code" TMPDIR="$T/marker-tmp"
+    expect_rc 'a runner under an armed stage' 0
+    seen="$(cat "$W/marker_at_create" 2>/dev/null || true)"
+    [[ "$seen" == "$T/marker-tmp/"*.changed ]] || bad "the runner was created before the change record was made (the fake daemon saw: ${seen:0:200})"
+    # The create refused by Docker: cautious. A refusal before the create: it changed nothing.
+    prune_world
+    : >"$W/create_fail"
+    run_fn "$code" TMPDIR="$T/marker-tmp"
+    [[ "$RC" != 0 ]] || bad 'a runner whose create Docker refused did not fail'
+    trailer_cautious 'a create that Docker refused'
+    prune_world
+    printf other >"$W/v/$NAME_SRC/l_ns"
+    snapshot_state
+    run_fn "$code" TMPDIR="$T/marker-tmp"
+    expect_rc 'a refusal before the create' 3
+    trailer_unchanged 'a refusal before the runner was created'
+    [[ -z "$(find "$T/marker-tmp" -mindepth 1)" ]] || bad 'a change record was left behind'
+}
+
+# run_helper records a change for every command that is not one of the five read-only ones, BEFORE it asks for the runner. Since every runner's create is recorded as
+# well (above), this is the earlier of two records, and is tested on its own: run_in_runner is replaced by a stand-in that only says whether the record existed.
+t_g24_run_helper_records_a_writing_helper_before_the_runner() {
+    local name got
+    for name in helper:fixture-load helper:post-upgrade-mark helper:half-migrate helper:revoke helper:sign-in migrate relationships:check resources:assets:prune \
+        helper:db-ping helper:snapshot migrate:status about release:show; do
+        mkdir -p "$T/marker-tmp"
+        run_fn "ROOT=/stand-in; run_in_runner() { if [[ -e \"\$MUTATION_MARK.changed\" ]]; then echo recorded; else echo unrecorded; fi; }; arm_stage stand-in on_stage_exit; run_helper current $name got; echo \"\$got\"" TMPDIR="$T/marker-tmp"
+        expect_rc "run_helper $name" 0
+        got="$OUT"
+        if [[ "$name" == helper:db-ping || "$name" == helper:snapshot || "$name" == migrate:status || "$name" == about || "$name" == release:show ]]; then
+            [[ "$got" == unrecorded ]] || bad "$name is read-only, and a change was recorded before its runner: $got"
+        else
+            [[ "$got" == recorded ]] || bad "$name may change something, and no change was recorded before its runner: $got"
+        fi
+    done
+}
+
+# The link the prune dry-run's runner makes is made by RUNNER_FILES_SETUP, a shell text that runs INSIDE the runner. It is run here, for real, by the host's `sh`,
+# against a directory standing in for the files volume's mount and another for the runner's working directory, with a stand-in for the command: what it makes, what it
+# refuses, what it leaves alone. (That Docker mounts the volume where this says, and that the application's disk follows the link, only a real run can show.)
+t_g24_the_files_mapping_is_made_inside_the_runner() {
+    local sb="$T/mapping" setup dir before after kind out want
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'printf "%s" "$RUNNER_FILES_SETUP"'
+    setup="$OUT"
+    [[ -n "$setup" ]] || { bad 'RUNNER_FILES_SETUP is empty'; return 0; }
+    PRE=''
+    mapped() { # runs the setup with the sandbox's mount and prints what the stand-in command saw; sets RC and out
+        rm -rf "$sb/work"; mkdir -p "$sb/work/storage"
+        if [[ -n "$PRE" ]]; then mkdir -p "$sb/work/storage/app/private/resources"; fi
+        RC=0
+        out="$(cd "$sb/work" && sh -c "$setup" sh "$sb/files" sh -c '(cd storage/app/private/resources 2>/dev/null && pwd -P); ls storage/app/private/resources 2>/dev/null | tr "\n" " "; echo "args=$#:$1:$2"; exit 7' x 'a b' c 2>&1)" || RC=$?
+    }
+    dir="$sb/files/storage/app/private/resources"
+    # Files in the volume's Resources directory: the application's path is the volume's directory, which is listed, and the command's status and arguments come through.
+    rm -rf "$sb"; mkdir -p "$dir"; : >"$dir/01jb0000000000000000000001"; : >"$dir/01jb0000000000000000000002"
+    before="$(cd "$sb/files" && find . | LC_ALL=C sort | tr '\n' ' ')"
+    mapped
+    [[ "$RC" == 7 ]] || bad "the command's own status did not come through: $RC ($out)"
+    [[ "$out" == *"$dir"* && "$out" == *'01jb0000000000000000000001 01jb0000000000000000000002'* && "$out" == *'args=2:a b:c'* ]] || bad "the application's path was not the volume's directory, or the arguments changed: $out"
+    [[ "$(readlink "$sb/work/storage/app/private/resources")" == "$dir" ]] || bad 'the link is not exactly to the Resources directory in the volume'
+    after="$(cd "$sb/files" && find . | LC_ALL=C sort | tr '\n' ' ')"
+    [[ "$before" == "$after" ]] || bad 'the setup changed the files volume'
+    # A Resources directory with no file in it.
+    rm -f "$dir/01jb0000000000000000000001" "$dir/01jb0000000000000000000002"
+    mapped
+    [[ "$out" == *"$dir"* && "$RC" == 7 ]] || bad "an empty Resources directory was not mapped: $out"
+    # No Resources directory at all (the zero-file state): no link, the command runs, and finds what a new installation finds.
+    rm -rf "$sb/files/storage"
+    mapped
+    [[ ! -e "$sb/work/storage/app/private/resources" && ! -L "$sb/work/storage/app/private/resources" && "$RC" == 7 && "$out" == *'args=2:a b:c'* ]] || bad "a volume with no Resources directory was not left as the empty store: rc=$RC $out"
+    # Anything else that is there is refused, status 70, and the command is not run: a link (to somewhere in the container or in the volume), a dangling link, a file,
+    # and a directory of that name that is already in the runner's own storage.
+    for kind in link dangling file preexisting; do
+        rm -rf "$sb/files"; mkdir -p "$sb/files/storage/app/private" "$sb/elsewhere"
+        PRE=''
+        case "$kind" in
+            link) ln -s "$sb/elsewhere" "$dir" ;;
+            dangling) ln -s "$sb/nowhere" "$dir" ;;
+            file) : >"$dir" ;;
+            preexisting) mkdir -p "$dir"; PRE=1 ;;
+        esac
+        mapped
+        [[ "$RC" == 70 ]] || bad "a Resources directory that is a $kind was not refused with status 70: rc=$RC ($out)"
+        [[ "$out" != *'args='* ]] || bad "the command was run although the Resources directory was a $kind"
+        want="is not a plain directory"
+        [[ "$kind" != preexisting ]] || want="could not be made visible"
+        [[ "$out" == *"$want"* && "$out" == *'nothing was run'* ]] || bad "a Resources directory that is a $kind was refused without saying why ('$want'): $out"
+    done
+    PRE=''
+}
+
 # --- the matrix runner itself (WU0): sharing the mutants among workers must not change which mutants run or what is concluded ---------------------------
 # These tests are about the machinery that runs the matrix, not about the rehearsal script, so no GUARD_TESTS entry points at them.
 
@@ -6642,6 +6975,16 @@ declare -A GUARD_TESTS=(
     [G22-f-volume-gone]='t_g22_a_missing_volume_is_never_recreated'
     [G22-f-volume-not-established]='t_g22_a_missing_volume_is_never_recreated'
     [G22-f-create-scope]='t_g22_creation_is_an_explicit_permission'
+    [G24-e-runner-files-mounts]='t_g24_the_prune_dry_run_reads_the_files_volume_read_only'
+    [G24-files-current-only]='t_g24_the_files_volume_is_only_for_the_prune_dry_run'
+    [G24-files-exact-length]='t_g24_the_files_volume_is_only_for_the_prune_dry_run'
+    [G24-files-exact-vector]='t_g24_the_files_volume_is_only_for_the_prune_dry_run'
+    [G24-files-record]='t_g24_the_prune_runner_needs_an_established_valid_files_volume'
+    [G24-files-ready]='t_g24_the_prune_runner_needs_an_established_valid_files_volume'
+    [G24-runner-create-mutation]='t_g24_a_runner_create_is_a_recorded_change'
+    [G24-r-recheck-source]='t_g24_every_runner_rechecks_the_source_volume_after_create'
+    [G24-r-recheck-files]='t_g24_the_prune_runner_rechecks_the_files_volume_too'
+    [G24-r-recheck-refuses]='t_g24_every_runner_rechecks_the_source_volume_after_create'
     [G22-f-recheck-files-volume]='t_g22_the_mounts_are_verified_again_after_create'
     [G22-f-recheck-source-volume]='t_g22_the_mounts_are_verified_again_after_create'
     [G22-f-recheck-removable]='t_g22_the_mounts_are_verified_again_after_create'
@@ -6650,7 +6993,7 @@ declare -A GUARD_TESTS=(
     [G23-mutation-recorded]='t_g23_a_change_record_that_cannot_be_written_stops_the_stage t_g23_a_failed_stage_does_not_overstate_or_understate'
     [G23-create-mutation]='t_g23_creating_the_files_container_is_a_recorded_change'
     [G23-sql-mutation]='t_g23_a_failed_stage_does_not_overstate_or_understate'
-    [G23-helper-mutation]='t_g23_a_failed_stage_does_not_overstate_or_understate'
+    [G23-helper-mutation]='t_g24_run_helper_records_a_writing_helper_before_the_runner'
     [G23-query-read-only]='t_g23_a_failed_stage_does_not_overstate_or_understate'
     [G22-f-marker]='t_g22_a_missing_volume_is_never_recreated'
     [G22-aside-stamp]='t_g22_aside_refusals'
