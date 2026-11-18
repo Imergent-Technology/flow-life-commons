@@ -2066,7 +2066,7 @@ t_g10_run_argv_isolation() {
 }
 
 t_g11_fixed_argument_vectors() {
-    local name
+    local name tree
     declare -A want=(
         [about]='php artisan about' [migrate:status]='php artisan migrate:status' [migrate]='php artisan migrate --force --no-interaction'
         [relationships:check]='php artisan relationships:check' [release:show]='php artisan release:show'
@@ -2076,9 +2076,14 @@ t_g11_fixed_argument_vectors() {
         [helper:half-migrate]='php /var/www/html/harness/rehearse.php half-migrate' [helper:revoke]='php /var/www/html/harness/rehearse.php revoke'
     )
     for name in "${!want[@]}"; do
-        src_world
-        run_script -- run historical "$name"
+        tree=historical
+        if [[ "$name" == resources:assets:prune ]]; then tree=current; prune_world; else src_world; fi # (the prune dry-run is only run in the current tree, with the files volume)
+        run_script -- run "$tree" "$name"
         expect_rc "run $name" 0
+        if [[ "$name" == resources:assets:prune ]]; then
+            [[ "$(<"$W/calls")" == *' sh /rehearsal/files '"${want[$name]}"* ]] || bad "run $name: the command was not exactly '${want[$name]}', after the files volume's path"
+            continue
+        fi
         [[ "$(grep -E '^create ' "$W/calls")" == *' sh '"${want[$name]}" ]] || bad "run $name: the command was not exactly '${want[$name]}': $(grep -E '^create ' "$W/calls" | tail -c 120)"
     done
 }
@@ -4986,7 +4991,7 @@ t_g24_the_files_volume_is_only_for_the_prune_dry_run() {
     many=(current php artisan resources:assets:prune ' --dry-run')
     [[ "$(may_read "${many[@]}")" == no ]] || bad 'an option with a leading space was allowed the files volume'
     # And from the outside: no other approved command, in either tree, has the volume, or so much as asks Docker about it.
-    for want in 'current about' 'current migrate:status' 'current helper:db-ping' 'current migrate' 'historical resources:assets:prune' 'historical about'; do
+    for want in 'current about' 'current migrate:status' 'current helper:db-ping' 'current migrate' 'historical about'; do
         prune_world
         # shellcheck disable=SC2086
         run_script -- run $want
@@ -5168,15 +5173,51 @@ t_g24_run_helper_records_a_writing_helper_before_the_runner() {
     done
 }
 
+# The directory the runner links to is the one the files helper (and the archive reader behind it) keeps the Resources files in: the volume is the application's
+# `storage/app/private`, mounted at FILES_MOUNT, and the files are `<volume>/<STORE>/<storage key>`. That layout is described once, by ResourceFileArchive::STORE and the
+# files helper's root; the script's FILES_STORE_DIR, FILES_MOUNT and the runner's setup must agree with them, and this is where they are held to it (a disagreement
+# once made a populated volume look empty). The mapping test below takes its expected directory from the script's constant, so it cannot drift from this.
+t_g24_the_runner_mapping_agrees_with_the_files_helper_layout() {
+    local archive="$ROOT/apps/platform/tests/Support/ResourceFileArchive.php" helper="$SRC/php/files.php" php_store php_root roots calls store mount
+    [[ -r "$archive" && -r "$helper" ]] || { bad "the files helper or ResourceFileArchive cannot be read ($archive, $helper)"; return 0; }
+    php_store="$(sed -n "s/^[[:space:]]*public const string STORE = '\([^']*\)';.*/\1/p" "$archive")"
+    php_root="$(sed -n "s/^const FILES_ROOT = '\([^']*\)';.*/\1/p" "$helper")"
+    [[ -n "$php_store" && -n "$php_root" ]] || { bad "ResourceFileArchive::STORE ('$php_store') or the helper's FILES_ROOT ('$php_root') was not found"; return 0; }
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'printf "%s|%s" "$FILES_STORE_DIR" "$FILES_MOUNT"'
+    store="${OUT%%|*}" mount="${OUT#*|}"
+    [[ "$store" == "$php_store" ]] || bad "the script's FILES_STORE_DIR is '$store' and ResourceFileArchive::STORE is '$php_store'"
+    [[ "$mount" == "$php_root" ]] || bad "the script mounts the files volume at '$mount' and the files helper's root is '$php_root'"
+    # The helper works on its root only (every call that takes a root is given FILES_ROOT, none another path), and the script's setup looks where STORE is.
+    roots="$(grep -cE 'ResourceFileArchive::(inventory|seed|createArchive|setAside|extract)\(' "$helper" || true)"
+    calls="$(grep -cE 'ResourceFileArchive::(inventory|seed|createArchive|setAside|extract)\(([a-zA-Z]+\(\), )?FILES_ROOT' "$helper" || true)"
+    [[ "$roots" -ge 5 && "$roots" == "$calls" ]] || bad "the files helper does not give FILES_ROOT as the root of every archive call ($calls of $roots)"
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'printf "%s" "$RUNNER_FILES_SETUP"'
+    # shellcheck disable=SC2016 # the text looked for is the setup's own, with its `$store` in it
+    [[ "$OUT" == *'dir="$store/'"$php_store"'"'* ]] || bad "the runner's setup does not look for the directory $php_store in the volume"
+    # shellcheck disable=SC2016 # as above
+    [[ "$OUT" != *'$store/storage'* ]] || bad "the runner's setup looks for the directory under the volume's storage/, which is not in it"
+    # The container's link name is the application's own path of the disk (config/filesystems.php), which is what makes the link the application's Resources disk.
+    grep -qE "'root' => storage_path\('app/private/$php_store'\)" "$ROOT/apps/platform/config/filesystems.php" || bad "the application's resources disk is not rooted at storage/app/private/$php_store"
+    # shellcheck disable=SC2016 # as above
+    [[ "$OUT" == *'ln -s "$dir" storage/app/private/'"$php_store"* ]] || bad "the runner's setup does not link the application's storage/app/private/$php_store"
+}
+
 # The link the prune dry-run's runner makes is made by RUNNER_FILES_SETUP, a shell text that runs INSIDE the runner. It is run here, for real, by the host's `sh`,
-# against a directory standing in for the files volume's mount and another for the runner's working directory, with a stand-in for the command: what it makes, what it
-# refuses, what it leaves alone. (That Docker mounts the volume where this says, and that the application's disk follows the link, only a real run can show.)
+# against a directory standing in for the files volume's mount (laid out as the files helper lays it out: `<volume>/resources/<key>`) and another for the runner's
+# working directory, with a stand-in for the command: what it makes, what it refuses, what it leaves alone. (That Docker mounts the volume where this says, and that
+# the application's disk follows the link, only a real run can show.)
 t_g24_the_files_mapping_is_made_inside_the_runner() {
-    local sb="$T/mapping" setup dir before after kind out want
+    local sb="$T/mapping" setup dir before after kind out want store stamp
     # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
     run_fn 'printf "%s" "$RUNNER_FILES_SETUP"'
     setup="$OUT"
     [[ -n "$setup" ]] || { bad 'RUNNER_FILES_SETUP is empty'; return 0; }
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'printf "%s" "$FILES_STORE_DIR"'
+    store="$OUT"
+    [[ -n "$store" ]] || { bad 'FILES_STORE_DIR is empty'; return 0; }
     PRE=''
     mapped() { # runs the setup with the sandbox's mount and prints what the stand-in command saw; sets RC and out
         rm -rf "$sb/work"; mkdir -p "$sb/work/storage"
@@ -5184,28 +5225,40 @@ t_g24_the_files_mapping_is_made_inside_the_runner() {
         RC=0
         out="$(cd "$sb/work" && sh -c "$setup" sh "$sb/files" sh -c '(cd storage/app/private/resources 2>/dev/null && pwd -P); ls storage/app/private/resources 2>/dev/null | tr "\n" " "; echo "args=$#:$1:$2"; exit 7' x 'a b' c 2>&1)" || RC=$?
     }
-    dir="$sb/files/storage/app/private/resources"
+    volume_listing() { (cd "$sb/files" && find . -exec ls -ldn --time-style=+ {} + | LC_ALL=C sort | tr '\n' ' '); }
+    dir="$sb/files/$store"
     # Files in the volume's Resources directory: the application's path is the volume's directory, which is listed, and the command's status and arguments come through.
     rm -rf "$sb"; mkdir -p "$dir"; : >"$dir/01jb0000000000000000000001"; : >"$dir/01jb0000000000000000000002"
-    before="$(cd "$sb/files" && find . | LC_ALL=C sort | tr '\n' ' ')"
+    before="$(volume_listing)"
     mapped
     [[ "$RC" == 7 ]] || bad "the command's own status did not come through: $RC ($out)"
     [[ "$out" == *"$dir"* && "$out" == *'01jb0000000000000000000001 01jb0000000000000000000002'* && "$out" == *'args=2:a b:c'* ]] || bad "the application's path was not the volume's directory, or the arguments changed: $out"
     [[ "$(readlink "$sb/work/storage/app/private/resources")" == "$dir" ]] || bad 'the link is not exactly to the Resources directory in the volume'
-    after="$(cd "$sb/files" && find . | LC_ALL=C sort | tr '\n' ' ')"
+    after="$(volume_listing)"
     [[ "$before" == "$after" ]] || bad 'the setup changed the files volume'
     # A Resources directory with no file in it.
     rm -f "$dir/01jb0000000000000000000001" "$dir/01jb0000000000000000000002"
+    before="$(volume_listing)"
     mapped
-    [[ "$out" == *"$dir"* && "$RC" == 7 ]] || bad "an empty Resources directory was not mapped: $out"
+    [[ "$out" == *"$dir"* && "$RC" == 7 && "$out" == *'args=2:a b:c'* ]] || bad "an empty Resources directory was not mapped: $out"
+    [[ "$(readlink "$sb/work/storage/app/private/resources")" == "$dir" && "$before" == "$(volume_listing)" ]] || bad 'an empty Resources directory was not linked, or the setup changed the volume'
     # No Resources directory at all (the zero-file state): no link, the command runs, and finds what a new installation finds.
-    rm -rf "$sb/files/storage"
+    rm -rf "$sb/files"; mkdir -p "$sb/files"
+    before="$(volume_listing)"
     mapped
     [[ ! -e "$sb/work/storage/app/private/resources" && ! -L "$sb/work/storage/app/private/resources" && "$RC" == 7 && "$out" == *'args=2:a b:c'* ]] || bad "a volume with no Resources directory was not left as the empty store: rc=$RC $out"
+    [[ "$before" == "$(volume_listing)" ]] || bad 'the setup changed a volume with no Resources directory'
+    # A volume whose Resources directory was set aside (`resources.before-restore-<stamp>`) has no active one: that directory is not linked, and its files are not seen.
+    stamp=20261118T101500Z
+    rm -rf "$sb/files"; mkdir -p "$sb/files/$store.before-restore-$stamp"; : >"$sb/files/$store.before-restore-$stamp/01jb0000000000000000000009"
+    before="$(volume_listing)"
+    mapped
+    [[ ! -e "$sb/work/storage/app/private/resources" && ! -L "$sb/work/storage/app/private/resources" && "$RC" == 7 && "$out" == *'args=2:a b:c'* ]] || bad "a volume holding only a set-aside Resources directory was given an active one: rc=$RC $out"
+    [[ "$out" != *01jb0000000000000000000009* && "$before" == "$(volume_listing)" ]] || bad 'the set-aside directory was exposed, or the setup changed the volume'
     # Anything else that is there is refused, status 70, and the command is not run: a link (to somewhere in the container or in the volume), a dangling link, a file,
-    # and a directory of that name that is already in the runner's own storage.
+    # and a directory of that name that is already in the runner's own storage. And nothing is changed in the volume.
     for kind in link dangling file preexisting; do
-        rm -rf "$sb/files"; mkdir -p "$sb/files/storage/app/private" "$sb/elsewhere"
+        rm -rf "$sb/files"; mkdir -p "$sb/files" "$sb/elsewhere"
         PRE=''
         case "$kind" in
             link) ln -s "$sb/elsewhere" "$dir" ;;
@@ -5213,14 +5266,150 @@ t_g24_the_files_mapping_is_made_inside_the_runner() {
             file) : >"$dir" ;;
             preexisting) mkdir -p "$dir"; PRE=1 ;;
         esac
+        before="$(volume_listing)"
         mapped
         [[ "$RC" == 70 ]] || bad "a Resources directory that is a $kind was not refused with status 70: rc=$RC ($out)"
         [[ "$out" != *'args='* ]] || bad "the command was run although the Resources directory was a $kind"
         want="is not a plain directory"
         [[ "$kind" != preexisting ]] || want="could not be made visible"
         [[ "$out" == *"$want"* && "$out" == *'nothing was run'* ]] || bad "a Resources directory that is a $kind was refused without saying why ('$want'): $out"
+        [[ "$before" == "$(volume_listing)" ]] || bad "the setup changed the volume when the Resources directory was a $kind"
     done
     PRE=''
+}
+
+# Cleanup knows the runner's two layouts and no third: the ordinary one (the read-only source volume) and the prune dry-run's (that and the files volume, read-only, at the
+# path WU2 gives it). Each is removed when it is the rehearsal's, and what is not exactly one of them is kept, with the cleanup reporting itself incomplete.
+t_g24_cleanup_recognises_both_runner_layouts() {
+    local plain="volume:$NAME_SRC:/var/www/html:false," prune="volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_SRC:/var/www/html:false," second row
+    second="$(printf '3%.0s' {1..64})"
+    # Each layout on its own: listed by --dry-run (changing nothing), then removed, with the volumes it used.
+    for row in "$plain" "$prune"; do
+        prune_world
+        add_ephemeral "$RID" runner "mounts=$row"
+        put "$W/n/$NID" endpoints "$CID,$RID,"
+        run_script -- cleanup --dry-run
+        expect_rc "cleanup --dry-run with the runner mounting $row" 0
+        expect_has "the runner mounting $row" "$OUT" "would remove container ${RID:0:12} ($NAME_R)"
+        expect_has "the volumes beside the runner mounting $row" "$OUT" "would remove volume $NAME_FV"
+        expect_has "the volumes beside the runner mounting $row" "$OUT" "would remove volume $NAME_SRC"
+        [[ -d "$W/c/$RID" && -d "$W/v/$NAME_FV" && -d "$W/v/$NAME_SRC" ]] || bad "a dry run removed something ($row)"
+        [[ -z "$(mutating_calls)" ]] || bad "a dry run called: $(mutating_calls)"
+        run_script -- cleanup
+        expect_rc "cleanup with the runner mounting $row" 0
+        [[ -z "$(ls -A "$W/c")$(ls -A "$W/n")$(ls -A "$W/v")" ]] || bad "cleanup left something behind, with the runner mounting $row: $(find "$W/c" "$W/n" "$W/v" -mindepth 1 | tr '\n' ' ')"
+        [[ ! -e "$T/root" ]] || bad "cleanup left the state directory, with the runner mounting $row"
+    done
+    # Both layouts together (two runners, as an interrupted run and its successor could leave).
+    prune_world
+    add_ephemeral "$RID" runner "mounts=$plain"
+    add_ephemeral "$second" runner "mounts=$prune"
+    put "$W/n/$NID" endpoints "$CID,$RID,$second,"
+    run_script -- cleanup --dry-run
+    expect_rc 'a dry run with both layouts' 0
+    expect_has 'the ordinary runner' "$OUT" "would remove container ${RID:0:12} ($NAME_R)"
+    expect_has 'the prune runner' "$OUT" "would remove container ${second:0:12} ($NAME_R)"
+    run_script -- cleanup
+    expect_rc 'cleanup with both layouts' 0
+    [[ -z "$(ls -A "$W/c")$(ls -A "$W/n")$(ls -A "$W/v")" && ! -e "$T/root" ]] || bad 'cleanup of both layouts left something behind'
+    # Not exactly one of the two layouts: kept, whatever else about the container is right. The files volume's mount writable; at another path; a third mount; the
+    # files mount alone; the source volume writable beside the files volume; the files volume under the source's path; the other layout's mounts with a bind mount.
+    for row in "volume:$NAME_FV:/rehearsal/files:true,volume:$NAME_SRC:/var/www/html:false," \
+        "volume:$NAME_FV:/data:false,volume:$NAME_SRC:/var/www/html:false," \
+        "volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_SRC:/var/www/html:false,volume:elsewhere:/x:false," \
+        "volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_SRC:/var/www/html:false,bind::/var/run/docker.sock:false," \
+        "volume:$NAME_FV:/rehearsal/files:false," \
+        "volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_SRC:/var/www/html:true," \
+        "volume:$NAME_FV:/var/www/html:false,volume:$NAME_SRC:/rehearsal/files:false," \
+        "volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_FV:/var/www/html:false," \
+        "volume:$NAME_SRC:/var/www/html:false,volume:$NAME_SRC:/rehearsal/files:false,"; do
+        prune_world
+        add_ephemeral "$RID" runner "mounts=$row"
+        put "$W/n/$NID" endpoints "$CID,$RID,"
+        run_script -- cleanup --dry-run
+        expect_lacks "a runner mounting $row" "$OUT" "would remove container ${RID:0:12}"
+        expect_has "a runner mounting $row" "$OUT" "keep    container ${RID:0:12}: "
+        run_script -- cleanup
+        expect_rc "cleanup with a runner mounting $row" 1
+        [[ -d "$W/c/$RID" ]] || bad "a runner mounting $row was removed"
+        [[ -f "$T/root/compose.env" ]] || bad "the state was discarded although a runner mounting $row remains"
+        expect_has "the way on" "$ERR" 'cleanup is NOT complete'
+        ! grep -qE "^(stop|rm) $RID" "$W/calls" || bad "stop or rm was called on a runner mounting $row"
+    done
+    # A runner that is not the rehearsal's in some other way is kept in either layout (another run's token, an unlabelled one, a runner on the bridge, one with the
+    # image's own root writable, or one with a network port).
+    for row in "$plain" "$prune"; do
+        for kind in 'l_token=other' 'readonly_root=false' 'ports=1' 'user=0:0'; do
+            prune_world
+            add_ephemeral "$RID" runner "mounts=$row" "$kind"
+            put "$W/n/$NID" endpoints "$CID,$RID,"
+            run_script -- cleanup
+            expect_rc "cleanup with a runner ($kind) mounting $row" 1
+            [[ -d "$W/c/$RID" ]] || bad "a runner ($kind) mounting $row was removed"
+        done
+    done
+    # The state a cleanup that could not finish keeps is what a later cleanup finishes from: the runner (prune layout) is removed once it is what it should be.
+    prune_world
+    add_ephemeral "$RID" runner "mounts=volume:$NAME_FV:/rehearsal/files:true,volume:$NAME_SRC:/var/www/html:false,"
+    put "$W/n/$NID" endpoints "$CID,$RID,"
+    run_script -- cleanup
+    expect_rc 'cleanup with a writable files mount' 1
+    put "$W/c/$RID" mounts "$prune"
+    run_script -- cleanup
+    expect_rc 'cleanup once the runner is the rehearsal prune runner' 0
+    [[ -z "$(ls -A "$W/c")$(ls -A "$W/n")$(ls -A "$W/v")" && ! -e "$T/root" ]] || bad 'the retry did not finish the cleanup'
+}
+
+# A runner that stops being the rehearsal's between its classification and its removal is not removed: the check just before the removal is the same strict one, so a prune
+# runner whose files mount became writable (or a plain one that gained the files volume) is kept.
+t_g24_cleanup_rechecks_the_runner_layout_before_removing_it() {
+    local row change need
+    # (the hook runs after each full identity inspect and waits, by exiting non-zero, until the classification is over: after the first check for the ordinary layout,
+    # after the second for the prune layout, whose first check is the ordinary one that it does not satisfy)
+    for row in "1|volume:$NAME_SRC:/var/www/html:false,|volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_SRC:/var/www/html:false,volume:elsewhere:/x:false," \
+        "2|volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_SRC:/var/www/html:false,|volume:$NAME_FV:/rehearsal/files:true,volume:$NAME_SRC:/var/www/html:false," \
+        "2|volume:$NAME_FV:/rehearsal/files:false,volume:$NAME_SRC:/var/www/html:false,|volume:$NAME_FV:/data:false,volume:$NAME_SRC:/var/www/html:false,"; do
+        need="${row%%|*}" row="${row#*|}"
+        change="${row#*|}" row="${row%%|*}"
+        prune_world
+        add_ephemeral "$RID" runner "mounts=$row"
+        put "$W/n/$NID" endpoints "$CID,$RID,"
+        # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+        printf 'n=$(( $(cat "%s/hook_count" 2>/dev/null || echo 0) + 1 )); echo $n >"%s/hook_count"; ((n >= %s)) || exit 1; printf %%s "%s" >"%s/c/%s/mounts"\n' "$W" "$W" "$need" "$change" "$W" "$RID" >"$W/hook_inspect_c"
+        run_script -- cleanup
+        expect_rc "a runner that changed from $row to $change after it was classified" 1
+        [[ -d "$W/c/$RID" ]] || bad "a runner that changed to $change after it was classified was removed"
+        expect_has 'the change' "$OUT" 'changed since it was checked'
+        ! grep -qE "^(stop|rm) $RID" "$W/calls" || bad "stop or rm was called on a runner that no longer verified ($change)"
+        [[ -f "$T/root/compose.env" ]] || bad 'the state was discarded although a runner remains'
+    done
+}
+
+# `run historical resources:assets:prune` would not be given the files volume: it would see an empty store whatever the volume holds. It is refused, before anything is asked of
+# Docker; the same command in the current tree is the one that runs, and no other command's policy changes.
+t_g24_the_historical_prune_is_refused() {
+    local name
+    prune_world
+    run_script -- run historical resources:assets:prune
+    expect_refused 'the prune dry-run in the historical tree' 'is only run in the current tree'
+    expect_has 'the way on' "$ERR" 'run current resources:assets:prune'
+    no_runner_created 'the historical prune'
+    ! grep -q "$NAME_FV" "$W/calls" || bad 'the files volume was looked at for the historical prune'
+    # Nothing else changes: the others still run in the historical tree (the vectors are the ones the policy test holds), and the current one runs.
+    for name in about migrate:status helper:db-ping; do
+        prune_world
+        run_script -- run historical "$name"
+        expect_rc "run historical $name" 0
+    done
+    prune_world
+    run_script -- run current resources:assets:prune
+    expect_rc 'run current resources:assets:prune' 0
+    # The refusal is the runner's own: it holds for any caller of it (a helper stage), not only for the `run` command.
+    prune_world
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'ROOT=/stand-in; run_in_runner "$ROOT" historical php artisan resources:assets:prune --dry-run'
+    [[ "$RC" != 0 && "$ERR" == *'is only run in the current tree'* ]] || bad "run_in_runner ran the prune dry-run in the historical tree: $RC ${ERR:0:200}"
+    no_runner_created 'the historical prune through run_in_runner'
 }
 
 # --- the matrix runner itself (WU0): sharing the mutants among workers must not change which mutants run or what is concluded ---------------------------
@@ -6985,6 +7174,9 @@ declare -A GUARD_TESTS=(
     [G24-r-recheck-source]='t_g24_every_runner_rechecks_the_source_volume_after_create'
     [G24-r-recheck-files]='t_g24_the_prune_runner_rechecks_the_files_volume_too'
     [G24-r-recheck-refuses]='t_g24_every_runner_rechecks_the_source_volume_after_create'
+    [G24-cleanup-plain-runner]='t_g24_cleanup_recognises_both_runner_layouts'
+    [G24-cleanup-prune-runner]='t_g24_cleanup_recognises_both_runner_layouts t_g24_cleanup_rechecks_the_runner_layout_before_removing_it'
+    [G24-historical-prune]='t_g24_the_historical_prune_is_refused'
     [G22-f-recheck-files-volume]='t_g22_the_mounts_are_verified_again_after_create'
     [G22-f-recheck-source-volume]='t_g22_the_mounts_are_verified_again_after_create'
     [G22-f-recheck-removable]='t_g22_the_mounts_are_verified_again_after_create'

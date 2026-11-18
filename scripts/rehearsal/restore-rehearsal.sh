@@ -150,11 +150,12 @@ readonly FILES_NAME='flc-rehearsal-restore-files'
 readonly FILES_VOLUME_NAME='flc-rehearsal-restore-files-data'
 readonly FILES_MOUNT='/var/www/html'      # an existing www-data-owned directory of the image, so a new volume copies its ownership here, as the source volume does at SRC_MOUNT
 readonly FILES_SRC_MOUNT='/rehearsal/src' # the prepared source in the files container; only the helper and its two support classes are read from it
-readonly FILES_STORE_DIR='resources'      # inside the volume: storage/app/private/resources, the private `resources` disk's root (config/filesystems.php)
+readonly FILES_STORE_DIR='resources'      # inside the volume (whose root is storage/app/private): the private `resources` disk's root, storage/app/private/resources (config/filesystems.php); ResourceFileArchive::STORE
 # Slice 2.2C-3 (WU2). The PHP runner may see the files volume for exactly one operation, `resources:assets:prune --dry-run` in the current tree, read-only. The volume
 # is mounted at a path of its own, NOT under the application, because Docker copies an image directory's content into an empty named volume that is mounted over it,
-# and because the files volume's root is storage/ (not the Resources directory), so the application's `storage/app/private/resources` is a link, made inside the
-# runner's own temporary storage (a tmpfs, gone with the container), to the directory of that name in the volume. See RUNNER_FILES_SETUP.
+# and because the files volume's root is the application's `storage/app/private` (the files helper mounts it at FILES_MOUNT), so the Resources directory is
+# `<volume>/FILES_STORE_DIR` and the application's `storage/app/private/resources` is a link, made inside the runner's own temporary storage (a tmpfs, gone with
+# the container), to that directory. See RUNNER_FILES_SETUP.
 readonly RUNNER_FILES_MOUNT='/rehearsal/files'
 readonly FILES_ARCHIVE_FILE='resources.archive.tar.gz'
 readonly FILES_MANIFEST_FILE='resources.manifest.json'
@@ -947,8 +948,8 @@ runner_command() {
 # What the runner runs first, inside the container: the writable directories Laravel needs beneath its (temporary) storage, then the command itself. Fixed text; the
 # caller supplies nothing.
 readonly RUNNER_SETUP='mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs 2>/dev/null; exec "$@"'
-# The same for the prune dry-run, which has the files volume at $1 (RUNNER_FILES_MOUNT, a constant of this script) and sees the application's Resources directory
-# as a link to the volume's: the application resolves its `resources` disk through storage_path('app/private/resources'), which is a path in the runner's tmpfs and
+# The same for the prune dry-run, which has the files volume at $1 (RUNNER_FILES_MOUNT, a constant of this script; its root is the application's storage/app/private,
+# so its Resources directory is $1/FILES_STORE_DIR, written into the text below from that constant) and sees the application's Resources directory as a link to it: the application resolves its `resources` disk through storage_path('app/private/resources'), which is a path in the runner's tmpfs and
 # so would otherwise be empty. The link is made in that tmpfs only (the mount is read-only and nothing is written to it), and both ends are proven before the
 # command runs: the directory in the volume must be a plain directory whose physical path is exactly the one expected (not a link to somewhere else in the
 # container), and the link must resolve to it. A volume with no Resources directory at all is the zero-file state: no link is made, and the application finds the
@@ -956,25 +957,30 @@ readonly RUNNER_SETUP='mkdir -p storage/framework/cache storage/framework/sessio
 # shellcheck disable=SC2016 # the text is run by `sh` inside the container, which expands it
 readonly RUNNER_FILES_SETUP='store=$1; shift
 mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs 2>/dev/null
-dir="$store/storage/app/private/resources"
+dir="$store/'"$FILES_STORE_DIR"'"
 if [ -e "$dir" ] || [ -L "$dir" ]; then
   [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$dir" ] || { echo "restore-rehearsal: the Resources directory in the files volume is not a plain directory; nothing was run." >&2; exit 70; }
   mkdir -p storage/app/private && ln -s "$dir" storage/app/private/resources && [ "$(cd storage/app/private/resources 2>/dev/null && pwd -P)" = "$dir" ] || { echo "restore-rehearsal: the Resources directory could not be made visible to the application; nothing was run." >&2; exit 70; }
 fi
 exec "$@"'
 
-# runner_may_read_files WORKDIR CMD...: true for exactly one operation, the Resources prune dry-run in the current tree. What is compared is the vector the runner is
-# about to run, element by element, not a name a caller supplied.
-runner_may_read_files() {
-    local workdir="$1" i
-    shift
-    [[ "$workdir" == current ]] || return 1 # guard:G24-files-current-only
+# prune_vector CMD...: the argument vector is exactly the prune dry-run's. What is compared is the vector itself, element by element, not a name a caller supplied.
+prune_vector() {
+    local i
     (($# == ${#PRUNE_DRY_RUN_CMD[@]})) || return 1 # guard:G24-files-exact-length
     for i in "${!PRUNE_DRY_RUN_CMD[@]}"; do
         [[ "$1" == "${PRUNE_DRY_RUN_CMD[i]}" ]] || return 1 # guard:G24-files-exact-vector
         shift
     done
     return 0
+}
+
+# runner_may_read_files WORKDIR CMD...: true for exactly one operation, the Resources prune dry-run in the current tree.
+runner_may_read_files() {
+    local workdir="$1"
+    shift
+    [[ "$workdir" == current ]] || return 1 # guard:G24-files-current-only
+    prune_vector "$@"
 }
 
 # run_in_runner ROOT WORKDIR CMD...: the checks, then one disposable runner on the rehearsal network with the application password, the
@@ -984,6 +990,11 @@ run_in_runner() {
     local root="$1" workdir="$2" token why ids net_id id with_files=0 files_args=() setup="$RUNNER_SETUP" lead=()
     shift 2
     if runner_may_read_files "$workdir" "$@"; then with_files=1; fi
+    # The prune dry-run is only run where it is given the files volume. In the historical tree it would not be: it would report an empty store whatever the volume
+    # holds (or fail, for want of the command), which reads as a finding and is not one. Refused here, before anything is asked of Docker.
+    if [[ "$workdir" != current ]] && prune_vector "$@"; then
+        refuse "the Resources prune dry-run is only run in the current tree, where it is given the files volume to read; in the '$workdir' tree it would see an empty store whatever the volume holds. Run: restore-rehearsal.sh run current resources:assets:prune" # guard:G24-historical-prune
+    fi
     assert_sql_target "$root" "$APP_DB" # container, version and sentinel, before anything can touch the database
     token="$(state_token "$root")"
     why="$(app_account_problem "$CID")" || refuse "$why." # guard:G12-before-run
@@ -1167,13 +1178,24 @@ cmd_self_check() {
     ok_line "the allowlist refuses a development database name"
 }
 
+# runner_cleanup_problem ID TOKEN: the PHP runner has exactly two valid layouts, and cleanup says which it is checking (never taken from the environment): the ordinary
+# runner, with the read-only source volume and nothing else, or the prune dry-run's runner, which also has the files volume read-only at RUNNER_FILES_MOUNT. The
+# complete identity check is the same for both and differs only in the mounts it requires; a container that satisfies neither is not the rehearsal's runner.
+runner_cleanup_problem() {
+    local id="$1" token="$2" plain special
+    plain="$(ephemeral_identity_problem "$id" "$token" runner "$NETWORK_NAME" any false 0)" && return 0 # guard:G24-cleanup-plain-runner
+    special="$(ephemeral_identity_problem "$id" "$token" runner "$NETWORK_NAME" any false 1)" && return 0 # guard:G24-cleanup-prune-runner
+    printf '%s (and it is not the prune dry-run runner either: %s)\n' "$plain" "$special"
+    return 1
+}
+
 # Cleanup's identity check for a labelled container: the role label only chooses which complete check applies; a container that does not
 # satisfy that check is kept. The image ID is not part of removal safety, so cleanup does not require the current PHP image.
 cleanup_container_problem() {
     local id="$1" token="${2:-}" role
     role="$(dkr inspect --type container --format "$ROLE_FMT" "$id" 2>/dev/null)" || role=''
     case "$role" in
-        runner) ephemeral_identity_problem "$id" "$token" runner "$NETWORK_NAME" any ;;
+        runner) runner_cleanup_problem "$id" "$token" ;;
         prepare) ephemeral_identity_problem "$id" "$token" prepare none any >/dev/null || ephemeral_identity_problem "$id" "$token" prepare bridge any ;;
         files) ephemeral_identity_problem "$id" "$token" files none any true >/dev/null || ephemeral_identity_problem "$id" "$token" files none any false ;;
         *) container_identity_problem "$id" "$token" ;;
