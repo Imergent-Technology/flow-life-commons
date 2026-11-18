@@ -2498,7 +2498,7 @@ run_files() {
 # files_mounts_recheck ID TOKEN: the identity of the files volume and of the source volume was proven BEFORE the container was created, and Docker creates a
 # named volume that is missing when it sets up a mount (empty, unlabelled, plain local). So once the create has returned both are proven again, with the new
 # container as the only consumer allowed: a volume that vanished and was replaced in between, or that gained another user, is found here, before anything
-# starts. Nothing starts. No volume is touched, the replacement included: it is evidence. Only the container this script has just created is removed, and
+# starts. Nothing starts. This script touches no volume, the replacement included: it is evidence. Only the container this script has just created is removed, and
 # only if it is still what create_verified verified; a container that is not is left where it is, and the refusal says so.
 files_mounts_recheck() {
     local id="$1" token="$2" problem='' why removable=0 outcome
@@ -2517,7 +2517,7 @@ files_mounts_recheck() {
     else
         outcome="The container ${id:0:12} is no longer what this script created, so it was left where it is, and was not started."
     fi
-    refuse "after the files container was created, $problem. $outcome No volume was changed or removed: whatever is there now is evidence. Run: restore-rehearsal.sh cleanup --dry-run." # guard:G22-f-recheck-refuses
+    refuse "after the files container was created, $problem. $outcome This script removed no volume; Docker may have made a named volume again while it created the container, and the volume that is there now has been left as it is, for investigation. Run: restore-rehearsal.sh cleanup --dry-run." # guard:G22-f-recheck-refuses
 }
 
 # files_report TEXT: validates the files helper's state, count and file lines and sets FILES_STATE (absent|present), FILES_COUNT and FILES_SPEC

@@ -4439,6 +4439,56 @@ replace_volume_hook() { # NAME: the volume is removed and made again as Docker w
     printf 'rm -rf "%s/v/%s"; mkdir -p "%s/v/%s"; cd "%s/v/%s"; printf %%s "%s" >id; printf %%s "%s" >name; printf local >driver; printf 0 >options\n' "$W" "$1" "$W" "$1" "$W" "$1" "$1" "$1" >"$W/hook_create"
 }
 files_container_exists() { local d; for d in "$W"/c/*; do [[ -d "$d" && "$(cat "$d/name" 2>/dev/null)" == "/$NAME_F" ]] && return 0; done; return 1; }
+
+# process_alive PID: true while the process exists and is not a zombie that has only to be waited for.
+process_alive() { local st=''; [[ -r "/proc/$1/stat" ]] || return 1; read -r _ _ st _ <"/proc/$1/stat" 2>/dev/null || return 1; [[ -n "$st" && "$st" != Z && "$st" != X ]]; }
+
+# interrupt_at_create TMPDIR TRIES -- ARGS...: runs the script as run_script does (the same scrubbed environment, the same fake daemon), but in the background so that
+# the PID of THAT process is known from the launch ($!: nothing is looked up, nothing is searched for by name). The fake daemon's create hook says it has been entered,
+# and waits to be released; the test waits for that (at most TRIES tenths of a second), checks that the change record already exists, sends SIGTERM to the one PID it
+# started and to nothing else, releases the hook so that the stage can run its trap, and waits for that PID. Sets RC, OUT and ERR as run_script does, and INT_WHY:
+# empty when it all happened, otherwise what did not (a stage that ended early, a create that was never reached, a record that was not there, a stage that did not
+# end). Whatever it started is gone when it returns, whichever way it ended.
+interrupt_at_create() {
+    local tmp="$1" tries="$2" pid i=0 args
+    shift 3
+    args="$*"
+    INT_WHY='' INT_PID='' RC=0
+    rm -f "$W/create_ready" "$W/create_release"
+    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+    printf '{ for f in "%s"/*.changed; do [[ -e "$f" ]] && echo changed-record-present; done; echo entered; } >"%s/create_ready"\nj=0; while [[ ! -e "%s/create_release" && $j -lt 100 ]]; do sleep 0.1; j=$((j + 1)); done\n' \
+        "$tmp" "$W" "$W" >"$W/hook_create"
+    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+    [[ "${INT_NO_READY:-0}" == 1 ]] && printf 'j=0; while [[ ! -e "%s/create_release" && $j -lt 100 ]]; do sleep 0.1; j=$((j + 1)); done\n' "$W" >"$W/hook_create"
+    env -i PATH="$BIN" HOME="$T/home" FLC_REHEARSAL_ROOT="$T/root" TMPDIR="$tmp" "$BIN/bash" "$SUT/restore-rehearsal.sh" "$@" >"$T/out" 2>"$T/err" &
+    pid=$! INT_PID=$!
+    until [[ -s "$W/create_ready" ]]; do
+        if ! process_alive "$pid"; then INT_WHY='the stage ended before the daemon was asked to create the container'; break; fi
+        if ((i >= tries)); then INT_WHY='the stage did not reach the create in time'; break; fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    if [[ -z "$INT_WHY" ]]; then
+        compgen -G "$tmp/*.changed" >/dev/null || INT_WHY='the change record did not exist when the create was reached'
+        [[ "$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)" == *"$SUT/restore-rehearsal.sh $args "* ]] || INT_WHY="${INT_WHY:-the PID that was started is not the stage}"
+    fi
+    if [[ -z "$INT_WHY" ]]; then
+        kill -TERM "$pid" 2>/dev/null || INT_WHY='the signal could not be delivered to the stage'
+    fi
+    : >"$W/create_release"
+    i=0
+    while process_alive "$pid"; do
+        if ((i >= 100)); then INT_WHY="${INT_WHY:-the stage did not end after the signal}"; kill -KILL "$pid" 2>/dev/null || true; break; fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    wait "$pid" 2>/dev/null || RC=$?
+    OUT="$(<"$T/out")"
+    ERR="$(<"$T/err")"
+    INT_SEEN="$(cat "$W/create_ready" 2>/dev/null || true)"
+    [[ -z "$INT_WHY" ]] || return 1
+    return 0
+}
 t_g22_the_mounts_are_verified_again_after_create() {
     # The files volume is replaced by an unlabelled one while the container is created.
     if want_case G22-f-recheck-files-volume || want_case G22-f-recheck-refuses; then
@@ -4713,14 +4763,39 @@ t_g23_creating_the_files_container_is_a_recorded_change() {
     expect_has 'a create that Docker refused' "$ERR" 'docker could not create the files container'
     trailer_cautious 'a create that Docker refused'
     no_files_container 'a create that Docker refused'
-    # The stage is interrupted once the create has begun: the exit trap still runs, and says it may have changed.
+    # The stage is interrupted once the create has begun: the exit trap still runs, and says it may have changed. The signal goes to the one process the test
+    # started (see interrupt_at_create), at a point the fake daemon has reported and the change record exists.
+    local bystander
     backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
-    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
-    printf 'for p in /proc/[0-9]*; do if tr "\\0" " " <"$p/cmdline" 2>/dev/null | grep -q "restore-rehearsal.sh backup-files"; then kill -TERM "${p#/proc/}" 2>/dev/null; fi; done; sleep 1\n' >"$W/hook_create"
-    run_script TMPDIR="$T/marker-tmp" -- backup-files
-    [[ "$RC" == 143 ]] || bad "a stage that was terminated did not exit 143: $RC"
-    trailer_cautious 'a stage interrupted after the create had begun'
-    [[ -z "$(find "$T/marker-tmp" -mindepth 1)" ]] || bad 'an interrupted stage left its change record behind'
+    rm -rf "$T/int-tmp"; mkdir -p "$T/int-tmp"
+    # A process whose command line has the words of the stage's (a search by name would have found it) and that the test owns: it must be left alone.
+    mkfifo "$T/bystander.fifo"
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    "$BIN/bash" -c 'exec 3<>"$2"; read -r -t 30 -u 3 _' restore-rehearsal.sh backup-files "$T/bystander.fifo" &
+    bystander=$!
+    if interrupt_at_create "$T/int-tmp" 100 -- backup-files; then
+        [[ "$INT_SEEN" == *changed-record-present* ]] || bad 'the daemon was asked to create the container before the change record existed'
+        [[ "$RC" == 143 ]] || bad "a stage that was terminated did not exit 143: $RC"
+        trailer_cautious 'a stage interrupted after the create had begun'
+        [[ -z "$(find "$T/int-tmp" -mindepth 1)" ]] || bad 'an interrupted stage left its change record behind'
+        ! files_container_exists || ! grep -q "$NAME_F" "$W/started" 2>/dev/null || bad 'an interrupted stage started the files container'
+    else
+        bad "the interruption could not be carried out: $INT_WHY"
+    fi
+    process_alive "$bystander" || bad 'a process that only looks like the stage was signalled'
+    kill -KILL "$bystander" 2>/dev/null || true
+    wait "$bystander" 2>/dev/null || true
+    rm -f "$T/bystander.fifo"
+    # The synchronisation itself fails, and does not hang, when its conditions are not met: a daemon that never says it has been entered, and a stage that ends before
+    # it could be.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    rm -rf "$T/int-tmp"; mkdir -p "$T/int-tmp"
+    INT_NO_READY=1 interrupt_at_create "$T/int-tmp" 5 -- backup-files && bad 'an interruption that never saw the daemon pass for one that was carried out'
+    [[ "$INT_WHY" == 'the stage did not reach the create in time' ]] || bad "a daemon that never reported was not told as such: $INT_WHY"
+    ! process_alive "$INT_PID" || bad 'a stage was left running by an interruption that failed'
+    rm -rf "$T/int-tmp"; mkdir -p "$T/int-tmp"
+    interrupt_at_create "$T/int-tmp" 20 -- no-such-stage && bad 'a stage that ended early passed for an interruption'
+    [[ "$INT_WHY" == 'the stage ended before the daemon was asked to create the container' ]] || bad "a stage that ended early was not told as such: $INT_WHY"
     # Everything before the create is still a pre-mutation refusal (see the unchanged-state cases of t_g23_a_failed_stage_does_not_overstate_or_understate), and a
     # writing action keeps its own earlier record: a seed that fails at the create is cautious as before.
     seed_world
