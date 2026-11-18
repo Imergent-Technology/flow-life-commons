@@ -205,7 +205,7 @@ render() { # KIND DIR TEMPLATE
 formatarg() { local a; while [[ $# -gt 0 ]]; do if [[ "$1" == --format ]]; then printf '%s' "$2"; return; fi; shift; done; }
 filters() { while [[ $# -gt 0 ]]; do if [[ "$1" == --filter ]]; then printf '%s\n' "$2"; shift; fi; shift; done; }
 lastarg() { printf '%s' "${@: -1}"; }
-hook() { if [[ -f "$W/hook_$1" ]]; then bash "$W/hook_$1" && rm -f "$W/hook_$1"; fi; }
+hook() { if [[ -f "$W/hook_$1" ]]; then bash "$W/hook_$1" && rm -f "$W/hook_$1"; fi; return 0; } # a hook that exits non-zero is kept for the next call (WU1: one that waits for something)
 
 list() { # KIND(c|n|v) -- applies the --filter arguments; prints one line per match: "<id> <name>"
     local kind="$1"
@@ -423,6 +423,7 @@ case "$1 ${2:-}" in
         printf '%s' "${APP_KEY:-}" >"$W/create_appkey_seen.$n"; printf '%s' "${APP_PREVIOUS_KEYS:-}" >"$W/create_previouskeys_seen.$n"
         env | cut -d= -f1 | sort >"$W/create_env_names.$n"
         if [[ -f "$W/create_override" ]]; then while read -r field value; do printf '%s' "$value" >"$d/$field"; done <"$W/create_override"; fi
+        HOOK_CID="$cid" hook create # slice 2.2C-3 (WU1): what happens to the world while the daemon sets up the mounts (a volume replaced, a consumer added)
         printf '%s\n' "$cid" ;;
     "start "*)
         id="$(lastarg "$@")"
@@ -439,6 +440,7 @@ case "$1 ${2:-}" in
             *'rehearse.php snapshot'*) key="snapshot_${wd##*/}" ;;
             *'rehearse.php mark'*) key=mark ;;
             *'rehearse.php signin'*) key=signin ;;
+            *' exec sha256sum -- '*'tests/Support'*) key=support_sums ;; # slice 2.2C-3 (WU1): the support classes' digests as the volume holds them
             *' exec sha256sum -- '*) key=harness_sums ;;
             *'rehearse.php half-migrate'*) key=half_migrate ;;
             *'rehearse.php revoke'*) key=revoke ;;
@@ -491,7 +493,13 @@ case "${args[0]}" in
         line="$(grep "^$rev " "$W/commits" 2>/dev/null)" || exit 1
         [[ ! -f "$W/commit_wrong" || "$rev" != 2f385b79* ]] || { echo "$(printf '9%.0s' {1..40})"; exit 0; }
         echo "${line#* }" ;;
-    cat-file) [[ ! -f "$W/no_lockfile" ]] || exit 1 ;;
+    cat-file)
+        if [[ "${args[1]}" == blob ]]; then # slice 2.2C-3 (WU1): a support class as a commit holds it; its text names the commit and path, which the tests digest too
+            [[ ! -f "$W/no_support" ]] || exit 1
+            printf 'BLOB %s\n' "${args[2]}"
+            exit 0
+        fi
+        [[ ! -f "$W/no_lockfile" ]] || exit 1 ;;
     status) [[ ! -f "$W/git_status" ]] || cat "$W/git_status" ;;
     archive) echo "GIT-ARCHIVE ${args[2]} ${args[3]}" ;;
     *) echo "fake git: unexpected call: $*" >&2; exit 97 ;;
@@ -774,7 +782,7 @@ t_g1_applies_to_every_command() {
 
 t_g2_environment() {
     local var
-    for var in COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES DB_HOST DB_PASSWORD MYSQL_PWD MYSQL_HOST MARIADB_ROOT_PASSWORD PGHOST PGPASSWORD POSTGRES_PASSWORD APP_KEY APP_ENV DATABASE_URL REHEARSAL_RUN_TOKEN; do
+    for var in COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES DB_HOST DB_PASSWORD MYSQL_PWD MYSQL_HOST MARIADB_ROOT_PASSWORD PGHOST PGPASSWORD POSTGRES_PASSWORD APP_KEY APP_ENV DATABASE_URL REHEARSAL_RUN_TOKEN FILES_CREATE_OK FILES_RW FILES_SPEC; do
         good_world
         run_script "$var=do-not-print-this-value" -- self-check
         expect_refused "$var" "$var"
@@ -1956,8 +1964,12 @@ t_g5_malformed_state_recovery_path() {
 # A world with the verified PHP image and both commits, with (src_world) or without the prepared source volume.
 # The helper scripts' digests as a container would print them (`sha256sum` of each file of the harness directory under test).
 harness_sums() { (cd "$SUT/php" && sha256sum -- db-ping.php probe.php rehearse.php files.php); }
-# What `prepare` records, for a state directory that has been prepared: the two commits and each helper script's digest.
-prepared_text() { printf 'prepared-v1\nhistorical=%s\ncurrent=%s\n' "$HIST" "$HEAD_SHA"; harness_sums | sed 's/^/harness /'; }
+# The test-support classes the helpers load, as WU1 attests them (HalfFailedShape ... UpgradeDatabase), and their digests as the fake git gives a commit's blob
+# (`BLOB <commit>:<path>`, one line) and as a container would print them from the support directory.
+SUPPORT_EXPECTED=(HalfFailedShape HistoricalFixture HistoricalSnapshot ResourceFileArchive ResourceFileRefusal Totp UpgradeDatabase)
+support_sums() { local n; for n in "${SUPPORT_EXPECTED[@]}"; do printf '%s  %s.php\n' "$(printf 'BLOB %s:apps/platform/tests/Support/%s.php\n' "$HEAD_SHA" "$n" | sha256sum | cut -c1-64)" "$n"; done; }
+# What `prepare` records, for a state directory that has been prepared: the two commits, each helper script's digest and each support class's.
+prepared_text() { printf 'prepared-v2\nhistorical=%s\ncurrent=%s\n' "$HIST" "$HEAD_SHA"; harness_sums | sed 's/^/harness /'; support_sums | sed 's/^/support /'; }
 put_prepared_source() {
     prepared_text >"$T/root/prepared.source"
     chmod 600 "$T/root/prepared.source"
@@ -1967,6 +1979,7 @@ prep_world() {
     put "$W" image_id "$IMG_ID"
     printf '%s %s\nHEAD %s\n' "$HIST" "$HIST" "$HEAD_SHA" >"$W/commits"
     harness_sums >"$W/out_harness_sums"
+    support_sums >"$W/out_support_sums"
 }
 src_world() {
     prep_world
@@ -2237,7 +2250,7 @@ t_g10_prepare_happy_path() {
     # Composer (steps 3 and 4, the only ones with a route out) runs before the harness is copied in (step 5, stdin.5 below).
     expect_has 'harness' "$(tar -tf "$W/stdin.5" | tr '\n' ' ')" 'db-ping.php probe.php'
     creates="$(grep -E '^create ' "$W/calls")"
-    [[ "$(grep -c . <<<"$creates")" == 6 ]] || bad "expected six preparation containers, got: $creates"
+    [[ "$(grep -c . <<<"$creates")" == 7 ]] || bad "expected seven preparation containers (WU1 adds the support classes' check), got: $creates"
     i=0
     while IFS= read -r line; do
         i=$((i + 1))
@@ -2255,7 +2268,10 @@ t_g10_prepare_happy_path() {
     done
     # Slice 2.2B: the helper scripts are digested INSIDE the volume (the sixth container, after the harness is copied in), and what prepare
     # records is the two commits and those digests, in a private file.
-    expect_has 'the volume check' "$(tail -n 1 <<<"$creates")" 'exec sha256sum -- "$@" sh /var/www/html/harness db-ping.php probe.php rehearse.php files.php'
+    expect_has 'the volume check' "$(tail -n 2 <<<"$creates" | head -n 1)" 'exec sha256sum -- "$@" sh /var/www/html/harness db-ping.php probe.php rehearse.php files.php'
+    # WU1: and the support classes the helpers load, digested inside the volume by a container with no network (the seventh), after the harness check.
+    expect_has 'the support classes check' "$(tail -n 1 <<<"$creates")" 'exec sha256sum -- "$@" sh /var/www/html/current/tests/Support HalfFailedShape.php HistoricalFixture.php HistoricalSnapshot.php ResourceFileArchive.php ResourceFileRefusal.php Totp.php UpgradeDatabase.php'
+    expect_has 'the support classes check has no network' "$(tail -n 1 <<<"$creates")" '--network none'
     expect_has 'recorded' "$OUT" 'recorded: both commits'
     [[ "$("$REAL_STAT" -c %a "$T/root/prepared.source")" == 600 ]] || bad 'prepared.source is not mode 600'
     [[ "$(<"$T/root/prepared.source")" == "$(prepared_text)" ]] || bad "prepared.source is not exactly the two commits and the helper digests: $(<"$T/root/prepared.source")"
@@ -2278,6 +2294,46 @@ t_g10_prepare_verifies_the_harness_in_the_volume() {
     run_script -- prepare
     expect_rc 'a digest container that fails' 5
     [[ ! -e "$T/root/prepared.source" ]] || bad 'the source was recorded although the check failed'
+}
+
+# WU1: the test-support classes the helpers load are digested inside the volume and compared with the verified commit's own; nothing is recorded otherwise.
+t_g10_prepare_verifies_the_support_classes() {
+    local got
+    prep_world
+    support_sums | sed '0,/^[0-9a-f]\{64\}/s//ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' >"$W/out_support_sums"
+    run_script -- prepare
+    expect_refused 'a support class in the volume that is not the commit'"'"'s' 'test-support classes in the source volume are not the ones the commit'
+    [[ ! -e "$T/root/prepared.source" ]] || bad 'the source was recorded although a support class was not verified'
+    prep_world
+    support_sums | head -n 6 >"$W/out_support_sums"
+    run_script -- prepare
+    expect_refused 'a volume that holds fewer support classes' 'test-support classes in the source volume are not the ones'
+    prep_world
+    { support_sums; printf '%s  Extra.php\n' "$(printf 'a%.0s' {1..64})"; } >"$W/out_support_sums"
+    run_script -- prepare
+    expect_refused 'a volume that holds an extra support class' 'test-support classes in the source volume are not the ones'
+    prep_world
+    support_sums | tac >"$W/out_support_sums"
+    run_script -- prepare
+    expect_refused 'support classes in another order' 'test-support classes in the source volume are not the ones'
+    prep_world
+    printf '5\n' >"$W/fail_support_sums"
+    run_script -- prepare
+    expect_rc 'a support-class digest container that fails' 5
+    [[ ! -e "$T/root/prepared.source" ]] || bad 'the source was recorded although the check failed'
+    # The expected digests come from the commit, and a class the commit lacks is a refusal.
+    prep_world
+    touch "$W/no_support"
+    run_script -- prepare
+    expect_refused 'a commit without a support class' 'does not hold apps/platform/tests/Support'
+    [[ ! -e "$T/root/prepared.source" ]] || bad 'the source was recorded for a commit without its support classes'
+    # What is attested is what the helpers load: rehearse.php's and files.php's own lists, and no other.
+    got="$({ sed -n '/^function loadSupport/,/^}/p' "$SRC/php/rehearse.php" "$SRC/php/files.php" | grep -o "\['[A-Za-z', ]*'\]" | tr -d "[]' " | tr ',' '\n'; } | LC_ALL=C sort | tr '\n' ' ')"
+    [[ "$got" == "$(printf '%s ' "${SUPPORT_EXPECTED[@]}" | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')" ]] || bad "the support classes attested are not the ones the helpers load: loaded [$got]"
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'printf "%s\n" "${SUPPORT_FILES[@]}" | LC_ALL=C sort | tr "\n" " "'
+    [[ "$OUT" == "$got" ]] || bad "the script's SUPPORT_FILES are not the helpers' loaded classes: [$OUT] against [$got]"
+
 }
 
 t_g10_prepare_uses_only_verified_commits() {
@@ -4105,7 +4161,7 @@ t_g13_prepared_source() {
         no_helper_ran "$c without a record"; no_clear_or_import "$c without a record"
         restore_world; printf 'HEAD %s\n%s %s\n' "$(printf 'c%.0s' {1..40})" "$HIST" "$HIST" >"$W/commits"
         run_script -- "$c"
-        expect_refused "$c after HEAD moved" 'prepared source is stale'
+        expect_refused "$c after HEAD moved" 'HEAD is not the commit the source volume was archived from'
         no_helper_ran "$c after HEAD moved"; no_clear_or_import "$c after HEAD moved"
     done
     restore_world; chmod 644 "$T/root/prepared.source"
@@ -4117,12 +4173,33 @@ t_g13_prepared_source() {
     restore_world; sed -i 's/^harness [0-9a-f]\{64\}/harness ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' "$T/root/prepared.source"
     run_script -- restore-historical
     expect_refused 'a helper script that is not the one that was copied in' 'helper script in scripts/rehearsal/php'
-    restore_world; sed -i '$d' "$T/root/prepared.source"
+    restore_world; sed -i '/^harness .*files\.php$/d' "$T/root/prepared.source"
     run_script -- restore-historical
     expect_refused 'a record that lacks a helper' 'helper script in scripts/rehearsal/php'
-    restore_world; sed -i 's/^prepared-v1$/prepared-v0/' "$T/root/prepared.source"
+    # WU1: the test-support classes the helpers load are attested one by one: a changed, a missing, an added and a reordered record each refuse, as does a record
+    # of the earlier format (which has none: it is stale, not adopted), and a format this script does not know.
+    for c in restore-historical seed-files; do
+        restore_world; sed -i '0,/^support [0-9a-f]\{64\}/s//support ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/' "$T/root/prepared.source"
+        run_script -- "$c"
+        expect_refused "$c with a support class whose recorded digest is not the commit's" 'test-support class recorded'
+        restore_world; sed -i '$d' "$T/root/prepared.source"
+        run_script -- "$c"
+        expect_refused "$c with a record that lacks a support class" 'test-support class recorded'
+        restore_world; printf 'support %s  Extra.php\n' "$(printf 'd%.0s' {1..64})" >>"$T/root/prepared.source"
+        run_script -- "$c"
+        expect_refused "$c with a record that adds a support class" 'test-support class recorded'
+        restore_world; { head -n 3 "$T/root/prepared.source"; grep '^harness ' "$T/root/prepared.source"; grep '^support ' "$T/root/prepared.source" | tac; } >"$T/prepared.reordered"; cp "$T/prepared.reordered" "$T/root/prepared.source"
+        run_script -- "$c"
+        expect_refused "$c with a record whose support classes are in another order" 'test-support class recorded'
+        restore_world; { printf 'prepared-v1\nhistorical=%s\ncurrent=%s\n' "$HIST" "$HEAD_SHA"; harness_sums | sed 's/^/harness /'; } >"$T/root/prepared.source"
+        run_script -- "$c"
+        expect_refused "$c with a record of the earlier format" 'earlier version of prepare'
+        expect_has "$c names the remedy" "$ERR" 'Run cleanup, then up and prepare again'
+    done
+    no_helper_ran 'a stale or altered attestation'; no_clear_or_import 'a stale or altered attestation'
+    restore_world; sed -i 's/^prepared-v2$/prepared-v0/' "$T/root/prepared.source"
     run_script -- restore-historical
-    expect_refused 'a record in another format' 'not exactly what prepare writes'
+    expect_refused 'a record in another format' 'earlier version of prepare'
     restore_world; printf 'extra\n' >>"$T/root/prepared.source"
     run_script -- restore-historical
     expect_refused 'a record with something added' 'not exactly what prepare writes'
@@ -4271,6 +4348,546 @@ t_guard_registry_comparison() {
     matrix="$(sed -n '/^printf .\\nMutation matrix/,$p' "$ROOT/scripts/tests/rehearsal.sh")"
     [[ -n "$matrix" ]] || bad 'the matrix could not be found in this file'
     [[ "$matrix" != *'grep -q'* && "$matrix" != *'grep -x'* ]] || bad 'the matrix pipes into an early-exiting grep again'
+}
+
+# --- WU1: files-volume creation is an explicit permission; the volume is proven again after the create; evidence; what a failed stage may say ----------------
+
+# The marker that says the files volume was established earlier in this run (what the script writes the first time it has created and verified the volume).
+established_files_volume() {
+    printf 'files-volume-v1\n%s' "$(printf 'flc-run-v1|%s' "$TOKEN" | sha256sum | cut -c1-16)" >"$T/root/files.volume"
+    chmod 600 "$T/root/files.volume"
+}
+# What the world holds that a stage that changed nothing would not have changed: no mutating helper, no write statement, no volume created or removed, nothing
+# written to the state directory but what was there (the run's own lock file, which every command makes, aside). (The fake daemon logs each; the state directory is compared with a listing taken before the stage.)
+STATE_LISTING=''
+snapshot_state() { STATE_LISTING="$(cd "$T/root" && find . -type f ! -name run.lock -exec sha256sum {} + | LC_ALL=C sort)"; }
+world_changed() { # prints what changed, if anything
+    local k out='' now
+    for k in fixture_load migrate_historical migrate_current mark half_migrate revoke files_seed files_aside files_restore; do
+        if [[ -f "$W/runs" ]] && grep -q "^$k\$" "$W/runs"; then out+="$k ran; "; fi
+    done
+    for k in stub.sql clear.sql import.sql assets_insert.sql; do [[ ! -e "$W/$k" ]] || out+="$k was run; "; done
+    if grep -qE '^volume (create|rm) ' "$W/calls"; then out+="a volume was created or removed; "; fi
+    now="$(cd "$T/root" && find . -type f ! -name run.lock -exec sha256sum {} + | LC_ALL=C sort)"
+    [[ "$now" == "$STATE_LISTING" ]] || out+="the state directory changed ($(diff <(printf '%s\n' "$STATE_LISTING") <(printf '%s\n' "$now") | grep '^[<>]' | cut -c1-90 | tr '\n' '|')); "
+    printf '%s' "$out"
+}
+UNCHANGED_SAYS='stopped before it began to change anything'
+changed_says='may be partly changed. No database, volume or network was removed'
+# trailer_unchanged DESC: the stage refused having begun nothing, and said exactly that; the world agrees. trailer_cautious DESC: it may have begun, and said so.
+trailer_unchanged() {
+    expect_has "$1 (the trailer)" "$ERR" "$UNCHANGED_SAYS"
+    expect_lacks "$1 (the trailer)" "$ERR" 'may be partly changed'
+    [[ -z "$(world_changed)" ]] || bad "$1: it said it changed nothing but the world changed: $(world_changed)"
+}
+trailer_cautious() {
+    expect_has "$1 (the trailer)" "$ERR" "$changed_says"
+    expect_lacks "$1 (the trailer)" "$ERR" "$UNCHANGED_SAYS"
+}
+
+# N-L1: only the first files action of seed-files or backup-files may create the files volume, and it is told so by an argument. Nothing in the environment can.
+t_g22_creation_is_an_explicit_permission() {
+    local before
+    ensure_files_cache
+    # A variable in the environment grants nothing: it is refused at the start (G2), and if it were not, the functions do not read it.
+    backup_files_world up absent 0
+    run_script FILES_CREATE_OK=1 -- backup-files
+    expect_refused 'backup-files with FILES_CREATE_OK in the environment' 'FILES_CREATE_OK'
+    assert_no_docker_call 'an inherited FILES_CREATE_OK'
+    for before in aside-files restore-files seed-files; do
+        files_world
+        run_script FILES_CREATE_OK=1 -- "$before"
+        expect_refused "$before with FILES_CREATE_OK" 'FILES_CREATE_OK'
+    done
+    restore_files_world novolume
+    run_fn "ROOT='$T/root'; files_volume_ready '$TOKEN'" FILES_CREATE_OK=1
+    [[ "$RC" == 3 && "$ERR" == *'only the first files action of seed-files or backup-files may create it'* ]] || bad "an inherited FILES_CREATE_OK created, or the refusal was not the rule's: $RC ${ERR:0:300}"
+    run_fn "ROOT='$T/root'; files_volume_ready '$TOKEN' 0" FILES_CREATE_OK=1
+    [[ "$RC" == 3 && "$ERR" == *'only the first files action'* ]] || bad "files_volume_ready with no permission, and an inherited variable, did not refuse: $RC ${ERR:0:300}"
+    [[ "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad 'a files volume was created without permission'
+    if want_case G22-f-create-scope; then
+        # No other action can acquire it, whatever its caller asks.
+        for before in aside restore archive verify-archive; do
+            restore_files_world novolume
+            run_fn "ROOT='$T/root'; run_files --create $before"
+            [[ "$RC" == 3 && "$ERR" == *'may not create the files volume'* ]] || bad "run_files --create $before was not refused as an action that may not create: $RC ${ERR:0:300}"
+            [[ "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad "run_files --create $before created a files volume"
+        done
+    fi
+    # The authorized first use: the volume is created, with its labels, once, and recorded.
+    restore_files_world novolume
+    run_fn "ROOT='$T/root'; files_volume_ready '$TOKEN' 1"
+    expect_rc 'the authorized first creation' 0
+    [[ "$(grep -c '^volume create ' "$W/calls")" == 1 && -d "$W/v/$NAME_FV" && -f "$T/root/files.volume" ]] || bad 'the authorized creation did not create one volume and record it'
+    # An established volume that is missing is never recreated, even when this call is permitted to create.
+    restore_files_world novolume; established_files_volume
+    run_fn "ROOT='$T/root'; files_volume_ready '$TOKEN' 1"
+    [[ "$RC" == 3 && "$ERR" == *'established earlier in this run and is now missing'* ]] || bad "a permitted call recreated an established volume, or was refused for another reason: $RC ${ERR:0:300}"
+    [[ "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad 'an established volume was created again'
+    # The initial zero-file backup still creates the volume, once.
+    backup_files_world hist absent 0
+    run_script -- backup-files
+    expect_rc 'the initial zero-file backup' 0
+    [[ "$(grep -c '^volume create ' "$W/calls")" == 1 ]] || bad 'the zero-file backup did not create exactly one volume'
+}
+
+# N-L2: Docker creates a named volume that is missing when it sets up a container's mounts, so the volumes are proven again once the container exists, with that
+# container the only consumer allowed. The fake daemon replaces a volume (or adds a consumer, or alters the new container) during the create.
+# What it proves: that the script looks again, after the create returns, with the right identity and consumer rules, and acts only on its own container. What it
+# cannot prove: that a live daemon behaves so on that race, and what the replacement volume looks like there (the fake makes it empty, unlabelled and local).
+replace_volume_hook() { # NAME: the volume is removed and made again as Docker would on its own: the right name, local, no labels, no token
+    printf 'rm -rf "%s/v/%s"; mkdir -p "%s/v/%s"; cd "%s/v/%s"; printf %%s "%s" >id; printf %%s "%s" >name; printf local >driver; printf 0 >options\n' "$W" "$1" "$W" "$1" "$W" "$1" "$1" "$1" >"$W/hook_create"
+}
+files_container_exists() { local d; for d in "$W"/c/*; do [[ -d "$d" && "$(cat "$d/name" 2>/dev/null)" == "/$NAME_F" ]] && return 0; done; return 1; }
+
+# process_alive PID: true while the process exists and is not a zombie that has only to be waited for.
+process_alive() { local st=''; [[ -r "/proc/$1/stat" ]] || return 1; read -r _ _ st _ <"/proc/$1/stat" 2>/dev/null || return 1; [[ -n "$st" && "$st" != Z && "$st" != X ]]; }
+
+# interrupt_at_create TMPDIR TRIES -- ARGS...: runs the script as run_script does (the same scrubbed environment, the same fake daemon), but in the background so that
+# the PID of THAT process is known from the launch ($!: nothing is looked up, nothing is searched for by name). The fake daemon's create hook says it has been entered,
+# and waits to be released; the test waits for that (at most TRIES tenths of a second), checks that the change record already exists, sends SIGTERM to the one PID it
+# started and to nothing else, releases the hook so that the stage can run its trap, and waits for that PID. Sets RC, OUT and ERR as run_script does, and INT_WHY:
+# empty when it all happened, otherwise what did not (a stage that ended early, a create that was never reached, a record that was not there, a stage that did not
+# end). Whatever it started is gone when it returns, whichever way it ended.
+interrupt_at_create() {
+    local tmp="$1" tries="$2" pid i=0 args
+    shift 3
+    args="$*"
+    INT_WHY='' INT_PID='' RC=0
+    rm -f "$W/create_ready" "$W/create_release"
+    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+    printf '{ for f in "%s"/*.changed; do [[ -e "$f" ]] && echo changed-record-present; done; echo entered; } >"%s/create_ready"\nj=0; while [[ ! -e "%s/create_release" && $j -lt 100 ]]; do sleep 0.1; j=$((j + 1)); done\n' \
+        "$tmp" "$W" "$W" >"$W/hook_create"
+    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+    [[ "${INT_NO_READY:-0}" == 1 ]] && printf 'j=0; while [[ ! -e "%s/create_release" && $j -lt 100 ]]; do sleep 0.1; j=$((j + 1)); done\n' "$W" >"$W/hook_create"
+    env -i PATH="$BIN" HOME="$T/home" FLC_REHEARSAL_ROOT="$T/root" TMPDIR="$tmp" "$BIN/bash" "$SUT/restore-rehearsal.sh" "$@" >"$T/out" 2>"$T/err" &
+    pid=$! INT_PID=$!
+    until [[ -s "$W/create_ready" ]]; do
+        if ! process_alive "$pid"; then INT_WHY='the stage ended before the daemon was asked to create the container'; break; fi
+        if ((i >= tries)); then INT_WHY='the stage did not reach the create in time'; break; fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    if [[ -z "$INT_WHY" ]]; then
+        compgen -G "$tmp/*.changed" >/dev/null || INT_WHY='the change record did not exist when the create was reached'
+        [[ "$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)" == *"$SUT/restore-rehearsal.sh $args "* ]] || INT_WHY="${INT_WHY:-the PID that was started is not the stage}"
+    fi
+    if [[ -z "$INT_WHY" ]]; then
+        kill -TERM "$pid" 2>/dev/null || INT_WHY='the signal could not be delivered to the stage'
+    fi
+    : >"$W/create_release"
+    i=0
+    while process_alive "$pid"; do
+        if ((i >= 100)); then INT_WHY="${INT_WHY:-the stage did not end after the signal}"; kill -KILL "$pid" 2>/dev/null || true; break; fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    wait "$pid" 2>/dev/null || RC=$?
+    OUT="$(<"$T/out")"
+    ERR="$(<"$T/err")"
+    INT_SEEN="$(cat "$W/create_ready" 2>/dev/null || true)"
+    [[ -z "$INT_WHY" ]] || return 1
+    return 0
+}
+t_g22_the_mounts_are_verified_again_after_create() {
+    # The files volume is replaced by an unlabelled one while the container is created.
+    if want_case G22-f-recheck-files-volume || want_case G22-f-recheck-refuses; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+        replace_volume_hook "$NAME_FV"
+        snapshot_state
+        run_script -- backup-files
+        expect_refused 'a files volume replaced while the container was created' "after the files container was created, the files volume is no longer the rehearsal's: its labels are not this script's"
+        expect_has 'the container is said to be removed, not started' "$ERR" 'was removed and not started'
+        [[ ! -e "$W/started" ]] || ! grep -q "$NAME_F" "$W/started" || bad 'the files container was started although its volume was replaced'
+        ! files_container_exists || bad 'the files container that was created was not removed'
+        [[ -d "$W/v/$NAME_FV" ]] || bad 'the replacement volume was removed: it is evidence and is never deleted'
+        ! grep -q '^volume rm ' "$W/calls" || bad 'a volume was removed'
+        no_files_container 'a replaced files volume'
+        [[ ! -e "$T/root/resources.manifest.json" ]] || bad 'a manifest was written for a backup whose volume was replaced'
+        [[ "$(grep -c '^create ' "$W/calls")" == 1 ]] || bad 'more than the one files container was created'
+    fi
+    # The same for the source volume, and for a consumer that appeared.
+    if want_case G22-f-recheck-source-volume; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+        replace_volume_hook "$NAME_SRC"
+        run_script -- backup-files
+        expect_refused 'a source volume replaced while the container was created' "the source volume is no longer the rehearsal's"
+        [[ ! -e "$W/started" ]] || ! grep -q "$NAME_F" "$W/started" || bad 'the files container was started although the source volume was replaced'
+        ! files_container_exists || bad 'the files container was not removed after the source volume was replaced'
+        [[ -d "$W/v/$NAME_SRC" ]] || bad 'the replacement source volume was removed'
+    fi
+    # A container that is not ours that began using the files volume, or the source volume, in the window.
+    backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    printf 'mkdir -p "%s/c/%s"; cd "%s/c/%s"; printf %%s %s >id; printf /intruder >name; printf %%s "volume:%s:/data," >mounts\n' "$W" "$FOREIGN" "$W" "$FOREIGN" "$FOREIGN" "$NAME_FV" >"$W/hook_create"
+    run_script -- backup-files
+    expect_refused 'a foreign container that began using the files volume' 'that is not ours uses it'
+    ! files_container_exists || bad 'the files container was not removed after a foreign consumer appeared'
+    [[ -d "$W/c/$FOREIGN" ]] || bad 'the foreign container was removed'
+    backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    printf 'mkdir -p "%s/c/%s"; cd "%s/c/%s"; printf %%s %s >id; printf /intruder >name; printf %%s "volume:%s:/data," >mounts\n' "$W" "$FOREIGN" "$W" "$FOREIGN" "$FOREIGN" "$NAME_SRC" >"$W/hook_create"
+    run_script -- backup-files
+    expect_refused 'a foreign container that began using the source volume' 'the source volume is no longer the rehearsal'"'"'s: container'
+    # The new container is only removed if it is still what was created: one that changed is left where it is, and the refusal says so.
+    if want_case G22-f-recheck-removable; then
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+        replace_volume_hook "$NAME_FV"
+        # (after create_verified has looked, at the next inspect of that container; the hook waits for the files container to exist)
+        # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+        printf 'ok=1; for d in "%s"/c/*; do if [[ "$(cat "$d/name" 2>/dev/null)" == "/%s" ]]; then printf %%s someone-else >"$d/l_role"; ok=0; fi; done; exit $ok\n' "$W" "$NAME_F" >"$W/hook_inspect_c"
+        run_script -- backup-files
+        expect_refused 'a container that changed during the create' 'is no longer what this script created, so it was left where it is'
+        files_container_exists || bad 'a container that is no longer the script'"'"'s was removed'
+        ! grep -q "^rm " "$W/calls" || bad 'a container was removed although it could not be proven to be the one created'
+        [[ ! -e "$W/started" ]] || ! grep -q "$NAME_F" "$W/started" || bad 'a container that changed was started'
+        # and one that is fine is removed (the case above), and a removal that fails says so
+        backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+        replace_volume_hook "$NAME_FV"
+        inject_failure 'rm *'
+        run_script -- backup-files
+        expect_refused 'a created container that cannot be removed' 'could not be removed and was not started'
+    fi
+    # Nothing was weakened: with the volume replaced BEFORE the create, the first check refuses as before and no container is created.
+    backup_files_world up absent 0; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data l_ns=; established_files_volume
+    run_script -- backup-files
+    expect_refused 'a volume replaced before the create' "the files volume is not the rehearsal's"
+    [[ "$(grep -c '^create ' "$W/calls" || true)" == 0 ]] || bad 'a container was created although the volume was already wrong'
+    # And a restore, which reads the same volumes, is held to the same rule.
+    ensure_files_cache
+    restore_files_world; established_files_volume
+    replace_volume_hook "$NAME_FV"
+    run_script -- restore-files
+    expect_refused 'a restore whose files volume was replaced during the create' 'is no longer the rehearsal'"'"'s'
+    ! files_container_exists || bad 'the restore left its files container'
+}
+
+# Evidence: only what has passed the existing validation is printed, only keys, sizes and SHA-256 values, in the validated order; a large inventory is reduced to
+# a count and one digest. No content, token or row is printed, and no line of a helper's output reaches the report unvalidated.
+t_g22_evidence_is_validated_before_it_is_printed() {
+    local spec='' i key large=''
+    for i in 1 2 3; do spec+="${spec:+,}$(printf '0%025d' "$i"):$((i * 10)):$(printf '%064x' "$i")"; done
+    run_fn "say_inventory 'read before' '$spec'"
+    expect_rc 'a small inventory' 0
+    expect_has 'the count' "$OUT" 'read before: 3 file(s), by key, size and SHA-256:'
+    expect_has 'a key, a size and a digest' "$OUT" "$(printf '0%025d' 2)  20 bytes  $(printf '%064x' 2)"
+    for i in $(seq 1 17); do large+="${large:+,}$(printf '0%025d' "$i"):$i:$(printf '%064x' "$i")"; done
+    run_fn "say_inventory 'read after' '$large'"
+    expect_has 'a large inventory is a count' "$OUT" 'read after: 17 files; SHA-256 of the list'
+    expect_has 'and one digest' "$OUT" "$(printf '%s' "$large" | sha256sum | cut -c1-64)"
+    expect_lacks 'and no key' "$OUT" "$(printf '0%025d' 5)"
+    run_fn "say_inventory 'none' 'empty'"
+    expect_has 'an empty inventory' "$OUT" 'none: no files'
+    if want_case G22-evidence-shape; then
+        for key in 'garbage' "$(printf '0%025d' 1):1:xyz" "$(printf '0%025d' 1):-1:$(printf '%064x' 1)" "$(printf '0%025d' 1):1:$(printf '%064x' 1):extra" "$(printf 'U%025d' 1):1:$(printf '%064x' 1)"; do
+            run_fn "say_inventory 'x' '$key'"
+            [[ "$RC" == 3 && "$OUT" != *'by key'* && "$OUT" != *"${key:0:12}"* ]] || bad "an inventory not in the validated shape ('${key:0:30}') was printed or not refused: $RC ${OUT:0:200}"
+        done
+    fi
+    # In the commands: the archive's accepted entry count, and the aside's inventories, after their own validation; nothing a helper printed beyond that.
+    ensure_files_cache
+    backup_files_world up present 4
+    run_script -- backup-files
+    expect_rc 'a backup' 0
+    expect_has 'the accepted entries of the verified archive' "$OUT" 'holds 5 entries (the Resources directory and 4 file(s))'
+    restore_files_world
+    printf 'archive:note=SECRET-NOT-FOR-THE-LOG\n' >>"$W/out_files_verify_archive"
+    run_script -- restore-files
+    expect_rc 'a restore' 0
+    expect_has 'the entries read before anything was written' "$OUT" 'holds 5 entries (the Resources directory and 4 file(s))'
+    expect_lacks 'a helper line that is not part of the protocol' "$OUT$ERR" 'SECRET-NOT-FOR-THE-LOG'
+    aside_world
+    printf 'aside:note=SECRET-NOT-FOR-THE-LOG\n' >>"$W/out_files_aside"
+    run_script -- aside-files
+    expect_rc 'an aside' 0
+    expect_has 'the inventory before the rename' "$OUT" 'read immediately before the rename: 4 file(s), by key, size and SHA-256:'
+    expect_has 'the inventory after it' "$OUT" 'read in the renamed directory: 4 file(s), by key, size and SHA-256:'
+    expect_has 'a key, size and digest' "$OUT" "${FKEYS[0]}  ${FBYTES[0]} bytes  $(fsha 1)"
+    expect_lacks 'a helper line that is not part of the protocol' "$OUT$ERR" 'SECRET-NOT-FOR-THE-LOG'
+    # Evidence is printed only after validation: an aside whose inventories differ prints none.
+    aside_world; aside_out 3 4 >"$W/out_files_aside"
+    run_script -- aside-files
+    expect_refused 'an aside that did not preserve the files' 'not what was there'
+    expect_lacks 'no inventory after a refusal' "$OUT" 'by key, size and SHA-256'
+}
+
+# What a stage that did not finish says. A refusal that came before anything could change the rehearsal database, the files volume or the state directory says
+# so, and the world agrees; one after something may have begun, however it failed (inside a function, a command substitution, a pipeline or a subshell), keeps
+# the cautious words. The fake daemon proves the tracking sees every one of these; whether a live daemon's failures are always seen the same way is not proven.
+t_g23_a_failed_stage_does_not_overstate_or_understate() {
+    # --- refusals that came before anything could change (before the files container is asked of Docker): the trailer says so, and the world agrees.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    add_ephemeral "$RID" runner; snapshot_state
+    run_script -- backup-files
+    expect_refused 'a runner left over from an interrupted run' 'a rehearsal container other than the database exists'
+    trailer_unchanged 'a refusal because of a leftover container'
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data l_token="$OTHER_TOKEN"; established_files_volume; snapshot_state
+    run_script -- backup-files
+    expect_refused 'a files volume of another run' "the files volume is not the rehearsal's"
+    trailer_unchanged 'a refusal because the files volume is not the rehearsal'"'"'s'
+    backup_files_world up present 4; established_files_volume; snapshot_state
+    run_script -- backup-files
+    expect_refused 'an established files volume that is gone' 'was established earlier in this run and is now missing'
+    trailer_unchanged 'a refusal because an established volume is missing'
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source l_token="$OTHER_TOKEN"; snapshot_state
+    run_script -- backup-files
+    expect_refused 'a source volume of another run' "the source volume is not the rehearsal's"
+    trailer_unchanged 'a refusal because the source volume is not the rehearsal'"'"'s'
+    # --- a refusal AFTER the files container was asked of Docker is cautious even when the action only reads: Docker sets up the mounts at create, and a missing
+    # volume is made then. (The helper's output being wrong, the archive not verifying, a zero-file backup refused on a directory: all of them come after.)
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
+    run_script -- backup-files
+    expect_refused 'a files check that did not report ok' 'did not report files:check=ok'
+    trailer_cautious 'a read-only files check that did not report ok'
+    ensure_files_cache
+    restore_files_world; established_files_volume
+    printf 'archive:entries=5\n' >"$W/out_files_verify_archive"
+    run_script -- restore-files
+    expect_refused 'an archive that was not verified' 'was not verified against the manifest'
+    trailer_cautious 'a read-only archive verification that did not verify'
+    restore_files_world zero; established_files_volume
+    fout present 4 files:check=ok >"$W/out_files_check"
+    run_script -- restore-files
+    expect_refused 'a zero-file restore with a directory in place' 'a Resources directory exists'
+    trailer_cautious 'a zero-file restore refused on a read-only check'
+    # --- refusals after something may have begun: the cautious words, whatever the failure was inside.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+    printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
+    run_script -- backup-files
+    expect_refused 'a refusal after the record of the files volume was written' 'did not report files:check=ok'
+    trailer_cautious 'a refusal after the record of the files volume was written'
+    backup_files_world up present 4
+    printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
+    run_script -- backup-files
+    expect_refused 'a refusal after the files volume was created' 'did not report files:check=ok'
+    trailer_cautious 'a refusal after the files volume was created'
+    seed_world
+    printf '5\n' >"$W/fail_files_seed"
+    run_script -- seed-files
+    expect_rc 'a seed that fails inside a command substitution' 5
+    trailer_cautious 'a seed that failed in a command substitution'
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    printf '5\n' >"$W/fail_files_archive"
+    run_script -- backup-files
+    trailer_cautious 'an archive that failed after its temporary file was made'
+    ensure_files_cache
+    restore_files_world; established_files_volume
+    printf '5\n' >"$W/fail_files_restore"
+    run_script -- restore-files
+    trailer_cautious 'an extraction that failed'
+    aside_world; established_files_volume
+    printf '5\n' >"$W/fail_files_aside"
+    run_script -- aside-files
+    trailer_cautious 'an aside that failed'
+    if want_case G23-helper-mutation; then
+        ensure_cache
+        restore_world
+        stage_world; baseline_world
+        printf '5\n' >"$W/fail_migrate_historical"
+        run_script -- baseline
+        trailer_cautious 'a migration that failed in the runner'
+    fi
+    if want_case G23-sql-mutation; then
+        ensure_half_state
+        half_world
+        printf '1\n' >"$W/stub_fail"
+        run_script -- half-fail-upgrade
+        trailer_cautious 'a stub that failed to be created'
+    fi
+    # app_query runs reads only.
+    if want_case G23-query-read-only; then
+        good_world
+        run_fn "ROOT='$T/root'; app_query 'DROP TABLE people'"
+        [[ "$RC" == 3 && "$ERR" == *'app_query runs reads only'* ]] || bad "app_query ran, or did not refuse, a statement that is not a SELECT: $RC ${ERR:0:200}"
+        [[ ! -e "$W/appsql.log" ]] || ! grep -q 'DROP TABLE people' "$W/appsql.log" || bad 'a statement that is not a SELECT reached the database'
+    fi
+    # The record that tracks all this is the script's own, outside the state directory, and is gone when the stage ends.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
+    mkdir -p "$T/trailer-tmp"
+    run_script TMPDIR="$T/trailer-tmp" -- backup-files
+    [[ -z "$(find "$T/trailer-tmp" -mindepth 1)" ]] || bad "a stage left its change record behind: $(find "$T/trailer-tmp" -mindepth 1 | head -n 2 | tr '\n' ' ')"
+    # When the record cannot be made at all, the trailer is the cautious one: no claim is made without the proof.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
+    run_script TMPDIR="$T/no-such-directory" -- backup-files
+    expect_refused 'a refusal with no change record' 'did not report files:check=ok'
+    trailer_cautious 'a refusal when the change record could not be made'
+}
+
+# --- WU1 review remediation: the files container's create is a recorded change; an unwritable change record stops the stage; the read-only list is pinned ----
+
+# F1. Docker sets up a container's mounts when it is created, and makes a volume that is missing then, so even a read-only files action may change the files
+# volume the moment the create is attempted. The change record is made BEFORE Docker is asked, and every way that create can end afterwards (the daemon
+# refuses, the container is not what was asked for, a volume was replaced, the stage is interrupted) is told in the cautious words.
+t_g23_creating_the_files_container_is_a_recorded_change() {
+    local seen
+    # The record is there before the create is attempted: the fake daemon looks for it at the create, for an action that only reads, and with the volume
+    # established so that nothing earlier could have made it.
+    mkdir -p "$T/marker-tmp"
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+    printf 'for f in "%s"/*.changed; do [[ -e "$f" ]] && echo "$f"; done >"%s/marker_at_create"\n' "$T/marker-tmp" "$W" >"$W/hook_create"
+    run_script TMPDIR="$T/marker-tmp" -- backup-files
+    seen="$(cat "$W/marker_at_create" 2>/dev/null || true)"
+    [[ "$seen" == "$T/marker-tmp/"*.changed ]] || bad "the files container was created before the change record was made (the fake daemon saw: ${seen:0:200})"
+    # The volume replaced while a READ-ONLY action's container was created: the recheck refuses, and the trailer is the cautious one.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    replace_volume_hook "$NAME_FV"
+    run_script -- backup-files
+    expect_refused 'a files volume replaced during a read-only check' 'the files volume is no longer the rehearsal'"'"'s'
+    trailer_cautious 'a volume replaced during the create of a read-only check'
+    [[ -d "$W/v/$NAME_FV" ]] || bad 'the replacement volume was removed'
+    ! grep -q '^volume rm ' "$W/calls" || bad 'a volume was removed'
+    [[ ! -e "$W/started" ]] || ! grep -q "$NAME_F" "$W/started" || bad 'a container was started after its volume was replaced'
+    ensure_files_cache
+    restore_files_world; established_files_volume
+    replace_volume_hook "$NAME_FV"
+    run_script -- restore-files
+    expect_refused 'a files volume replaced during a read-only archive verification' 'is no longer the rehearsal'"'"'s'
+    trailer_cautious 'a volume replaced during the create of a read-only verification'
+    # The container that was created is not what was asked for: refused and removed by create_verified, and the trailer is cautious.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    printf 'l_role someone-else\n' >"$W/create_override"
+    run_script -- backup-files
+    expect_refused 'a created container that fails its identity check' 'was removed and not started'
+    trailer_cautious 'a created container that failed its identity check'
+    [[ ! -e "$W/started" ]] || ! grep -q "$NAME_F" "$W/started" || bad 'a container that failed its identity check was started'
+    ! files_container_exists || bad 'a container that failed its identity check was left'
+    [[ -d "$W/v/$NAME_FV" ]] || bad 'a volume was removed after a container failed its identity check'
+    # The daemon refuses the create altogether.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    : >"$W/create_fail"
+    run_script -- backup-files
+    expect_rc 'a create that Docker refused' 1
+    expect_has 'a create that Docker refused' "$ERR" 'docker could not create the files container'
+    trailer_cautious 'a create that Docker refused'
+    no_files_container 'a create that Docker refused'
+    # The stage is interrupted once the create has begun: the exit trap still runs, and says it may have changed. The signal goes to the one process the test
+    # started (see interrupt_at_create), at a point the fake daemon has reported and the change record exists.
+    local bystander
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    rm -rf "$T/int-tmp"; mkdir -p "$T/int-tmp"
+    # A process whose command line has the words of the stage's (a search by name would have found it) and that the test owns: it must be left alone.
+    mkfifo "$T/bystander.fifo"
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    "$BIN/bash" -c 'exec 3<>"$2"; read -r -t 30 -u 3 _' restore-rehearsal.sh backup-files "$T/bystander.fifo" &
+    bystander=$!
+    if interrupt_at_create "$T/int-tmp" 100 -- backup-files; then
+        [[ "$INT_SEEN" == *changed-record-present* ]] || bad 'the daemon was asked to create the container before the change record existed'
+        [[ "$RC" == 143 ]] || bad "a stage that was terminated did not exit 143: $RC"
+        trailer_cautious 'a stage interrupted after the create had begun'
+        [[ -z "$(find "$T/int-tmp" -mindepth 1)" ]] || bad 'an interrupted stage left its change record behind'
+        # Bash runs a trap after the foreground command that is running has finished, so the `check` whose create the signal arrived in may run to its end (start,
+        # then removal) before the stage exits. What matters is what does not follow: no files container is left behind, the stage does not go on to its next files
+        # action (`archive`), and exactly one files container was ever created.
+        ! files_container_exists || bad 'an interrupted stage left a files container behind'
+        [[ "$(grep -c "^create --name $NAME_F " "$W/calls")" == 1 ]] || bad 'an interrupted stage created more than one files container'
+        ! grep -q "files.php archive" "$W/calls" || bad 'an interrupted stage went on to the archive action'
+        [[ "$(grep -c "^rm " "$W/calls")" == "$(grep -c "^start " "$W/calls")" ]] || bad 'a container that an interrupted stage started was not removed'
+    else
+        bad "the interruption could not be carried out: $INT_WHY"
+    fi
+    process_alive "$bystander" || bad 'a process that only looks like the stage was signalled'
+    kill -KILL "$bystander" 2>/dev/null || true
+    wait "$bystander" 2>/dev/null || true
+    rm -f "$T/bystander.fifo"
+    # The synchronisation itself fails, and does not hang, when its conditions are not met: a daemon that never says it has been entered, and a stage that ends before
+    # it could be.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    rm -rf "$T/int-tmp"; mkdir -p "$T/int-tmp"
+    INT_NO_READY=1 interrupt_at_create "$T/int-tmp" 5 -- backup-files && bad 'an interruption that never saw the daemon pass for one that was carried out'
+    [[ "$INT_WHY" == 'the stage did not reach the create in time' ]] || bad "a daemon that never reported was not told as such: $INT_WHY"
+    ! process_alive "$INT_PID" || bad 'a stage was left running by an interruption that failed'
+    rm -rf "$T/int-tmp"; mkdir -p "$T/int-tmp"
+    interrupt_at_create "$T/int-tmp" 20 -- no-such-stage && bad 'a stage that ended early passed for an interruption'
+    [[ "$INT_WHY" == 'the stage ended before the daemon was asked to create the container' ]] || bad "a stage that ended early was not told as such: $INT_WHY"
+    # Everything before the create is still a pre-mutation refusal (see the unchanged-state cases of t_g23_a_failed_stage_does_not_overstate_or_understate), and a
+    # writing action keeps its own earlier record: a seed that fails at the create is cautious as before.
+    seed_world
+    : >"$W/create_fail"
+    run_script -- seed-files
+    trailer_cautious 'a seed whose create Docker refused'
+}
+
+# F2. If the change record cannot be written, nothing that it records is begun. The destination is made unwritable with ENOTDIR (a path below a regular file),
+# which fails for root too. Each place that records first is tried: the function itself, a state file, an SQL write, a helper that may write, a files action
+# that writes and one that only reads (whose create is recorded just before Docker is asked). `fail` exits, so it ends a command substitution's subshell and
+# a pipeline's, and the callers that need the status (capture) carry it out: tried through capture as well.
+t_g23_a_change_record_that_cannot_be_written_stops_the_stage() {
+    local bad_mark="$T/not-a-directory/marker" code
+    : >"$T/not-a-directory"
+    good_world
+    run_fn "MUTATION_MARK='$bad_mark'; mutation_begins; echo SURVIVED"
+    [[ "$RC" == 1 && "$ERR" == *'the record of what this stage may change could not be written, so nothing was begun'* && "$OUT" != *SURVIVED* ]] || bad "mutation_begins went on after it could not write the record, or did not say so: $RC ${ERR:0:200} $OUT"
+    # A record that exists is not written again, and no record at all (a stage that was not armed) records nothing and stops nothing.
+    run_fn "MUTATION_MARK=''; mutation_begins; echo SURVIVED"
+    [[ "$RC" == 0 && "$OUT" == *SURVIVED* ]] || bad "an unarmed stage was stopped by mutation_begins: $RC ${ERR:0:200}"
+    # A state file: nothing is written, not even its temporary file.
+    src_world; snapshot_state
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; write_state_file recorded.test content; echo SURVIVED"
+    [[ "$RC" == 1 && "$OUT" != *SURVIVED* && ! -e "$T/root/recorded.test" ]] || bad "a state file was written although its change record could not be: $RC ${ERR:0:200}"
+    [[ -z "$(find "$T/root" -name '.recorded.test.*')" ]] || bad 'a temporary state file was made although its change record could not be'
+    [[ -z "$(world_changed)" ]] || bad "the state directory changed: $(world_changed)"
+    # An SQL write reaches no container: the first thing it does is record.
+    src_world
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; printf 'DROP TABLE x;\n' | guarded_app_sql '$T/root' \"\$APP_DB\"; echo SURVIVED"
+    [[ "$RC" != 0 && "$OUT" != *SURVIVED* ]] || bad "an SQL write went on although its change record could not be written: $RC ${ERR:0:200}"
+    ! grep -qE '^(exec|inspect) ' "$W/calls" || bad "an SQL write reached Docker although its change record could not be written: $(grep -E '^(exec|inspect) ' "$W/calls" | head -n 2 | tr '\n' '|')"
+    # A helper that may write: no runner is created.
+    src_world
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; run_helper historical helper:fixture-load out; echo SURVIVED"
+    [[ "$RC" != 0 && "$OUT" != *SURVIVED* ]] || bad "a helper that may write was run although its change record could not be written: $RC ${ERR:0:200}"
+    ! grep -q '^create ' "$W/calls" || bad 'a runner was created although the change record could not be written'
+    [[ ! -e "$W/runs" ]] || bad "a helper ran: $(tr '\n' ' ' <"$W/runs")"
+    # The same through capture, the way the stages call it.
+    src_world
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; capture out 'running the helper' run_helper historical helper:fixture-load out; echo SURVIVED"
+    [[ "$RC" != 0 && "$OUT" != *SURVIVED* && "$ERR" == *'could not be written, so nothing was begun'* ]] || bad "capture did not carry the failure out: $RC ${ERR:0:300}"
+    # A files action that writes, and one that only reads.
+    for code in "run_files seed" "run_files check empty" "run_files --create check empty"; do
+        restore_files_world; established_files_volume
+        run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; capture out 'a files action' $code; echo SURVIVED"
+        [[ "$RC" != 0 && "$OUT" != *SURVIVED* ]] || bad "'$code' went on although its change record could not be written: $RC ${ERR:0:200}"
+        ! grep -q '^create ' "$W/calls" || bad "'$code' asked Docker for a container although its change record could not be written"
+        ! grep -q '^volume create ' "$W/calls" || bad "'$code' created a volume although its change record could not be written"
+        [[ ! -e "$W/runs" ]] || bad "'$code': the files helper ran: $(tr '\n' ' ' <"$W/runs")"
+    done
+    # A volume that is to be created is recorded first too.
+    restore_files_world novolume
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; files_volume_ready '$TOKEN' 1; echo SURVIVED"
+    [[ "$RC" != 0 && "$OUT" != *SURVIVED* && "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad "a files volume was created although the change record could not be written: $RC ${ERR:0:200}"
+}
+
+# F3. The approved commands that are read-only, for the purpose of what a failed stage may say, are exactly five. Any other approved name, and anything that is not
+# an approved name, is classified as one that may change something. The test knows every approved name (read from runner_command), so a new one, or a writing
+# helper added to the five, cannot pass without this list being changed on purpose.
+t_g23_the_read_only_helpers_are_exactly_these() {
+    local -a read_only=(helper:db-ping helper:snapshot migrate:status about release:show)
+    local -a approved=() other=()
+    local name got
+    mapfile -t approved < <(sed -n '/^runner_command() {/,/^}/p' "$SRC/restore-rehearsal.sh" | grep -E '^        [a-z:| -]+\) RUN_CMD=' | sed 's/).*//' | tr '|' '\n' | tr -d ' ')
+    ((${#approved[@]} == 13)) || bad "runner_command approves ${#approved[@]} names, not the 13 this test knows: ${approved[*]}"
+    for name in "${read_only[@]}"; do
+        [[ " ${approved[*]} " == *" $name "* ]] || bad "$name is not an approved command any more, so it cannot be a read-only one"
+    done
+    for name in "${approved[@]}" bogus '' 'helper:snapshot ' 'helper:' 'about:x' 'HELPER:SNAPSHOT'; do
+        run_fn "helper_is_read_only '$name' && echo read-only || echo may-change"
+        got="$OUT"
+        if [[ " ${read_only[*]} " == *" $name "* && -n "$name" ]]; then
+            [[ "$got" == read-only ]] || bad "'$name' is one of the five read-only commands but is classified as one that may change something"
+        else
+            [[ "$got" == may-change ]] || bad "'$name' is classified as read-only: a command that is not one of the five must be one that may change something"
+            other+=("$name")
+        fi
+    done
+    # The writing helpers in particular, by name.
+    for name in helper:fixture-load helper:post-upgrade-mark helper:half-migrate helper:revoke helper:sign-in migrate relationships:check resources:assets:prune; do
+        [[ " ${other[*]} " == *" $name "* ]] || bad "$name is not classified as a command that may change something"
+    done
+    run_fn 'declare -f helper_is_read_only | grep -c "return 0"'
+    [[ "$OUT" == 1 ]] || bad 'helper_is_read_only has more than one place that says a command is read-only'
 }
 
 # --- the matrix runner itself (WU0): sharing the mutants among workers must not change which mutants run or what is concluded ---------------------------
@@ -5908,11 +6525,14 @@ declare -A GUARD_TESTS=(
     [G16-import-verified-dump]='t_g16_import_is_reverified'
     [G16-defect-reproduced]='t_g16_unexpected_outcomes'
     [G10-harness-verified]='t_g10_prepare_verifies_the_harness_in_the_volume'
+    [G10-support-verified]='t_g10_prepare_verifies_the_support_classes'
     [G13-prepared-recorded]='t_g13_prepared_source'
     [G13-prepared-historical]='t_g13_prepared_source'
     [G13-prepared-current]='t_g13_prepared_source'
     [G13-prepared-harness]='t_g13_prepared_source'
     [G13-prepared-exact]='t_g13_prepared_source'
+    [G13-prepared-format]='t_g13_prepared_source'
+    [G13-prepared-support]='t_g13_prepared_source'
     [G13-snapshot-reported]='t_g13_snapshot_must_be_reported'
     [G13-structure-complete]='t_g13_snapshot_must_be_reported t_g13_snapshot_semantics'
     [G17-keyring-present]='t_g17_backup_and_keys'
@@ -6021,6 +6641,17 @@ declare -A GUARD_TESTS=(
     [G22-aside-preserved]='t_g22_aside_refusals'
     [G22-f-volume-gone]='t_g22_a_missing_volume_is_never_recreated'
     [G22-f-volume-not-established]='t_g22_a_missing_volume_is_never_recreated'
+    [G22-f-create-scope]='t_g22_creation_is_an_explicit_permission'
+    [G22-f-recheck-files-volume]='t_g22_the_mounts_are_verified_again_after_create'
+    [G22-f-recheck-source-volume]='t_g22_the_mounts_are_verified_again_after_create'
+    [G22-f-recheck-removable]='t_g22_the_mounts_are_verified_again_after_create'
+    [G22-f-recheck-refuses]='t_g22_the_mounts_are_verified_again_after_create'
+    [G22-evidence-shape]='t_g22_evidence_is_validated_before_it_is_printed'
+    [G23-mutation-recorded]='t_g23_a_change_record_that_cannot_be_written_stops_the_stage t_g23_a_failed_stage_does_not_overstate_or_understate'
+    [G23-create-mutation]='t_g23_creating_the_files_container_is_a_recorded_change'
+    [G23-sql-mutation]='t_g23_a_failed_stage_does_not_overstate_or_understate'
+    [G23-helper-mutation]='t_g23_a_failed_stage_does_not_overstate_or_understate'
+    [G23-query-read-only]='t_g23_a_failed_stage_does_not_overstate_or_understate'
     [G22-f-marker]='t_g22_a_missing_volume_is_never_recreated'
     [G22-aside-stamp]='t_g22_aside_refusals'
     [G22-aside-result]='t_g22_aside_refusals'

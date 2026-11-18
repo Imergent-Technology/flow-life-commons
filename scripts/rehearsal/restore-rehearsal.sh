@@ -138,6 +138,10 @@ readonly APP_USER='flc_rehearsal'
 readonly APP_TREE='apps/platform'
 readonly HISTORICAL_COMMIT='2f385b79a7b83323c6f15a6685ee610ccd85b5bf' # v0.3.0, what production runs
 readonly HARNESS_FILES=(db-ping.php probe.php rehearse.php files.php)
+# The test-support classes the helpers load BY PATH from the current tree of the source volume (rehearse.php's and files.php's loadSupport(), and nothing else: no
+# autoload-dev is installed). Each is attested individually: the digest the verified commit holds is compared with the one taken inside the volume, and recorded.
+readonly SUPPORT_DIR='tests/Support'
+readonly SUPPORT_FILES=(HalfFailedShape HistoricalFixture HistoricalSnapshot ResourceFileArchive ResourceFileRefusal Totp UpgradeDatabase)
 # Slice 2.2C-2. The Resource FILES: one more rehearsal-owned, labelled volume (the files volume, whose root is the application's storage/app/private, so its
 # `resources` directory is the private Resources disk's root) and one more disposable container (the files container: no network, no credentials, no
 # application, no Docker socket; the prepared source read-only and the files volume, read-only unless the action writes). tests/Support/ResourceFileArchive.php
@@ -215,7 +219,7 @@ EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
 readonly EMPTY_DIGEST
 # Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
 readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER")
-readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_)|^DATABASE_URL$'
+readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_|FILES_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
 # and each was run against a real container, network and volume on a live daemon: the Slice 1 templates (CONTAINER_FMT, NETWORK_FMT,
@@ -894,8 +898,9 @@ app_account_problem() {
 
 # The application-user path: every check root-side identity does, then the account's own, then the statement. SQL on stdin. There is no
 # root fallback: a refusal here ends the operation.
-guarded_app_sql() {
+guarded_app_sql() { # ROOT DB [read]: with `read` (app_query's, which only runs a SELECT) the statement is not a change; any other use is one, as far as a failed stage may say
     local root="$1" db="$2" why
+    [[ "${3:-}" == read ]] || mutation_begins # guard:G23-sql-mutation
     assert_sql_target "$root" "$db"
     why="$(app_account_problem "$CID")" || refuse "$why. If the account lacks a privilege it needs, the smallest correction is to GRANT that privilege on $APP_DB.* to $APP_USER yourself; this script never falls back to root." # guard:G12-before-sql
     mariadb_app "$CID" -D "$db"
@@ -1362,8 +1367,16 @@ cmd_prepare() {
     capture volume_sums 'checking the helper scripts in the source volume' prepare_run "$token" none 0 \
         sh -c 'cd "$1" && shift && exec sha256sum -- "$@"' sh "$SRC_MOUNT/harness" "${HARNESS_FILES[@]}"
     [[ "$volume_sums" == "$host_sums" ]] || refuse "the helper scripts in the source volume are not the ones in this checkout (their digests differ). Nothing was recorded. Run: restore-rehearsal.sh cleanup, then up and prepare again." # guard:G10-harness-verified
+    # The support classes the helpers load from the current tree are held to the same standard: the digests the verified commit holds, taken here from git, are
+    # compared with the ones taken inside the volume by a container with no network. A file that is missing, changed or added to the list is a refusal.
+    local support_host support_volume
+    support_host="$(support_digests "$current")" || exit "$?"
+    # shellcheck disable=SC2016 # the snippet runs in the container; its arguments follow it
+    capture support_volume 'checking the support classes in the source volume' prepare_run "$token" none 0 \
+        sh -c 'cd "$1" && shift && exec sha256sum -- "$@"' sh "$SRC_MOUNT/current/$SUPPORT_DIR" "${SUPPORT_FILES[@]/%/.php}"
+    [[ "$support_volume" == "$support_host" ]] || refuse "the test-support classes in the source volume are not the ones the commit ${current:0:12} holds (their digests differ). Nothing was recorded. Run: restore-rehearsal.sh cleanup, then up and prepare again." # guard:G10-support-verified
     write_state_file "$PREPARED_FILE" "$(prepared_source_text "$historical" "$current")"
-    note "recorded: both commits and the digests of ${#HARNESS_FILES[@]} helper scripts ($PREPARED_FILE)"
+    note "recorded: both commits and the digests of ${#HARNESS_FILES[@]} helper scripts and ${#SUPPORT_FILES[@]} support classes ($PREPARED_FILE)"
 
     PREPARE_RECOVERY=0
     say "Prepared. Source volume $SRC_VOLUME_NAME (mounted read-only into the runner)."
@@ -1454,8 +1467,9 @@ inventory_difference() {
 
 # One fixed statement as the application account, through every check of the guarded path (G5, G6, G12). Nothing here takes SQL from
 # whoever runs the script: every caller below passes a literal statement.
-app_query() { # STATEMENT
-    printf '%s\n' "$1" | guarded_app_sql "$ROOT" "$APP_DB"
+app_query() { # STATEMENT: a read. Only a statement that begins with SELECT is run as one.
+    [[ "$1" == SELECT* ]] || refuse "app_query runs reads only; '${1:0:20}' is not one." # guard:G23-query-read-only
+    printf '%s\n' "$1" | guarded_app_sql "$ROOT" "$APP_DB" read
 }
 
 # The sorted names of every table in the rehearsal database, one per line, from the server. A query that fails is a refusal and never an
@@ -1477,21 +1491,67 @@ require_inventory() {
     [[ -z "$diff" ]] || refuse "the rehearsal database is not exactly $2 ($(tr '\n' ';' <<<"$diff"))."
 }
 
+# The approved commands that are read-only by what they are (a database ping, the snapshot, the ledger and the version display); every other one, the
+# sign-in and the checks included, may change something as far as a failed stage may say.
+helper_is_read_only() {
+    case "$1" in
+        helper:db-ping | helper:snapshot | migrate:status | about | release:show) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # run_helper TREE NAME VAR: one approved command in a disposable runner, its standard output stored in VAR. A failed or refused helper ends
 # the script with the helper's own status.
 run_helper() {
     local tree="$1" name="$2" var="$3"
     runner_command "$name"
+    helper_is_read_only "$name" || mutation_begins # guard:G23-helper-mutation
     capture "$var" "'$name' in the $tree tree" run_in_runner "$ROOT" "$tree" "${RUN_CMD[@]}"
 }
 
 STAGE=''
+# What a stage that did not finish may say about what it changed. A claim that nothing changed is only as good as the proof, so the default is the cautious
+# message, and the other one needs both facts: the stage armed a record when it started (so the tracking worked), and nothing that could change the rehearsal
+# database, the files volume or the state directory was begun since. The record is two files, so that it survives where a variable does not: a failure
+# inside a function called from a command substitution, a pipeline or a subshell happens in another process, and only a file is seen from here.
+#   MUTATION_MARK          made when the stage arms its trap (a private file outside the state directory; it holds nothing);
+#   MUTATION_MARK.changed  made by mutation_begins BEFORE every operation that could change one of those three things.
+# Every such operation is behind one of the callers of mutation_begins: write_state_file, guarded_app_sql (unless it is app_query's read), run_helper (unless
+# the command is one of the read-only ones), the creation of the dump and archive temporary files, the files volume's creation, and the files container's
+# `seed`, `aside` and `restore`. A refusal after any of those is "may be partly changed", whatever else it was.
+MUTATION_MARK=''
+arm_stage() { # STAGE_NAME EXIT_HANDLER
+    STAGE="$1"
+    MUTATION_MARK="$(umask 077 && mktemp -- "${TMPDIR:-/tmp}/flc-rehearsal-stage.XXXXXX" 2>/dev/null)" || MUTATION_MARK=''
+    # shellcheck disable=SC2064 # the handler name is a literal chosen by the caller
+    trap "$2" EXIT
+    # An interrupted stage ends through the exit trap too, so that it says what it may have changed and removes its record; the statuses are the usual ones.
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+}
+mutation_begins() {
+    [[ -n "$MUTATION_MARK" ]] || return 0
+    [[ -e "$MUTATION_MARK.changed" ]] || : >"$MUTATION_MARK.changed" || fail "the record of what this stage may change could not be written, so nothing was begun" # guard:G23-mutation-recorded
+}
+stage_changed_nothing() { [[ -n "$MUTATION_MARK" && -f "$MUTATION_MARK" && ! -e "$MUTATION_MARK.changed" ]]; }
+stage_record_remove() {
+    [[ -z "$MUTATION_MARK" ]] || rm -f -- "$MUTATION_MARK" "$MUTATION_MARK.changed"
+}
+# The trailer. Only a stage that provably began nothing is told it changed nothing; everything else keeps the cautious words.
+stage_trailer() { # WHAT_MAY_BE_CHANGED
+    if stage_changed_nothing; then
+        warn "$STAGE did not finish, and it stopped before it began to change anything: only read-only checks had run, so the rehearsal database, the files volume and the state directory are as they were. No database, volume or network was removed."
+    else
+        warn "$STAGE did not finish. $1 may be partly changed. No database, volume or network was removed; a disposable container is removed when it has finished, or when it fails its checks, and says so."
+    fi
+    warn "The rehearsal is disposable: run"
+    warn "  restore-rehearsal.sh cleanup --dry-run ; cleanup ; then up, prepare and the stages again."
+}
 on_stage_exit() {
     local status=$?
-    if ((status != 0)); then
-        warn "$STAGE did not finish. The rehearsal database may be partly changed and nothing was removed. The rehearsal is disposable: run"
-        warn "  restore-rehearsal.sh cleanup --dry-run ; cleanup ; then up, prepare and the stages again."
-    fi
+    if ((status != 0)); then stage_trailer 'The rehearsal database'; fi
+    stage_record_remove
 }
 
 # G13: the commits the rehearsal means, and the checkout they are compared with. `prepare` archives COMMITS, never the working tree, so a
@@ -1508,8 +1568,20 @@ require_source_commits() {
 # script as it is in this checkout. A stage compares what it derives NOW with what was recorded THEN, so a source that has gone stale (HEAD
 # moved, a helper edited) is refused instead of run.
 prepared_source_text() { # HISTORICAL_COMMIT CURRENT_COMMIT
-    printf 'prepared-v1\nhistorical=%s\ncurrent=%s\n' "$1" "$2"
+    printf 'prepared-v2\nhistorical=%s\ncurrent=%s\n' "$1" "$2"
     (cd "$SCRIPT_DIR/php" && sha256sum -- "${HARNESS_FILES[@]}") | sed 's/^/harness /'
+    support_digests "$2" | sed 's/^/support /'
+}
+
+# support_digests COMMIT: the SHA-256 of each test-support class as COMMIT holds it, one line each in the form sha256sum prints from the support directory
+# (`<sha>  <Name>.php`). A class the commit does not hold is a refusal: the expected digests come from the verified commit and from nowhere else.
+support_digests() {
+    local commit="$1" name sha
+    for name in "${SUPPORT_FILES[@]}"; do
+        sha="$(gitq cat-file blob "$commit:$APP_TREE/$SUPPORT_DIR/$name.php" | sha256sum | cut -c1-64)" || refuse "commit ${commit:0:12} does not hold $APP_TREE/$SUPPORT_DIR/$name.php, which the helpers load, so it cannot be attested."
+        [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || refuse "the digest of $name.php did not come out as a SHA-256."
+        printf '%s  %s.php\n' "$sha" "$name"
+    done
 }
 
 # G13: every stage starts here. The historical commit is the exact one and the checkout is clean (require_source_commits), and what `prepare`
@@ -1520,10 +1592,12 @@ require_prepared_source() {
     require_source_commits
     state_file_ok "$PREPARED_FILE" || refuse "'$PREPARED_FILE' is missing from the state directory, or is not a private file of this script's: prepare has not finished, or the state is not intact. Run: restore-rehearsal.sh prepare. Nothing was changed." # guard:G13-prepared-recorded
     recorded="$(<"$ROOT/$PREPARED_FILE")"
+    [[ "$(head -n 1 <<<"$recorded")" == prepared-v2 ]] || refuse "'$PREPARED_FILE' was written by an earlier version of prepare (or is not a record of one), and does not attest the test-support classes: the prepared source is stale. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-format
     current="$(verified_commit HEAD)" || refuse "HEAD is not a commit."
     [[ "$(sed -n 's/^historical=//p' <<<"$recorded")" == "$HISTORICAL_COMMIT" ]] || refuse "the source volume was not archived from the historical commit $HISTORICAL_COMMIT. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-historical
     [[ "$(sed -n 's/^current=//p' <<<"$recorded")" == "$current" ]] || refuse "HEAD is not the commit the source volume was archived from (it was $(sed -n 's/^current=\(.\{12\}\).*/\1/p' <<<"$recorded")): the prepared source is stale. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-current
     [[ "$(grep '^harness ' <<<"$recorded")" == "$(prepared_source_text "$HISTORICAL_COMMIT" "$current" | grep '^harness ')" ]] || refuse "a helper script in scripts/rehearsal/php is not the one that was copied into the source volume: the prepared source is stale. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-harness
+    [[ "$(grep '^support ' <<<"$recorded")" == "$(prepared_source_text "$HISTORICAL_COMMIT" "$current" | grep '^support ')" ]] || refuse "a test-support class recorded for the source volume is not the one the commit holds (or one is missing or added): the prepared source is stale. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-support
     [[ "$recorded" == "$(prepared_source_text "$HISTORICAL_COMMIT" "$current")" ]] || refuse "'$PREPARED_FILE' is not exactly what prepare writes. Run cleanup, then up and prepare again. Nothing was changed." # guard:G13-prepared-exact
 }
 
@@ -1532,6 +1606,7 @@ require_prepared_source() {
 # write_state_file NAME CONTENT: a private (mode 600) file in the state directory, written whole or not at all.
 write_state_file() {
     local name="$1" content="$2" tmp
+    mutation_begins
     tmp="$(umask 077 && mktemp -- "$ROOT/.${name}.XXXXXX")"
     (
         umask 077
@@ -1838,8 +1913,7 @@ cmd_baseline() {
     local existing migrated fixture_out table_text upgrade_text struct_text why content
     capture existing 'reading the table inventory' db_inventory
     [[ -z "$existing" ]] || refuse "the rehearsal database already holds $(grep -c . <<<"$existing") table(s). The baseline builds the v0.3.0 schema in an EMPTY database. The rehearsal is disposable: run cleanup, then up and prepare, then baseline." # guard:G13-empty-target
-    STAGE=baseline
-    trap on_stage_exit EXIT
+    arm_stage baseline on_stage_exit
     say "Building the v0.3.0 schema with the v0.3.0 application (its 15 migrations) ..."
     run_helper historical migrate migrated
     printf '%s\n' "$migrated"
@@ -1876,6 +1950,7 @@ cmd_take_backup() {
     why="$(keys_problem "$snapshot")" || refuse "$why."
 
     say "Taking the two-pass dump as the application account (structure of every table, rows of the durable tables only) ..."
+    mutation_begins # the dump's temporary file is the first thing written to the state directory
     dump_tmp="$(umask 077 && mktemp -- "$ROOT/.dump.XXXXXX")"
     take_dump "$dump_tmp" || { rm -f -- "$dump_tmp"; exit 1; }
     why="$(dump_problem "$dump_tmp")" || { rm -f -- "$dump_tmp"; refuse "the dump is not what the backup contract requires: $why. It was removed."; } # guard:G15-dump-checked
@@ -1903,8 +1978,7 @@ cmd_upgrade() {
     require_inventory "$(historical_inventory)" 'the 16 tables of the v0.3.0 schema' # guard:G13-upgrade-from-historical
     require_database_matches_snapshot historical "$SNAPSHOT_TABLES"
     say "ok   a verified backup exists and the database still equals its snapshot"
-    STAGE=upgrade
-    trap on_stage_exit EXIT
+    arm_stage upgrade on_stage_exit
     say "Upgrading with the current application's migrations (the 14 after v0.3.0) ..."
     run_helper current migrate migrated
     printf '%s\n' "$migrated"
@@ -1942,8 +2016,7 @@ cmd_reproduce_wp3_01() {
     IFS=$'\t' read -r people profiles ledger orphans <<<"$counts"
     [[ "$people" == $((FIXTURE_PEOPLE + 1)) && "$profiles" == 1 && "$ledger" == 29 && "$orphans" == 0 ]] || refuse "the database is not the post-upgrade state this demonstration starts from (people $people, contact_profiles $profiles, migrations $ledger, profiles without a Person $orphans; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0). Has it already been run?" # guard:G16-upgraded-state
 
-    STAGE=reproduce-wp3-01
-    trap on_stage_exit EXIT
+    arm_stage reproduce-wp3-01 on_stage_exit
     say "WP3-01: loading the historical dump over the UPGRADED database WITHOUT clearing it first."
     say "This is the defect, not a restoration: nothing here claims the database was recovered."
     why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump is not the one the manifest describes ($why); it is not loaded." # guard:G16-import-verified-dump
@@ -2191,8 +2264,7 @@ cmd_restore_historical() {
     capture statement 'building the clearing statement' clear_statement "$RESTORE_FROM"
     count="$(grep -c . <<<"$(clear_list "$RESTORE_FROM")")"
 
-    STAGE=restore-historical
-    trap on_stage_exit EXIT
+    arm_stage restore-historical on_stage_exit
     say "Clearing the application schema (DROP TABLE for exactly the $count tables, nothing else) ..."
     guarded_app_sql "$ROOT" "$APP_DB" <<<"$statement" >/dev/null || fail "the application schema could not be cleared" # (a here-string, not a pipe: a refusal inside a pipe would end only the pipe's subshell)
     require_inventory '' 'empty: the intended tables are all gone' # guard:G17-cleared
@@ -2231,8 +2303,7 @@ cmd_reupgrade() {
     verify_signin
     say "ok   the database is the verified restored historical state, and its application signs in"
 
-    STAGE=reupgrade
-    trap on_stage_exit EXIT
+    arm_stage reupgrade on_stage_exit
     say "Upgrading again with the current application's migrations (the 14 after v0.3.0) ..."
     run_helper current migrate migrated
     printf '%s\n' "$migrated"
@@ -2280,8 +2351,7 @@ cmd_half_fail_upgrade() {
     verify_restored_state
     say "ok   the database is exactly the restored historical state, and the first upgrade's structure is recorded"
 
-    STAGE=half-fail-upgrade
-    trap on_stage_exit EXIT
+    arm_stage half-fail-upgrade on_stage_exit
     say "Placing the stub: one table named $STUB_TABLE, the third table the Relationships migration creates (no migration is changed) ..."
     guarded_app_sql "$ROOT" "$APP_DB" <<<"$STUB_SQL" >/dev/null || fail "the stub could not be created"
     require_inventory "$(sorted_list "${HISTORICAL_TABLES[@]}" "$STUB_TABLE")" 'the 16 tables of v0.3.0 and the stub' # guard:G20-stub-placed
@@ -2334,8 +2404,7 @@ cmd_revoke_after_backup() {
     capture observed 'reading the security tables' app_query "$REVOKE_SQL"
     [[ "$observed" == "$REVOKE_BEFORE" ]] || refuse "the security tables are not as the upgrade left them (role assignments, security events, the assignment to revoke present, role.revoked events, the event of Person $REVOKE_PERSON's revocation: ${observed//$'\t'/, }; expected ${REVOKE_BEFORE//$'\t'/, }). Has it already been run? Nothing was changed." # guard:G21-before-state
 
-    STAGE=revoke-after-backup
-    trap on_stage_exit EXIT
+    arm_stage revoke-after-backup on_stage_exit
     say "Revoking one role assignment AFTER the backup, as the application's RevokeRole does: remove it and record the event, in one transaction ..."
     run_helper current helper:revoke out
     for expected in revoke:role-removed=ok revoke:event-recorded=ok revoke:complete=ok; do
@@ -2365,13 +2434,14 @@ files_action_policy() {
     [[ -n "$FILES_RW" ]] || refuse "'$1' is not a files action the rehearsal runs." # guard:G22-f-allowlist
 }
 
-# The files volume, proven to be the rehearsal's before every use. It is CREATED only by the first files action of `seed-files` or `backup-files` (the caller
-# says so with FILES_CREATE_OK=1 in the environment of that one call), and only while the state directory holds no record that it was ever established
+# The files volume, proven to be the rehearsal's before every use. It is CREATED only by the first files action of `seed-files` or `backup-files`: the caller
+# says so with an explicit argument (CREATE is 1) to that one call, never through the environment (an inherited variable grants nothing, and FILES_* is
+# refused when the script starts), and only while the state directory holds no record that it was ever established
 # (`files.volume`, written once the volume has been created and verified, or found and verified). A volume that is missing after that, or missing when no
 # command may create it, is a refusal: a new, empty volume is never silently put where an established one was. Creating a volume that exists changes
 # nothing, so a foreign volume of this name is found by the identity check, not overwritten by the create.
-files_volume_ready() { # TOKEN
-    local token="$1" why recorded=0 expected
+files_volume_ready() { # TOKEN CREATE: CREATE is 1 only for the first files action of seed-files or backup-files; anything else, or nothing, may not create
+    local token="$1" create="${2:-0}" why recorded=0 expected
     expected="files-volume-v1"$'\n'"$(token_fingerprint "$token")"
     if [[ -e "$ROOT/$FILES_VOLUME_MARKER" || -L "$ROOT/$FILES_VOLUME_MARKER" ]]; then
         { state_file_ok "$FILES_VOLUME_MARKER" && [[ "$(<"$ROOT/$FILES_VOLUME_MARKER")" == "$expected" ]]; } || refuse "the record of the files volume in the state directory is not this run's." # guard:G22-f-marker
@@ -2379,28 +2449,41 @@ files_volume_ready() { # TOKEN
     fi
     if ! dkr volume inspect "$FILES_VOLUME_NAME" >/dev/null 2>&1; then
         [[ $recorded == 0 ]] || refuse "the files volume $FILES_VOLUME_NAME was established earlier in this run and is now missing. It is never recreated: its files are gone. Run cleanup and start again." # guard:G22-f-volume-gone
-        [[ "${FILES_CREATE_OK:-0}" == 1 ]] || refuse "there is no files volume, and only the first files action of seed-files or backup-files may create it. Run one of those first, or cleanup and start again." # guard:G22-f-volume-not-established
+        [[ "$create" == 1 ]] || refuse "there is no files volume, and only the first files action of seed-files or backup-files may create it. Run one of those first, or cleanup and start again." # guard:G22-f-volume-not-established
+        mutation_begins # creating the volume is a change
         dkr volume create --label "$LABEL_NS_KEY=$LABEL_NS_VALUE" --label "$LABEL_NS_KEY.role=files-data" --label "$LABEL_NS_KEY.run-token=$token" "$FILES_VOLUME_NAME" >/dev/null || fail "the files volume could not be created"
     fi
     why="$(files_volume_identity_problem "$FILES_VOLUME_NAME" "$token" '')" || refuse "the files volume is not the rehearsal's: $why." # guard:G22-f-volume
     [[ $recorded == 1 ]] || write_state_file "$FILES_VOLUME_MARKER" "$expected"
 }
 
-# run_files ACTION [ARGUMENT]: one fixed action of files.php in ONE disposable files container, after the checks. The container has no network and no
-# credential; its output and exit status are the action's. The ARGUMENT is built by this script from values it has validated (a file list, or a stamp).
-# Standard input goes to the container for the two actions that read an archive.
+# run_files [--create] ACTION [ARGUMENT]: one fixed action of files.php in ONE disposable files container, after the checks. The container has no network and
+# no credential; its output and exit status are the action's. The ARGUMENT is built by this script from values it has validated (a file list, or a stamp).
+# Standard input goes to the container for the two actions that read an archive. --create lets this call create the files volume, and only seed-files's
+# `seed` and backup-files's `check` (each the first files action of its command) may say so: no other action can acquire that permission.
 run_files() {
-    local action="$1" argument="${2:-}" token why ids id interactive=() ro_opt=''
+    local create=0 action argument token why ids id interactive=() ro_opt=''
+    if [[ "${1:-}" == --create ]]; then
+        create=1
+        shift
+    fi
+    action="$1" argument="${2:-}"
     files_action_policy "$action"
+    [[ $create == 0 || "$action" == seed || "$action" == check ]] || refuse "'$action' may not create the files volume; only the first files action of seed-files or backup-files may." # guard:G22-f-create-scope
+    [[ "$FILES_RW" == false ]] || mutation_begins # seed, aside and restore write to the files volume
     ((FILES_STDIN == 0)) || interactive=(-i)
     resolve_project_container "$ROOT"
     token="$(state_token "$ROOT")"
     inventory ids 'the labelled containers' labelled_containers
     [[ "$ids" == "$CID" ]] || refuse "a rehearsal container other than the database exists (an interrupted run). Run: restore-rehearsal.sh cleanup --dry-run, then cleanup." # guard:G22-f-no-leftover
     why="$(source_volume_identity_problem "$SRC_VOLUME_NAME" "$token" '')" || refuse "the source volume is not the rehearsal's (has 'prepare' been run?): $why." # guard:G22-f-src-volume
-    files_volume_ready "$token"
+    files_volume_ready "$token" "$create"
     resolve_php_image
     [[ "$FILES_RW" == true ]] || ro_opt=',readonly' # guard:G22-f-readonly-mount
+    # Docker sets up a container's mounts when it is CREATED, and creates a named volume that is missing then (empty, unlabelled), whether the action reads or
+    # writes. So from the moment the create is attempted a failure may have changed the files volume, and the change record says so first. Every refusal above
+    # this line came before any of that, and a failure to make the record stops here, before Docker is asked for anything.
+    mutation_begins # guard:G23-create-mutation
     id="$(create_verified "$ROOT" "$token" files none plain_docker -- \
         --network none \
         --mount "type=volume,source=$SRC_VOLUME_NAME,target=$FILES_SRC_MOUNT,readonly" \
@@ -2408,7 +2491,33 @@ run_files() {
         --tmpfs /tmp:rw,noexec,nosuid,size=64m,uid=33,gid=33 \
         ${interactive[@]+"${interactive[@]}"} \
         "$PHP_IMAGE_ID" php "$FILES_SRC_MOUNT/harness/files.php" "$action" ${argument:+"$argument"})" || exit "$?"
+    files_mounts_recheck "$id" "$token"
     start_and_remove "$id" ${interactive[@]+"${interactive[@]}"}
+}
+
+# files_mounts_recheck ID TOKEN: the identity of the files volume and of the source volume was proven BEFORE the container was created, and Docker creates a
+# named volume that is missing when it sets up a mount (empty, unlabelled, plain local). So once the create has returned both are proven again, with the new
+# container as the only consumer allowed: a volume that vanished and was replaced in between, or that gained another user, is found here, before anything
+# starts. Nothing starts. This script touches no volume, the replacement included: it is evidence. Only the container this script has just created is removed, and
+# only if it is still what create_verified verified; a container that is not is left where it is, and the refusal says so.
+files_mounts_recheck() {
+    local id="$1" token="$2" problem='' why removable=0 outcome
+    why="$(files_volume_identity_problem "$FILES_VOLUME_NAME" "$token" "$id")" || problem="the files volume is no longer the rehearsal's: $why" # guard:G22-f-recheck-files-volume
+    if [[ -z "$problem" ]]; then
+        why="$(source_volume_identity_problem "$SRC_VOLUME_NAME" "$token" "$id")" || problem="the source volume is no longer the rehearsal's: $why" # guard:G22-f-recheck-source-volume
+    fi
+    [[ -n "$problem" ]] || return 0
+    ephemeral_identity_problem "$id" "$token" files none >/dev/null 2>&1 && removable=1 # guard:G22-f-recheck-removable
+    if ((removable == 1)); then
+        if dkr rm "$id" >/dev/null 2>&1; then
+            outcome="The files container ${id:0:12}, which this script had just created, was removed and not started."
+        else
+            outcome="The files container ${id:0:12}, which this script had just created, could not be removed and was not started: remove it with cleanup."
+        fi
+    else
+        outcome="The container ${id:0:12} is no longer what this script created, so it was left where it is, and was not started."
+    fi
+    refuse "after the files container was created, $problem. $outcome This script removed no volume; Docker may have made a named volume again while it created the container, and the volume that is there now has been left as it is, for investigation. Run: restore-rehearsal.sh cleanup --dry-run." # guard:G22-f-recheck-refuses
 }
 
 # files_report TEXT: validates the files helper's state, count and file lines and sets FILES_STATE (absent|present), FILES_COUNT and FILES_SPEC
@@ -2551,14 +2660,39 @@ files_verified_ok() {
     grep -Fxq 'archive:verified=ok' <<<"$1" && grep -Fxq "archive:entries=$(($2 + 1))" <<<"$1"
 }
 
+# say_inventory LABEL SPEC: evidence of a validated inventory (SPEC is `key:bytes:sha256,...` or `empty`, from files_report or the database, never from
+# a caller): up to FILES_EVIDENCE_MAX files as their keys, sizes and SHA-256 values, in key order; more as the count and one SHA-256 over the whole list, so a
+# log stays bounded. Only keys, sizes and digests are printed: never a file's content, a token, a secret or a row. A spec that is not in the validated shape is
+# a refusal here too, so nothing unvalidated is printed.
+readonly FILES_EVIDENCE_MAX=16
+say_inventory() {
+    local label="$1" spec="$2" entry entries=() key bytes sha extra
+    if [[ "$spec" == empty ]]; then
+        say "       $label: no files"
+        return 0
+    fi
+    IFS=',' read -ra entries <<<"$spec"
+    for entry in "${entries[@]}"; do
+        IFS=: read -r key bytes sha extra <<<"$entry"
+        [[ -z "$extra" && "$key" =~ $KEY_RE && "$bytes" =~ ^(0|[1-9][0-9]{0,11})$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || refuse "an inventory to be reported is not a list of keys, sizes and SHA-256 values; nothing was printed." # guard:G22-evidence-shape
+    done
+    if ((${#entries[@]} <= FILES_EVIDENCE_MAX)); then
+        say "       $label: ${#entries[@]} file(s), by key, size and SHA-256:"
+        for entry in "${entries[@]}"; do
+            IFS=: read -r key bytes sha <<<"$entry"
+            say "         $key  $bytes bytes  $sha"
+        done
+    else
+        say "       $label: ${#entries[@]} files; SHA-256 of the list of their keys, sizes and SHA-256 values: $(printf '%s' "$spec" | sha256sum | cut -c1-64)"
+    fi
+}
+
 FILES_TMP=''
 on_files_exit() {
     local status=$?
     [[ -z "$FILES_TMP" ]] || rm -f -- "$FILES_TMP"
-    if ((status != 0)); then
-        warn "$STAGE did not finish. The rehearsal files and database may be partly changed and nothing was removed. The rehearsal is disposable: run"
-        warn "  restore-rehearsal.sh cleanup --dry-run ; cleanup ; then up, prepare and the stages again."
-    fi
+    if ((status != 0)); then stage_trailer 'The rehearsal files and database'; fi
+    stage_record_remove
 }
 
 # --- the four commands ------------------------------------------------------------------------------------------------------------------------
@@ -2577,10 +2711,9 @@ cmd_seed_files() {
     files_db_rows
     [[ "$DB_ROWS_SPEC" == empty ]] || refuse "resource_assets is not an existing, empty table, so there is nothing to seed. Nothing was changed." # guard:G22-seed-assets-empty
 
-    STAGE=seed-files
-    trap on_files_exit EXIT
+    arm_stage seed-files on_files_exit
     say "Seeding $FILES_SEED_COUNT synthetic files as uploads made after the upgrade, then their asset rows ..."
-    FILES_CREATE_OK=1 capture seeded 'seeding the Resources directory' run_files seed
+    capture seeded 'seeding the Resources directory' run_files --create seed
     grep -Fxq 'files:seed=ok' <<<"$seeded" || refuse "the files helper did not report files:seed=ok." # guard:G22-seed-reported
     files_report "$seeded"
     [[ "$FILES_STATE" == present && "$FILES_COUNT" == "$FILES_SEED_COUNT" ]] || refuse "the files helper did not seed exactly $FILES_SEED_COUNT files." # guard:G22-seed-count
@@ -2607,10 +2740,9 @@ cmd_backup_files() {
     [[ "$inventory_now" == "$(historical_inventory)" || "$inventory_now" == "$(upgraded_inventory)" ]] || refuse "the database is neither the 16 tables of v0.3.0 nor the 34 of the upgraded schema, so the asset rows cannot be taken as they should be. Nothing was changed." # guard:G22-backup-db-state
     files_db_rows
 
-    STAGE=backup-files
-    trap on_files_exit EXIT
+    arm_stage backup-files on_files_exit
     say "Checking the Resources directory against the database ($( [[ "$DB_ROWS_SPEC" == none ]] && echo 'there is no resource_assets table' || echo "resource_assets: ${DB_ROWS_COUNT} row(s)" )) ..."
-    FILES_CREATE_OK=1 capture checked 'checking the Resources directory' run_files check "$DB_ROWS_SPEC"
+    capture checked 'checking the Resources directory' run_files --create check "$DB_ROWS_SPEC"
     grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok." # guard:G22-backup-check-reported
     files_report "$checked"
     if [[ "$DB_ROWS_SPEC" == none || "$DB_ROWS_SPEC" == empty ]]; then
@@ -2624,11 +2756,13 @@ cmd_backup_files() {
 
     if [[ "$FILES_STATE" == present ]]; then
         say "Archiving the $FILES_COUNT file(s) with the runbook's command (tar -C <private> -czf <archive> resources), then reading the archive back ..."
+        mutation_begins # the archive's temporary file is the first thing written to the state directory
         FILES_TMP="$(umask 077 && mktemp -- "$ROOT/.files-archive.XXXXXX")"
         run_files archive "$DB_ROWS_SPEC" >"$FILES_TMP"
         [[ -s "$FILES_TMP" ]] || refuse "the archive is empty." # guard:G22-backup-archive-nonempty
         capture verified 'verifying the archive' run_files verify-archive "$FILES_SPEC" <"$FILES_TMP"
         files_verified_ok "$verified" "$FILES_COUNT" || refuse "the archive was not verified against the files it was made from." # guard:G22-backup-archive-verified
+        say "ok   the archive was read back and holds $((FILES_COUNT + 1)) entries (the Resources directory and $FILES_COUNT file(s)); each file is the size and SHA-256 recorded"
         sha="$(sha256sum <"$FILES_TMP" | cut -c1-64)"
         bytes="$(wc -c <"$FILES_TMP" | tr -d ' ')"
         mv -- "$FILES_TMP" "$ROOT/$FILES_ARCHIVE_FILE"
@@ -2662,8 +2796,7 @@ cmd_aside_files() {
     files_backup_required # guard:G22-aside-backup-required
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
     [[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || refuse "the time of day did not come out as a UTC stamp ('${stamp:0:30}')." # guard:G22-aside-stamp
-    STAGE=aside-files
-    trap on_files_exit EXIT
+    arm_stage aside-files on_files_exit
     capture out 'moving the Resources directory aside' run_files aside "$stamp"
     want="$FILES_STORE_DIR.before-restore-$stamp"
     if [[ "$(grep -c '^aside:name=' <<<"$out" || true)" == 1 ]] && grep -Fxq "aside:name=$want" <<<"$out" && grep -Fxq 'aside:complete=ok' <<<"$out"; then reported=1; fi
@@ -2677,6 +2810,8 @@ cmd_aside_files() {
     files_report "$checked"
     [[ "$FILES_STATE" == absent ]] || refuse "the Resources directory is still where it was after being moved aside." # guard:G22-aside-result
     say "ok   $FILES_STORE_DIR moved to $want (renamed; nothing deleted): $moved file(s), read before the rename and again after it, identical in every key, size and SHA-256; the Resources directory is now absent"
+    say_inventory 'read immediately before the rename' "$before_spec"
+    say_inventory 'read in the renamed directory' "$after_spec"
 }
 
 # files_backup_required: the Resource-files backup an earlier stage took is present, this run's, consistent, and its archive (if it has one) is the one the
@@ -2704,8 +2839,7 @@ cmd_restore_files() {
     require_prepared_source
     local verified out checked
     files_backup_required
-    STAGE=restore-files
-    trap on_files_exit EXIT
+    arm_stage restore-files on_files_exit
     if [[ "$FILES_MANIFEST_STATE" == absent ]]; then
         capture checked 'checking the Resources directory' run_files check empty
         files_report "$checked"
@@ -2716,6 +2850,7 @@ cmd_restore_files() {
     say "Verifying the archive against the manifest before anything is written ..."
     capture verified 'verifying the archive' run_files verify-archive "$MANIFEST_SPEC" <"$ROOT/$FILES_ARCHIVE_FILE"
     files_verified_ok "$verified" "$MANIFEST_LINES" || refuse "the archive was not verified against the manifest. Nothing was extracted." # guard:G22-restore-verified-first
+    say "ok   the archive was read before anything was written and holds $((MANIFEST_LINES + 1)) entries (the Resources directory and $MANIFEST_LINES file(s)); each file is the size and SHA-256 the manifest records"
     say "Extracting into a volume with no Resources directory ..."
     capture out 'extracting the archive' run_files restore "$MANIFEST_SPEC" <"$ROOT/$FILES_ARCHIVE_FILE"
     grep -Fxq 'restore:extracted=ok' <<<"$out" || refuse "the files helper did not report restore:extracted=ok." # guard:G22-restore-reported
