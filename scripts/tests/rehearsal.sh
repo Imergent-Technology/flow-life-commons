@@ -4373,7 +4373,7 @@ world_changed() { # prints what changed, if anything
     printf '%s' "$out"
 }
 UNCHANGED_SAYS='stopped before it began to change anything'
-changed_says='may be partly changed and nothing was removed'
+changed_says='may be partly changed. No database, volume or network was removed'
 # trailer_unchanged DESC: the stage refused having begun nothing, and said exactly that; the world agrees. trailer_cautious DESC: it may have begun, and said so.
 trailer_unchanged() {
     expect_has "$1 (the trailer)" "$ERR" "$UNCHANGED_SAYS"
@@ -4563,28 +4563,43 @@ t_g22_evidence_is_validated_before_it_is_printed() {
 # so, and the world agrees; one after something may have begun, however it failed (inside a function, a command substitution, a pipeline or a subshell), keeps
 # the cautious words. The fake daemon proves the tracking sees every one of these; whether a live daemon's failures are always seen the same way is not proven.
 t_g23_a_failed_stage_does_not_overstate_or_understate() {
-    # --- read-only refusals: the trailer says nothing changed, and nothing did.
-    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume; snapshot_state
+    # --- refusals that came before anything could change (before the files container is asked of Docker): the trailer says so, and the world agrees.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    add_ephemeral "$RID" runner; snapshot_state
+    run_script -- backup-files
+    expect_refused 'a runner left over from an interrupted run' 'a rehearsal container other than the database exists'
+    trailer_unchanged 'a refusal because of a leftover container'
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data l_token="$OTHER_TOKEN"; established_files_volume; snapshot_state
+    run_script -- backup-files
+    expect_refused 'a files volume of another run' "the files volume is not the rehearsal's"
+    trailer_unchanged 'a refusal because the files volume is not the rehearsal'"'"'s'
+    backup_files_world up present 4; established_files_volume; snapshot_state
+    run_script -- backup-files
+    expect_refused 'an established files volume that is gone' 'was established earlier in this run and is now missing'
+    trailer_unchanged 'a refusal because an established volume is missing'
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    add_volume "$NAME_SRC" "name=$NAME_SRC" l_role=source l_token="$OTHER_TOKEN"; snapshot_state
+    run_script -- backup-files
+    expect_refused 'a source volume of another run' "the source volume is not the rehearsal's"
+    trailer_unchanged 'a refusal because the source volume is not the rehearsal'"'"'s'
+    # --- a refusal AFTER the files container was asked of Docker is cautious even when the action only reads: Docker sets up the mounts at create, and a missing
+    # volume is made then. (The helper's output being wrong, the archive not verifying, a zero-file backup refused on a directory: all of them come after.)
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
     printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
     run_script -- backup-files
     expect_refused 'a files check that did not report ok' 'did not report files:check=ok'
-    trailer_unchanged 'a files check that did not report ok'
-    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume; snapshot_state
-    : >"$W/asset_rows"
-    run_script -- backup-files
-    expect_refused 'files that are not the asset rows' 'are not the asset rows'
-    trailer_unchanged 'files that are not the asset rows'
+    trailer_cautious 'a read-only files check that did not report ok'
     ensure_files_cache
-    restore_files_world; established_files_volume; snapshot_state
+    restore_files_world; established_files_volume
     printf 'archive:entries=5\n' >"$W/out_files_verify_archive"
     run_script -- restore-files
     expect_refused 'an archive that was not verified' 'was not verified against the manifest'
-    trailer_unchanged 'an archive that was not verified, before anything was written'
-    restore_files_world zero; established_files_volume; snapshot_state
+    trailer_cautious 'a read-only archive verification that did not verify'
+    restore_files_world zero; established_files_volume
     fout present 4 files:check=ok >"$W/out_files_check"
     run_script -- restore-files
     expect_refused 'a zero-file restore with a directory in place' 'a Resources directory exists'
-    trailer_unchanged 'a zero-file restore refused on a read-only check'
+    trailer_cautious 'a zero-file restore refused on a read-only check'
     # --- refusals after something may have begun: the cautious words, whatever the failure was inside.
     backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
     printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
@@ -4648,6 +4663,150 @@ t_g23_a_failed_stage_does_not_overstate_or_understate() {
     run_script TMPDIR="$T/no-such-directory" -- backup-files
     expect_refused 'a refusal with no change record' 'did not report files:check=ok'
     trailer_cautious 'a refusal when the change record could not be made'
+}
+
+# --- WU1 review remediation: the files container's create is a recorded change; an unwritable change record stops the stage; the read-only list is pinned ----
+
+# F1. Docker sets up a container's mounts when it is created, and makes a volume that is missing then, so even a read-only files action may change the files
+# volume the moment the create is attempted. The change record is made BEFORE Docker is asked, and every way that create can end afterwards (the daemon
+# refuses, the container is not what was asked for, a volume was replaced, the stage is interrupted) is told in the cautious words.
+t_g23_creating_the_files_container_is_a_recorded_change() {
+    local seen
+    # The record is there before the create is attempted: the fake daemon looks for it at the create, for an action that only reads, and with the volume
+    # established so that nothing earlier could have made it.
+    mkdir -p "$T/marker-tmp"
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+    printf 'for f in "%s"/*.changed; do [[ -e "$f" ]] && echo "$f"; done >"%s/marker_at_create"\n' "$T/marker-tmp" "$W" >"$W/hook_create"
+    run_script TMPDIR="$T/marker-tmp" -- backup-files
+    seen="$(cat "$W/marker_at_create" 2>/dev/null || true)"
+    [[ "$seen" == "$T/marker-tmp/"*.changed ]] || bad "the files container was created before the change record was made (the fake daemon saw: ${seen:0:200})"
+    # The volume replaced while a READ-ONLY action's container was created: the recheck refuses, and the trailer is the cautious one.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    replace_volume_hook "$NAME_FV"
+    run_script -- backup-files
+    expect_refused 'a files volume replaced during a read-only check' 'the files volume is no longer the rehearsal'"'"'s'
+    trailer_cautious 'a volume replaced during the create of a read-only check'
+    [[ -d "$W/v/$NAME_FV" ]] || bad 'the replacement volume was removed'
+    ! grep -q '^volume rm ' "$W/calls" || bad 'a volume was removed'
+    [[ ! -e "$W/started" ]] || ! grep -q "$NAME_F" "$W/started" || bad 'a container was started after its volume was replaced'
+    ensure_files_cache
+    restore_files_world; established_files_volume
+    replace_volume_hook "$NAME_FV"
+    run_script -- restore-files
+    expect_refused 'a files volume replaced during a read-only archive verification' 'is no longer the rehearsal'"'"'s'
+    trailer_cautious 'a volume replaced during the create of a read-only verification'
+    # The container that was created is not what was asked for: refused and removed by create_verified, and the trailer is cautious.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    printf 'l_role someone-else\n' >"$W/create_override"
+    run_script -- backup-files
+    expect_refused 'a created container that fails its identity check' 'was removed and not started'
+    trailer_cautious 'a created container that failed its identity check'
+    [[ ! -e "$W/started" ]] || ! grep -q "$NAME_F" "$W/started" || bad 'a container that failed its identity check was started'
+    ! files_container_exists || bad 'a container that failed its identity check was left'
+    [[ -d "$W/v/$NAME_FV" ]] || bad 'a volume was removed after a container failed its identity check'
+    # The daemon refuses the create altogether.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    : >"$W/create_fail"
+    run_script -- backup-files
+    expect_rc 'a create that Docker refused' 1
+    expect_has 'a create that Docker refused' "$ERR" 'docker could not create the files container'
+    trailer_cautious 'a create that Docker refused'
+    no_files_container 'a create that Docker refused'
+    # The stage is interrupted once the create has begun: the exit trap still runs, and says it may have changed.
+    backup_files_world up present 4; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+    # shellcheck disable=SC2016 # the script written here is run by the fake daemon, which expands it
+    printf 'for p in /proc/[0-9]*; do if tr "\\0" " " <"$p/cmdline" 2>/dev/null | grep -q "restore-rehearsal.sh backup-files"; then kill -TERM "${p#/proc/}" 2>/dev/null; fi; done; sleep 1\n' >"$W/hook_create"
+    run_script TMPDIR="$T/marker-tmp" -- backup-files
+    [[ "$RC" == 143 ]] || bad "a stage that was terminated did not exit 143: $RC"
+    trailer_cautious 'a stage interrupted after the create had begun'
+    [[ -z "$(find "$T/marker-tmp" -mindepth 1)" ]] || bad 'an interrupted stage left its change record behind'
+    # Everything before the create is still a pre-mutation refusal (see the unchanged-state cases of t_g23_a_failed_stage_does_not_overstate_or_understate), and a
+    # writing action keeps its own earlier record: a seed that fails at the create is cautious as before.
+    seed_world
+    : >"$W/create_fail"
+    run_script -- seed-files
+    trailer_cautious 'a seed whose create Docker refused'
+}
+
+# F2. If the change record cannot be written, nothing that it records is begun. The destination is made unwritable with ENOTDIR (a path below a regular file),
+# which fails for root too. Each place that records first is tried: the function itself, a state file, an SQL write, a helper that may write, a files action
+# that writes and one that only reads (whose create is recorded just before Docker is asked). `fail` exits, so it ends a command substitution's subshell and
+# a pipeline's, and the callers that need the status (capture) carry it out: tried through capture as well.
+t_g23_a_change_record_that_cannot_be_written_stops_the_stage() {
+    local bad_mark="$T/not-a-directory/marker" code
+    : >"$T/not-a-directory"
+    good_world
+    run_fn "MUTATION_MARK='$bad_mark'; mutation_begins; echo SURVIVED"
+    [[ "$RC" == 1 && "$ERR" == *'the record of what this stage may change could not be written, so nothing was begun'* && "$OUT" != *SURVIVED* ]] || bad "mutation_begins went on after it could not write the record, or did not say so: $RC ${ERR:0:200} $OUT"
+    # A record that exists is not written again, and no record at all (a stage that was not armed) records nothing and stops nothing.
+    run_fn "MUTATION_MARK=''; mutation_begins; echo SURVIVED"
+    [[ "$RC" == 0 && "$OUT" == *SURVIVED* ]] || bad "an unarmed stage was stopped by mutation_begins: $RC ${ERR:0:200}"
+    # A state file: nothing is written, not even its temporary file.
+    src_world; snapshot_state
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; write_state_file recorded.test content; echo SURVIVED"
+    [[ "$RC" == 1 && "$OUT" != *SURVIVED* && ! -e "$T/root/recorded.test" ]] || bad "a state file was written although its change record could not be: $RC ${ERR:0:200}"
+    [[ -z "$(find "$T/root" -name '.recorded.test.*')" ]] || bad 'a temporary state file was made although its change record could not be'
+    [[ -z "$(world_changed)" ]] || bad "the state directory changed: $(world_changed)"
+    # An SQL write reaches no container: the first thing it does is record.
+    src_world
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; printf 'DROP TABLE x;\n' | guarded_app_sql '$T/root' \"\$APP_DB\"; echo SURVIVED"
+    [[ "$RC" != 0 && "$OUT" != *SURVIVED* ]] || bad "an SQL write went on although its change record could not be written: $RC ${ERR:0:200}"
+    ! grep -qE '^(exec|inspect) ' "$W/calls" || bad "an SQL write reached Docker although its change record could not be written: $(grep -E '^(exec|inspect) ' "$W/calls" | head -n 2 | tr '\n' '|')"
+    # A helper that may write: no runner is created.
+    src_world
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; run_helper historical helper:fixture-load out; echo SURVIVED"
+    [[ "$RC" != 0 && "$OUT" != *SURVIVED* ]] || bad "a helper that may write was run although its change record could not be written: $RC ${ERR:0:200}"
+    ! grep -q '^create ' "$W/calls" || bad 'a runner was created although the change record could not be written'
+    [[ ! -e "$W/runs" ]] || bad "a helper ran: $(tr '\n' ' ' <"$W/runs")"
+    # The same through capture, the way the stages call it.
+    src_world
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; capture out 'running the helper' run_helper historical helper:fixture-load out; echo SURVIVED"
+    [[ "$RC" != 0 && "$OUT" != *SURVIVED* && "$ERR" == *'could not be written, so nothing was begun'* ]] || bad "capture did not carry the failure out: $RC ${ERR:0:300}"
+    # A files action that writes, and one that only reads.
+    for code in "run_files seed" "run_files check empty" "run_files --create check empty"; do
+        restore_files_world; established_files_volume
+        run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; capture out 'a files action' $code; echo SURVIVED"
+        [[ "$RC" != 0 && "$OUT" != *SURVIVED* ]] || bad "'$code' went on although its change record could not be written: $RC ${ERR:0:200}"
+        ! grep -q '^create ' "$W/calls" || bad "'$code' asked Docker for a container although its change record could not be written"
+        ! grep -q '^volume create ' "$W/calls" || bad "'$code' created a volume although its change record could not be written"
+        [[ ! -e "$W/runs" ]] || bad "'$code': the files helper ran: $(tr '\n' ' ' <"$W/runs")"
+    done
+    # A volume that is to be created is recorded first too.
+    restore_files_world novolume
+    run_fn "ROOT='$T/root'; MUTATION_MARK='$bad_mark'; files_volume_ready '$TOKEN' 1; echo SURVIVED"
+    [[ "$RC" != 0 && "$OUT" != *SURVIVED* && "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad "a files volume was created although the change record could not be written: $RC ${ERR:0:200}"
+}
+
+# F3. The approved commands that are read-only, for the purpose of what a failed stage may say, are exactly five. Any other approved name, and anything that is not
+# an approved name, is classified as one that may change something. The test knows every approved name (read from runner_command), so a new one, or a writing
+# helper added to the five, cannot pass without this list being changed on purpose.
+t_g23_the_read_only_helpers_are_exactly_these() {
+    local -a read_only=(helper:db-ping helper:snapshot migrate:status about release:show)
+    local -a approved=() other=()
+    local name got
+    mapfile -t approved < <(sed -n '/^runner_command() {/,/^}/p' "$SRC/restore-rehearsal.sh" | grep -E '^        [a-z:| -]+\) RUN_CMD=' | sed 's/).*//' | tr '|' '\n' | tr -d ' ')
+    ((${#approved[@]} == 13)) || bad "runner_command approves ${#approved[@]} names, not the 13 this test knows: ${approved[*]}"
+    for name in "${read_only[@]}"; do
+        [[ " ${approved[*]} " == *" $name "* ]] || bad "$name is not an approved command any more, so it cannot be a read-only one"
+    done
+    for name in "${approved[@]}" bogus '' 'helper:snapshot ' 'helper:' 'about:x' 'HELPER:SNAPSHOT'; do
+        run_fn "helper_is_read_only '$name' && echo read-only || echo may-change"
+        got="$OUT"
+        if [[ " ${read_only[*]} " == *" $name "* && -n "$name" ]]; then
+            [[ "$got" == read-only ]] || bad "'$name' is one of the five read-only commands but is classified as one that may change something"
+        else
+            [[ "$got" == may-change ]] || bad "'$name' is classified as read-only: a command that is not one of the five must be one that may change something"
+            other+=("$name")
+        fi
+    done
+    # The writing helpers in particular, by name.
+    for name in helper:fixture-load helper:post-upgrade-mark helper:half-migrate helper:revoke helper:sign-in migrate relationships:check resources:assets:prune; do
+        [[ " ${other[*]} " == *" $name "* ]] || bad "$name is not classified as a command that may change something"
+    done
+    run_fn 'declare -f helper_is_read_only | grep -c "return 0"'
+    [[ "$OUT" == 1 ]] || bad 'helper_is_read_only has more than one place that says a command is read-only'
 }
 
 # --- the matrix runner itself (WU0): sharing the mutants among workers must not change which mutants run or what is concluded ---------------------------
@@ -6407,7 +6566,8 @@ declare -A GUARD_TESTS=(
     [G22-f-recheck-removable]='t_g22_the_mounts_are_verified_again_after_create'
     [G22-f-recheck-refuses]='t_g22_the_mounts_are_verified_again_after_create'
     [G22-evidence-shape]='t_g22_evidence_is_validated_before_it_is_printed'
-    [G23-mutation-recorded]='t_g23_a_failed_stage_does_not_overstate_or_understate'
+    [G23-mutation-recorded]='t_g23_a_change_record_that_cannot_be_written_stops_the_stage t_g23_a_failed_stage_does_not_overstate_or_understate'
+    [G23-create-mutation]='t_g23_creating_the_files_container_is_a_recorded_change'
     [G23-sql-mutation]='t_g23_a_failed_stage_does_not_overstate_or_understate'
     [G23-helper-mutation]='t_g23_a_failed_stage_does_not_overstate_or_understate'
     [G23-query-read-only]='t_g23_a_failed_stage_does_not_overstate_or_understate'

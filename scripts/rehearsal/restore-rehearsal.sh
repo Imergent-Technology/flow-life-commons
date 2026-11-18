@@ -1525,6 +1525,10 @@ arm_stage() { # STAGE_NAME EXIT_HANDLER
     MUTATION_MARK="$(umask 077 && mktemp -- "${TMPDIR:-/tmp}/flc-rehearsal-stage.XXXXXX" 2>/dev/null)" || MUTATION_MARK=''
     # shellcheck disable=SC2064 # the handler name is a literal chosen by the caller
     trap "$2" EXIT
+    # An interrupted stage ends through the exit trap too, so that it says what it may have changed and removes its record; the statuses are the usual ones.
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
 }
 mutation_begins() {
     [[ -n "$MUTATION_MARK" ]] || return 0
@@ -1537,9 +1541,9 @@ stage_record_remove() {
 # The trailer. Only a stage that provably began nothing is told it changed nothing; everything else keeps the cautious words.
 stage_trailer() { # WHAT_MAY_BE_CHANGED
     if stage_changed_nothing; then
-        warn "$STAGE did not finish, and it stopped before it began to change anything: only read-only checks had run, so the rehearsal database, the files volume and the state directory are as they were. Nothing was removed."
+        warn "$STAGE did not finish, and it stopped before it began to change anything: only read-only checks had run, so the rehearsal database, the files volume and the state directory are as they were. No database, volume or network was removed."
     else
-        warn "$STAGE did not finish. $1 may be partly changed and nothing was removed."
+        warn "$STAGE did not finish. $1 may be partly changed. No database, volume or network was removed; a disposable container is removed when it has finished, or when it fails its checks, and says so."
     fi
     warn "The rehearsal is disposable: run"
     warn "  restore-rehearsal.sh cleanup --dry-run ; cleanup ; then up, prepare and the stages again."
@@ -2476,6 +2480,10 @@ run_files() {
     files_volume_ready "$token" "$create"
     resolve_php_image
     [[ "$FILES_RW" == true ]] || ro_opt=',readonly' # guard:G22-f-readonly-mount
+    # Docker sets up a container's mounts when it is CREATED, and creates a named volume that is missing then (empty, unlabelled), whether the action reads or
+    # writes. So from the moment the create is attempted a failure may have changed the files volume, and the change record says so first. Every refusal above
+    # this line came before any of that, and a failure to make the record stops here, before Docker is asked for anything.
+    mutation_begins # guard:G23-create-mutation
     id="$(create_verified "$ROOT" "$token" files none plain_docker -- \
         --network none \
         --mount "type=volume,source=$SRC_VOLUME_NAME,target=$FILES_SRC_MOUNT,readonly" \
