@@ -41,8 +41,10 @@ Tooling (run inside containers)
 Quality
   test [backend|frontend|e2e] [--pgsql] [-- args]
                            Run tests (default: backend + frontend)
-  check [repo|backend|frontend] [--pgsql]
-                           Everything CI runs; exits non-zero on any failure
+  check [repo|backend|frontend] [--pgsql] [--mutation]
+                           Routine verification (what CI runs); exits non-zero on any failure.
+                           --pgsql adds the PostgreSQL backend run; --mutation adds the
+                           rehearsal's full mutation matrix. Neither is release assurance
   build                    Production build of the Guardian Console
   audit                    Dependency vulnerability audit (composer + npm; needs the network)
 

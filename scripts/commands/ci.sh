@@ -6,7 +6,7 @@
 # dispatching arbitrary workflows stay plain `git`/`gh` commands.
 #
 # `gh` is required ONLY here. Every other ./flow command works without it.
-# The provider-independent local equivalent of CI remains `./flow check --pgsql`.
+# The provider-independent local equivalent of CI is `./flow check` (routine verification).
 # shellcheck shell=bash
 
 CI_WORKFLOW='ci.yml'   # .github/workflows/ci.yml  — "CI"
@@ -49,7 +49,7 @@ Usage: ./flow ci <subcommand>
 
 Needs the GitHub CLI (gh); no other ./flow command does.
 Anything else GitHub-related (auth, remotes, secrets, artifacts) is plain git/gh.
-Local equivalent of the CI checks: ./flow check --pgsql
+Local equivalent of the CI checks: ./flow check
 USAGE
 }
 
@@ -62,7 +62,7 @@ require_gh() {
     Debian/Ubuntu: sudo apt install gh
     Arch:          sudo pacman -S github-cli
     Other:         https://cli.github.com
-Every other ./flow command works without gh; ./flow check --pgsql runs the same checks locally."
+Every other ./flow command works without gh; ./flow check runs the same checks locally."
     fi
 
     if ! gh auth status >/dev/null 2>&1; then

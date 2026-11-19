@@ -1,9 +1,9 @@
 # ADR 0005: MariaDB first, PostgreSQL portability required
 
-- **Status:** Accepted
+- **Status:** Accepted **Amended by [ADR 0039](0039-postgresql-is-a-deferred-compatibility-target.md) (2026-11-18):** the PostgreSQL run of the suite is no longer part of routine verification (`./flow check`, CI); it is explicit (`--pgsql`). The architectural rules below are unchanged.
 - **Date:** 2026-09-19
 - **Supersedes:** none
-- **Superseded by:** none
+- **Superseded by:** none (amended in part by [ADR 0039](0039-postgresql-is-a-deferred-compatibility-target.md))
 
 ## Context
 

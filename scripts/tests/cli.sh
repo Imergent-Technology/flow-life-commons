@@ -101,6 +101,58 @@ else
     pass "./flow check does not depend on an advisory database"
 fi
 
+printf 'flow check: routine and comprehensive verification (CI-1)\n'
+# What ./flow check says it did not run: sourced from the real check.sh, so the text a user reads is the text under test.
+notice() { FLOW_ROOT="$ROOT" bash -c 'source "$FLOW_ROOT/scripts/lib/common.sh"; source "$FLOW_ROOT/scripts/commands/check.sh"; verification_notice "$@"' x "$@" 2>&1; }
+expect_contains() { # DESC TEXT NEEDLE
+    if [[ "$2" == *"$3"* ]]; then pass "$1"; else fail "$1 (did not contain: $3)"; fi
+}
+expect_lacks() { # DESC TEXT NEEDLE
+    if [[ "$2" != *"$3"* ]]; then pass "$1"; else fail "$1 (should not contain: $3)"; fi
+}
+expect_exit "an unknown check option is rejected" 1 check --nonsense
+expect_exit "--mutation is refused with the backend scope" 1 check backend --mutation
+expect_exit "--mutation is refused with the frontend scope" 1 check frontend --mutation
+expect_output "the refusal names the scope that runs the rehearsal" "check repo --mutation" check backend --mutation
+expect_output "help documents --mutation" "--mutation" help
+expect_output "help says neither option is release assurance" "Neither is release assurance" help
+expect_output "--pgsql is still a backend option of test" "only applies to the backend suite" test frontend --pgsql
+routine="$(notice all 0 0)"
+expect_contains "a routine run says what it did not include" "$routine" "NOT part of this run"
+expect_contains "a routine run says the mutation matrix did not run" "$routine" "mutation matrix (its ordinary tests and registry check ran; 0 mutation experiments)"
+expect_contains "a routine run says PostgreSQL did not run" "$routine" "the backend suite on PostgreSQL"
+expect_contains "a routine run says E2E did not run" "$routine" "browser E2E"
+expect_contains "a routine run says the audit did not run" "$routine" "dependency-security audit"
+expect_contains "a routine run says release checks did not run" "$routine" "release-specific checks"
+expect_contains "a routine run says it is not release assurance" "$routine" "This is not release assurance"
+expect_lacks "a routine run does not claim an extra" "$routine" "Also run, on request"
+mutation="$(notice all 0 1)"
+expect_contains "--mutation says the full matrix ran" "$mutation" "Also run, on request: the recovery rehearsal's full mutation matrix"
+expect_lacks "--mutation does not also say the matrix did not run" "$mutation" "0 mutation experiments"
+expect_contains "--mutation is still not release assurance" "$mutation" "This is not release assurance"
+expect_contains "--mutation still says E2E did not run" "$mutation" "browser E2E"
+expect_contains "--mutation still says PostgreSQL did not run" "$mutation" "the backend suite on PostgreSQL"
+pgsql="$(notice all 1 0)"
+expect_contains "--pgsql says PostgreSQL ran" "$pgsql" "Also run, on request: the backend suite on PostgreSQL"
+expect_contains "--pgsql still says the matrix did not run" "$pgsql" "0 mutation experiments"
+both="$(notice all 1 1)"
+expect_contains "both options say both ran" "$both" "Also run, on request: the recovery rehearsal's full mutation matrix; the backend suite on PostgreSQL"
+expect_contains "both options are still not release assurance" "$both" "This is not release assurance"
+frontend="$(notice frontend 0 0)"
+expect_contains "the frontend scope says the rehearsal did not run" "$frontend" "the recovery rehearsal (repo checks were not selected)"
+expect_contains "the frontend scope says the backend did not run" "$frontend" "backend checks were not selected"
+# The wiring: routine passes --routine to the rehearsal and the full run passes nothing; the workflow runs the routine command only.
+check_src="$(<"$ROOT/scripts/commands/check.sh")"
+# shellcheck disable=SC2016 # the text looked for is the source's own, with its $FLOW_ROOT in it
+expect_contains "the routine rehearsal is started with --routine" "$check_src" 'bash "$FLOW_ROOT/scripts/tests/rehearsal.sh" --routine'
+# shellcheck disable=SC2016 # as above
+expect_contains "the full rehearsal is started with no argument" "$check_src" 'bash "$FLOW_ROOT/scripts/tests/rehearsal.sh"
+'
+expect_contains "PostgreSQL stays one --pgsql away" "$check_src" 'run_check "Backend tests (Pest, PostgreSQL)" test_backend 1'
+ci_run="$(grep -E '^[[:space:]]+run: \./flow check' "$ROOT/.github/workflows/ci.yml" | sed 's/^[[:space:]]*run: //')"
+if [[ "$ci_run" == './flow check' ]]; then pass "CI runs ./flow check, routine, and nothing else of ./flow check"; else fail "CI runs '$ci_run', not exactly './flow check'"; fi
+if grep -v '^[[:space:]]*#' "$ROOT/.github/workflows/ci.yml" | grep -qE '(--pgsql|--mutation)'; then fail "ci.yml asks for --pgsql or --mutation outside a comment"; else pass "ci.yml does not ask for PostgreSQL or the mutation matrix"; fi
+
 printf 'flow ci: dispatch\n'
 expect_exit "a bare 'ci' exits 2" 2 ci
 expect_exit "an unknown subcommand exits 2" 2 ci definitely-not-a-subcommand

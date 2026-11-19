@@ -21,7 +21,7 @@ cd flow-life-commons
 | API health (same origin) | http://commons.flowlife.localhost:18080/api/v1/health |
 | Mailpit | http://mail.flowlife.localhost:18080 |
 
-`./flow doctor` diagnoses your machine; `./flow help` lists commands; `./flow check` runs everything CI runs.
+`./flow doctor` diagnoses your machine; `./flow help` lists commands; `./flow check` runs what CI runs: routine verification (PostgreSQL, the rehearsal's mutation matrix, E2E and the dependency audit are explicit extras; see [testing](docs/development/testing.md#verification-tiers)).
 
 ## Repository
 

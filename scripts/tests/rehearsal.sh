@@ -24,7 +24,10 @@
 #   (unset)               N = the CPUs this process may really use (affinity and any cgroup quota) minus one for the ordinary tests, at most 4,
 #                         and at most one worker per 512 MiB of available memory; 0 when that leaves none.
 #
-# REHEARSAL_TESTS="t_a t_b" runs just those tests (no matrix). REHEARSAL_SRC names the script directory under test.
+# Which verification this is is chosen by an ARGUMENT (see "how the file is run" near the end of this file):
+#   rehearsal.sh             FULL: ordinary tests, registry check and the whole matrix above. The complete verification.
+#   rehearsal.sh --routine   ROUTINE: every ordinary test once and the registry check, and NO mutation experiment (it says so). Used by `./flow check`.
+# REHEARSAL_TESTS="t_a t_b" runs just those tests (no matrix, no summary; not a mode of verification). REHEARSAL_SRC names the script directory under test.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -4351,7 +4354,7 @@ t_guard_registry_comparison() {
     done
     out="$(registry_differences "$(seq 1 40000)" "$(seq 1 40000)")"
     [[ -z "$out" ]] || bad 'two equal lists of 40000 differ'
-    matrix="$(sed -n '/^printf .\\nMutation matrix/,$p' "$ROOT/scripts/tests/rehearsal.sh")"
+    matrix="$(sed -n '/^[[:space:]]*printf .\\nMutation matrix (each/,$p' "$ROOT/scripts/tests/rehearsal.sh")"
     [[ -n "$matrix" ]] || bad 'the matrix could not be found in this file'
     [[ "$matrix" != *'grep -q'* && "$matrix" != *'grep -x'* ]] || bad 'the matrix pipes into an early-exiting grep again'
 }
@@ -5655,7 +5658,7 @@ t_matrix_the_caches_are_made_before_the_mutants_and_kept() {
 # report_mutants), with the failure count local to this test. Complete, honest reports of caught mutants add no failure; an honestly reported survivor, or a
 # worker's missing result, does; and complete reports cannot hide a failure the run already had.
 t_matrix_parent_counts_failures() {
-    local FAILURES=0 TALLY=''
+    local FAILURES=0 TALLY='' MUTANTS_RAN=-1 MUTANTS_CAUGHT=-1
     local -a MUTANT_IDS=(A B C)
     local -A MUTANT_LINE=()
     local ok_a='  ok    A                          caught by g1_a: it did' ok_b='  ok    B                          caught by g1_b: it did' ok_c='  ok    C                          caught by g1_c: it did'
@@ -5675,15 +5678,18 @@ t_matrix_parent_counts_failures() {
     tally 0 0 "$ok_a"$'\n'"$ok_c"$'\n'"$trailer0" 0 "$ok_b"$'\n'"$trailer1"
     ((FAILURES == 0)) || bad "complete, honest reports of caught mutants were counted as $FAILURES failure(s): ${TALLY:0:300}"
     [[ "$TALLY" == *'3 mutant(s) run by 2 worker(s), each exactly once'* ]] || bad "a clean run did not say so: ${TALLY:0:300}"
+    ((MUTANTS_RAN == 3 && MUTANTS_CAUGHT == 3)) || bad "the summary's mutant counts for a clean run were ran=$MUTANTS_RAN caught=$MUTANTS_CAUGHT, not 3 and 3"
     tally 0 0 "$ok_a"$'\n'"$ok_c"$'\n'"$trailer0" 1 "$fail_b"$'\n''worker 1/2: assigned=1 caught=0 failed=1'
     ((FAILURES > 0)) || bad "a surviving mutant, honestly reported, did not fail the run: ${TALLY:0:300}"
     [[ "$TALLY" == *'FAIL  B'*'survived'* && "$TALLY" != *'each exactly once'* ]] || bad "a surviving mutant was not reported, or the run was called clean: ${TALLY:0:300}"
+    ((MUTANTS_RAN == 3 && MUTANTS_CAUGHT == 2)) || bad "the summary's mutant counts with a survivor were ran=$MUTANTS_RAN caught=$MUTANTS_CAUGHT, not 3 and 2"
     tally 1 0 "$ok_a"$'\n'"$ok_c"$'\n'"$trailer0" 0 "$ok_b"$'\n'"$trailer1"
     ((FAILURES == 1)) || bad "complete reports changed a failure the run already had: FAILURES=$FAILURES"
     [[ "$TALLY" != *'each exactly once'* ]] || bad "complete reports hid a failure the run already had: ${TALLY:0:300}"
     tally 0 0 "$ok_a"$'\n'"$ok_c"$'\n'"$trailer0" 0 "$trailer1"
     ((FAILURES > 0)) || bad "a worker with a mutant missing, and an exit status of 0, did not fail the run: ${TALLY:0:300}"
     [[ "$TALLY" == *'did not run'* ]] || bad "a mutant that was never reported was not said to have not run: ${TALLY:0:300}"
+    ((MUTANTS_RAN == 2 && MUTANTS_CAUGHT == 2)) || bad "the summary's mutant counts with a missing result were ran=$MUTANTS_RAN caught=$MUTANTS_CAUGHT, not 2 and 2"
     unset -f tally
 }
 
@@ -5706,6 +5712,168 @@ t_matrix_modes_keep_their_meaning() {
     rc=0
     out="$(env -u REHEARSAL_TESTS REHEARSAL_WORKERS=17 timeout 60 bash "$THIS_SCRIPT" 2>&1)" || rc=$?
     [[ "$rc" == 2 && "$out" == *'REHEARSAL_WORKERS must be a whole number'* && "$out" != *'  ok '* ]] || bad "REHEARSAL_WORKERS=17 did not stop the run at once (exit $rc): ${out:0:300}"
+}
+
+# --- the modes of the file itself (CI-1): which verification a run is, and that a weaker one is only ever chosen on the command line ---------------------------
+# The modes are driven by functions that take their tests from ORDINARY_TESTS, so they are tested here with a short list of stand-ins and the REAL registry and mutant
+# list, in a subshell of their own (nothing they change reaches this test); `rehearsal.sh --routine` itself is only started here with arguments that are refused.
+
+# Anything but nothing or exactly --routine is refused before a single test runs, and a weaker run cannot be chosen by the environment.
+t_modes_a_malformed_selection_is_refused() {
+    local out rc args
+    for args in '--bogus' '--routine --routine' '--routine --worker 0 1 G1-host' '--full' '--Routine' '--routine=1' '-r' 'routine' '--routine extra' "''"; do
+        rc=0
+        # shellcheck disable=SC2086 # the words are the point
+        out="$(eval "timeout 60 bash \"\$THIS_SCRIPT\" $args" 2>&1)" || rc=$?
+        [[ "$rc" == 2 ]] || bad "rehearsal.sh $args exited $rc, not 2 (it printed: ${out:0:200})"
+        [[ "$out" != *'  ok '* && "$out" != *REHEARSAL_SUMMARY* && "$out" != *'passed'* ]] || bad "rehearsal.sh $args ran something or reported a result: ${out:0:200}"
+    done
+    # The environment does not choose a mode, and does not combine with one.
+    rc=0
+    out="$(REHEARSAL_TESTS=t_surface_no_restore_command timeout 60 bash "$THIS_SCRIPT" --routine 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" == *'cannot be combined'* && "$out" != *'  ok '* ]] || bad "--routine with REHEARSAL_TESTS was not refused at once (exit $rc): ${out:0:200}"
+    rc=0
+    out="$(env -u REHEARSAL_TESTS REHEARSAL_WORKERS=17 timeout 60 bash "$THIS_SCRIPT" --routine 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" == *'REHEARSAL_WORKERS must be a whole number'* && "$out" != *'  ok '* ]] || bad "--routine with a malformed REHEARSAL_WORKERS was not refused at once (exit $rc): ${out:0:200}"
+    # A weaker mode needs its argument: the same environment and no argument is the full run, which a malformed value stops at once as before.
+    rc=0
+    out="$(env -u REHEARSAL_TESTS REHEARSAL_ROUTINE=1 REHEARSAL_MODE=routine REHEARSAL_WORKERS=17 timeout 60 bash "$THIS_SCRIPT" 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" != *'Routine'* && "$out" != *'NOT RUN'* ]] || bad "an environment variable chose a weaker mode (exit $rc): ${out:0:200}"
+}
+
+# Routine: every ordinary test once, the registry, no mutation experiment, and a report that cannot be taken for the full run's.
+# shellcheck disable=SC2329 # the stand-in functions are defined in subshells and called by the code under test
+t_modes_routine_runs_every_ordinary_test_once_and_no_mutant() {
+    local out rc=0 log="$T/modes.log" markers
+    markers="$(matrix_markers | wc -l)"
+    rm -f "$log" "$T/modes.mutants"
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell, which expands them
+    out="$( (
+        t_fake_a() { echo a >>"$log"; }; t_fake_b() { echo b >>"$log"; }; t_fake_c() { echo c >>"$log"; }
+        run_mutant() { echo "mutant $1" >>"$T/modes.mutants"; }
+        prepare_caches() { echo caches >>"$T/modes.mutants"; }
+        ORDINARY_TESTS=(t_fake_a t_fake_b t_fake_c)
+        rehearsal_routine
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 0 ]] || bad "a routine run of passing tests exited $rc: ${out:0:300}"
+    [[ "$(sort "$log" | tr '\n' ' ')" == 'a b c ' ]] || bad "the ordinary tests were not each run exactly once: $(tr '\n' ' ' <"$log")"
+    [[ ! -e "$T/modes.mutants" ]] || bad "a routine run executed a mutation experiment or prepared the matrix's caches: $(tr '\n' ' ' <"$T/modes.mutants")"
+    expect_has 'the summary line' "$out" "REHEARSAL_SUMMARY mode=routine result=passed ordinary_run=3 ordinary_failed=0 registry=consistent guards_registered=$markers mutants_executed=0 mutants_caught=0 matrix=not-run"
+    expect_has 'the matrix is said not to have run' "$out" 'Mutation matrix: NOT RUN'
+    expect_has 'the closing line says so too' "$out" 'The mutation matrix was NOT RUN.'
+    expect_lacks 'the full run closing line' "$out" 'All rehearsal guard tests passed'
+    expect_lacks 'the full run mutant line' "$out" 'mutant(s) run by'
+    expect_lacks 'the full run matrix header' "$out" 'each safeguard line replaced'
+    [[ "$markers" -ge 300 ]] || bad "the registry holds only $markers guards: the test is not using the real one"
+}
+
+# Routine still fails for a failing ordinary test (and runs the others), for no tests, and for a test listed twice.
+# shellcheck disable=SC2329 # the stand-in functions are defined in subshells and called by the code under test
+t_modes_routine_fails_closed() {
+    local out rc log="$T/modes-fail.log"
+    rm -f "$log"
+    rc=0
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (
+        t_fake_a() { echo a >>"$log"; }; t_fake_bad() { echo bad >>"$log"; TEST_FAILS=1; }; t_fake_c() { echo c >>"$log"; }
+        ORDINARY_TESTS=(t_fake_a t_fake_bad t_fake_c)
+        rehearsal_routine
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 1 ]] || bad "a failing ordinary test did not fail the routine run (exit $rc): ${out:0:300}"
+    [[ "$(sort "$log" | tr '\n' ' ')" == 'a bad c ' ]] || bad "the routine run did not go on past a failing test: $(tr '\n' ' ' <"$log")"
+    expect_has 'the failure is in the summary' "$out" 'result=failed ordinary_run=3 ordinary_failed=1'
+    expect_lacks 'no success line' "$out" 'Routine rehearsal checks passed'
+    rc=0
+    out="$( (ORDINARY_TESTS=(); rehearsal_routine) 2>&1)" || rc=$?
+    [[ "$rc" == 1 && "$out" == *'there are no ordinary tests to run'* && "$out" != *'Routine rehearsal checks passed'* ]] || bad "a routine run of no tests succeeded (exit $rc): ${out:0:300}"
+    rc=0
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (t_fake_a() { :; }; ORDINARY_TESTS=(t_fake_a t_fake_a); rehearsal_routine) 2>&1)" || rc=$?
+    [[ "$rc" == 1 && "$out" == *'appears twice'* && "$out" != *'Routine rehearsal checks passed'* ]] || bad "a test listed twice was not refused (exit $rc): ${out:0:300}"
+}
+
+# Routine checks the registry in both directions, as the full run does: a marker with no entry, and an entry with no marker, each fail it.
+# shellcheck disable=SC2329 # the stand-in functions are defined in subshells and called by the code under test
+t_modes_routine_checks_the_registry_both_ways() {
+    local out rc real
+    real="$(matrix_markers)"
+    rc=0
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (
+        t_fake_a() { :; }
+        matrix_markers() { { printf '%s\n' "$real"; echo G99-a-marker-with-no-entry; } | sort -u; }
+        ORDINARY_TESTS=(t_fake_a)
+        rehearsal_routine
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 1 ]] || bad "a marker with no registry entry did not fail the routine run (exit $rc): ${out:0:300}"
+    expect_has 'the unregistered marker is named' "$out" 'G99-a-marker-with-no-entry has no tests in GUARD_TESTS'
+    expect_has 'the summary' "$out" 'result=failed'
+    expect_has 'the summary says inconsistent' "$out" 'registry=inconsistent'
+    expect_lacks 'no success line (marker)' "$out" 'Routine rehearsal checks passed'
+    rc=0
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (
+        t_fake_a() { :; }
+        matrix_markers() { printf '%s\n' "$real" | grep -vx 'G1-host'; }
+        ORDINARY_TESTS=(t_fake_a)
+        rehearsal_routine
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 1 ]] || bad "a registry entry with no marker did not fail the routine run (exit $rc): ${out:0:300}"
+    expect_has 'the unmarked entry is named' "$out" 'GUARD_TESTS lists G1-host, which has no marker in the script'
+    expect_lacks 'no success line (entry)' "$out" 'Routine rehearsal checks passed'
+}
+
+# Full (no argument) keeps every registered mutant, runs each exactly once and counts each as caught; one that is not caught, or an ordinary test that fails, fails it.
+# (The workers' own accounting is held by the matrix_* tests; this runs the sequential path, with the mutant itself replaced by a stand-in that records the call.)
+# shellcheck disable=SC2329 # the stand-in functions are defined in subshells and called by the code under test
+t_modes_full_runs_every_registered_mutant_exactly_once() {
+    local out rc=0 log="$T/modes-full.log" markers mutants
+    markers="$(matrix_markers | wc -l)"
+    mutants="$(matrix_mutants | wc -l)"
+    [[ "$mutants" == "$markers" && "$markers" -ge 300 ]] || bad "the matrix would not mutate every marker ($mutants of $markers)"
+    rm -f "$log"
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (
+        t_fake_a() { :; }
+        prepare_caches() { :; }
+        run_mutant() { echo "$1" >>"$log"; printf '  ok    %s caught by a stand-in\n' "$1"; }
+        ORDINARY_TESTS=(t_fake_a)
+        REHEARSAL_WORKERS=0 rehearsal_full
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 0 ]] || bad "a full run in which every mutant is caught exited $rc: ${out:0:300}"
+    [[ "$(wc -l <"$log")" == "$markers" && "$(sort "$log" | uniq -d | wc -l)" == 0 && "$(sort "$log")" == "$(matrix_mutants | sort)" ]] || bad "the full run did not run each of the $markers registered mutants exactly once"
+    expect_has 'the summary' "$out" "REHEARSAL_SUMMARY mode=full result=passed ordinary_run=1 ordinary_failed=0 registry=consistent guards_registered=$markers mutants_executed=$markers mutants_caught=$markers matrix=run workers=0"
+    expect_has 'the closing line' "$out" 'All rehearsal guard tests passed'
+    expect_lacks 'a full run is not said to be routine' "$out" 'NOT RUN'
+    # A guard whose mutant is not caught fails the run.
+    rm -f "$log"
+    rc=0
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (
+        t_fake_a() { :; }
+        prepare_caches() { :; }
+        run_mutant() { if [[ "$1" == G1-host ]]; then printf '  FAIL  %s survived\n' "$1" >&2; return 1; fi; printf '  ok    %s caught\n' "$1"; }
+        ORDINARY_TESTS=(t_fake_a)
+        REHEARSAL_WORKERS=0 rehearsal_full
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 1 ]] || bad "a full run with a surviving mutant exited $rc: ${out:0:300}"
+    expect_has 'the survivor is in the summary' "$out" "result=failed ordinary_run=1 ordinary_failed=0 registry=consistent guards_registered=$markers mutants_executed=$markers mutants_caught=$((markers - 1))"
+    expect_lacks 'no success line (survivor)' "$out" 'All rehearsal guard tests passed'
+    # An ordinary test that fails fails the full run, whatever the mutants say.
+    rc=0
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (
+        t_fake_bad() { TEST_FAILS=1; }
+        prepare_caches() { :; }
+        run_mutant() { printf '  ok    %s caught\n' "$1"; }
+        ORDINARY_TESTS=(t_fake_bad)
+        REHEARSAL_WORKERS=0 rehearsal_full
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 1 && "$out" == *'result=failed ordinary_run=1 ordinary_failed=1'* && "$out" != *'All rehearsal guard tests passed'* ]] || bad "a failing ordinary test did not fail the full run (exit $rc): ${out:0:300}"
+    # And the full run refuses a malformed REHEARSAL_WORKERS before any test, as before.
+    rc=0
+    out="$( (t_fake_a() { echo RAN; }; ORDINARY_TESTS=(t_fake_a); REHEARSAL_WORKERS=17 rehearsal_full) 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" != *RAN* ]] || bad "a malformed REHEARSAL_WORKERS did not stop the full run before its tests (exit $rc): ${out:0:200}"
 }
 
 # The lists the half-failed rehearsal holds are the repository's: the tables, the migrations, the stub's statement, the fixture's counts, the fixed ids.
@@ -7455,15 +7623,16 @@ account_worker() {
 # no result, as a failure. A mutant that no worker reported is missing from the printout and has been counted by account_worker, with its worker. The closing line
 # is printed only when every mutant has a result and nothing, here or earlier in the run, has failed.
 report_mutants() {
-    local id ran=0
+    local id ran=0 caught=0
     for id in "${MUTANT_IDS[@]}"; do
         [[ -n "${MUTANT_LINE[$id]:-}" ]] || continue
         ran=$((ran + 1))
         case "${MUTANT_LINE[$id]}" in
-            '  ok '*) printf '%s\n' "${MUTANT_LINE[$id]}" ;;
+            '  ok '*) printf '%s\n' "${MUTANT_LINE[$id]}"; caught=$((caught + 1)) ;;
             *) printf '%s\n' "${MUTANT_LINE[$id]}" >&2; FAILURES=$((FAILURES + 1)) ;;
         esac
     done
+    MUTANTS_RAN="$ran" MUTANTS_CAUGHT="$caught" # what the summary line reports: the mutants that have a result, and those of them that were caught
     ((ran == ${#MUTANT_IDS[@]})) || { printf '  FAIL  %d of %d mutant(s) have a result, so %d did not run\n' "$ran" "${#MUTANT_IDS[@]}" "$((${#MUTANT_IDS[@]} - ran))" >&2; FAILURES=$((FAILURES + 1)); }
     if ((ran == ${#MUTANT_IDS[@]} && FAILURES == 0)); then printf '  %d mutant(s) run by %d worker(s), each exactly once\n' "$ran" "$1"; fi
 }
@@ -7510,73 +7679,187 @@ if [[ "${1:-}" == --worker ]]; then
     exit 0
 fi
 
+# --- how the file is run: the modes ------------------------------------------------------------------------------------------------------------------
+#
+#   rehearsal.sh             FULL: the ordinary tests, the registry check and the whole mutation matrix. The complete verification, and the only thing that
+#                            may be called one (release assurance, and any change to restore-rehearsal.sh or to this file, before an independent review).
+#   rehearsal.sh --routine   ROUTINE: every ordinary test exactly once, the registry check (both directions), and NO mutation experiment. It says so, in words
+#                            a reader cannot take for the full run: it never prints the full run's closing line or its "mutant(s) run by" line.
+#   rehearsal.sh --worker I N ID...   one share of the matrix (see worker_main); started by a full run, never by a person.
+#
+# A weaker run is chosen by an ARGUMENT, never by the environment, and anything else is refused before a single test runs: an unknown option, an option given
+# twice or beside another, and --routine together with REHEARSAL_TESTS (which runs only the tests it names). REHEARSAL_TESTS alone keeps its old meaning, for
+# working on one test, and is not a mode of verification: it prints no summary. A run that is interrupted prints no summary and no closing line and is not
+# a success; the summary line, the last thing printed but the closing sentence, is the only machine-readable result.
+#
+#   REHEARSAL_SUMMARY mode=routine|full result=passed|failed ordinary_run=N ordinary_failed=N registry=consistent|inconsistent guards_registered=N
+#                     mutants_executed=N mutants_caught=N matrix=not-run|run [workers=N]
+
+# MODE (full or routine), or refuses: exit 2 before anything runs.
+parse_mode() {
+    MODE=full
+    case "$#" in
+        0) ;;
+        1) if [[ "$1" == --routine ]]; then MODE=routine; else printf 'rehearsal.sh: unknown option %s. Usage: rehearsal.sh [--routine]\n' "${1:0:40}" >&2; return 2; fi ;;
+        *) printf 'rehearsal.sh: more than one option. Usage: rehearsal.sh [--routine]\n' >&2; return 2 ;;
+    esac
+    if [[ "$MODE" == routine && -n "${REHEARSAL_TESTS:-}" ]]; then
+        printf 'rehearsal.sh: --routine runs every ordinary test, and REHEARSAL_TESTS runs only the tests it names: they cannot be combined.\n' >&2
+        return 2
+    fi
+    return 0
+}
+
+ORDINARY_TESTS=() # the ordinary tests of this run (all_tests); a list of its own so that the modes can be tested with a short one
+ORDINARY_RAN=0 ORDINARY_FAILED=0
+
+# run_ordinary: every test in ORDINARY_TESTS exactly once, in this process. A failed test is counted and the run goes on; a run that did not run every test once is
+# itself a failure (a test run twice or not at all cannot be reported as passed).
+run_ordinary() {
+    local t n=0
+    local -A seen=()
+    ORDINARY_RAN=0 ORDINARY_FAILED=0
+    ((${#ORDINARY_TESTS[@]} > 0)) || { printf '  FAIL  there are no ordinary tests to run\n' >&2; FAILURES=$((FAILURES + 1)); return 0; }
+    for t in "${ORDINARY_TESTS[@]}"; do
+        if [[ -n "${seen[$t]:-}" ]]; then printf '  FAIL  %s appears twice in the list of ordinary tests\n' "${t#t_}" >&2; FAILURES=$((FAILURES + 1)); continue; fi
+        seen[$t]=1
+        n=$((n + 1))
+        if ! run_test "$t"; then
+            FAILURES=$((FAILURES + 1))
+            ORDINARY_FAILED=$((ORDINARY_FAILED + 1))
+        fi
+        ORDINARY_RAN=$n
+    done
+    ((ORDINARY_RAN == ${#ORDINARY_TESTS[@]})) || { printf '  FAIL  %d of %d ordinary tests were run\n' "$ORDINARY_RAN" "${#ORDINARY_TESTS[@]}" >&2; FAILURES=$((FAILURES + 1)); }
+}
+
+# registry_report: the registry check, once, in this process (see registry_differences). Its findings are printed where they have always been, and counted.
+REGISTRY_PROBLEMS=''
+registry_report() {
+    local problem
+    mapfile -t MARKERS < <(matrix_markers)
+    REGISTRY_PROBLEMS="$(registry_differences "$(printf '%s\n' "${MARKERS[@]}")" "$(printf '%s\n' "${!GUARD_TESTS[@]}")" | LC_ALL=C sort)"
+    while IFS= read -r problem; do
+        [[ -n "$problem" ]] || continue
+        case "$problem" in
+            'unregistered '*) printf '  FAIL  %s has no tests in GUARD_TESTS\n' "${problem#unregistered }" >&2 ;;
+            'unmarked '*) printf '  FAIL  GUARD_TESTS lists %s, which has no marker in the script\n' "${problem#unmarked }" >&2 ;;
+        esac
+        FAILURES=$((FAILURES + 1))
+    done <<<"$REGISTRY_PROBLEMS"
+}
+
+# summary MODE WORKERS: the one machine-readable line.
+summary() {
+    local result=passed registry=consistent state=run note=''
+    ((FAILURES == 0)) || result=failed
+    [[ -z "$REGISTRY_PROBLEMS" ]] || registry=inconsistent
+    if [[ "$1" == routine ]]; then state=not-run; else note=" workers=$2"; fi
+    printf 'REHEARSAL_SUMMARY mode=%s result=%s ordinary_run=%d ordinary_failed=%d registry=%s guards_registered=%d mutants_executed=%d mutants_caught=%d matrix=%s%s\n' \
+        "$1" "$result" "$ORDINARY_RAN" "$ORDINARY_FAILED" "$registry" "${#MARKERS[@]}" "$MUTANTS_RAN" "$MUTANTS_CAUGHT" "$state" "$note"
+}
+
+# rehearsal_routine: see the modes above. Returns 0 only when every ordinary test passed once, the registry is consistent in both directions, and nothing failed.
+rehearsal_routine() {
+    FAILURES=0 MUTANTS_RAN=0 MUTANTS_CAUGHT=0
+    registry_report
+    mapfile -t MUTANT_IDS < <(matrix_mutants)
+    run_ordinary
+    printf '\nMutation matrix: NOT RUN (--routine). %d guard(s) are registered and 0 mutation experiments were executed: this run does not show that the ordinary tests catch the removal of any guard.\n' "${#MARKERS[@]}"
+    printf 'The full verification is: scripts/tests/rehearsal.sh (or ./flow check --mutation).\n'
+    summary routine 0
+    if ((FAILURES > 0)); then
+        printf '%d rehearsal check(s) failed (routine mode)\n' "$FAILURES" >&2
+        return 1
+    fi
+    printf 'Routine rehearsal checks passed: %d ordinary test(s) and the registry check. The mutation matrix was NOT RUN.\n' "$ORDINARY_RAN"
+}
+
+# rehearsal_full: the ordinary tests, the registry and the whole matrix, each mutant exactly once, in this process or in WORKERS workers.
+rehearsal_full() {
+    local i id share status
+    FAILURES=0 MUTANTS_RAN=0 MUTANTS_CAUGHT=0
+    # The registry, once, in this process: every marker in the script has an entry in GUARD_TESTS and every entry has a marker (by exact membership: see
+    # registry_differences). Its findings are printed with the matrix, where they have always been, so the first thing printed here is the workers' start.
+    mapfile -t MARKERS < <(matrix_markers)
+    REGISTRY_PROBLEMS="$(registry_differences "$(printf '%s\n' "${MARKERS[@]}")" "$(printf '%s\n' "${!GUARD_TESTS[@]}")" | LC_ALL=C sort)"
+    mapfile -t MUTANT_IDS < <(matrix_mutants)
+    WORKERS="$(matrix_workers)" || return 2
+    if ((WORKERS > ${#MUTANT_IDS[@]})); then WORKERS=${#MUTANT_IDS[@]}; fi
+
+    # With workers: each gets its own share and its own output file (made here, written by that worker alone), and they run while this process runs the
+    # ordinary tests. Output is read back only after they have finished, and printed in marker order, so it does not depend on which finished first.
+    SHARD_OUT=() SHARD_IDS=() SHARD_STATUS=()
+    if ((WORKERS > 0)); then
+        printf 'Starting %d mutation worker(s) for %d mutant(s) (REHEARSAL_WORKERS=0 runs them one after another, in this process)\n' "$WORKERS" "${#MUTANT_IDS[@]}"
+        for ((i = 0; i < WORKERS; i++)); do
+            SHARD_OUT[i]="$T/shard-$i.out"
+            mapfile -t share < <(shard_of "$WORKERS" "$i" "${MUTANT_IDS[@]}")
+            SHARD_IDS[i]="${share[*]}"
+            : >"${SHARD_OUT[i]}"
+            REHEARSAL_SRC="$SRC" bash "$THIS_SCRIPT" --worker "$i" "$WORKERS" "${share[@]}" >"${SHARD_OUT[i]}" 2>&1 &
+            WORKER_PIDS[i]=$!
+        done
+    fi
+
+    run_ordinary
+
+    printf '\nMutation matrix (each safeguard line replaced by ":" in a scratch copy; its tests must then fail)\n'
+    while IFS= read -r id; do
+        [[ -n "$id" ]] || continue
+        case "$id" in
+            'unregistered '*) printf '  FAIL  %s has no tests in GUARD_TESTS\n' "${id#unregistered }" >&2 ;;
+            'unmarked '*) printf '  FAIL  GUARD_TESTS lists %s, which has no marker in the script\n' "${id#unmarked }" >&2 ;;
+        esac
+        FAILURES=$((FAILURES + 1))
+    done <<<"$REGISTRY_PROBLEMS"
+
+    if ((WORKERS == 0)); then
+        # The same lifecycle as a worker's: the caches are made again, from the script as it is, before the first mutant (not the ordinary tests' own, whatever state they are in).
+        if prepare_caches fresh; then
+            for id in "${MUTANT_IDS[@]}"; do
+                MUTANTS_RAN=$((MUTANTS_RAN + 1))
+                if run_mutant "$id"; then MUTANTS_CAUGHT=$((MUTANTS_CAUGHT + 1)); else FAILURES=$((FAILURES + 1)); fi
+            done
+        else
+            printf '  FAIL  the mutants were not run\n' >&2
+            FAILURES=$((FAILURES + 1))
+        fi
+    else
+        for ((i = 0; i < WORKERS; i++)); do
+            status=0
+            wait "${WORKER_PIDS[i]}" || status=$?
+            SHARD_STATUS[i]="$status"
+        done
+        WORKER_PIDS=()
+        for ((i = 0; i < WORKERS; i++)); do account_worker "$i" "$WORKERS" "${SHARD_IDS[i]}" "${SHARD_STATUS[i]}" "${SHARD_OUT[i]}"; done
+        report_mutants "$WORKERS"
+    fi
+
+    printf '\n'
+    summary full "$WORKERS"
+    if ((FAILURES > 0)); then
+        printf '%d rehearsal check(s) failed\n' "$FAILURES" >&2
+        return 1
+    fi
+    printf 'All rehearsal guard tests passed\n'
+}
+
+# --- the entry point -----------------------------------------------------------------------------------------------------------------------------------
+
+parse_mode "$@" || exit "$?"
 printf 'Rehearsal guard tests (fake daemon; no container, network, volume or database is created)\n'
-# REHEARSAL_TESTS="t_a t_b" runs just those (no mutation matrix), for working on one test.
+# REHEARSAL_TESTS="t_a t_b" runs just those (no mutation matrix), for working on one test. It is not a mode of verification: it prints no summary.
 if [[ -n "${REHEARSAL_TESTS:-}" ]]; then
     for t in $REHEARSAL_TESTS; do run_test "$t" || FAILURES=$((FAILURES + 1)); done
     ((FAILURES == 0)) || exit 1
     exit 0
 fi
-
-# The registry, once, in this process: every marker in the script has an entry in GUARD_TESTS and every entry has a marker (by exact membership: see
-# registry_differences). Its findings are printed with the matrix, where they have always been.
-mapfile -t MARKERS < <(matrix_markers)
-REGISTRY_PROBLEMS="$(registry_differences "$(printf '%s\n' "${MARKERS[@]}")" "$(printf '%s\n' "${!GUARD_TESTS[@]}")" | LC_ALL=C sort)"
-mapfile -t MUTANT_IDS < <(matrix_mutants)
-WORKERS="$(matrix_workers)" || exit "$?"
-if ((WORKERS > ${#MUTANT_IDS[@]})); then WORKERS=${#MUTANT_IDS[@]}; fi
-
-# With workers: each gets its own share and its own output file (made here, written by that worker alone), and they run while this process runs the
-# ordinary tests. Output is read back only after they have finished, and printed in marker order, so it does not depend on which finished first.
-SHARD_OUT=() SHARD_IDS=() SHARD_STATUS=()
-if ((WORKERS > 0)); then
-    printf 'Starting %d mutation worker(s) for %d mutant(s) (REHEARSAL_WORKERS=0 runs them one after another, in this process)\n' "$WORKERS" "${#MUTANT_IDS[@]}"
-    for ((i = 0; i < WORKERS; i++)); do
-        SHARD_OUT[i]="$T/shard-$i.out"
-        mapfile -t share < <(shard_of "$WORKERS" "$i" "${MUTANT_IDS[@]}")
-        SHARD_IDS[i]="${share[*]}"
-        : >"${SHARD_OUT[i]}"
-        REHEARSAL_SRC="$SRC" bash "$THIS_SCRIPT" --worker "$i" "$WORKERS" "${share[@]}" >"${SHARD_OUT[i]}" 2>&1 &
-        WORKER_PIDS[i]=$!
-    done
+mapfile -t ORDINARY_TESTS < <(all_tests)
+if [[ "$MODE" == routine ]]; then
+    # A malformed REHEARSAL_WORKERS is refused here as in a full run, although this one starts no worker: a value that means nothing is not silently ignored.
+    matrix_workers >/dev/null || exit "$?"
+    rehearsal_routine || exit 1
+    exit 0
 fi
-
-for t in $(all_tests); do run_test "$t" || FAILURES=$((FAILURES + 1)); done
-
-printf '\nMutation matrix (each safeguard line replaced by ":" in a scratch copy; its tests must then fail)\n'
-while IFS= read -r problem; do
-    [[ -n "$problem" ]] || continue
-    case "$problem" in
-        'unregistered '*) printf '  FAIL  %s has no tests in GUARD_TESTS\n' "${problem#unregistered }" >&2 ;;
-        'unmarked '*) printf '  FAIL  GUARD_TESTS lists %s, which has no marker in the script\n' "${problem#unmarked }" >&2 ;;
-    esac
-    FAILURES=$((FAILURES + 1))
-done <<<"$REGISTRY_PROBLEMS"
-
-if ((WORKERS == 0)); then
-    # The same lifecycle as a worker's: the caches are made again, from the script as it is, before the first mutant (not the ordinary tests' own, whatever state they are in).
-    if prepare_caches fresh; then
-        for id in "${MUTANT_IDS[@]}"; do
-            run_mutant "$id" || FAILURES=$((FAILURES + 1))
-        done
-    else
-        printf '  FAIL  the mutants were not run\n' >&2
-        FAILURES=$((FAILURES + 1))
-    fi
-else
-    for ((i = 0; i < WORKERS; i++)); do
-        status=0
-        wait "${WORKER_PIDS[i]}" || status=$?
-        SHARD_STATUS[i]="$status"
-    done
-    WORKER_PIDS=()
-    for ((i = 0; i < WORKERS; i++)); do account_worker "$i" "$WORKERS" "${SHARD_IDS[i]}" "${SHARD_STATUS[i]}" "${SHARD_OUT[i]}"; done
-    report_mutants "$WORKERS"
-fi
-
-printf '\n'
-if ((FAILURES > 0)); then
-    printf '%d rehearsal check(s) failed\n' "$FAILURES" >&2
-    exit 1
-fi
-printf 'All rehearsal guard tests passed\n'
+rehearsal_full || exit "$?"
