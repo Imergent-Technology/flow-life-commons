@@ -71,7 +71,7 @@ A fresh development database has no accounts. `identity:create-administrator` cr
 ./flow composer require ... # composer in the platform container
 ./flow npm install ...      # npm in the Guardian Console
 ./flow test                 # backend + frontend tests
-./flow check                # everything CI runs (add --pgsql for PostgreSQL)
+./flow check                # routine verification, what CI runs (--pgsql: PostgreSQL; --mutation: rehearsal mutation matrix)
 ./flow db shell             # SQL shell
 ./flow db fresh             # drop everything and re-migrate (local only, asks first)
 ./flow build                # production build of the Guardian Console

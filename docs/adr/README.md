@@ -18,7 +18,7 @@ Copy [template.md](template.md). Number sequentially (`NNNN-short-title.md`). St
 | [0002](0002-laravel-php-platform.md) | Laravel on PHP 8.3 for the platform | Accepted |
 | [0003](0003-react-guardian-console.md) | React, TypeScript and Vite for the Guardian Console | Accepted |
 | [0004](0004-wordpress-adapter-not-authority.md) | WordPress is an adapter, not an authority | Accepted |
-| [0005](0005-mariadb-with-postgresql-portability.md) | MariaDB first, PostgreSQL portability required | Accepted |
+| [0005](0005-mariadb-with-postgresql-portability.md) | MariaDB first, PostgreSQL portability required | Accepted (verification amended by ADR 0039) |
 | [0006](0006-ulid-identifiers.md) | Application-generated ULID identifiers | Accepted |
 | [0007](0007-versioned-rest-api-openapi.md) | Versioned REST API with an OpenAPI contract | Accepted |
 | [0008](0008-platform-owned-authorization.md) | Platform-owned authorization | Accepted |
@@ -27,7 +27,7 @@ Copy [template.md](template.md). Number sequentially (`NNNN-short-title.md`). St
 | [0011](0011-docker-compose-development-environment.md) | Docker Compose development environment and `./flow` | Accepted |
 | [0012](0012-tailwind-4-via-vite.md) | Tailwind CSS 4 via the Vite plugin | Accepted |
 | [0013](0013-monorepo.md) | Monorepo | Accepted |
-| [0014](0014-testing-and-database-compatibility-strategy.md) | Testing and database compatibility strategy | Accepted |
+| [0014](0014-testing-and-database-compatibility-strategy.md) | Testing and database compatibility strategy | Accepted (PostgreSQL run amended by ADR 0039) |
 | [0015](0015-identity-owns-person.md) | Identity owns Person; Person is not Account | Accepted |
 | [0016](0016-guardian-console-same-origin-session-authentication.md) | Guardian Console authenticates via a same-origin, host-only session cookie | Accepted |
 | [0017](0017-capabilities-and-roles-in-code.md) | Capabilities and roles are defined in code; only assignments persist | Accepted |
@@ -52,6 +52,7 @@ Copy [template.md](template.md). Number sequentially (`NNNN-short-title.md`). St
 | [0036](0036-business-relationships-are-independent-and-not-access-roles.md) | Business relationships are independent of each other and are not Access roles | Accepted (principle; amends ADR 0034's note on Volunteers) |
 | [0037](0037-resources-are-audience-targeted-packs-of-cards.md) | Resources are audience-targeted Packs of Cards | Accepted (implemented; G5 complete; amended by ADR 0038) |
 | [0038](0038-organizational-relationships-and-resource-viewing-authority.md) | Organizational relationships and Resource viewing authority | Accepted (G10 design gate, 2026-10-08; implemented by WP1–WP7, G10 complete as development and integration, not released; amends ADRs 0017, 0036 and 0037) |
+| [0039](0039-postgresql-is-a-deferred-compatibility-target.md) | PostgreSQL is a deferred compatibility target; routine verification is MariaDB-only | Accepted (2026-11-18; amends the verification parts of ADR 0005 and 0014) |
 
 Domain events and the transactional outbox are a documented *direction* ([integration model](../architecture/integration-model.md)), not yet a decision: they get an ADR when the first real consumer shapes the design.
 

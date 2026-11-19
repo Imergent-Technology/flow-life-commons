@@ -10,15 +10,43 @@ Strategy and rationale: [ADR 0014](../adr/0014-testing-and-database-compatibilit
 | `./flow test backend [--pgsql] [pest args]` | Pest; `--pgsql` runs the same suite on PostgreSQL. Args pass through, e.g. `--filter=Health` |
 | `./flow test frontend [vitest args]` | Vitest |
 | `./flow test e2e [--workers=4] [playwright args]` | Playwright journeys against the running stack (`./flow up` first): builds the Console, seeds the fixtures, and runs the functional journeys against the production **build** (see [E2E origins](#e2e-origins)). The acceptance command is `./flow test e2e --workers=4` |
-| `./flow check [repo\|backend\|frontend] [--pgsql]` | Everything CI runs (below) |
+| `./flow check [repo\|backend\|frontend] [--pgsql] [--mutation]` | **Routine verification**, what CI runs (below). `--pgsql` adds the PostgreSQL backend run; `--mutation` adds the recovery rehearsal's full mutation matrix. See [Verification tiers](#verification-tiers) |
 
-`./flow check` runs every check even after a failure, prints a summary, and exits non-zero if anything failed.
+`./flow check` runs every check even after a failure, prints a summary, and exits non-zero if anything failed. **A passing run says what it did not include** (PostgreSQL, the rehearsal's mutation matrix, browser E2E, the dependency audit, the release checks) and that it is not release assurance; read that line before relying on a green run.
 
 | Scope | Checks |
 | --- | --- |
-| repo | Compose config validates, shellcheck on `flow`/`scripts`, `./flow` CLI and `./flow release` behaviour tests (a real git fixture and the real artifact validator, with Composer/npm stubbed), the Apache/Caddy public-surface contract, actionlint on workflows, WordPress plugin PHP syntax |
-| backend | `composer validate --strict`, Pint (`--test`), Larastan level `max`, Pest on MariaDB incl. architecture tests, (with `--pgsql`) Pest on PostgreSQL |
+| repo | Compose config validates, shellcheck on `flow`/`scripts`, `./flow` CLI and `./flow release` behaviour tests (a real git fixture and the real artifact validator, with Composer/npm stubbed), the Apache/Caddy public-surface contract, the recovery rehearsal's ordinary tests and guard-registry check (`rehearsal.sh --routine`; with `--mutation`, its full mutation matrix too), actionlint on workflows, WordPress plugin PHP syntax |
+| backend | `composer validate --strict`, Pint (`--test`), Larastan level `max`, Pest on MariaDB incl. architecture tests, and, only with `--pgsql`, Pest on PostgreSQL |
 | frontend | `tsc -b` strict, ESLint, Prettier check, Vitest, production build, build verification |
+
+## Verification tiers
+
+What a green result means depends on which tier ran. A routine run must never be reported as more than it is.
+
+**Routine verification.** `./flow check`, run by CI on every pull request and every push to `main`. It runs the repo checks (including every ordinary test of the recovery rehearsal and its guard-registry check in both directions), the backend checks with Pest **on MariaDB**, and the frontend checks (strict TypeScript, ESLint, Prettier, Vitest, the production build and its verification). It does **not** run the PostgreSQL backend suite, the rehearsal's mutation matrix, the browser E2E suite, the dependency audit or any release check, and it says so every time. Its rehearsal mode, `rehearsal.sh --routine`, executes zero mutation experiments and reports `Mutation matrix: NOT RUN`.
+
+**Targeted verification.** Run when a change justifies it, locally or on a branch, and never silently skipped:
+
+| What | Command | When |
+| --- | --- | --- |
+| PostgreSQL backend suite | `./flow check --pgsql` (or `./flow test backend --pgsql`) | a migration or query that might be engine-sensitive; before migration planning resumes ([ADR 0039](../adr/0039-postgresql-is-a-deferred-compatibility-target.md)) |
+| The rehearsal's full mutation matrix | `./flow check --mutation` (or `scripts/tests/rehearsal.sh` with no argument) | **any change to `scripts/rehearsal/restore-rehearsal.sh`, its PHP helpers or `scripts/tests/rehearsal.sh`, before an independent review handback**, and before a release |
+| Browser E2E | `./flow up`, then `./flow test e2e --workers=4` (the manual `e2e.yml` workflow has never run on GitHub) | changes to sign-in, sessions, MFA, authorization surfaces or the Console |
+| One test of the rehearsal | `REHEARSAL_TESTS="t_a t_b" scripts/tests/rehearsal.sh` | working on a test; every name must be a test (an unknown or empty selection is refused, a failing test fails the run); prints no summary and is not a mode of verification; `./flow check` refuses it |
+
+`--pgsql` and `--mutation` are independent and can be combined (`./flow check --pgsql --mutation`). `--mutation` applies to the repo scope and is refused with `backend` or `frontend`; with the `repo` or the default scope it runs the full matrix beside the other checks.
+
+**Release assurance.** Required before a release is approved, on the release commit. **No workflow performs it yet**: until one exists, run these, in this order, on the exact commit the release tag points to, and keep the outputs with the release record:
+
+1. `./flow check --mutation` (routine verification plus the complete rehearsal mutation matrix: its `REHEARSAL_SUMMARY` line must read `mode=full result=passed` with `mutants_executed` equal to `guards_registered` and to `mutants_caught`)
+2. `./flow up`, then `./flow test e2e --workers=4`
+3. `./flow audit` (runtime-dependency advisories fail it; read the development-tooling findings, [dependencies](../security/dependencies.md))
+4. `./flow release build --ref TAG --previous REF|none --schema-rollback VALUE --dry-run`, then the real build ([deployment runbook](../runbooks/deployment.md#8-flow-release-the-developer-side-tooling))
+
+PostgreSQL stays optional for a release until its support is planned. A green routine CI run is **not** release assurance, and none of these steps is implied by it.
+
+**The rehearsal's modes.** `scripts/tests/rehearsal.sh` with no argument is the **full** run (ordinary tests, registry check, every mutant exactly once); `--routine` is the **routine** run (every ordinary test once, the registry check, no mutant). The weaker run is chosen by that argument alone, never by an environment variable; anything else, an option given twice or beside another, or `--routine` together with `REHEARSAL_TESTS` is refused before any test runs. Both end with a machine-readable line, `REHEARSAL_SUMMARY mode=… result=… ordinary_run=N ordinary_failed=N registry=consistent|inconsistent guards_registered=N mutants_executed=N mutants_caught=N matrix=not-run|run`, and a run that is interrupted prints none of it and is not a success. `./flow check` does not trust the rehearsal's exit status alone: it also requires exactly one valid `REHEARSAL_SUMMARY` of the mode it asked for, passed, with the registry consistent, at least one ordinary test run and none failed, and for `--routine` no mutant executed, for a full run `mutants_executed` and `mutants_caught` both equal to `guards_registered`; a missing, repeated, malformed or wrong-mode summary fails the check, as does a nonzero exit whatever the summary says. For the same reason every `./flow check` scope that runs the rehearsal (the default, `repo`) refuses `REHEARSAL_TESTS` and `REHEARSAL_SRC` when either is set in the environment, even to nothing, and says so before starting anything: they are for running the file directly, and would make a green result mean something else. The routine run's closing sentence ends `The mutation matrix was NOT RUN.` and it never prints the full run's `mutant(s) run by` or `All rehearsal guard tests passed` lines. (A few ordinary `matrix_*` tests exercise the matrix's own runner on a handful of real mutants; they are ordinary tests, counted as such, and the routine run itself executes none of the matrix.)
 
 ## Backend
 
@@ -45,7 +73,9 @@ Strategy and rationale: [ADR 0014](../adr/0014-testing-and-database-compatibilit
 
 ## PostgreSQL
 
-`./flow test backend --pgsql` starts the `postgres` profile, creates `flowlife_test` and `flowlife_upgrade_test`, and runs the suite with the connection switched by environment variables (real environment beats `.env` and `phpunit.xml`, so only the engine changes). CI runs it on every push via `./flow check --pgsql`.
+MariaDB 10.11 is the production database and the only one being deployed to; **PostgreSQL is a deferred compatibility target** ([ADR 0039](../adr/0039-postgresql-is-a-deferred-compatibility-target.md), which amends ADR 0005 and 0014). The suite, the `postgres` Compose profile and the tests are all kept, and the portability rules and the source scan (`DatabasePortabilityTest`) still run on every change.
+
+`./flow test backend --pgsql` starts the `postgres` profile, creates `flowlife_test` and `flowlife_upgrade_test`, and runs the suite with the connection switched by environment variables (real environment beats `.env` and `phpunit.xml`, so only the engine changes). `./flow check --pgsql` adds it to a check. **CI does not run it**, so a green CI run says nothing about PostgreSQL. The last commit on which the PostgreSQL run was independently evidenced green is `79c01d8a623a06f55170177cd2137d278af910e4` (2026-11-18); it is recorded in ADR 0039, and updated there when someone runs it green later.
 
 ## Frontend
 
@@ -125,17 +155,17 @@ The lazy-loaded editor is proved at three layers, because a source assertion alo
 
 **Caches.** The tests share three fixture caches (the baseline and backup state, the files backups, the half-failed state), which are made from the script under test by whichever test needs them first. A mutant must never be what makes them, so before its first mutant every worker, and a sequential run, makes all three from the unmutated script (`prepare_caches`, in the worker's own temporary directory), checks that they are complete, and records their digest. A worker that cannot make them stops without a closing line, and the main process reports it unfinished. `run_mutant` fails a mutant whose tests changed a cache, so a mutant's result cannot depend on which mutants ran before it or in which worker.
 
-`REHEARSAL_TESTS="t_a t_b"` runs just those tests (no matrix), whatever `REHEARSAL_WORKERS` says; `REHEARSAL_SRC` names the script directory under test. `t_matrix_*` in the same file test the runner itself: the shares are a partition of the real mutant list, every marker is a mutant exactly once, a worker's results are judged as the main process judges them (including a crashed or incomplete worker), one worker and two workers reach the same verdicts on real mutants, including one that cannot be caught, the sequential run and a worker give the same verdict *and the same reason* for guards whose tests use the caches, a worker that cannot make its caches runs nothing, and the failures the main process counts (an honestly reported survivor, a missing result, a failure the run already had) cannot be lost.
+`REHEARSAL_TESTS="t_a t_b"` runs just those tests (no matrix), whatever `REHEARSAL_WORKERS` says, and only when run directly: every name must be one of the file's `t_` tests, a selection of nothing (empty or only whitespace) is refused, an unknown name is refused before any test runs, a failing selected test makes the run exit nonzero, and it never prints the verification summary. `REHEARSAL_SRC` names the script directory under test. `./flow check` refuses both variables. `t_matrix_*` in the same file test the runner itself: the shares are a partition of the real mutant list, every marker is a mutant exactly once, a worker's results are judged as the main process judges them (including a crashed or incomplete worker), one worker and two workers reach the same verdicts on real mutants, including one that cannot be caught, the sequential run and a worker give the same verdict *and the same reason* for guards whose tests use the caches, a worker that cannot make its caches runs nothing, and the failures the main process counts (an honestly reported survivor, a missing result, a failure the run already had) cannot be lost.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on pushes to `main`, on pull requests (docs-only changes are skipped), and on manual dispatch, cancels superseded runs on the same ref, uses Linux runners, resolves development images from Google's public cache / GHCR so shared runner IPs do not receive anonymous Docker Hub 429s, caches the PHP image layers, and runs `./flow setup --skip-build` then `./flow check --pgsql`. See also [Docker environment](docker.md#ci-parity). No deployment happens from CI.
+`.github/workflows/ci.yml` runs routine verification (`./flow check`, see [Verification tiers](#verification-tiers)) on pushes to `main`, on pull requests (docs-only changes are skipped), and on manual dispatch, cancels superseded runs on the same ref, uses Linux runners, resolves development images from Google's public cache / GHCR so shared runner IPs do not receive anonymous Docker Hub 429s, caches the PHP image layers, and runs `./flow setup --skip-build` then `./flow check`. See also [Docker environment](docker.md#ci-parity). No deployment happens from CI.
 
 ## Triggering and reviewing CI
 
 `./flow ci` is a deliberately thin wrapper over the [GitHub CLI](https://cli.github.com) for this project's two workflows. It is **not** a general GitHub client: authentication, remotes, secrets, artifacts and dispatching arbitrary workflows stay plain `git`/`gh` commands.
 
-**`gh` is required only by `./flow ci`.** Every other `./flow` command works without it, and `./flow check --pgsql` remains the provider-independent local equivalent of the CI checks.
+**`gh` is required only by `./flow ci`.** Every other `./flow` command works without it, and `./flow check` is the provider-independent local equivalent of the CI checks.
 
 ```bash
 sudo apt install gh            # Debian/Ubuntu; or pacman -S github-cli on Arch

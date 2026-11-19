@@ -63,10 +63,13 @@ jobs:
       - name: Set up environment
         run: ./flow setup --skip-build
 
-      # Repo hygiene, Pint, Larastan, Pest (MariaDB + architecture tests),
-      # PostgreSQL run of the suite, tsc, ESLint, Prettier, Vitest, production build.
-      - name: Run all checks
-        run: ./flow check --pgsql
+      # ROUTINE verification: repo hygiene, the recovery rehearsal's ordinary tests and registry
+      # check (mutation matrix NOT RUN), Pint, Larastan, Pest (MariaDB + architecture tests), tsc,
+      # ESLint, Prettier, Vitest, production build. PostgreSQL (`--pgsql`) and the full mutation
+      # matrix (`--mutation`) are explicit, local or on request; neither is release assurance
+      # (docs/development/testing.md, "Verification tiers"). The output says what was not run.
+      - name: Run routine checks
+        run: ./flow check
 
       - name: Service logs (on failure)
         if: failure()
