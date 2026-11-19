@@ -27,7 +27,8 @@
 # Which verification this is is chosen by an ARGUMENT (see "how the file is run" near the end of this file):
 #   rehearsal.sh             FULL: ordinary tests, registry check and the whole matrix above. The complete verification.
 #   rehearsal.sh --routine   ROUTINE: every ordinary test once and the registry check, and NO mutation experiment (it says so). Used by `./flow check`.
-# REHEARSAL_TESTS="t_a t_b" runs just those tests (no matrix, no summary; not a mode of verification). REHEARSAL_SRC names the script directory under test.
+# REHEARSAL_TESTS="t_a t_b" runs just those tests (no registry check, no matrix, no summary; not a mode of verification; every name must be a test, and an empty selection
+# is refused). REHEARSAL_SRC names the script directory under test. `./flow check` refuses both variables: they are for running this file directly.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -5708,7 +5709,7 @@ t_matrix_modes_keep_their_meaning() {
     rc=0
     out="$(REHEARSAL_WORKER=1 REHEARSAL_WORKERS=3 REHEARSAL_TESTS=t_guard_registry_comparison timeout 300 bash "$THIS_SCRIPT" 2>&1)" || rc=$?
     [[ "$rc" == 0 ]] || bad "REHEARSAL_TESTS with worker variables in the environment exited $rc: ${out:0:300}"
-    [[ "$out" == *'ok    guard_registry_comparison'* && "$out" != *'Mutation matrix'* && "$out" != *'worker'* ]] || bad "REHEARSAL_TESTS did not run just that test, or started workers: ${out:0:300}"
+    [[ "$out" == *'ok    guard_registry_comparison'* && "$out" != *'Mutation matrix'* && "$out" != *'worker'* && "$out" != *REHEARSAL_SUMMARY* ]] || bad "REHEARSAL_TESTS did not run just that test, started workers, or printed a verification summary: ${out:0:300}"
     rc=0
     out="$(env -u REHEARSAL_TESTS REHEARSAL_WORKERS=17 timeout 60 bash "$THIS_SCRIPT" 2>&1)" || rc=$?
     [[ "$rc" == 2 && "$out" == *'REHEARSAL_WORKERS must be a whole number'* && "$out" != *'  ok '* ]] || bad "REHEARSAL_WORKERS=17 did not stop the run at once (exit $rc): ${out:0:300}"
@@ -5739,6 +5740,40 @@ t_modes_a_malformed_selection_is_refused() {
     rc=0
     out="$(env -u REHEARSAL_TESTS REHEARSAL_ROUTINE=1 REHEARSAL_MODE=routine REHEARSAL_WORKERS=17 timeout 60 bash "$THIS_SCRIPT" 2>&1)" || rc=$?
     [[ "$rc" == 2 && "$out" != *'Routine'* && "$out" != *'NOT RUN'* ]] || bad "an environment variable chose a weaker mode (exit $rc): ${out:0:200}"
+}
+
+# Running named tests directly (REHEARSAL_TESTS) is for working on a test, and must never look like a pass it is not: a name that is not a test, a selection of nothing
+# (empty, blank or only whitespace) and a variable that is merely set are all refused before anything runs (exit 2), a selected test that fails fails the run (exit 1),
+# and no run of this kind prints the verification summary. (The valid case, with the real file, is held by t_matrix_modes_keep_their_meaning.)
+# shellcheck disable=SC2329 # the stand-in functions are defined in subshells and called by the code under test
+t_modes_targeted_runs_refuse_what_tests_nothing() {
+    local out rc sel
+    for sel in '' ' ' $'\t' $'\n' $' \n ' 't_no_such_test' 'no_such_test' 'bad' 'run_test' 't_guard_registry_comparison t_no_such_test' 't_no_such_test t_guard_registry_comparison'; do
+        rc=0
+        out="$(REHEARSAL_TESTS="$sel" timeout 60 bash "$THIS_SCRIPT" 2>&1)" || rc=$?
+        [[ "$rc" == 2 ]] || bad "REHEARSAL_TESTS='${sel//$'\n'/\\n}' exited $rc, not 2 (it printed: ${out:0:200})"
+        [[ "$out" != *'  ok '* && "$out" != *REHEARSAL_SUMMARY* && "$out" != *'passed'* ]] || bad "REHEARSAL_TESTS='${sel//$'\n'/\\n}' ran a test or reported a pass: ${out:0:200}"
+    done
+    rc=0
+    out="$(REHEARSAL_TESTS='' timeout 60 bash "$THIS_SCRIPT" --routine 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" != *'  ok '* && "$out" != *REHEARSAL_SUMMARY* ]] || bad "--routine with an empty REHEARSAL_TESTS was not refused (exit $rc): ${out:0:200}"
+    # A failing selected test fails the run, the others still run, and neither a pass nor a failure prints the summary.
+    local log="$T/targeted.log"
+    rm -f "$log"
+    rc=0
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (
+        t_fake_a() { echo a >>"$log"; }; t_fake_bad() { echo bad >>"$log"; TEST_FAILS=1; }; t_fake_c() { echo c >>"$log"; }
+        ORDINARY_TESTS=(t_fake_a t_fake_bad t_fake_c)
+        run_targeted 't_fake_a t_fake_bad'
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 1 ]] || bad "a failing selected test did not fail the targeted run (exit $rc): ${out:0:300}"
+    [[ "$(sort "$log" | tr '\n' ' ')" == 'a bad ' ]] || bad "the targeted run ran something other than what was selected: $(tr '\n' ' ' <"$log")"
+    [[ "$out" != *REHEARSAL_SUMMARY* && "$out" != *'selected test(s) passed'* ]] || bad "a failing targeted run printed a summary or a pass: ${out:0:300}"
+    rc=0
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell
+    out="$( (t_fake_a() { :; }; ORDINARY_TESTS=(t_fake_a); run_targeted ' t_fake_a ') 2>&1)" || rc=$?
+    [[ "$rc" == 0 && "$out" == *'1 selected test(s) passed'* && "$out" != *REHEARSAL_SUMMARY* && "$out" == *'not a verification'* ]] || bad "a passing targeted run (exit $rc) did not say it is not a verification, or printed a summary: ${out:0:300}"
 }
 
 # Routine: every ordinary test once, the registry, no mutation experiment, and a report that cannot be taken for the full run's.
@@ -7703,7 +7738,7 @@ parse_mode() {
         1) if [[ "$1" == --routine ]]; then MODE=routine; else printf 'rehearsal.sh: unknown option %s. Usage: rehearsal.sh [--routine]\n' "${1:0:40}" >&2; return 2; fi ;;
         *) printf 'rehearsal.sh: more than one option. Usage: rehearsal.sh [--routine]\n' >&2; return 2 ;;
     esac
-    if [[ "$MODE" == routine && -n "${REHEARSAL_TESTS:-}" ]]; then
+    if [[ "$MODE" == routine && -v REHEARSAL_TESTS ]]; then
         printf 'rehearsal.sh: --routine runs every ordinary test, and REHEARSAL_TESTS runs only the tests it names: they cannot be combined.\n' >&2
         return 2
     fi
@@ -7845,17 +7880,45 @@ rehearsal_full() {
     printf 'All rehearsal guard tests passed\n'
 }
 
+# run_targeted: the tests named in REHEARSAL_TESTS, once each, in this process. Every name must be an ordinary test (a t_ function this file defines) and at least one must
+# be named: an unknown name, or a selection of nothing, is refused (exit 2) before any test runs, since a run that tested nothing cannot be reported as passing.
+# A selected test that fails makes the run fail (exit 1). It never prints the summary line: it is not a verification.
+run_targeted() { # SELECTION: the value of REHEARSAL_TESTS
+    local -a names=()
+    local t known ordinary
+    IFS=$' \t\n' read -r -d '' -a names <<<"$1" || true
+    if ((${#names[@]} == 0)); then
+        printf 'rehearsal.sh: REHEARSAL_TESTS is set but names no test. Name the tests to run, or unset it for a verification run.\n' >&2
+        return 2
+    fi
+    for t in "${names[@]}"; do
+        known=0
+        for ordinary in "${ORDINARY_TESTS[@]}"; do [[ "$ordinary" == "$t" ]] && known=1 && break; done
+        if ((known == 0)); then
+            printf 'rehearsal.sh: REHEARSAL_TESTS names %s, which is not a test in this file (tests are the t_ functions; nothing was run).\n' "${t:0:60}" >&2
+            return 2
+        fi
+    done
+    FAILURES=0
+    for t in "${names[@]}"; do run_test "$t" || FAILURES=$((FAILURES + 1)); done
+    if ((FAILURES > 0)); then
+        printf 'Targeted run: %d of %d selected test(s) failed.\n' "$FAILURES" "${#names[@]}" >&2
+        return 1
+    fi
+    printf 'Targeted run: %d selected test(s) passed. This is not a verification: no registry check and no mutants were run.\n' "${#names[@]}"
+}
+
 # --- the entry point -----------------------------------------------------------------------------------------------------------------------------------
 
 parse_mode "$@" || exit "$?"
 printf 'Rehearsal guard tests (fake daemon; no container, network, volume or database is created)\n'
-# REHEARSAL_TESTS="t_a t_b" runs just those (no mutation matrix), for working on one test. It is not a mode of verification: it prints no summary.
-if [[ -n "${REHEARSAL_TESTS:-}" ]]; then
-    for t in $REHEARSAL_TESTS; do run_test "$t" || FAILURES=$((FAILURES + 1)); done
-    ((FAILURES == 0)) || exit 1
+mapfile -t ORDINARY_TESTS < <(all_tests)
+# REHEARSAL_TESTS="t_a t_b" runs just those (no registry check, no mutation matrix), for working on a test. It is not a mode of verification: it prints no summary,
+# and `./flow check` refuses it. A variable that is SET (even to nothing) selects this path, so it can never fall through to a different run than the one asked for.
+if [[ -v REHEARSAL_TESTS ]]; then
+    run_targeted "$REHEARSAL_TESTS" || exit "$?"
     exit 0
 fi
-mapfile -t ORDINARY_TESTS < <(all_tests)
 if [[ "$MODE" == routine ]]; then
     # A malformed REHEARSAL_WORKERS is refused here as in a full run, although this one starts no worker: a value that means nothing is not silently ignored.
     matrix_workers >/dev/null || exit "$?"
