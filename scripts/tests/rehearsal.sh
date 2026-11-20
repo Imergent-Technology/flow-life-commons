@@ -27,6 +27,16 @@
 # Which verification this is is chosen by an ARGUMENT (see "how the file is run" near the end of this file):
 #   rehearsal.sh             FULL: ordinary tests, registry check and the whole matrix above. The complete verification.
 #   rehearsal.sh --routine   ROUTINE: every ordinary test once and the registry check, and NO mutation experiment (it says so). Used by `./flow check`.
+#
+# REHEARSAL_WORKERS means something a little different in the two modes, because the two have different work to share:
+#   full     the workers share the MUTANTS (above); the ordinary tests run in this process, beside them.
+#   routine  the workers share the ORDINARY TESTS, and this process only waits for them and checks what each reported (there are no mutants to run).
+#            0 runs every ordinary test in this process, one after another: the deterministic reference and debugging mode. N (1 to 16) starts N
+#            workers, `rehearsal.sh --tests-worker INDEX COUNT NAME...` (arguments, never the environment), each given a fixed, disjoint share of the
+#            sorted tests (the same round-robin as the matrix) and a temporary directory, fake daemon and caches of its own. Unset: the CPUs this process
+#            may really use, at most 4, at most one per 512 MiB of available memory; sequential when that leaves fewer than two.
+#            The parent fails unless every test was assigned exactly once and reported exactly once, as the worker it was assigned to, by a record
+#            the worker wrote to a file of its own (not by anything a test printed), and every worker finished, in time, with a status that agrees.
 # REHEARSAL_TESTS="t_a t_b" runs just those tests (no registry check, no matrix, no summary; not a mode of verification; every name must be a test, and an empty selection
 # is refused). REHEARSAL_SRC names the script directory under test. `./flow check` refuses both variables: they are for running this file directly.
 set -Eeuo pipefail
@@ -37,7 +47,8 @@ SRC="${REHEARSAL_SRC:-$ROOT/scripts/rehearsal}"
 T="$(mktemp -d)"
 # The workers this process started, so that an interrupted run does not leave them behind. Each worker removes only its own $T.
 WORKER_PIDS=()
-trap 'if declare -F stop_workers >/dev/null; then stop_workers; fi; rm -rf "$T"' EXIT
+TESTS_WORKER_PIDS=() # the same for the ordinary-test workers of a routine run, which are ended differently (each is a process group of its own: see end_ordinary_workers)
+trap 'if declare -F stop_workers >/dev/null; then stop_workers; fi; if declare -F stop_tests_workers >/dev/null; then stop_tests_workers; fi; rm -rf "$T"' EXIT
 trap 'exit 143' TERM INT HUP
 # Run from a throwaway directory. A mutant with a path guard removed would otherwise create its "relative" state directory here.
 mkdir "$T/cwd"
@@ -5911,6 +5922,489 @@ t_modes_full_runs_every_registered_mutant_exactly_once() {
     [[ "$rc" == 2 && "$out" != *RAN* ]] || bad "a malformed REHEARSAL_WORKERS did not stop the full run before its tests (exit $rc): ${out:0:200}"
 }
 
+# --- routine mode: the ordinary tests shared among workers (CI-2) ----------------------------------------------------------------------------------------
+# These tests are about the machinery that shares and judges the ordinary tests, not about the rehearsal script, so no GUARD_TESTS entry points at them. The workers
+# the parent starts are real where the test is about what a real worker does, and stand-ins (which write what a faulty worker would, to a record file) where it is
+# about what the parent concludes from one.
+
+# The shares: for any number of workers up to 16 they are, over the real list of tests, disjoint, together the whole list, within one of each other in size, the same
+# every time, and the parent's own check (plan_ordinary_shards) finds them right; and it finds a faulty shard_of wrong.
+# shellcheck disable=SC2329 # the faulty shard_of is defined in subshells and called by the code under test
+t_ordinary_shares_are_a_partition() {
+    local -a all=() joined=() share=()
+    local n i min max sizes out rc
+    local -a ORDINARY_TESTS=()
+    mapfile -t all < <(all_tests)
+    ((${#all[@]} >= 284)) || bad "only ${#all[@]} ordinary tests were found; there are at least 284"
+    ORDINARY_TESTS=("${all[@]}")
+    for ((n = 1; n <= 16; n++)); do
+        joined=() min=999999 max=0 sizes=''
+        plan_ordinary_shards "$n" 2>"$T/plan.err" || bad "$n workers: the shares were refused: $(head -n 3 "$T/plan.err" | tr '\n' ' ')"
+        for ((i = 0; i < n; i++)); do
+            read -ra share <<<"${SHARD_TESTS[i]}"
+            ((${#share[@]} >= min)) || min=${#share[@]}
+            ((${#share[@]} <= max)) || max=${#share[@]}
+            sizes+="${#share[@]} "
+            joined+=("${share[@]}")
+        done
+        [[ "$(printf '%s\n' "${joined[@]}" | LC_ALL=C sort)" == "$(printf '%s\n' "${all[@]}" | LC_ALL=C sort)" ]] || bad "the $n shares are not the whole list of ordinary tests, each once (sizes: $sizes)"
+        ((max - min <= 1)) || bad "the $n shares differ by more than one test ($sizes)"
+        [[ "${SHARD_TESTS[0]%% *}" == "${all[0]}" ]] || bad "share 0 of $n does not start with the first test"
+        mapfile -t share < <(shard_of "$n" 0 "${all[@]}")
+        [[ "${share[*]}" == "${SHARD_TESTS[0]}" ]] || bad "share 0 of $n is not what shard_of gives for it"
+    done
+    # A shard_of that loses a test, that gives one to two workers, or that gives one worker everything, is found out.
+    rc=0
+    out="$( (
+        shard_of() { local c="$1" i="$2" id n=0; shift 2; for id in "$@"; do if ((n % c == i && n > 0)); then printf '%s\n' "$id"; fi; n=$((n + 1)); done; }
+        plan_ordinary_shards 3
+    ) 2>&1)" || rc=$?
+    [[ "$rc" != 0 && "$out" == *'is assigned to no ordinary worker'* ]] || bad "a shard_of that loses a test was accepted (exit $rc): ${out:0:200}"
+    rc=0
+    out="$( (
+        shard_of() { local c="$1" i="$2" id n=0; shift 2; if ((i > 0)); then printf '%s\n' "$1"; fi; for id in "$@"; do if ((n % c == i)); then printf '%s\n' "$id"; fi; n=$((n + 1)); done; }
+        plan_ordinary_shards 3
+    ) 2>&1)" || rc=$?
+    [[ "$rc" != 0 && "$out" == *'is assigned to ordinary workers'* ]] || bad "a shard_of that gives a test to two workers was accepted (exit $rc): ${out:0:200}"
+    rc=0
+    out="$( (
+        shard_of() { local c="$1" i="$2"; shift 2; if ((i == 0)); then printf '%s\n' "$@"; fi; }
+        plan_ordinary_shards 3
+    ) 2>&1)" || rc=$?
+    [[ "$rc" != 0 && "$out" == *'would be given no test'* ]] || bad "a shard_of that leaves a worker with nothing was accepted (exit $rc): ${out:0:200}"
+}
+
+# An ordinary-test worker is chosen by arguments and by nothing else, and a malformed assignment is refused (exit 2) before anything runs: no result, no record.
+t_ordinary_worker_arguments_are_checked() {
+    local out rc args records="$T/ordinary-args.records"
+    for args in '2 2 t_g1_host' 'x 2 t_g1_host' '-1 2 t_g1_host' '0 0 t_g1_host' '0 1' '0' '' '0 1 t_no_such_test' '0 1 g1_host' '0 1 t_g1_host t_g1_host' '0 1 ../x' '0 1 run_test' '0 1 bad' '0 1 G1-host' '0 1 t_g1_host;touch'; do
+        rc=0
+        : >"$records"
+        # shellcheck disable=SC2086 # the words are the point
+        out="$(timeout 120 bash "$THIS_SCRIPT" --tests-worker $args 3>"$records" 2>&1)" || rc=$?
+        [[ "$rc" == 2 ]] || bad "a tests worker given '$args' exited $rc, not 2 (it printed: ${out:0:200})"
+        [[ "$out" != *'  ok '* && "$out" != *REHEARSAL_SUMMARY* && ! -s "$records" ]] || bad "a tests worker given '$args' ran a test or wrote a record: ${out:0:200}"
+    done
+    # Without a record descriptor it is not being run by a routine run, and runs nothing.
+    rc=0
+    out="$(timeout 120 bash "$THIS_SCRIPT" --tests-worker 0 1 t_g1_host 3>&- 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" == *'no record file on descriptor 3'* && "$out" != *'  ok '* ]] || bad "a tests worker with no record descriptor ran, or was not refused (exit $rc): ${out:0:200}"
+    # It is not a second way into the matrix's worker, nor the matrix's worker a way into it; and an option beside it is refused with the rest.
+    rc=0
+    out="$(timeout 120 bash "$THIS_SCRIPT" --worker 0 1 t_g1_host 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" != *'  ok '* ]] || bad "the mutation worker accepted a test name (exit $rc): ${out:0:200}"
+    rc=0
+    out="$(timeout 60 bash "$THIS_SCRIPT" --routine --tests-worker 0 1 t_g1_host 3>"$records" 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" == *'more than one option'* && "$out" != *'  ok '* && ! -s "$records" ]] || bad "--routine beside --tests-worker was not refused (exit $rc): ${out:0:200}"
+    # Nothing in the environment makes a run a worker or a different kind of run.
+    rc=0
+    out="$(env -u REHEARSAL_TESTS REHEARSAL_TESTS_WORKER=1 REHEARSAL_WORKER=1 REHEARSAL_WORKERS=17 timeout 60 bash "$THIS_SCRIPT" --routine 2>&1)" || rc=$?
+    [[ "$rc" == 2 && "$out" == *'REHEARSAL_WORKERS must be a whole number'* && "$out" != *'  ok '* ]] || bad "an inherited variable changed what --routine did (exit $rc): ${out:0:200}"
+}
+
+# What the parent concludes from one worker's records: right only when every line is a record, each assigned test is reported once and nothing else, and the
+# closing record is there once, last, with the counts of the results, and the exit status agrees. Each way of being wrong is a problem of its own.
+t_ordinary_worker_records_are_checked() {
+    local ok_a='RESULT t_fake_a ok' ok_b='RESULT t_fake_b ok' fail_b='RESULT t_fake_b fail' done_ok='DONE 1 3 2 2 0'
+    local -A ORDINARY_VERDICT=()
+    ordinary_case() { # DESC STATUS RECORDS EXPECTED_SUBSTRING ('' = right) [STOPPED]
+        ORDINARY_VERDICT=()
+        ordinary_worker_problems 1 3 't_fake_a t_fake_b' "$2" "$3" "${5:-}"
+        if [[ -z "$4" ]]; then
+            [[ -z "$WORKER_PROBLEMS" ]] || bad "$1: a right worker was reported as wrong: ${WORKER_PROBLEMS:0:300}"
+        else
+            [[ "$WORKER_PROBLEMS" == *"$4"* ]] || bad "$1: expected a problem mentioning '$4', got: ${WORKER_PROBLEMS:0:300}"
+        fi
+    }
+    ordinary_case 'a right worker' 0 "$ok_a"$'\n'"$ok_b"$'\n'"$done_ok" ''
+    [[ "${ORDINARY_VERDICT[t_fake_a]:-}" == ok && "${ORDINARY_VERDICT[t_fake_b]:-}" == ok ]] || bad 'the results of a right worker were not kept'
+    ordinary_case 'a failure, honestly reported' 1 "$ok_a"$'\n'"$fail_b"$'\n''DONE 1 3 2 1 1' ''
+    [[ "${ORDINARY_VERDICT[t_fake_b]:-}" == fail && "$WORKER_TEST_FAILURES" == 1 ]] || bad 'an honestly reported failure was not kept as one'
+    ordinary_case 'a failure reported with exit 0' 0 "$ok_a"$'\n'"$fail_b"$'\n''DONE 1 3 2 1 1' 'exited 0 though it reported 1 failed'
+    ordinary_case 'a bad exit after a clean report' 2 "$ok_a"$'\n'"$ok_b"$'\n'"$done_ok" 'exited with status 2 though it reported no failed'
+    ordinary_case 'a test missing, closing record that says so' 1 "$ok_a"$'\n''DONE 1 3 2 1 0' 'produced no result for: fake_b'
+    ordinary_case 'a test missing, closing record that hides it' 0 "$ok_a"$'\n'"$done_ok" 'produced no result for: fake_b'
+    ordinary_case 'a test reported twice' 0 "$ok_a"$'\n'"$ok_a"$'\n'"$ok_b"$'\n'"$done_ok" 'fake_a more than once'
+    ordinary_case 'a test nobody assigned' 0 "$ok_a"$'\n'"$ok_b"$'\n''RESULT t_fake_c ok'$'\n'"$done_ok" 'fake_c, which was not assigned'
+    ordinary_case 'no closing record' 137 "$ok_a" 'did not finish'
+    ordinary_case 'no record at all' 0 '' 'produced no result for: fake_a fake_b'
+    ordinary_case 'a closing record twice' 0 "$ok_a"$'\n'"$ok_b"$'\n'"$done_ok"$'\n'"$done_ok" 'closing record 2 times'
+    ordinary_case 'counts that do not match the results' 0 "$ok_a"$'\n'"$ok_b"$'\n''DONE 1 3 2 1 1' 'closed with'
+    ordinary_case 'a closing record for another worker' 0 "$ok_a"$'\n'"$ok_b"$'\n''DONE 0 3 2 2 0' 'closed with 0/3'
+    ordinary_case 'a result after the closing record' 0 "$ok_a"$'\n'"$ok_b"$'\n'"$done_ok"$'\n'"$ok_b" 'after its closing record'
+    ordinary_case 'a line that is not a record' 0 "$ok_a"$'\n''  ok    fake_b'$'\n'"$ok_b"$'\n'"$done_ok" 'wrote a record that is not one'
+    ordinary_case 'a record with the right words and the wrong shape' 0 "$ok_a"$'\n''RESULT t_fake_b maybe'$'\n'"$ok_b"$'\n'"$done_ok" 'wrote a record that is not one'
+    ordinary_case 'a worker that was stopped' 143 "$ok_a" 'was stopped after 7 seconds' 7
+    ordinary_case 'a worker that was stopped, whatever it wrote' 143 "$ok_a"$'\n'"$ok_b"$'\n'"$done_ok" 'was stopped after 7 seconds' 7
+    unset -f ordinary_case
+}
+
+# A launcher that starts stand-in workers (call it in a subshell): worker FAULTY of the run does SCENARIO, written to its record file as a faulty worker would, and
+# the others are right. The stand-in leads a process group of its own, as the real one does. FAKE_PIDS (a file) collects the pids a hanging stand-in starts.
+# shellcheck disable=SC2016 # the text is a script for the stand-in worker's own bash, which expands it
+FAKE_WORKER='
+scenario=$1; shift
+all=("$@"); n=${#all[@]}
+rec() { printf "%s\n" "$*" >&3; }
+results() { local t; for t in "${all[@]}"; do rec "RESULT $t ok"; done; }
+case "$scenario" in
+    ok) results; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0" ;;
+    honest-failure) rec "RESULT ${all[0]} fail"; rec "RESULT ${all[1]} ok"; rec "DONE $FAKE_INDEX $FAKE_COUNT $n 1 1"; exit 1 ;;
+    exit-nonzero) results; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0"; exit 1 ;;
+    fail-exit-zero) rec "RESULT ${all[0]} fail"; rec "RESULT ${all[1]} ok"; rec "DONE $FAKE_INDEX $FAKE_COUNT $n 1 1" ;;
+    missing) rec "RESULT ${all[0]} ok"; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0" ;;
+    duplicate) rec "RESULT ${all[0]} ok"; results; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0" ;;
+    unassigned) results; rec "RESULT t_fake_a ok"; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0" ;;
+    other-names) rec "RESULT t_fake_x ok"; rec "RESULT t_fake_y ok"; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0" ;;
+    no-closing-record) results ;;
+    killed) rec "RESULT ${all[0]} ok"; kill -KILL $$ ;;
+    forged-output) printf "  ok    fake_b\n  ok    fake_d\nRESULT t_fake_b ok\nRESULT t_fake_d ok\nDONE $FAKE_INDEX $FAKE_COUNT $n $n 0\n" ;;
+    garbage) results; echo "hello" >&3; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0" ;;
+    result-after-done) results; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0"; rec "RESULT ${all[0]} ok" ;;
+    done-twice) results; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0"; rec "DONE $FAKE_INDEX $FAKE_COUNT $n $n 0" ;;
+    bad-counts) results; rec "DONE $FAKE_INDEX $FAKE_COUNT $n 1 1" ;;
+    wrong-index) results; rec "DONE 0 $FAKE_COUNT $n $n 0" ;;
+    never-ran) exit 2 ;;
+    hang) rec "RESULT ${all[0]} ok"; sleep 300 & echo $! >>"$FAKE_PIDS"; echo $$ >>"$FAKE_PIDS"; sleep 300 ;;
+    stubborn) trap "" TERM; rec "RESULT ${all[0]} ok"; sleep 300 & echo $! >>"$FAKE_PIDS"; echo $$ >>"$FAKE_PIDS"; while :; do sleep 1; done ;;
+    orphan) rec "RESULT ${all[0]} ok"; ( trap "" TERM; sleep 300 ) & echo $! >>"$FAKE_PIDS"; echo $$ >>"$FAKE_PIDS"; sleep 300 ;;
+esac
+'
+FAKE_FAULTY=1 FAKE_SCENARIO=ok FAKE_PIDS=/dev/null
+stand_in_ordinary_workers() { # FAULTY SCENARIO
+    FAKE_FAULTY="$1" FAKE_SCENARIO="$2"
+    start_ordinary_worker() { # INDEX COUNT RECORDS OUTPUT NAME...
+        local index="$1" count="$2" records="$3" output="$4" scenario=ok
+        shift 4
+        [[ "$index" != "$FAKE_FAULTY" ]] || scenario="$FAKE_SCENARIO"
+        FAKE_INDEX="$index" FAKE_COUNT="$count" FAKE_PIDS="$FAKE_PIDS" setsid bash -c "$FAKE_WORKER" fake "$scenario" "$@" 3>"$records" >"$output" 2>&1 </dev/null &
+        STARTED_PID=$!
+    }
+}
+# stand_in_routine OUTFILE FAULTY SCENARIO: a routine run of four stand-in tests in two stand-in workers, as the harness would run it, written to OUTFILE; its status.
+stand_in_routine() {
+    local rc=0
+    (
+        stand_in_ordinary_workers "$2" "$3"
+        ORDINARY_TESTS=(t_fake_a t_fake_b t_fake_c t_fake_d)
+        rehearsal_routine 2
+    ) >"$1" 2>&1 || rc=$?
+    return "$rc"
+}
+
+# The parent against workers that go wrong. Each fault of worker 1 of 2 fails the run, and is said to, whatever its status was; a right worker beside it does not hide it;
+# and an honest failure is a failure of that test and not of the worker. Four stand-in tests, in two stand-in workers: (fake_a fake_c) and (fake_b fake_d).
+# shellcheck disable=SC2329 # the faulty shard_of is defined in subshells and called by the code under test
+t_ordinary_a_worker_that_goes_wrong_fails_the_run() {
+    local out rc c scenario want out_summary
+    local -a cases=(
+        'honest-failure|FAIL  fake_b|result=failed ordinary_run=4 ordinary_failed=1'
+        'exit-nonzero|exited with status 1 though it reported no failed test|result=failed ordinary_run=4 ordinary_failed=0'
+        'fail-exit-zero|exited 0 though it reported 1 failed test(s)|result=failed ordinary_run=4 ordinary_failed=1'
+        'missing|produced no result for: fake_d|result=failed ordinary_run=3 ordinary_failed=0'
+        'duplicate|reported fake_b more than once|result=failed ordinary_run=4 ordinary_failed=0'
+        'unassigned|reported fake_a, which was not assigned to it|result=failed ordinary_run=4 ordinary_failed=0'
+        'other-names|reported fake_x, which was not assigned to it|result=failed ordinary_run=2 ordinary_failed=0'
+        'no-closing-record|did not finish|result=failed ordinary_run=4 ordinary_failed=0'
+        'killed|did not finish|result=failed ordinary_run=3 ordinary_failed=0'
+        'forged-output|produced no result for: fake_b fake_d|result=failed ordinary_run=2 ordinary_failed=0'
+        'garbage|wrote a record that is not one|result=failed ordinary_run=4 ordinary_failed=0'
+        'result-after-done|after its closing record|result=failed ordinary_run=4 ordinary_failed=0'
+        'done-twice|closing record 2 times|result=failed ordinary_run=4 ordinary_failed=0'
+        'bad-counts|closed with 1/2 assigned=2 passed=1 failed=1|result=failed ordinary_run=4 ordinary_failed=0'
+        'wrong-index|closed with 0/2|result=failed ordinary_run=4 ordinary_failed=0'
+        'never-ran|produced no result for: fake_b fake_d|result=failed ordinary_run=2 ordinary_failed=0'
+    )
+    # The control: the same stand-ins, all right, are accepted, so that the failures below are the scenarios' and not the stand-ins'.
+    rc=0
+    stand_in_routine "$T/ordinary-fake.out" 1 ok || rc=$?
+    out="$(<"$T/ordinary-fake.out")"
+    [[ "$rc" == 0 ]] || bad "four stand-in tests in two right stand-in workers did not pass (exit $rc): ${out:0:400}"
+    expect_has 'the control run' "$out" 'result=passed ordinary_run=4 ordinary_failed=0'
+    expect_has 'the control says how it ran' "$out" 'Starting 2 ordinary-test worker(s) for 4 test(s)'
+    expect_has 'the control reports each test, in order' "$out" $'  ok    fake_a\n  ok    fake_b\n  ok    fake_c\n  ok    fake_d'
+    for c in "${cases[@]}"; do
+        IFS='|' read -r scenario want out_summary <<<"$c"
+        rc=0
+        stand_in_routine "$T/ordinary-fake.out" 1 "$scenario" || rc=$?
+        out="$(<"$T/ordinary-fake.out")"
+        [[ "$rc" == 1 ]] || bad "$scenario: the run exited $rc, not 1: ${out:0:300}"
+        expect_has "$scenario" "$out" "$want"
+        expect_has "$scenario (summary)" "$out" "$out_summary"
+        expect_lacks "$scenario (no success line)" "$out" 'Routine rehearsal checks passed'
+        [[ "$(grep -c '^REHEARSAL_SUMMARY' <<<"$out")" == 1 ]] || bad "$scenario: the run did not print exactly one summary line"
+    done
+    # A fault of the other worker is found as well (the first is not the only one looked at).
+    rc=0
+    stand_in_routine "$T/ordinary-fake.out" 0 killed || rc=$?
+    out="$(<"$T/ordinary-fake.out")"
+    [[ "$rc" == 1 && "$out" == *'ordinary worker 0/2 did not finish'* ]] || bad "a fault of worker 0 was not found (exit $rc): ${out:0:300}"
+    # The list of tests is checked before any worker is started: shares that are not the whole list, a list with nothing in it or with a test twice, are failures that
+    # start nothing; and fewer tests than workers means fewer workers, not an idle one.
+    rc=0
+    out="$( (
+        stand_in_ordinary_workers 1 ok
+        shard_of() { local c="$1" i="$2" id n=0; shift 2; for id in "$@"; do if ((n % c == i && n > 0)); then printf '%s\n' "$id"; fi; n=$((n + 1)); done; }
+        ORDINARY_TESTS=(t_fake_a t_fake_b t_fake_c t_fake_d)
+        rehearsal_routine 2
+    ) 2>&1)" || rc=$?
+    [[ "$rc" == 1 && "$out" == *'is assigned to no ordinary worker'* && "$out" != *'Starting'* && "$out" == *'result=failed ordinary_run=0'* ]] || bad "shares that lose a test did not fail the run before it started (exit $rc): ${out:0:300}"
+    rc=0
+    out="$( (stand_in_ordinary_workers 1 ok; ORDINARY_TESTS=(t_fake_a t_fake_a); rehearsal_routine 2) 2>&1)" || rc=$?
+    [[ "$rc" == 1 && "$out" == *'appears twice'* && "$out" != *'Starting'* && "$out" != *'Routine rehearsal checks passed'* ]] || bad "a test listed twice was not refused before the workers started (exit $rc): ${out:0:300}"
+    rc=0
+    out="$( (stand_in_ordinary_workers 1 ok; ORDINARY_TESTS=(); rehearsal_routine 2) 2>&1)" || rc=$?
+    [[ "$rc" == 1 && "$out" == *'there are no ordinary tests to run'* && "$out" != *'Starting'* && "$out" != *'Routine rehearsal checks passed'* ]] || bad "a run of no tests succeeded with workers (exit $rc): ${out:0:300}"
+    rc=0
+    out="$( (stand_in_ordinary_workers 1 ok; ORDINARY_TESTS=(t_fake_a t_fake_b); rehearsal_routine 4) 2>&1)" || rc=$?
+    [[ "$rc" == 0 && "$out" == *'Starting 2 ordinary-test worker(s) for 2 test(s)'* && "$out" == *'result=passed ordinary_run=2 ordinary_failed=0'* ]] || bad "four workers for two tests did not become two (exit $rc): ${out:0:300}"
+    # What a failing worker printed is shown to the reader, marked so that it cannot be taken for a line of the run's own.
+    rc=0
+    stand_in_routine "$T/ordinary-fake.out" 1 forged-output || rc=$?
+    out="$(<"$T/ordinary-fake.out")"
+    [[ "$out" != *$'\n  ok    fake_b'* ]] || bad "a worker's printed '  ok' line was reported as a result of the run: ${out:0:300}"
+}
+
+# A worker that hangs is stopped after the longest a routine run waits for one, with whatever it started, and the run fails; so is one that ignores TERM (it is killed
+# after the grace period), and one that ends at TERM but leaves a process behind that does not. Nothing is left running, and the run says which worker and how far it got.
+t_ordinary_a_worker_that_hangs_is_stopped_with_what_it_started() {
+    local out rc scenario pid pids gone
+    for scenario in hang stubborn orphan; do
+        : >"$T/ordinary-hang.pids"
+        rc=0
+        out="$( (
+            ORDINARY_TIMEOUT=3 ORDINARY_GRACE=2 FAKE_PIDS="$T/ordinary-hang.pids"
+            stand_in_ordinary_workers 1 "$scenario"
+            ORDINARY_TESTS=(t_fake_a t_fake_b t_fake_c t_fake_d)
+            rehearsal_routine 2
+        ) 2>&1)" || rc=$?
+        [[ "$rc" == 1 ]] || bad "$scenario: a run with a hung worker exited $rc, not 1: ${out:0:300}"
+        expect_has "$scenario" "$out" 'ordinary worker 1/2 was stopped after 3 seconds'
+        expect_has "$scenario (how far it got)" "$out" 'with 1 of its 2 tests reported'
+        expect_has "$scenario (its summary)" "$out" 'result=failed ordinary_run=3 ordinary_failed=0'
+        expect_lacks "$scenario (no success line)" "$out" 'Routine rehearsal checks passed'
+        pids="$(<"$T/ordinary-hang.pids")"
+        [[ "$(grep -c . <<<"$pids")" == 2 ]] || bad "$scenario: the stand-in did not start what this test looks for: $pids"
+        for pid in $pids; do
+            gone=0
+            for _ in {1..30}; do
+                if ! kill -0 "$pid" 2>/dev/null; then gone=1; break; fi
+                sleep 0.1
+            done
+            ((gone == 1)) || { bad "$scenario: process $pid (the worker, or what it started) was left running"; kill -KILL "$pid" 2>/dev/null || true; }
+        done
+    done
+}
+
+# Workers started as the parent starts them, on real tests: each leads a process group, has a temporary directory of its own inside the parent's scratch directory (and
+# removes it), runs only what it was given, writes exactly the records that say so, and cannot be made to write another by anything a test starts.
+t_ordinary_workers_are_isolated() {
+    local -a ids=(G1-context-env G1-host G1-tls G2-env G1-context G1-endpoint) tests=() first=() second=() names
+    local id t copy="$T/ordinary-iso-src" pid_a pid_b dir_a dir_b seen=0 pg_a pg_b rc_a=0 rc_b=0 out_a out_b rec_a rec_b
+    local -A ORDINARY_VERDICT=()
+    for id in "${ids[@]}"; do
+        [[ -n "${GUARD_TESTS[$id]:-}" ]] || bad "the guard $id used by this test is not registered"
+        for t in ${GUARD_TESTS[$id]}; do [[ " ${tests[*]} " == *" $t "* ]] || tests+=("$t"); done
+    done
+    mapfile -t first < <(shard_of 2 0 "${tests[@]}")
+    mapfile -t second < <(shard_of 2 1 "${tests[@]}")
+    rm -rf "$T/scratch-0" "$T/scratch-1"
+    start_ordinary_worker 0 2 "$T/iso-0.records" "$T/iso-0.out" "${first[@]}"
+    pid_a="$STARTED_PID"
+    start_ordinary_worker 1 2 "$T/iso-1.records" "$T/iso-1.out" "${second[@]}"
+    pid_b="$STARTED_PID"
+    for _ in {1..200}; do
+        dir_a="$(readlink "/proc/$pid_a/cwd" 2>/dev/null || true)" dir_b="$(readlink "/proc/$pid_b/cwd" 2>/dev/null || true)"
+        pg_a="$(pgid_of "$pid_a" || true)" pg_b="$(pgid_of "$pid_b" || true)"
+        if [[ "$dir_a" == "$T/scratch-0"/*/cwd && "$dir_b" == "$T/scratch-1"/*/cwd && "$dir_a" != "$dir_b" ]]; then seen=2; break; fi
+        sleep 0.05
+    done
+    ((seen == 2)) || bad "the two workers were never seen running at once, each in a temporary directory of its own inside the parent's scratch directory ($dir_a, $dir_b)"
+    [[ "$pg_a" == "$pid_a" && "$pg_b" == "$pid_b" ]] || bad "a worker does not lead a process group of its own (pids $pid_a $pid_b, groups $pg_a $pg_b)"
+    { wait "$pid_a" || rc_a=$?; } 2>/dev/null
+    { wait "$pid_b" || rc_b=$?; } 2>/dev/null
+    [[ "$rc_a" == 0 && "$rc_b" == 0 ]] || bad "right workers on right tests exited $rc_a and $rc_b"
+    out_a="$(<"$T/iso-0.out")" out_b="$(<"$T/iso-1.out")" rec_a="$(<"$T/iso-0.records")" rec_b="$(<"$T/iso-1.records")"
+    [[ -z "$(find "$T/scratch-0" "$T/scratch-1" -mindepth 1 2>/dev/null)" ]] || bad "a worker left its temporary directory behind: $(find "$T/scratch-0" "$T/scratch-1" -mindepth 1 | head -n 3 | tr '\n' ' ')"
+    ordinary_worker_problems 0 2 "${first[*]}" "$rc_a" "$rec_a"
+    [[ -z "$WORKER_PROBLEMS" ]] || bad "worker 0 of 2 was found wrong: ${WORKER_PROBLEMS:0:300}"
+    ordinary_worker_problems 1 2 "${second[*]}" "$rc_b" "$rec_b"
+    [[ -z "$WORKER_PROBLEMS" ]] || bad "worker 1 of 2 was found wrong: ${WORKER_PROBLEMS:0:300}"
+    # Each ran its own tests and no other, and what it printed says the same as what it recorded; and it never prints the summary line.
+    for t in "${first[@]}"; do
+        if ! grep -qxF "  ok    ${t#t_}" <<<"$out_a" || grep -qxF "  ok    ${t#t_}" <<<"$out_b"; then bad "$t was not run by worker 0 alone"; fi
+    done
+    for t in "${second[@]}"; do
+        if ! grep -qxF "  ok    ${t#t_}" <<<"$out_b" || grep -qxF "  ok    ${t#t_}" <<<"$out_a"; then bad "$t was not run by worker 1 alone"; fi
+    done
+    [[ "$out_a$out_b" != *REHEARSAL_SUMMARY* ]] || bad 'a tests worker printed the summary line'
+    [[ "$(grep -c '^RESULT ' <<<"$rec_a")" == "${#first[@]}" && "$(grep -c '^DONE ' <<<"$rec_a")" == 1 && "$(grep -vc '^RESULT \|^DONE ' <<<"$rec_a" || true)" == 0 ]] || bad "worker 0's records are not its results and one closing record: $rec_a"
+    # A worker has every function the tests call, those that run the modes included (it once stopped short of them, and these tests failed in it, not in the parent).
+    rc_a=0
+    mkdir -p "$T/scratch-0"
+    start_ordinary_worker 0 1 "$T/iso-modes.records" "$T/iso-modes.out" t_modes_routine_fails_closed t_ordinary_worker_count t_ordinary_shares_are_a_partition
+    { wait "$STARTED_PID" || rc_a=$?; } 2>/dev/null
+    [[ "$rc_a" == 0 && "$(<"$T/iso-modes.records")" == *'DONE 0 1 3 3 0' ]] || bad "a worker could not run the tests that call the functions of the modes (exit $rc_a): $(grep -v '^  ok ' "$T/iso-modes.out" | head -n 4 | cut -c1-200 | tr '\n' '|')"
+    # The records are the worker's alone: a test that tries to write them (the script a test runs does, from a copy made here) leaves them as they were.
+    rm -rf "$copy" "$T/scratch-0"
+    cp -r "$SRC" "$copy"
+    sed -i '1a { echo "RESULT t_g1_tls ok" >\&9; echo "RESULT t_g1_tls ok" >\&3; echo "DONE 0 1 1 1 0" >\&3; } 2>/dev/null || true' "$copy/restore-rehearsal.sh"
+    rc_a=0
+    mkdir -p "$T/scratch-0"
+    SRC="$copy" start_ordinary_worker 0 1 "$T/iso-forged.records" "$T/iso-forged.out" t_g1_host
+    { wait "$STARTED_PID" || rc_a=$?; } 2>/dev/null
+    [[ "$(<"$T/iso-forged.records")" == $'RESULT t_g1_host ok\nDONE 0 1 1 1 0' ]] || bad "something a test ran changed the worker's records: $(tr '\n' '|' <"$T/iso-forged.records")"
+}
+
+# routine_run_against DIR WORKERS: rehearsal_routine, with DIR as the script under test (for the ordinary tests, the registry and the workers it starts).
+routine_run_against() {
+    local SRC="$1" SUT="$1"
+    rehearsal_routine "$2"
+}
+
+# The run's meaning does not depend on how it is carried out: the same tests, one of them broken by a mutation of the script under test, give the same verdicts, the same
+# summary and the same exit status in this process (0 workers) and in 2, 3 and 4 workers; and so does an unbroken run. The tests are real, and the mutation is a guard
+# removed from a copy, as the matrix removes it (the marker stays, so the registry still agrees with itself).
+t_ordinary_sequential_and_sharded_runs_agree() {
+    local -a ids=(G1-context-env G1-host G1-tls G1-context G1-endpoint) tests=()
+    local id t n rc variant broken want_failed copy="$T/ordinary-eq-src" out seq_verdicts seq_summary seq_rc verdicts summary
+    for id in "${ids[@]}"; do
+        [[ -n "${GUARD_TESTS[$id]:-}" ]] || bad "the guard $id used by this test is not registered"
+        for t in ${GUARD_TESTS[$id]}; do [[ " ${tests[*]} " == *" $t "* ]] || tests+=("$t"); done
+    done
+    ((${#tests[@]} >= 5)) || bad "too few tests (${#tests[@]}) to share among four workers"
+    rm -rf "$copy"
+    cp -r "$SRC" "$copy"
+    sed -i 's/^.*# guard:G1-host$/: # guard:G1-host/; s/^.*# guard:G1-tls$/: # guard:G1-tls/' "$copy/restore-rehearsal.sh"
+    cmp -s "$SRC/restore-rehearsal.sh" "$copy/restore-rehearsal.sh" && bad 'the mutation changed nothing'
+    # The tests the two removed guards are tested by are the ones that must fail (the registry says which; both of them are in the list above). (G2-env's would
+    # do as well, but its mutant takes twenty seconds to run, and this one is run seven times.)
+    want_failed="$(for t in ${GUARD_TESTS[G1-host]} ${GUARD_TESTS[G1-tls]}; do printf '  FAIL  %s\n' "${t#t_}"; done | LC_ALL=C sort)"
+    broken="$(grep -c . <<<"$want_failed")"
+    for variant in mutated intact; do
+        seq_rc='' seq_verdicts='' seq_summary=''
+        for n in 0 2 3 4; do
+            [[ "$variant" == intact && "$n" != 0 && "$n" != 2 ]] && continue
+            rc=0
+            out="$( (
+                ORDINARY_TESTS=("${tests[@]}")
+                if [[ "$variant" == mutated ]]; then routine_run_against "$copy" "$n"; else rehearsal_routine "$n"; fi
+            ) 2>&1)" || rc=$?
+            verdicts="$(grep -E '^  (ok|FAIL) ' <<<"$out" | LC_ALL=C sort)"
+            summary="$(grep '^REHEARSAL_SUMMARY' <<<"$out" || true)"
+            if [[ "$variant" == mutated ]]; then
+                [[ "$rc" == 1 ]] || bad "$variant, $n workers: exit $rc, not 1: ${out:0:300}"
+                [[ "$summary" == *"ordinary_run=${#tests[@]} ordinary_failed=$broken "* ]] || bad "$variant, $n workers: the summary does not say $broken of ${#tests[@]} failed: $summary"
+                [[ "$(grep '^  FAIL' <<<"$verdicts")" == "$want_failed" ]] || bad "$variant, $n workers: the failing tests are not exactly those of the removed guards: $(grep '^  FAIL' <<<"$verdicts" | tr '\n' ' ')"
+            else
+                [[ "$rc" == 0 && "$summary" == *"result=passed ordinary_run=${#tests[@]} ordinary_failed=0 "* ]] || bad "$variant, $n workers: an unbroken run did not pass (exit $rc): ${out:0:300}"
+            fi
+            [[ "$summary" != *workers=* && "$(grep -c '^REHEARSAL_SUMMARY' <<<"$out")" == 1 ]] || bad "$variant, $n workers: the summary is not the single line of the sequential run's form: $summary"
+            if ((n == 0)); then
+                seq_rc="$rc" seq_verdicts="$verdicts" seq_summary="$summary"
+                [[ "$out" != *'ordinary-test worker'* ]] || bad "$variant: a run of 0 workers started workers"
+            else
+                [[ "$rc" == "$seq_rc" && "$verdicts" == "$seq_verdicts" && "$summary" == "$seq_summary" ]] || bad "$variant: $n workers and 0 workers did not agree: exit $rc/$seq_rc, [$verdicts] / [$seq_verdicts], [$summary] / [$seq_summary]"
+                [[ "$out" == *"Starting $n ordinary-test worker(s)"* || "$n" -gt "${#tests[@]}" ]] || bad "$variant, $n workers: the run does not say it started them"
+            fi
+        done
+    done
+}
+
+# An interrupted routine run is not a success and leaves nothing behind: TERM (and INT, which a terminal sends) to the parent, while its workers are at work on real
+# tests, ends it with a nonzero status and no summary line, and every worker, everything a worker started and every temporary directory is gone.
+t_ordinary_an_interrupted_run_leaves_nothing() {
+    local sig tmp="$T/ordinary-int" parent out="$T/ordinary-int.out" rc pids pid group left
+    for sig in TERM INT; do
+        rm -rf "$tmp"
+        mkdir -p "$tmp"
+        rc=0
+        TMPDIR="$tmp" REHEARSAL_WORKERS=2 env --default-signal=INT,TERM -u REHEARSAL_TESTS bash "$THIS_SCRIPT" --routine >"$out" 2>&1 &
+        parent=$!
+        pids=''
+        for _ in {1..200}; do
+            pids="$(for pid in $(pgrep -P "$parent" 2>/dev/null || true); do tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -q -- '--tests-worker' && echo "$pid"; done)"
+            [[ "$(grep -c . <<<"$pids")" == 2 ]] && break
+            sleep 0.1
+        done
+        [[ "$(grep -c . <<<"$pids")" == 2 ]] || { bad "$sig: the run did not start two workers (found: $pids)"; kill -KILL "$parent" 2>/dev/null || true; continue; }
+        sleep 2 # until they are running tests, and what the tests start
+        group=''
+        for pid in $pids; do group+=" $(pgrep -g "$pid" | tr '\n' ' ')"; done
+        kill "-$sig" "$parent"
+        { wait "$parent" || rc=$?; } 2>/dev/null
+        ((rc != 0)) || bad "$sig: an interrupted run exited 0"
+        [[ "$(<"$out")" != *REHEARSAL_SUMMARY* && "$(<"$out")" != *'Routine rehearsal checks passed'* ]] || bad "$sig: an interrupted run printed a summary or a success line"
+        left=''
+        for pid in $group; do ! kill -0 "$pid" 2>/dev/null || left+=" $pid"; done
+        [[ -z "$left" ]] || { bad "$sig: processes of the run were left running:$left"; for pid in $left; do kill -KILL "$pid" 2>/dev/null || true; done; }
+        [[ -z "$(find "$tmp" -mindepth 1 2>/dev/null)" ]] || bad "$sig: temporary files were left behind: $(find "$tmp" -mindepth 1 | head -n 3 | tr '\n' ' ')"
+    done
+    rm -rf "$tmp"
+}
+
+# The summary of a sharded routine run is the line of every routine run: the outer verification (check.sh's rehearsal_verified, unchanged) accepts a passing one, and
+# refuses a failing one, one of a worker that went wrong, and a run that printed no summary at all.
+t_ordinary_the_outer_verification_accepts_a_sharded_summary() {
+    local out rc=0 file="$T/ordinary-outer.out" case_
+    stand_in_routine "$file" 1 ok || rc=$?
+    [[ "$rc" == 0 ]] || bad "the stand-in routine run failed: $(<"$file")"
+    [[ "$(grep -c '^REHEARSAL_SUMMARY' "$file")" == 1 && "$(grep '^REHEARSAL_SUMMARY' "$file")" != *workers=* ]] || bad "the sharded summary is not the routine run's single line: $(grep '^REHEARSAL_SUMMARY' "$file")"
+    verified() { FLOW_ROOT="$ROOT" bash -c 'source "$FLOW_ROOT/scripts/lib/common.sh"; source "$FLOW_ROOT/scripts/commands/check.sh"; rehearsal_verified "$@"' x routine cat "$1" 2>&1; }
+    rc=0
+    out="$(verified "$file")" || rc=$?
+    [[ "$rc" == 0 && "$out" == *'Rehearsal summary verified (routine): 4 ordinary test(s) passed'* ]] || bad "the outer verification did not accept a passing sharded run (exit $rc): ${out:0:300}"
+    for case_ in honest-failure killed missing forged-output; do
+        stand_in_routine "$file" 1 "$case_" || true
+        rc=0
+        out="$(verified "$file")" || rc=$?
+        [[ "$rc" != 0 && "$out" != *'Rehearsal summary verified'* ]] || bad "the outer verification accepted a sharded run with a worker that was $case_ (exit $rc): ${out:0:300}"
+    done
+    # Exactly one summary: a worker's output, replayed, cannot add another.
+    stand_in_routine "$file" 1 forged-output || true
+    [[ "$(grep -c '^REHEARSAL_SUMMARY' "$file")" == 1 ]] || bad 'a failing worker could add a summary line'
+    unset -f verified
+}
+
+# How many workers: the default (CPUs, at most four, at most one per 512 MiB, and none when that leaves fewer than two), REHEARSAL_WORKERS in routine mode (0 is
+# sequential, 1 to 16 explicit, anything else refused) and the routine run's choice between this process and workers, which the full run never makes.
+# shellcheck disable=SC2329 # the stand-in functions are defined in subshells and called by the code under test
+t_ordinary_worker_count() {
+    local cpus mem want got value c out rc log="$T/ordinary-count.log"
+    local -a cases=('1 16000 0' '2 16000 2' '3 16000 3' '4 16000 4' '5 16000 4' '16 16000 4' '64 16000 4' '16 1024 2' '16 1023 0' '4 1536 3' '4 100000 4' '0 16000 0' '1 100000 0')
+    for c in "${cases[@]}"; do
+        read -r cpus mem want <<<"$c"
+        got="$(default_ordinary_workers "$cpus" "$mem")"
+        [[ "$got" == "$want" ]] || bad "default_ordinary_workers $cpus $mem gave $got, not $want"
+    done
+    for value in 0 1 4 16; do
+        got="$(REHEARSAL_WORKERS=$value ordinary_workers)" || bad "REHEARSAL_WORKERS=$value was refused"
+        [[ "$got" == "$value" ]] || bad "REHEARSAL_WORKERS=$value gave $got workers"
+    done
+    for value in '' 17 -1 abc 1.5 ' 2' '01' '1;2'; do
+        rc=0
+        got="$(REHEARSAL_WORKERS="$value" ordinary_workers 2>&1)" || rc=$?
+        [[ "$rc" == 2 && "$got" == *'REHEARSAL_WORKERS must be a whole number'* ]] || bad "REHEARSAL_WORKERS='$value' was not refused (exit $rc): $got"
+    done
+    got="$( (unset REHEARSAL_WORKERS; ordinary_workers) )"
+    [[ "$got" =~ ^[0-4]$ && "$got" != 1 ]] || bad "the default number of ordinary workers is '$got'"
+    # The routine run shares the tests among workers only when asked to; 0 (and the full run, always) keep them in this process.
+    rm -f "$log"
+    # shellcheck disable=SC2016 # the stand-ins are defined in the subshell, which expands them
+    out="$( (
+        t_fake_a() { echo local >>"$log"; }
+        run_ordinary_sharded() { echo "sharded $1" >>"$log"; ORDINARY_RAN=1 ORDINARY_FAILED=0; }
+        ORDINARY_TESTS=(t_fake_a)
+        rehearsal_routine 0 >/dev/null
+        rehearsal_routine >/dev/null
+        rehearsal_routine 3 >/dev/null
+        prepare_caches() { :; }
+        run_mutant() { printf '  ok    %s caught\n' "$1"; }
+        REHEARSAL_WORKERS=0 rehearsal_full >/dev/null
+    ) 2>&1)" || rc=$?
+    [[ "$(tr '\n' ' ' <"$log")" == 'local local sharded 3 local ' ]] || bad "the routine and full runs did not choose between this process and workers as they should: $(tr '\n' ' ' <"$log") $out"
+}
+
 # The lists the half-failed rehearsal holds are the repository's: the tables, the migrations, the stub's statement, the fixture's counts, the fixed ids.
 # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
 t_static_half_failed_lists() {
@@ -7706,8 +8200,50 @@ prepare_caches() { # [fresh]: with 'fresh', whatever caches exist are discarded 
     CACHE_DIGEST="$(cache_digest)"
 }
 
+# tests_worker_main INDEX COUNT NAME...: an ordinary-test worker (routine mode). Runs exactly the tests it was given, in the order given, and says what it did in
+# RECORDS: lines written to descriptor 3, which the parent opened on a file of this worker's own. Nothing a test prints is a record: the tests write to the
+# ordinary output, the records are written here, to a descriptor that is moved out of the tests' reach (they are run with it closed). Two kinds:
+#   RESULT NAME ok|fail                       one per test, when it has run
+#   DONE INDEX COUNT ASSIGNED PASSED FAILED   once, last: the worker finished
+# The arguments are validated, not trusted: a malformed index or count, no test at all, a name that is not an ordinary test (or is repeated) and a missing record
+# descriptor are refused (exit 2) before anything runs. The exit status is 0 only when every test passed. It never prints the summary line: that is the parent's.
+tests_worker_main() {
+    local index="${1:-}" count="${2:-}" name assigned=0 passed=0 failed=0
+    local -a known=()
+    local -A is_test=() given=()
+    if ! [[ "$index" =~ ^[0-9]+$ && "$count" =~ ^[1-9][0-9]*$ ]] || ((index >= count)); then
+        printf 'usage: rehearsal.sh --tests-worker INDEX COUNT NAME...\n' >&2
+        return 2
+    fi
+    shift 2
+    (($# > 0)) || { printf 'tests worker %s/%s: no test was assigned to it\n' "$index" "$count" >&2; return 2; }
+    mapfile -t known < <(all_tests)
+    for name in "${known[@]}"; do is_test[$name]=1; done
+    for name in "$@"; do
+        [[ "$name" =~ ^t_[A-Za-z0-9_]+$ && -n "${is_test[$name]:-}" ]] || { printf 'tests worker %s/%s: %s is not an ordinary test\n' "$index" "$count" "${name:0:60}" >&2; return 2; }
+        [[ -z "${given[$name]:-}" ]] || { printf 'tests worker %s/%s: %s was given twice\n' "$index" "$count" "$name" >&2; return 2; }
+        given[$name]=1
+    done
+    { : >&3; } 2>/dev/null || { printf 'tests worker %s/%s: there is no record file on descriptor 3; this is started by a routine run, not by a person\n' "$index" "$count" >&2; return 2; }
+    exec 9>&3 3>&-
+    for name in "$@"; do
+        assigned=$((assigned + 1))
+        # With the record descriptor closed, so that nothing a test starts can write a record.
+        if run_test "$name" 9>&-; then
+            passed=$((passed + 1))
+            printf 'RESULT %s ok\n' "$name" >&9
+        else
+            failed=$((failed + 1))
+            printf 'RESULT %s fail\n' "$name" >&9
+        fi
+    done
+    printf 'DONE %s %s %d %d %d\n' "$index" "$count" "$assigned" "$passed" "$failed" >&9
+    ((failed == 0))
+}
+
 # A worker (see the top of this file): the mutants it was given and nothing else. Selected by ARGUMENTS only, so that nothing in the environment can make a
-# gate run skip its tests and its registry check.
+# gate run skip its tests and its registry check. (An ordinary-test worker is dispatched at the entry point, below, where every function is defined: it runs
+# ordinary tests, and some of them call the functions that run the modes.)
 if [[ "${1:-}" == --worker ]]; then
     shift
     worker_main "$@" || exit "$?"
@@ -7768,6 +8304,264 @@ run_ordinary() {
     ((ORDINARY_RAN == ${#ORDINARY_TESTS[@]})) || { printf '  FAIL  %d of %d ordinary tests were run\n' "$ORDINARY_RAN" "${#ORDINARY_TESTS[@]}" >&2; FAILURES=$((FAILURES + 1)); }
 }
 
+# --- routine mode: the ordinary tests shared among workers (CI-2) ---------------------------------------------------------------------------------------
+# Kept apart from the matrix's workers and their accounting, whose contracts are not changed by anything here: the matrix's IDs are of a different shape from the
+# tests' names (worker_problems matches [A-Za-z0-9-]+, a test name has underscores), a worker's evidence is a record file and not what it printed, and a hung
+# worker is ended with the whole process group it leads (a test may leave a process behind), which a matrix worker's TERM trap does not do.
+
+ORDINARY_TIMEOUT=1800 # seconds a routine run waits for its ordinary-test workers: far more than the slowest measured share, so that only a hang reaches it
+ORDINARY_GRACE=10     # seconds between asking a worker to stop (TERM) and making it (KILL)
+declare -A ORDINARY_VERDICT=() # NAME -> ok|fail: the first valid record of each assigned test, from every worker. Filled in the calling shell.
+SHARD_TESTS=()                 # SHARD_TESTS[i]: the tests (a space-separated list) assigned to ordinary-test worker i
+STARTED_PID=''
+
+# default_ordinary_workers CPUS MEMORY_MB: in a routine run only the workers run tests (this process only waits), so every CPU may have one: at most 4, at most one
+# per 512 MiB, and 0 (sequential, in this process) when that leaves fewer than two, since one worker is a sequential run with more machinery.
+default_ordinary_workers() {
+    local workers=$1
+    ((workers <= 4)) || workers=4
+    (($2 / 512 >= workers)) || workers=$(($2 / 512))
+    ((workers >= 2)) || workers=0
+    printf '%d' "$workers"
+}
+
+# ordinary_workers: how many ordinary-test workers a routine run uses. REHEARSAL_WORKERS says so (0 is sequential; validated as the matrix's workers are, so that a
+# value that means nothing is refused, not guessed at); unset, the default above.
+ordinary_workers() {
+    if [[ -n "${REHEARSAL_WORKERS+x}" ]]; then
+        matrix_workers
+    else
+        default_ordinary_workers "$(available_cpus)" "$(available_memory_mb)"
+    fi
+}
+
+# plan_ordinary_shards COUNT: SHARD_TESTS[0..COUNT-1] from ORDINARY_TESTS by shard_of, and the check that does not trust it: every ordinary test is in exactly one share,
+# nothing else is in any, and no share is empty. Says what is wrong and returns 1 if not; the caller counts the failure.
+plan_ordinary_shards() {
+    local n="$1" i t total=0 problems=0
+    local -a share=()
+    local -A owner=()
+    SHARD_TESTS=()
+    for ((i = 0; i < n; i++)); do
+        mapfile -t share < <(shard_of "$n" "$i" "${ORDINARY_TESTS[@]}")
+        SHARD_TESTS[i]="${share[*]}"
+        if ((${#share[@]} == 0)); then printf '  FAIL  ordinary worker %d/%d would be given no test\n' "$i" "$n" >&2; problems=$((problems + 1)); fi
+        for t in ${share[@]+"${share[@]}"}; do
+            total=$((total + 1))
+            if [[ -n "${owner[$t]:-}" ]]; then
+                printf '  FAIL  %s is assigned to ordinary workers %s and %d\n' "${t#t_}" "${owner[$t]}" "$i" >&2
+                problems=$((problems + 1))
+            else
+                owner[$t]=$i
+            fi
+        done
+    done
+    for t in "${ORDINARY_TESTS[@]}"; do
+        if [[ -z "${owner[$t]:-}" ]]; then printf '  FAIL  %s is assigned to no ordinary worker\n' "${t#t_}" >&2; problems=$((problems + 1)); fi
+    done
+    if ((total != ${#ORDINARY_TESTS[@]})); then printf '  FAIL  the ordinary workers were given %d tests between them, not %d\n' "$total" "${#ORDINARY_TESTS[@]}" >&2; problems=$((problems + 1)); fi
+    ((problems == 0))
+}
+
+# pgid_of PID: its process group, or nothing (and status 1) when there is no such process.
+pgid_of() {
+    local stat pgrp
+    stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+    stat="${stat##*) }" # what follows the command name: state, parent, group
+    read -r _ _ pgrp _ <<<"$stat"
+    [[ "$pgrp" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$pgrp"
+}
+
+# start_ordinary_worker INDEX COUNT RECORDS OUTPUT NAME...: starts `rehearsal.sh --tests-worker INDEX COUNT NAME...` in the background and leaves its pid in STARTED_PID.
+# It leads a session (and so a process group) of its own, so that ending it can end everything it started; its record file is opened on descriptor 3; its output
+# (the tests' diagnostics, which are not evidence) goes to OUTPUT; and its temporary directory is made inside a scratch directory of this process's, which this
+# process removes whatever happens to the worker. The environment is the matrix workers': the script directory under test, and REHEARSAL_WORKERS is not passed on.
+start_ordinary_worker() {
+    local index="$1" count="$2" records="$3" output="$4" scratch="$T/scratch-$1"
+    local -a own=()
+    shift 4
+    mkdir -p "$scratch"
+    ! command -v setsid >/dev/null 2>&1 || own=(setsid)
+    env -u REHEARSAL_WORKERS TMPDIR="$scratch" REHEARSAL_SRC="$SRC" ${own[@]+"${own[@]}"} bash "$THIS_SCRIPT" --tests-worker "$index" "$count" "$@" 3>"$records" >"$output" 2>&1 </dev/null &
+    STARTED_PID=$!
+}
+
+# end_ordinary_workers PID...: ends each worker, and whatever it started, and waits for it. TERM first (to the group, where the worker leads one), then, after
+# ORDINARY_GRACE seconds, KILL to whatever is left of the group, so that nothing it started outlives it.
+end_ordinary_workers() {
+    local pid waited alive
+    local -A target=() leader=()
+    for pid in "$@"; do
+        [[ -n "$pid" ]] || continue
+        target[$pid]="$pid"
+        if [[ "$(pgid_of "$pid" || true)" == "$pid" ]]; then target[$pid]="-$pid" leader[$pid]=1; fi
+        kill -TERM -- "${target[$pid]}" 2>/dev/null || true
+    done
+    for ((waited = 0; waited < ORDINARY_GRACE * 2; waited++)); do
+        alive=0
+        for pid in "${!target[@]}"; do ! kill -0 "$pid" 2>/dev/null || alive=1; done
+        ((alive == 1)) || break
+        sleep 0.5
+    done
+    for pid in "${!target[@]}"; do
+        if [[ -n "${leader[$pid]:-}" ]] || kill -0 "$pid" 2>/dev/null; then kill -KILL -- "${target[$pid]}" 2>/dev/null || true; fi
+        wait "$pid" 2>/dev/null || true
+    done
+}
+
+# stop_tests_workers: ends the ordinary-test workers this process started and has not yet found finished (an interrupted run).
+stop_tests_workers() {
+    end_ordinary_workers ${TESTS_WORKER_PIDS[@]+"${TESTS_WORKER_PIDS[@]}"}
+    TESTS_WORKER_PIDS=()
+}
+
+# ordinary_worker_problems INDEX COUNT "NAME ..." STATUS RECORDS [STOPPED]: what is wrong with an ordinary-test worker's run, one problem per line in WORKER_PROBLEMS
+# (empty when it is right). RECORDS is the worker's record file and nothing else. A worker is right only when every line of it is a record, it exited with the
+# status its results imply, wrote its DONE record exactly once, last, with the counts of its results, and reported every test it was assigned exactly once, and
+# nothing else. STOPPED (a number of seconds) says the parent ended it for taking too long. Fills ORDINARY_VERDICT, and WORKER_TEST_FAILURES (tests it reported as failed).
+WORKER_TEST_FAILURES=0
+ordinary_worker_problems() {
+    local index="$1" count="$2" assigned="$3" status="$4" text="$5" stopped="${6:-}" line name verdict dones=0 after=0 d_index='' d_count='' d_assigned='' d_passed='' d_failed=''
+    local n_assigned=0 n_ok=0 n_fail=0 missing=''
+    local -A want=() seen=()
+    WORKER_PROBLEMS='' WORKER_TEST_FAILURES=0
+    for name in $assigned; do
+        want[$name]=1
+        n_assigned=$((n_assigned + 1))
+    done
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        if [[ "$line" =~ ^RESULT\ (t_[A-Za-z0-9_]+)\ (ok|fail)$ ]]; then
+            name="${BASH_REMATCH[1]}" verdict="${BASH_REMATCH[2]}"
+            ((dones == 0)) || after=$((after + 1))
+            if [[ -z "${want[$name]:-}" ]]; then
+                add_problem 'ordinary worker %s/%s reported %s, which was not assigned to it' "$index" "$count" "${name#t_}"
+            elif [[ -n "${seen[$name]:-}" ]]; then
+                add_problem 'ordinary worker %s/%s reported %s more than once' "$index" "$count" "${name#t_}"
+            else
+                seen[$name]="$verdict"
+                ORDINARY_VERDICT[$name]="$verdict"
+                if [[ "$verdict" == ok ]]; then n_ok=$((n_ok + 1)); else n_fail=$((n_fail + 1)); fi
+            fi
+        elif [[ "$line" =~ ^DONE\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+            dones=$((dones + 1))
+            d_index="${BASH_REMATCH[1]}" d_count="${BASH_REMATCH[2]}" d_assigned="${BASH_REMATCH[3]}" d_passed="${BASH_REMATCH[4]}" d_failed="${BASH_REMATCH[5]}"
+        else
+            add_problem 'ordinary worker %s/%s wrote a record that is not one: %s' "$index" "$count" "${line:0:60}"
+        fi
+    done <<<"$text"
+    WORKER_TEST_FAILURES=$n_fail
+    for name in $assigned; do
+        [[ -n "${seen[$name]:-}" ]] || missing+="${missing:+ }${name#t_}"
+    done
+    [[ -z "$missing" ]] || add_problem 'ordinary worker %s/%s produced no result for: %s' "$index" "$count" "${missing:0:300}"
+    if [[ -n "$stopped" ]]; then add_problem 'ordinary worker %s/%s was stopped after %s seconds, which is the longest a routine run waits for one, with %d of its %d tests reported' "$index" "$count" "$stopped" "$((n_ok + n_fail))" "$n_assigned"; fi
+    if ((dones != 1)); then
+        add_problem 'ordinary worker %s/%s did not finish: it wrote its closing record %d times, not once' "$index" "$count" "$dones"
+    elif [[ "$d_index/$d_count/$d_assigned/$d_passed/$d_failed" != "$index/$count/$n_assigned/$n_ok/$n_fail" ]]; then
+        add_problem 'ordinary worker %s/%s closed with %s/%s assigned=%s passed=%s failed=%s, but its results are assigned=%d passed=%d failed=%d' "$index" "$count" "$d_index" "$d_count" "$d_assigned" "$d_passed" "$d_failed" "$n_assigned" "$n_ok" "$n_fail"
+    elif ((after > 0)); then
+        add_problem 'ordinary worker %s/%s wrote %d result(s) after its closing record' "$index" "$count" "$after"
+    fi
+    if ((n_fail == 0 && status != 0)); then
+        add_problem 'ordinary worker %s/%s exited with status %s though it reported no failed test' "$index" "$count" "$status"
+    elif ((n_fail > 0 && status == 0)); then
+        add_problem 'ordinary worker %s/%s exited 0 though it reported %d failed test(s)' "$index" "$count" "$n_fail"
+    fi
+}
+
+# account_ordinary_worker INDEX COUNT "NAME ..." STATUS RECORDS OUTPUT [STOPPED]: judges one finished worker (see ordinary_worker_problems), counts each problem it finds as
+# a failure, and, for a worker that has a problem or a failed test, shows what it printed (without its passing lines), each line marked so that nothing it printed
+# can be taken for a line of this process's own (the summary's, above all).
+account_ordinary_worker() {
+    local index="$1" count="$2" problem
+    ordinary_worker_problems "$1" "$2" "$3" "$4" "$(cat "$5" 2>/dev/null || true)" "${7:-}"
+    while IFS= read -r problem; do
+        [[ -z "$problem" ]] || { printf '  FAIL  %s\n' "$problem" >&2; FAILURES=$((FAILURES + 1)); }
+    done <<<"$WORKER_PROBLEMS"
+    if [[ -n "$WORKER_PROBLEMS" || "$WORKER_TEST_FAILURES" -gt 0 ]]; then
+        printf '        what ordinary worker %d/%d printed (its passing lines left out):\n' "$index" "$count" >&2
+        { grep -v '^  ok ' "$6" 2>/dev/null || true; } | tail -n 60 | sed 's/^/        | /' >&2
+    fi
+}
+
+# run_ordinary_sharded WORKERS: every test in ORDINARY_TESTS exactly once, in WORKERS workers (clamped to the number of tests), while this process waits. Then, in the
+# order of the list, what the workers reported. A test is counted as run only when a worker reported it, once, and as the one it was assigned to; anything less
+# (a missing, repeated, unassigned or contradicted report, a worker that did not finish, was killed, or had to be stopped) is a failure, and so is a test that
+# did not pass. Nothing is judged from the workers' exit statuses alone, or from what their tests printed.
+run_ordinary_sharded() {
+    local n="$1" total="${#ORDINARY_TESTS[@]}" i t status verdict pid alive started="$SECONDS" next_beat reported
+    local -a names=() out=() records=() finished=() statuses=() stopped=()
+    local -A seen=()
+    ORDINARY_RAN=0 ORDINARY_FAILED=0
+    ORDINARY_VERDICT=()
+    ((total > 0)) || { printf '  FAIL  there are no ordinary tests to run\n' >&2; FAILURES=$((FAILURES + 1)); return 0; }
+    for t in "${ORDINARY_TESTS[@]}"; do
+        if [[ -n "${seen[$t]:-}" ]]; then printf '  FAIL  %s appears twice in the list of ordinary tests\n' "${t#t_}" >&2; FAILURES=$((FAILURES + 1)); return 0; fi
+        seen[$t]=1
+    done
+    ((n <= total)) || n=$total
+    plan_ordinary_shards "$n" || { FAILURES=$((FAILURES + 1)); return 0; }
+
+    printf 'Starting %d ordinary-test worker(s) for %d test(s), each with a fake daemon and caches of its own (REHEARSAL_WORKERS=0 runs them one after another, in this process)\n' "$n" "$total"
+    for ((i = 0; i < n; i++)); do
+        out[i]="$T/ordinary-$i.out" records[i]="$T/ordinary-$i.records"
+        read -ra names <<<"${SHARD_TESTS[i]}"
+        start_ordinary_worker "$i" "$n" "${records[i]}" "${out[i]}" "${names[@]}"
+        TESTS_WORKER_PIDS[i]="$STARTED_PID"
+    done
+
+    # Wait for them, and say so as each finishes; a worker still running after ORDINARY_TIMEOUT is ended, and fails. The record files are not read until a worker is done.
+    alive=$n next_beat=$((SECONDS + 120))
+    while ((alive > 0)); do
+        for ((i = 0; i < n; i++)); do
+            [[ -z "${finished[i]:-}" ]] || continue
+            pid="${TESTS_WORKER_PIDS[i]}"
+            if ! kill -0 "$pid" 2>/dev/null; then
+                status=0
+                wait "$pid" || status=$?
+                statuses[i]="$status" finished[i]=1 TESTS_WORKER_PIDS[i]=''
+                alive=$((alive - 1))
+                printf '  ordinary worker %d/%d finished after %ds (exit %d)\n' "$i" "$n" "$((SECONDS - started))" "$status"
+            fi
+        done
+        ((alive > 0)) || break
+        if ((SECONDS - started >= ORDINARY_TIMEOUT)); then
+            for ((i = 0; i < n; i++)); do
+                [[ -z "${finished[i]:-}" ]] || continue
+                pid="${TESTS_WORKER_PIDS[i]}"
+                end_ordinary_workers "$pid"
+                statuses[i]=124 finished[i]=1 stopped[i]="$ORDINARY_TIMEOUT" TESTS_WORKER_PIDS[i]='' # 124 as `timeout` says it
+            done
+            break
+        fi
+        if ((SECONDS >= next_beat)); then
+            reported=0
+            for ((i = 0; i < n; i++)); do
+                status="$(grep -c '^RESULT ' "${records[i]}" 2>/dev/null)" || true
+                reported=$((reported + ${status:-0}))
+            done
+            printf '  ... %d of %d ordinary test(s) reported after %ds; %d worker(s) still running\n' "$reported" "$total" "$((SECONDS - started))" "$alive"
+            next_beat=$((SECONDS + 120))
+        fi
+        sleep 0.5
+    done
+    TESTS_WORKER_PIDS=()
+
+    for ((i = 0; i < n; i++)); do
+        account_ordinary_worker "$i" "$n" "${SHARD_TESTS[i]}" "${statuses[i]:-1}" "${records[i]}" "${out[i]}" "${stopped[i]:-}"
+    done
+    for t in "${ORDINARY_TESTS[@]}"; do
+        verdict="${ORDINARY_VERDICT[$t]:-}"
+        case "$verdict" in
+            ok) printf '  ok    %s\n' "${t#t_}"; ORDINARY_RAN=$((ORDINARY_RAN + 1)) ;;
+            fail) printf '  FAIL  %s\n' "${t#t_}" >&2; ORDINARY_RAN=$((ORDINARY_RAN + 1)) ORDINARY_FAILED=$((ORDINARY_FAILED + 1)); FAILURES=$((FAILURES + 1)) ;;
+        esac
+    done
+    ((ORDINARY_RAN == total)) || { printf '  FAIL  %d of %d ordinary tests were run\n' "$ORDINARY_RAN" "$total" >&2; FAILURES=$((FAILURES + 1)); }
+}
+
 # registry_report: the registry check, once, in this process (see registry_differences). Its findings are printed where they have always been, and counted.
 REGISTRY_PROBLEMS=''
 registry_report() {
@@ -7795,11 +8589,12 @@ summary() {
 }
 
 # rehearsal_routine: see the modes above. Returns 0 only when every ordinary test passed once, the registry is consistent in both directions, and nothing failed.
-rehearsal_routine() {
+rehearsal_routine() { # [WORKERS]: ordinary-test workers; 0 (the default) runs the tests here, in order
+    local workers="${1:-0}"
     FAILURES=0 MUTANTS_RAN=0 MUTANTS_CAUGHT=0
     registry_report
     mapfile -t MUTANT_IDS < <(matrix_mutants)
-    run_ordinary
+    if ((workers > 0)); then run_ordinary_sharded "$workers"; else run_ordinary; fi
     printf '\nMutation matrix: NOT RUN (--routine). %d guard(s) are registered and 0 mutation experiments were executed: this run does not show that the ordinary tests catch the removal of any guard.\n' "${#MARKERS[@]}"
     printf 'The full verification is: scripts/tests/rehearsal.sh (or ./flow check --mutation).\n'
     summary routine 0
@@ -7910,6 +8705,12 @@ run_targeted() { # SELECTION: the value of REHEARSAL_TESTS
 
 # --- the entry point -----------------------------------------------------------------------------------------------------------------------------------
 
+# An ordinary-test worker (see tests_worker_main), selected by ARGUMENTS only, like the matrix's: before the modes are parsed, so that nothing else is run.
+if [[ "${1:-}" == --tests-worker ]]; then
+    shift
+    tests_worker_main "$@" || exit "$?"
+    exit 0
+fi
 parse_mode "$@" || exit "$?"
 printf 'Rehearsal guard tests (fake daemon; no container, network, volume or database is created)\n'
 mapfile -t ORDINARY_TESTS < <(all_tests)
@@ -7920,9 +8721,9 @@ if [[ -v REHEARSAL_TESTS ]]; then
     exit 0
 fi
 if [[ "$MODE" == routine ]]; then
-    # A malformed REHEARSAL_WORKERS is refused here as in a full run, although this one starts no worker: a value that means nothing is not silently ignored.
-    matrix_workers >/dev/null || exit "$?"
-    rehearsal_routine || exit 1
+    # A malformed REHEARSAL_WORKERS is refused here, before any test, as in a full run.
+    ORDINARY_WORKERS="$(ordinary_workers)" || exit "$?"
+    rehearsal_routine "$ORDINARY_WORKERS" || exit 1
     exit 0
 fi
 rehearsal_full || exit "$?"
