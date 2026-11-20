@@ -7926,8 +7926,17 @@ t_g25_paired_a_change_during_the_backup_is_refused() {
 
 # --- the dump of the current schema, as a stage and as a validator ---
 
-# fresh_dump: a world, its two passes joined as the stage joins them, and what the first measurement counted, in files the validator is run against.
-fresh_dump() { paired_world; cat "$W/dump_pass1" "$W/dump_pass2" >"$T/dump.sql"; all_block one | awk '{ print $2 " " $3 " " $4 }' >"$T/measured.txt"; }
+# fresh_dump: the two passes of a world, joined as the stage joins them, and what the first measurement counted, in files the validator is run against. The world is built once
+# for the test process (building it is most of what a case costs) and copied for each case.
+fresh_dump() {
+    if [[ ! -s "$T/fresh.sql" ]]; then
+        paired_world
+        cat "$W/dump_pass1" "$W/dump_pass2" >"$T/fresh.sql"
+        all_block one | awk '{ print $2 " " $3 " " $4 }' >"$T/fresh.measured"
+    fi
+    cp "$T/fresh.sql" "$T/dump.sql"
+    cp "$T/fresh.measured" "$T/measured.txt"
+}
 dump_check() { # DESC NEEDLE: the dump in $T/dump.sql judged against $T/measured.txt; no NEEDLE means it must be accepted
     run_fn "current_dump_problem '$T/dump.sql' \"\$(<'$T/measured.txt')\""
     if [[ -z "$2" ]]; then
@@ -7936,9 +7945,34 @@ dump_check() { # DESC NEEDLE: the dump in $T/dump.sql judged against $T/measured
         [[ "$RC" == 1 && "$OUT" == *"$2"* ]] || bad "$1: expected the refusal '$2', got exit $RC: ${OUT:0:200}"
     fi
 }
+# The edits the cases make to a fresh dump, each one a plain text change that does not depend on the validator.
+dump_append() { printf '%b\n' "$1" >>"$T/dump.sql"; }                          # TEXT: lines at the end (\x60 is a backtick, \n a line break)
+dump_after() { # LINE TEXT: TEXT after the first line of the dump that is exactly LINE
+    DUMP_TEXT="$(printf '%b' "$2")" awk -v key="$(printf '%b' "$1")" '{ print } !done && $0 == key { print ENVIRON["DUMP_TEXT"]; done = 1 }' "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+}
+dump_before() { # LINE TEXT: TEXT before the first line of the dump that is exactly LINE
+    DUMP_TEXT="$(printf '%b' "$2")" awk -v key="$(printf '%b' "$1")" '!done && $0 == key { print ENVIRON["DUMP_TEXT"]; done = 1 } { print }' "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+}
+dump_replace() { # LINE TEXT: the first line of the dump that is exactly LINE, replaced by TEXT (no text: removed)
+    DUMP_TEXT="$(printf '%b' "$2")" awk -v key="$(printf '%b' "$1")" '!done && $0 == key { if (ENVIRON["DUMP_TEXT"] != "") print ENVIRON["DUMP_TEXT"]; done = 1; next } { print }' "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+}
+CREATE_JOBS='CREATE TABLE \x60jobs\x60 ('
+DISABLE_PEOPLE='/*!40000 ALTER TABLE \x60people\x60 DISABLE KEYS */;'
+ENABLE_PEOPLE='/*!40000 ALTER TABLE \x60people\x60 ENABLE KEYS */;'
+END_OF_TABLE=') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;'
+extra_table() { printf 'CREATE TABLE \x60%s\x60 (\n  \x60id\x60 int(11) NOT NULL\n%s\n' "$1" "$END_OF_TABLE"; }
+# fresh_dump with the structure of every table as the real schema's own SHOW CREATE TABLE writes it (the fixture a Pest test holds to the migrated schema).
+real_structures() {
+    local fixture="$ROOT/apps/platform/tests/Fixtures/rehearsal/current-create-tables.sql"
+    [[ -s "$fixture" ]] || { bad 'the fixture of the real CREATE TABLE statements is missing'; return 1; }
+    awk 'NR == FNR { if ($0 ~ /^CREATE TABLE /) { name = $3; skipping = 1 } text[name] = text[name] $0 "\n"; next }
+         /^CREATE TABLE / { name = $3; printf "%s", text[name]; skip = 1; next }
+         skip { if ($0 ~ /^\) ENGINE/) skip = 0; next }
+         { print }' "$fixture" "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+}
 
 t_g25_current_dump_contract() {
-    local stmt
+    local stmt line table
     if [[ -z "$CURRENT_GUARD" ]]; then
         fresh_dump; dump_check 'the dump of the current schema as mariadb-dump writes it' ''
         [[ "$(grep -c '^INSERT INTO' "$T/dump.sql")" == 11 ]] || bad 'the test dump does not have an INSERT for each of the 11 durable tables that hold rows'
@@ -7947,43 +7981,100 @@ t_g25_current_dump_contract() {
         ! grep -q 'INSERT INTO .contact_tags.' "$T/dump.sql" || bad 'the test dump has an INSERT for an empty table'
         # The profiles are separate: a v0.3.0 dump is not a current dump, and a current dump is not a v0.3.0 one.
         paired_world; put_dumps; cat "$W/dump_pass1" "$W/dump_pass2" >"$T/dump.sql"; all_block one | awk '{ print $2 " " $3 " " $4 }' >"$T/measured.txt"
-        dump_check 'a v0.3.0 dump taken as a current one' 'does not create exactly the 34 tables'
+        dump_check 'a v0.3.0 dump taken as a current one' 'of the dump'
         fresh_dump; run_fn "dump_problem '$T/dump.sql'"
         [[ "$RC" == 1 && "$OUT" == *'does not create exactly the 16'* ]] || bad "the historical validator did not refuse the 34-table dump: $RC ${OUT:0:200}"
         # The single-line form of INSERT, which the historical validator accepts, is not one the current profile has seen from the real tool.
         fresh_dump; sed -i '/^INSERT INTO \x60people\x60 VALUES$/,/;$/d' "$T/dump.sql"; printf 'INSERT INTO \x60people\x60 VALUES (1),(2);\n' >>"$T/dump.sql"
         dump_check 'the single-line INSERT' 'does not recognise'
+        # What is accepted besides the minimal test dump: the real schema's own structures (every table of it), an AUTO_INCREMENT counter in a closing line, the header of a
+        # real dump, and rows of the literal forms mariadb-dump writes, a string holding a `;`, a `)`, a `--` or a statement being data.
+        fresh_dump; real_structures; dump_check 'the CREATE TABLE statements of the real migrated schema' ''
+        [[ "$(grep -c '^CREATE TABLE' "$T/dump.sql")" == 34 && "$(grep -c 'FOREIGN KEY' "$T/dump.sql")" -ge 20 ]] || bad 'the real structures were not put in the dump'
+        fresh_dump; dump_replace ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;' ') ENGINE=InnoDB AUTO_INCREMENT=30 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;'
+        dump_check 'a closing line with an AUTO_INCREMENT counter' ''
+        for line in "/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;" "/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;" "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;" \
+            "/*!40103 SET TIME_ZONE='+00:00' */;" "/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;" "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;" \
+            "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;" "/*M!100001 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;" "/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;" \
+            "/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;" "/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;" "/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;" \
+            "/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;" "/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;" "/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;" \
+            "/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;" "-- Server version	10.11.18-MariaDB" "-- Dump completed on 2026-11-20 12:00:00"; do
+            fresh_dump; dump_append "$line"
+            dump_check "the line '$line'" ''
+        done
+        fresh_dump; dump_replace '(1),' "(1,'O\\\\'Brien; DROP TABLE people; -- (x)',NULL,-3.5,1e-7,0x41424344,_binary 'a\\\\0b\\\\nc','',''),"
+        dump_check 'a row of every literal form, with SQL inside its strings' ''
     fi
     if want_case G25-dump-unrecognised; then
         for stmt in 'USE other_db;' 'CREATE DATABASE other_db;' 'DELETE FROM people;' 'TRUNCATE TABLE people;' 'GRANT ALL ON *.* TO x;' 'SET @x = 1;' $'INSERT IGNORE INTO \x60people\x60 VALUES' \
             $'INSERT INTO \x60people\x60 (\x60id\x60) VALUES' $'ALTER TABLE \x60people\x60 ADD x int;' $'REPLACE INTO \x60people\x60 VALUES' '/*!50001 DROP DATABASE x */;' \
-            '/*!40101 SET @x=1 */; DROP DATABASE y;' $'LOCK TABLES \x60people\x60 READ;' 'select 1;'; do
-            fresh_dump; printf '%s\n' "$stmt" >>"$T/dump.sql"
+            '/*!40101 SET @x=1 */; DROP DATABASE y;' $'LOCK TABLES \x60people\x60 READ;' 'select 1;' 'DELIMITER ;;' '\! ls' 'source /etc/passwd' 'LOAD DATA INFILE "/etc/passwd" INTO TABLE people;' \
+            $'drop table if exists \x60people\x60;' '--DROP DATABASE y;' $'-- a comment with a backslash \\ in it' $'-- a comment with a carriage return\r' $'DROP TABLE IF EXISTS \x60people\x60; DROP DATABASE y;' \
+            $'DROP TABLE IF EXISTS \x60people\x60;\r' '/* DROP DATABASE y */;' '/*M!999999\- enable the sandbox mode */ DROP DATABASE y;' $'/*!40000 ALTER TABLE \x60people\x60 DISABLE KEYS */; DROP DATABASE y;' \
+            $'/*!40101 SET @a=1 */ DROP TABLE people /* */;' '/*!40101 SET GLOBAL max_connections=1 */;' "/*!40101 SET sql_mode='NO_BACKSLASH_ESCAPES' */;" '/*!40101 SET @m=@@sql_mode, sql_mode=@m */;' \
+            "/*!40101 SET @x='NO_BACKSLASH_ESCAPES' */;" '/*!40101 SET character_set_client = gbk */;' '/*!40101 SET NAMES big5 */;' '/*!40101 SET @a=1, DROP DATABASE y */;' \
+            $'-- a comment with a vertical tab \v'; do
+            fresh_dump; dump_append "$stmt"
             dump_check "the statement '$stmt'" 'does not recognise'
         done
     fi
+    if want_case G25-dump-nul; then
+        fresh_dump; printf -- '-- a comment\0 with a NUL byte\n' >>"$T/dump.sql"
+        dump_check 'a NUL byte, which the line reader would drop' 'NUL byte'
+    fi
     if want_case G25-dump-create-body; then
-        fresh_dump; sed -i '0,/^  \x60id\x60 int(11) NOT NULL,$/s//DELETE FROM people;/' "$T/dump.sql"
-        dump_check 'a CREATE TABLE body with a statement in it' 'CREATE TABLE of the dump holds a line that is not part of one'
+        for line in 'DELETE FROM people;' '  \x60x\x60 int(11)); DROP DATABASE d; --' '  \x60x\x60 int(11) NOT NULL); DROP TABLE people; -- ,' '  \x60x\x60 int(11) NOT NULL, DROP TABLE y' '  DROP TABLE people;' \
+            '  KEY \x60k\x60 (\x60id\x60)); DROP TABLE people;' '  CONSTRAINT \x60c\x60 CHECK (1),' '  \x60x\x60 json NOT NULL,' '  \x60x\x60 int NOT NULL,' '  \x60x\x60 varchar(10) DEFAULT '"'"'a;b'"'"',' \
+            '  \x60x\x60 int(11) NOT NULL COMMENT '"'"'x'"'"',' '  \x60x\x60 int(11) NOT NULL DEFAULT (select 1),' '  \x60x\x60 int(11) GENERATED ALWAYS AS (1) VIRTUAL,' '  ' '' '   \x60x\x60 int(11) NOT NULL,' \
+            '  \x60x\x60 int(11) NOT NULL; DROP TABLE people;' '  PRIMARY KEY (\x60id\x60) USING BTREE,' '  \x60X\x60 int(11) NOT NULL,' '  FULLTEXT KEY \x60f\x60 (\x60id\x60),' \
+            '  CONSTRAINT \x60c\x60 FOREIGN KEY (\x60id\x60) REFERENCES \x60people\x60 (\x60id\x60) ON DELETE CASCADE; DROP TABLE y,' \
+            "$END_OF_TABLE"$' DROP DATABASE y;' ') ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;' ') ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;' \
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='x';" ') ENGINE=InnoDB;' ')'; do
+            fresh_dump; dump_after "$CREATE_JOBS" "$line"
+            dump_check "a CREATE TABLE body holding '${line//\\x60/\`}'" 'not a column or key of the forms the schema uses'
+        done
+    fi
+    if want_case G25-dump-create-last; then
+        fresh_dump; dump_replace '  PRIMARY KEY (\x60id\x60)' '  PRIMARY KEY (\x60id\x60),'
+        dump_check 'a CREATE TABLE whose last line has a comma' 'no column, or its last line has a comma'
+        fresh_dump; sed -i '/^CREATE TABLE \x60jobs\x60 (/,/^) ENGINE/{/^  /d}' "$T/dump.sql"
+        dump_check 'a CREATE TABLE with no column' 'no column, or its last line has a comma'
+    fi
+    if want_case G25-dump-create-commas; then
+        fresh_dump; sed -i '/^CREATE TABLE \x60jobs\x60 (/,/^) ENGINE/s/^  \x60id\x60 int(11) NOT NULL,$/  \x60id\x60 int(11) NOT NULL/' "$T/dump.sql"
+        dump_check 'two lines of a body with no comma between them' 'a line after one that has no comma'
+    fi
+    if want_case G25-dump-create-reference; then
+        fresh_dump; dump_after "$CREATE_JOBS" '  \x60x\x60 int(11) NOT NULL,\n  CONSTRAINT \x60jobs_x_foreign\x60 FOREIGN KEY (\x60x\x60) REFERENCES \x60other\x60 (\x60id\x60),'
+        dump_check 'a foreign key to a table that is not one of the 34' 'references a table that is not one of the 34'
+        fresh_dump; dump_after "$CREATE_JOBS" '  \x60x\x60 int(11) NOT NULL,\n  CONSTRAINT \x60jobs_x_foreign\x60 FOREIGN KEY (\x60x\x60) REFERENCES \x60people\x60 (\x60id\x60) ON DELETE CASCADE ON UPDATE NO ACTION,'
+        dump_check 'a foreign key to a table of the schema' ''
     fi
     if want_case G25-dump-row-form; then
         fresh_dump; sed -i '0,/^INSERT INTO \x60people\x60 VALUES$/s//&\nSELECT 1;/' "$T/dump.sql"
-        dump_check 'an INSERT with a statement among its rows' 'INSERT of the dump holds a line that is not a row'
+        dump_check 'an INSERT with a statement among its rows' 'not a row of literal values'
         fresh_dump; sed -i '0,/^INSERT INTO \x60people\x60 VALUES$/s//&\n/' "$T/dump.sql"
-        dump_check 'an INSERT with a blank line among its rows' 'INSERT of the dump holds a line that is not a row'
+        dump_check 'an INSERT with a blank line among its rows' 'not a row of literal values'
+        for line in '(1); DROP TABLE people;' '(1);DELETE FROM people;' '(1)); DROP DATABASE x; --' "(1,'a'); INSERT INTO other VALUES (2);" '(1),(2);' '(1),(2),' '(1) , (2),' "(1,'a" "(1,'a')x," '(1,foo),' '(1,@x),' '(1,(SELECT 1)),' '(1,now()),' \
+            "(1,'a''b')'c')," "(1,'a'" "(1,'a');  " "(1,'a') ;" ' (1),' $'(1)\r,' '(),' '(1,),' "(1,'a'  ,2)," "(1,'a'/*x*/)," '(1,0xZZ),' '(1,-),' '(1,1.),' "(1,_utf8 'a')," "(1,N'a'),"; do
+            fresh_dump; dump_replace '(1),' "$line"
+            dump_check "the row line '$line'" 'not a row of literal values'
+        done
     fi
     if want_case G25-dump-complete; then
-        fresh_dump; printf 'CREATE TABLE \x60people\x60 (\n  \x60id\x60 int\n' >>"$T/dump.sql"
+        fresh_dump; printf 'CREATE TABLE \x60people\x60 (\n  \x60id\x60 int(11) NOT NULL,\n' >>"$T/dump.sql"
         dump_check 'a dump that ends inside a CREATE TABLE' 'ends inside a statement'
-        fresh_dump; printf 'INSERT INTO \x60people\x60 VALUES\n(1),\n' >>"$T/dump.sql"
+        fresh_dump; table="$(grep -n '^(1),$' "$T/dump.sql" | head -1 | cut -d: -f1)"; head -n "$table" "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
         dump_check 'a dump that ends inside an INSERT' 'ends inside a statement'
+        fresh_dump; table="$(grep -n '^UNLOCK TABLES;$' "$T/dump.sql" | tail -1 | cut -d: -f1)"; head -n "$((table - 1))" "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+        dump_check 'a dump that ends between a LOCK TABLES and its UNLOCK' 'ends inside a statement'
     fi
     if want_case G25-dump-creates; then
         fresh_dump; sed -i '/^CREATE TABLE \x60jobs\x60 (/,/^) ENGINE/d' "$T/dump.sql"
         dump_check 'a table whose structure is missing' 'does not create exactly the 34 tables'
-        fresh_dump; printf 'CREATE TABLE \x60jobs\x60 (\n  \x60id\x60 int\n) ENGINE=InnoDB;\n' >>"$T/dump.sql"
+        fresh_dump; extra_table jobs >>"$T/dump.sql"
         dump_check 'a table created twice' 'does not create exactly the 34 tables'
-        fresh_dump; printf 'CREATE TABLE \x60extra\x60 (\n  \x60id\x60 int\n) ENGINE=InnoDB;\n' >>"$T/dump.sql"
+        fresh_dump; extra_table extra >>"$T/dump.sql"
         dump_check 'a 35th table' 'does not create exactly the 34 tables'
     fi
     if want_case G25-dump-drops; then
@@ -7991,6 +8082,12 @@ t_g25_current_dump_contract() {
         dump_check 'a table that is not dropped before it is created' 'does not drop exactly the 34 tables'
         fresh_dump; printf 'DROP TABLE IF EXISTS \x60jobs\x60;\n' >>"$T/dump.sql"
         dump_check 'a table dropped twice' 'does not drop exactly the 34 tables'
+        fresh_dump; printf 'DROP TABLE IF EXISTS \x60other\x60;\n' >>"$T/dump.sql"
+        dump_check 'a table that is not one of the 34, dropped' 'does not drop exactly the 34 tables'
+    fi
+    if want_case G25-dump-create-order; then
+        fresh_dump; sed -i '/^DROP TABLE IF EXISTS \x60jobs\x60;$/d' "$T/dump.sql"; printf 'DROP TABLE IF EXISTS \x60jobs\x60;\n' >>"$T/dump.sql"
+        dump_check 'a table dropped after it is created' 'creates the table jobs before it drops it'
     fi
     if want_case G25-dump-unknown-table; then
         fresh_dump; printf 'INSERT INTO \x60other\x60 VALUES\n(1);\n' >>"$T/dump.sql"
@@ -8002,6 +8099,58 @@ t_g25_current_dump_contract() {
         fresh_dump; printf 'INSERT INTO \x60cache\x60 VALUES\n(1),\n(2);\n' >>"$T/dump.sql"
         dump_check 'rows of another transient table' 'rows for the transient table cache'
     fi
+    if want_case G25-dump-lock-known; then
+        fresh_dump; dump_append 'LOCK TABLES \x60other\x60 WRITE;\nUNLOCK TABLES;'
+        dump_check 'a LOCK TABLES of a table that is not one of the 34' 'LOCK TABLES of the dump names a table that is not one of the 34'
+    fi
+    if want_case G25-dump-lock-transient; then
+        fresh_dump; dump_append 'LOCK TABLES \x60sessions\x60 WRITE;\nUNLOCK TABLES;'
+        dump_check 'a LOCK TABLES of a transient table' 'names the transient table sessions'
+    fi
+    if want_case G25-dump-lock-context; then
+        fresh_dump; dump_after "$DISABLE_PEOPLE" 'LOCK TABLES \x60accounts\x60 WRITE;'
+        dump_check 'a LOCK TABLES inside another' 'nested, repeated, or for a table not created before it'
+        fresh_dump; dump_append 'LOCK TABLES \x60people\x60 WRITE;\nUNLOCK TABLES;'
+        dump_check 'a table locked twice' 'nested, repeated, or for a table not created before it'
+        fresh_dump; dump_before 'DROP TABLE IF EXISTS \x60accounts\x60;' 'LOCK TABLES \x60people\x60 WRITE;\nUNLOCK TABLES;'
+        dump_check 'a table locked before it is created' 'nested, repeated, or for a table not created before it'
+    fi
+    if want_case G25-dump-keys-known; then
+        fresh_dump; dump_append '/*!40000 ALTER TABLE \x60other\x60 DISABLE KEYS */;'
+        dump_check 'an ALTER TABLE of a table that is not one of the 34' 'ALTER TABLE of the dump names a table that is not one of the 34'
+    fi
+    if want_case G25-dump-keys-context; then
+        fresh_dump; dump_append '/*!40000 ALTER TABLE \x60people\x60 DISABLE KEYS */;'
+        dump_check 'an ALTER TABLE outside a LOCK TABLES' 'not for the table that is locked, or is out of order'
+        fresh_dump; dump_replace "$DISABLE_PEOPLE" '/*!40000 ALTER TABLE \x60accounts\x60 DISABLE KEYS */;'
+        dump_check 'an ALTER TABLE of another table than the one locked' 'not for the table that is locked, or is out of order'
+        fresh_dump; dump_after "$DISABLE_PEOPLE" "$DISABLE_PEOPLE"
+        dump_check 'keys disabled twice' 'not for the table that is locked, or is out of order'
+        fresh_dump; dump_replace "$DISABLE_PEOPLE" "$ENABLE_PEOPLE"
+        dump_check 'keys enabled before they are disabled' 'not for the table that is locked, or is out of order'
+    fi
+    if want_case G25-dump-unlock-context; then
+        fresh_dump; dump_append 'UNLOCK TABLES;'
+        dump_check 'an UNLOCK TABLES with nothing locked' 'not for a table it locked, or leaves the keys of one disabled'
+        fresh_dump; dump_replace "$ENABLE_PEOPLE" ''
+        dump_check 'an UNLOCK TABLES that leaves the keys disabled' 'not for a table it locked, or leaves the keys of one disabled'
+    fi
+    if want_case G25-dump-insert-context; then
+        fresh_dump; dump_append 'INSERT INTO \x60contact_tags\x60 VALUES\n(1);'
+        dump_check 'rows outside any LOCK TABLES' 'INSERT of the dump is not for the table that is locked'
+        fresh_dump; dump_after "$DISABLE_PEOPLE" 'INSERT INTO \x60accounts\x60 VALUES\n(1);'
+        dump_check 'rows of another table than the one locked' 'INSERT of the dump is not for the table that is locked'
+        fresh_dump; dump_after "$ENABLE_PEOPLE" 'INSERT INTO \x60people\x60 VALUES\n(1);'
+        dump_check 'rows after the keys are enabled again' 'INSERT of the dump is not for the table that is locked'
+    fi
+    if want_case G25-dump-locked-only; then
+        fresh_dump; dump_after "$DISABLE_PEOPLE" 'DROP TABLE IF EXISTS \x60people\x60;'
+        dump_check 'a DROP TABLE inside a LOCK TABLES' 'between a LOCK TABLES and its UNLOCK'
+        fresh_dump; dump_after "$DISABLE_PEOPLE" '/*!40101 SET NAMES utf8mb4 */;'
+        dump_check 'a SET inside a LOCK TABLES' 'between a LOCK TABLES and its UNLOCK'
+        fresh_dump; dump_after "$DISABLE_PEOPLE" 'DELETE FROM people;'
+        dump_check 'a DELETE inside a LOCK TABLES' 'between a LOCK TABLES and its UNLOCK'
+    fi
     if want_case G25-dump-rows; then
         fresh_dump; sed -i 's/^people 14 /people 15 /' "$T/measured.txt"
         dump_check 'a durable table with a row fewer than the database held' 'holds 14 row(s) for the durable table people, and the database held 15'
@@ -8009,7 +8158,7 @@ t_g25_current_dump_contract() {
         dump_check 'a durable table with a row more than the database held' 'holds 14 row(s) for the durable table people, and the database held 13'
         fresh_dump; sed -i '/^INSERT INTO \x60resource_assets\x60 VALUES$/,/;$/d' "$T/dump.sql"
         dump_check 'a durable table that held rows and has none in the dump' 'holds 0 row(s) for the durable table resource_assets, and the database held 4'
-        fresh_dump; printf 'INSERT INTO \x60contact_tags\x60 VALUES\n(1);\n' >>"$T/dump.sql"
+        fresh_dump; dump_after '/*!40000 ALTER TABLE \x60contact_tags\x60 DISABLE KEYS */;' 'INSERT INTO \x60contact_tags\x60 VALUES\n(1);'
         dump_check 'rows for a durable table that held none' 'holds 1 row(s) for the durable table contact_tags, and the database held 0'
     fi
 }
@@ -8181,13 +8330,13 @@ t_g25_recovery_unit_manifest_is_verified() {
     unit_case G25-rm-lists 'a durable list that is not the contract' "not the contract's 27 and 7" 's/"tables_with_data": \["account_invitations", /"tables_with_data": [/'
     unit_case G25-rm-structure 'a structure digest that was changed' 'structure digest is not that of the structure digests it lists' "s/\\(\"name\": \"people\", .*\"structure_sha256\": \"\\)[0-9a-f]\\{64\\}/\\1$(zeros)/"
     unit_case G25-rm-structure 'an aggregate structure digest that was changed' 'structure digest is not that of the structure digests it lists' "s/^  \"structure_sha256\": \"[0-9a-f]*\"/  \"structure_sha256\": \"$(zeros)\"/"
-    unit_case G25-rm-dump-content 'a manifest that says the database held one row more' 'the dump is not what the manifest says the database held' 's/"name": "people", "class": "durable", "rows": 14,/"name": "people", "class": "durable", "rows": 15,/'
+    unit_case G25-rm-dump-content 'a manifest that says the database held one row more' 'the dump is not consistent with the manifest' 's/"name": "people", "class": "durable", "rows": 14,/"name": "people", "class": "durable", "rows": 15,/'
     if want_case G25-rm-dump-content; then
         paired_world; install_paired
         sed -i '/^INSERT INTO \x60resource_assets\x60 VALUES$/,/;$/d' "$T/root/current.dump.sql"
         # (the dump changed, so the manifest is re-bound to it: the content check, not the checksum, is what this case is about)
         sed -i "s/\"database_dump_sha256\": \"[0-9a-f]*\"/\"database_dump_sha256\": \"$(sha256sum <"$T/root/current.dump.sql" | cut -c1-64)\"/; s/\"database_dump_bytes\": [0-9]*,/\"database_dump_bytes\": $(wc -c <"$T/root/current.dump.sql" | tr -d ' '),/" "$T/root/recovery.manifest.json"
-        unit_check 'a dump that lost the rows of a table, with its checksum corrected' 'the dump is not what the manifest says the database held'
+        unit_check 'a dump that lost the rows of a table, with its checksum corrected' 'the dump is not consistent with the manifest'
     fi
     unit_case G25-rm-inventory 'another inventory digest' 'inventory digest is not that of the files' "s/\"resources_inventory_sha256\": \"[0-9a-f]*\"/\"resources_inventory_sha256\": \"$(zeros)\"/"
     unit_case G25-rm-assets 'a file count that is not the asset rows' 'not one number' 's/"resources_files_count": 4,/"resources_files_count": 3,/'
@@ -8296,6 +8445,89 @@ t_g25_recovery_unit_substitutions() {
 }
 
 # --- the two profiles ---
+
+# --- R2 and R3 of the WU4 review ---
+
+# What the unit check establishes and what it does not. It establishes the integrity of the artifacts (checksums, sizes, the archive against its manifest) and the structural
+# consistency of the dump and the manifest (the statement forms, the inventory, the number of ROW LINES of each durable table against the recorded count). It does not read a
+# row's content from the dump and derives no digest from it, and the recorded digests are the first measurement's, not authenticated: those are checked by measuring a RESTORED
+# database and comparing it with the manifest (WU5's verification; docs, "the contract for WU5"). The cases below make the difference executable, so that the limit is a thing
+# a test states and not a sentence that can be read as more than it says.
+rebind_dump() { # the dump in the state directory as the manifest's: its SHA-256 and its size written into recovery.manifest.json
+    sed -i "s/\"database_dump_sha256\": \"[0-9a-f]*\"/\"database_dump_sha256\": \"$(sha256sum <"$T/root/current.dump.sql" | cut -c1-64)\"/; s/\"database_dump_bytes\": [0-9]*,/\"database_dump_bytes\": $(wc -c <"$T/root/current.dump.sql" | tr -d ' '),/" "$T/root/recovery.manifest.json"
+}
+t_g25_recovery_unit_verification_boundary() {
+    local before after
+    ensure_paired_cache
+    # Row COUNT agreement is verified: a dump that lost a row of a durable table is refused, whatever its checksum.
+    paired_world; install_paired
+    sed -i '/^INSERT INTO \x60people\x60 VALUES$/{n;d}' "$T/root/current.dump.sql"
+    rebind_dump
+    unit_check 'a dump with a row fewer, its checksum and size re-recorded' 'holds 13 row(s) for the durable table people, and the database held 14'
+    # Row CONTENT agreement is not: a dump with the same number of rows and another value in one, its checksum and size re-recorded, is accepted. This is the limit, stated.
+    paired_world; install_paired
+    sed -i '0,/^(1),$/s//(999),/' "$T/root/current.dump.sql"
+    rebind_dump
+    before="$(sha256sum <"$T/root/current.dump.sql")"
+    unit_check 'a dump with one row changed and the same number of rows, its checksum and size re-recorded (accepted: the unit check does not read row content)' ''
+    [[ "$(sha256sum <"$T/root/current.dump.sql")" == "$before" ]] || bad 'the unit check changed the dump'
+    # The recorded digests are not derived from anything in the unit: a changed recorded row digest is accepted too. It is the restored database's digest, compared with it, that
+    # shows the rows came back as recorded.
+    paired_world; install_paired
+    sed -i 's/"name": "people", "class": "durable", "rows": 14, "row_sha256": "[0-9a-f]*"/"name": "people", "class": "durable", "rows": 14, "row_sha256": "'"$(zeros)"'"/' "$T/root/recovery.manifest.json"
+    unit_check 'a manifest whose recorded row digest of a table is another (accepted: it is evidence to compare a restored database with, not a fact derived from the dump)' ''
+    # What IS held: the dump the manifest binds by checksum cannot be another one without the manifest being changed to match.
+    paired_world; install_paired
+    sed -i '0,/^(1),$/s//(999),/' "$T/root/current.dump.sql"
+    unit_check 'a dump with one row changed and the checksum not re-recorded' "dump's SHA-256 is not the manifest's"
+}
+
+# R3: the three phases of a stage that stops are told apart by the files that are really there.
+paired_files_hash() { (cd "$T/root" && sha256sum "${PAIRED_FILES[@]}" 2>/dev/null || true); }
+t_g25_paired_failure_phases_are_told_apart() {
+    local before
+    # Phase 1: before anything was put in place.
+    paired_world; touch "$W/dump_fail"
+    run_script -- backup-paired
+    paired_nothing_in_place 'phase 1'
+    expect_has 'phase 1: nothing was put in place' "$ERR" 'Nothing of this backup was put in place.'
+    [[ "$ERR" != *'put in place (recovery.manifest.json last)'* && "$ERR" != *'These parts'* ]] || bad "phase 1: the note speaks of files that were put in place: ${ERR:0:300}"
+    # Phase 2: some files were put in place and the recovery manifest was not, because a file of that name appeared (a file of another's: it is not part of this backup).
+    paired_world
+    printf 'printf planted >"%s/root/recovery.manifest.json"; chmod 600 "%s/root/recovery.manifest.json"\n' "$T" "$T" >"$W/after_files_verify_archive"
+    run_script -- backup-paired
+    expect_refused 'phase 2: the commit point is taken' 'recovery.manifest.json is in the state directory already, and a backup is never put over a file'
+    expect_has 'phase 2: what was put in place' "$ERR" 'current.dump.sql resources.archive.tar.gz resources.manifest.json'
+    expect_has 'phase 2: it is not a unit' "$ERR" 'recovery.manifest.json was not written, so they are NOT a recovery unit'
+    expect_has 'phase 2: the file there is not this stage' "$ERR" 'A file named recovery.manifest.json is in the state directory that this stage did not write'
+    [[ "$(<"$T/root/recovery.manifest.json")" == planted ]] || bad 'phase 2: the file that was there was overwritten'
+    [[ -s "$T/root/current.dump.sql" && -s "$T/root/resources.archive.tar.gz" && -s "$T/root/resources.manifest.json" ]] || bad 'phase 2: a file that was put in place was removed'
+    if compgen -G "$T/root/.paired.*" >/dev/null; then bad 'phase 2: a temporary file was left'; fi
+    # Phase 3: the recovery manifest was put in place, and the final verification failed. Four files exist; the note does not call them a backup.
+    paired_world
+    run_fn "require_recovery_unit() { refuse 'the final verification, forced to fail for the test'; }; main backup-paired"
+    expect_rc 'phase 3: the final verification fails' 3
+    expect_has 'phase 3: the cause' "$ERR" 'forced to fail for the test'
+    expect_has 'phase 3: all four files are there' "$ERR" 'All four files were put in place (recovery.manifest.json last) but the stage failed before it had verified them as put in place'
+    expect_has 'phase 3: no reliance' "$ERR" 'only require_recovery_unit accepting them makes them one, and nothing may rely on them until it does'
+    expect_has 'phase 3: nothing was repaired' "$ERR" 'Nothing was removed or repaired'
+    [[ "$ERR" != *'NOT a recovery unit'* && "$ERR" != *'require_recovery_unit accepted them'* ]] || bad "phase 3: the note says the files are not a unit, or that they were accepted: ${ERR:0:400}"
+    local f
+    for f in "${PAIRED_FILES[@]}"; do [[ -s "$T/root/$f" ]] || bad "phase 3: $f was removed"; done
+    if compgen -G "$T/root/.paired.*" >/dev/null; then bad 'phase 3: a temporary file was left'; fi
+    # The authority is require_recovery_unit: the real one accepts what is there (nothing was changed), and the files are as they were.
+    before="$(paired_files_hash)"
+    unit_check 'phase 3: the files the stage left, judged by require_recovery_unit itself' ''
+    [[ "$(paired_files_hash)" == "$before" ]] || bad 'phase 3: judging the files changed them'
+    # Phase 3, later: the final verification passed and the stage failed after it. The note says that, and no more.
+    paired_world
+    # shellcheck disable=SC2016 # the code is run by the inner bash
+    run_fn 'say() { case "$*" in *"binds the dump"*) exit 1 ;; esac; printf "%s\n" "$*"; }; main backup-paired'
+    expect_rc 'phase 3, later: the stage fails after the verification' 1
+    expect_has 'phase 3, later: accepted, then failed' "$ERR" 'recovery.manifest.json was put in place last, with current.dump.sql resources.archive.tar.gz resources.manifest.json, and require_recovery_unit accepted them; the stage failed after that'
+    expect_has 'phase 3, later: it is still the verifier that decides' "$ERR" 'Whether they may be relied on is for require_recovery_unit to say again'
+    [[ "$ERR" != *'NOT a recovery unit'* ]] || bad "phase 3, later: the note says the files are not a unit: ${ERR:0:400}"
+}
 
 # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
 t_g25_the_profiles_are_separate() {
@@ -8699,6 +8931,19 @@ declare -A GUARD_TESTS=(
     [G25-assets-two-readers]='t_g25_paired_the_measurement_is_validated'
     [G25-commit-no-clobber]='t_g25_paired_failures_leave_nothing_that_looks_like_a_backup'
     [G25-dump-complete]='t_g25_current_dump_contract'
+    [G25-dump-create-last]='t_g25_current_dump_contract'
+    [G25-dump-create-commas]='t_g25_current_dump_contract'
+    [G25-dump-create-reference]='t_g25_current_dump_contract'
+    [G25-dump-create-order]='t_g25_current_dump_contract'
+    [G25-dump-nul]='t_g25_current_dump_contract'
+    [G25-dump-unlock-context]='t_g25_current_dump_contract'
+    [G25-dump-lock-known]='t_g25_current_dump_contract'
+    [G25-dump-lock-transient]='t_g25_current_dump_contract'
+    [G25-dump-lock-context]='t_g25_current_dump_contract'
+    [G25-dump-keys-known]='t_g25_current_dump_contract'
+    [G25-dump-keys-context]='t_g25_current_dump_contract'
+    [G25-dump-insert-context]='t_g25_current_dump_contract'
+    [G25-dump-locked-only]='t_g25_current_dump_contract'
     [G25-dump-create-body]='t_g25_current_dump_contract'
     [G25-dump-creates]='t_g25_current_dump_contract'
     [G25-dump-drops]='t_g25_current_dump_contract'

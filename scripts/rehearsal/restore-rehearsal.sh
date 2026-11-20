@@ -122,8 +122,9 @@
 #       starts only from the upgraded 34-table database with the four seeded Resource files and their asset rows, measures database and directory before and after BOTH artifacts
 #       and refuses any difference, checks the dump line by line against the forms in current_dump_problem (an unrecognised statement is a refusal, a durable table with no rows
 #       needs no INSERT, and every durable table's rows are those the first measurement counted), verifies the archive, and puts nothing in place until the whole recovery unit is
-#       verified (recovery_unit_problem: every fact recomputed from the files, the document exactly what is written from them). It claims no change was OBSERVED, never an atomic
-#       snapshot (cmd_backup_paired says why). Nothing is overwritten and the recovery manifest is the last file put in place: without it the others are not a recovery unit.
+#       verified (recovery_unit_problem: the artifacts' integrity and the dump's and the manifest's structural consistency; it does NOT read a row's content from the dump, and
+#       what the restored database holds is for the restore's own verification to establish). It claims no change was OBSERVED, never an atomic snapshot (cmd_backup_paired
+#       says why). Nothing is overwritten and the recovery manifest is the last file put in place: without it the others are not a recovery unit.
 #
 # Exit status: 0 success; 1 a failure; 3 a safeguard refused; 64 usage.
 set -Eeuo pipefail
@@ -210,16 +211,43 @@ readonly CURRENT_RELEASE_VERSION='unreleased'                 # the tree under t
 readonly CURRENT_LEDGER_COUNT=29                              # the migrations of the current schema: v0.3.0's 15 and the 14 after; scripts/tests/rehearsal.sh pins both against the repository
 readonly CURRENT_LAST_MIGRATION='2026_10_11_000001_add_provenance_to_contact_methods'
 readonly BT=$'\x60' # a backtick, for the dump's quoted table names
-# The only statement forms a current-profile dump may hold outside a CREATE TABLE body and the rows of an INSERT (current_dump_problem); everything else is refused.
-readonly DUMP_SET_RE='^/\*(M!|!)[0-9]{5,6} SET [^;]* \*/;$'
+readonly BS=$'\\' # a backslash, which a comment of the dump may not hold
+# The only line forms a current-profile dump may hold (current_dump_problem); a line of any other form is refused. Each is a pattern for ONE line and is as narrow as the
+# real tool's output allows: a variable, a column type or an ENGINE option this list does not name is a refusal, so that what is accepted is only what is recognised.
+# They are NOT a SQL parser and they do not prove an arbitrary dump safe: they decide whether the dump is made only of the statement forms the fixed two-pass contract
+# writes. What they were composed from, and what has not been seen from a real 34-table dump, is the development note's "WU4" section.
+readonly DUMP_COMMENT_RE=$'^--( [ -~\t]*)?$'                    # `--` alone, or `-- ` and printable ASCII or tabs (a backslash is refused beside it: current_dump_problem)
 readonly DUMP_SANDBOX_RE='^/\*M!999999\\- enable the sandbox mode \*/$'
+# A conditional `SET`, matched against the line in lower case: only the variables mariadb-dump sets, to the kinds of value it sets them to, and nothing else between
+# `/*!NNNNN` and `*/;`, so that a statement cannot hide in a comment the server would run. Two variables change how the rest of the file is READ, and so are held to the
+# values the real dump gives them: sql_mode (a dump could otherwise switch on NO_BACKSLASH_ESCAPES, which turns the backslash in a string into data and a quote that
+# the row check treated as escaped into the end of the string) and the character sets (a multi-byte set can swallow a backslash). A user variable may only be given a system variable.
+readonly DUMP_SET_USER="@[a-z0-9_]+ *= *@@[a-z0-9_]+"
+readonly DUMP_SET_CHARSET="(character_set_client|character_set_results|collation_connection) *= *(@[a-z0-9_]+|@@[a-z0-9_]+|utf8(mb[34])?|utf8mb4_[a-z0-9_]+|binary)"
+readonly DUMP_SET_SYSTEM="(unique_checks|foreign_key_checks|sql_notes|note_verbosity|time_zone) *= *(@[a-z0-9_]+|@@[a-z0-9_]+|[a-z0-9_]+|'[a-z0-9_,+:-]*')"
+readonly DUMP_SET_MODE="sql_mode *= *(@old_sql_mode|'no_auto_value_on_zero')"
+readonly DUMP_SET_ASSIGN="(${DUMP_SET_USER}|${DUMP_SET_CHARSET}|${DUMP_SET_SYSTEM}|${DUMP_SET_MODE})"
+readonly DUMP_SET_RE="^/\\*(m!|!)[0-9]{5,6} set (names (utf8(mb[34])?)|${DUMP_SET_ASSIGN}(, ${DUMP_SET_ASSIGN})*) \\*/;\$"
 readonly DUMP_KEYS_RE="^/\\*!40000 ALTER TABLE ${BT}([a-z0-9_]+)${BT} (DISABLE|ENABLE) KEYS \\*/;\$"
 readonly DUMP_DROP_RE="^DROP TABLE IF EXISTS ${BT}([a-z0-9_]+)${BT};\$"
 readonly DUMP_CREATE_RE="^CREATE TABLE ${BT}([a-z0-9_]+)${BT} \\(\$"
-readonly DUMP_CREATE_END_RE='^\) ENGINE=[A-Za-z]+( [^;]*)?;$'
 readonly DUMP_INSERT_RE="^INSERT INTO ${BT}([a-z0-9_]+)${BT} VALUES\$"
 readonly DUMP_LOCK_RE="^LOCK TABLES ${BT}([a-z0-9_]+)${BT} WRITE;\$"
-readonly DUMP_ROW_RE='^\(.*\)[,;]$'
+# The body of a CREATE TABLE, one line each, as SHOW CREATE TABLE writes the 34 tables of the current schema (apps/platform/tests/Fixtures/rehearsal/current-create-tables.sql
+# holds them, and a test holds that file to the migrated schema): a column (the types and options the schema uses), PRIMARY KEY, [UNIQUE] KEY and a FOREIGN KEY, each with
+# its comma except the last line; and the closing line. A column type, a table option or an ENGINE the schema does not use is not accepted.
+readonly DUMP_ID="${BT}[a-z0-9_]+${BT}"
+readonly DUMP_IDS="${DUMP_ID}(,${DUMP_ID})*"
+readonly DUMP_COLUMN_RE="^  ${DUMP_ID} ((tiny|small|medium|big)?int\\([0-9]{1,3}\\)( unsigned)?|(var)?char\\([0-9]{1,5}\\)|(tiny|medium|long)?text|datetime|timestamp)( CHARACTER SET [a-z0-9_]+ COLLATE [a-z0-9_]+)?( NOT NULL| DEFAULT NULL)?( DEFAULT ('[^'\\\;]*'|-?[0-9]+|current_timestamp\\(\\)))?( AUTO_INCREMENT)?( CHECK \\(json_valid\\(${DUMP_ID}\\)\\))?,?\$"
+readonly DUMP_PRIMARY_RE="^  PRIMARY KEY \\(${DUMP_IDS}\\),?\$"
+readonly DUMP_KEY_RE="^  (UNIQUE )?KEY ${DUMP_ID} \\(${DUMP_IDS}\\),?\$"
+readonly DUMP_FOREIGN_RE="^  CONSTRAINT ${DUMP_ID} FOREIGN KEY \\(${DUMP_IDS}\\) REFERENCES ${DUMP_ID} \\(${DUMP_IDS}\\)( ON (DELETE|UPDATE) (CASCADE|SET NULL|RESTRICT|NO ACTION))*,?\$"
+readonly DUMP_REFERENCES_RE="REFERENCES ${BT}([a-z0-9_]+)${BT} "
+readonly DUMP_CREATE_END_RE='^\) ENGINE=InnoDB( AUTO_INCREMENT=[0-9]+)? DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;$'
+# One row of an INSERT, on its own line: `(`, one or more values, `)`, and `,` or `;`. A value is NULL, a number, a hexadecimal literal or a quoted string (with the
+# backslash escapes mariadb-dump writes); nothing else may stand between the parentheses, so a `;` outside a string, or a second statement, cannot be part of a row line.
+readonly DUMP_ROW_VALUE="(NULL|-?[0-9]+(\\.[0-9]+)?([eE][-+]?[0-9]+)?|0x[0-9A-Fa-f]+|(_binary )?'([^'\\\\]|\\\\.)*')"
+readonly DUMP_ROW_RE="^\\(${DUMP_ROW_VALUE}(,${DUMP_ROW_VALUE})*\\)[,;]\$"
 # One line of the recovery manifest's table list: the table, its class, its rows, the digest of its rows and of its structure.
 readonly RM_TABLE_RE='^    \{ "name": "([a-z0-9_]+)", "class": "(durable|transient)", "rows": (0|[1-9][0-9]{0,11}), "row_sha256": "([0-9a-f]{64})", "structure_sha256": "([0-9a-f]{64})" \},?$'
 # Slice 2.2C-1. The half-failed upgrade. A stub table is placed where the Relationships migration (the 11th of the 14 after v0.3.0) creates its THIRD table;
@@ -2070,67 +2098,113 @@ snapshot_value() {
 
 # current_dump_problem FILE TABLE_LINES: what the backup contract requires of the dump of the CURRENT schema, judged against what the database held when it was
 # taken (TABLE_LINES: `<table> <rows> <digest>` for each of the 34). Unlike dump_problem, which reads a v0.3.0 dump for table names alone, every line of the dump
-# must be one of the forms below; a statement of any other kind is a refusal, never skipped:
-#   comments (`--`), blank lines, the sandbox comment `/*M!999999\- enable ... */`, a conditional `/*!NNNNN SET ... */;` (and `/*M!NNNNNN SET ... */;`), the conditional
-#   `/*!40000 ALTER TABLE `t` DISABLE|ENABLE KEYS */;`, `DROP TABLE IF EXISTS `t`;`, a `CREATE TABLE `t` (` whose body is the lines indented by two spaces up to `) ENGINE=...;`,
-#   `LOCK TABLES `t` WRITE;`, `UNLOCK TABLES;`, and `INSERT INTO `t` VALUES` followed by one line for each row, `(...),` and the last `(...);`.
-# Then: exactly the 34 tables are created and dropped, once each; no transient table has an INSERT; each durable table has as many row lines as the database held
-# rows (so a durable table with no rows has none, and is not "missing"); and no table outside the 34 has anything. The row count of a dump is of its row LINES: a
-# row that mariadb-dump wrote over several lines is refused, not miscounted. NOT established against a live 34-table dump (docs, "WU4"): a form this list lacks
-# would refuse a good dump, which is the safe way to be wrong.
+# must be one of the forms named by the DUMP_*_RE patterns, and a line of any other form is a refusal, never skipped:
+#   comments, blank lines, the sandbox comment, a conditional `SET` of the variables mariadb-dump sets, `DROP TABLE IF EXISTS `t`;`, a `CREATE TABLE `t` (` with a body of
+#   columns and keys of the forms the schema uses and its closing `) ENGINE=InnoDB ...;`, `LOCK TABLES `t` WRITE;`, `/*!40000 ALTER TABLE `t` DISABLE|ENABLE KEYS */;`,
+#   `INSERT INTO `t` VALUES` and then one line for each row, `(...),` and the last `(...);`, and `UNLOCK TABLES;`.
+# Context is checked as well as form: a table named by a LOCK, an ALTER, an INSERT, a DROP, a CREATE or a foreign key must be one of the 34; a CREATE follows its DROP; a
+# LOCK is for a durable table that has been created, once, and ends in an UNLOCK; the ALTER and the INSERT are for the table that is locked, and DISABLE comes before ENABLE;
+# nothing else is between a LOCK and its UNLOCK. Then: exactly the 34 tables are created and dropped, once each; no transient table has an INSERT; each durable table has as
+# many row lines as the database held rows (so a durable table with no rows has none, and is not "missing"); and no table outside the 34 has anything.
+# What this is not: a SQL parser, and not a proof that arbitrary SQL is safe. It decides whether a file is made only of the line forms the two-pass dump writes, with the
+# rows' values held to the literal forms of a row; the row COUNT is checked against the measurement, a row's CONTENT is not (nothing here reads a row's values: that is
+# what the restored database's own digests are for, in WU5). A row that mariadb-dump wrote over several lines is refused, not miscounted. NOT established against a live
+# 34-table dump (docs, "WU4"): a form this list lacks would refuse a good dump, which is the safe way to be wrong.
 current_dump_problem() {
-    local file="$1" measured="$2" line state=top table='' lineno=0 name rows creates='' drops='' inventory
-    local -A rowcount=() inserted=()
+    local file="$1" measured="$2" line lower state=top table='' lineno=0 name rows creates='' drops='' inventory op want new ref ok seq=0
+    local locked='' keys=off body=0 comma=no
+    local -A rowcount=() dropidx=() createidx=() lockdone=() known=()
+    local LC_ALL=C
     [[ -f "$file" && ! -L "$file" ]] || { echo "it is not a regular file"; return 1; }
+    [[ "$(tr -d '\0' <"$file" | sha256sum)" == "$(sha256sum <"$file")" ]] || { echo "it holds a NUL byte"; return 1; } # guard:G25-dump-nul
+    inventory="$(upgraded_inventory)"
+    while read -r name; do known[$name]=1; done <<<"$inventory"
     while IFS= read -r line || [[ -n "$line" ]]; do
         lineno=$((lineno + 1))
         if [[ "$state" == create ]]; then
             if [[ "$line" =~ $DUMP_CREATE_END_RE ]]; then
+                [[ "$body" -ge 1 && "$comma" == no ]] || { echo "a CREATE TABLE of the dump has no column, or its last line has a comma (line $lineno)"; return 1; } # guard:G25-dump-create-last
                 state=top
                 continue
             fi
-            [[ "$line" == '  '* ]] || { echo "a CREATE TABLE of the dump holds a line that is not part of one (line $lineno)"; return 1; } # guard:G25-dump-create-body
+            [[ "$body" == 0 || "$comma" == yes ]] || { echo "a CREATE TABLE of the dump has a line after one that has no comma (line $lineno)"; return 1; } # guard:G25-dump-create-commas
+            ok=no
+            [[ "$line" =~ $DUMP_COLUMN_RE || "$line" =~ $DUMP_PRIMARY_RE || "$line" =~ $DUMP_KEY_RE ]] && ok=yes
+            if [[ "$ok" == no && "$line" =~ $DUMP_FOREIGN_RE ]]; then
+                ok=yes
+                [[ "$line" =~ $DUMP_REFERENCES_RE ]] && ref="${BASH_REMATCH[1]}" || ref=''
+                [[ -n "$ref" && -n "${known[$ref]:-}" ]] || { echo "a foreign key of the dump references a table that is not one of the 34 (line $lineno)"; return 1; } # guard:G25-dump-create-reference
+            fi
+            [[ "$ok" == yes ]] || { echo "a CREATE TABLE of the dump holds a line that is not a column or key of the forms the schema uses (line $lineno)"; return 1; } # guard:G25-dump-create-body
+            body=$((body + 1))
+            [[ "$line" == *, ]] && comma=yes || comma=no
             continue
         fi
         if [[ "$state" == insert ]]; then
-            [[ "$line" =~ $DUMP_ROW_RE ]] || { echo "an INSERT of the dump holds a line that is not a row (line $lineno)"; return 1; } # guard:G25-dump-row-form
+            [[ "$line" =~ $DUMP_ROW_RE ]] || { echo "an INSERT of the dump holds a line that is not a row of literal values (line $lineno)"; return 1; } # guard:G25-dump-row-form
             rowcount[$table]=$((${rowcount[$table]:-0} + 1))
             [[ "$line" != *';' ]] || state=top
             continue
         fi
-        [[ -z "$line" || "$line" == --* || "$line" == 'UNLOCK TABLES;' ]] && continue
-        [[ "$line" =~ $DUMP_SET_RE || "$line" =~ $DUMP_SANDBOX_RE || "$line" =~ $DUMP_KEYS_RE || "$line" =~ $DUMP_LOCK_RE ]] && continue
-        if [[ "$line" =~ $DUMP_DROP_RE ]]; then
-            drops+="${BASH_REMATCH[1]}"$'\n'
+        if [[ -z "$line" || ("$line" =~ $DUMP_COMMENT_RE && "$line" != *"$BS"*) ]]; then continue; fi
+        if [[ "$line" == 'UNLOCK TABLES;' ]]; then
+            [[ -n "$locked" && "$keys" != disabled ]] || { echo "an UNLOCK TABLES of the dump is not for a table it locked, or leaves the keys of one disabled (line $lineno)"; return 1; } # guard:G25-dump-unlock-context
+            locked=''
             continue
         fi
-        if [[ "$line" =~ $DUMP_CREATE_RE ]]; then
-            creates+="${BASH_REMATCH[1]}"$'\n'
-            state=create
+        if [[ "$line" =~ $DUMP_LOCK_RE ]]; then
+            name="${BASH_REMATCH[1]}"
+            [[ -n "${known[$name]:-}" ]] || { echo "a LOCK TABLES of the dump names a table that is not one of the 34 (line $lineno)"; return 1; } # guard:G25-dump-lock-known
+            ! in_array "$name" "${TRANSIENT_TABLES[@]}" || { echo "a LOCK TABLES of the dump names the transient table $name, which the data pass ignores (line $lineno)"; return 1; } # guard:G25-dump-lock-transient
+            [[ -z "$locked" && -z "${lockdone[$name]:-}" && -n "${createidx[$name]:-}" ]] || { echo "a LOCK TABLES of the dump is nested, repeated, or for a table not created before it (line $lineno)"; return 1; } # guard:G25-dump-lock-context
+            locked="$name" keys=off
+            lockdone[$name]=1
+            continue
+        fi
+        if [[ "$line" =~ $DUMP_KEYS_RE ]]; then
+            name="${BASH_REMATCH[1]}" op="${BASH_REMATCH[2]}"
+            [[ -n "${known[$name]:-}" ]] || { echo "an ALTER TABLE of the dump names a table that is not one of the 34 (line $lineno)"; return 1; } # guard:G25-dump-keys-known
+            if [[ "$op" == DISABLE ]]; then want=off new=disabled; else want=disabled new=enabled; fi
+            [[ "$locked" == "$name" && "$keys" == "$want" ]] || { echo "an ALTER TABLE ... $op KEYS of the dump is not for the table that is locked, or is out of order (line $lineno)"; return 1; } # guard:G25-dump-keys-context
+            keys="$new"
             continue
         fi
         if [[ "$line" =~ $DUMP_INSERT_RE ]]; then
             table="${BASH_REMATCH[1]}"
-            inserted[$table]=$((${inserted[$table]:-0} + 1))
+            [[ -n "${known[$table]:-}" ]] || { echo "it carries rows for a table that is not one of the 34"; return 1; } # guard:G25-dump-unknown-table
+            ! in_array "$table" "${TRANSIENT_TABLES[@]}" || { echo "it carries rows for the transient table $table"; return 1; } # guard:G25-dump-transient-empty
+            [[ "$locked" == "$table" && "$keys" != enabled ]] || { echo "an INSERT of the dump is not for the table that is locked (line $lineno)"; return 1; } # guard:G25-dump-insert-context
             state=insert
+            continue
+        fi
+        [[ -z "$locked" ]] || { echo "a statement between a LOCK TABLES and its UNLOCK is not one of the table's own (line $lineno)"; return 1; } # guard:G25-dump-locked-only
+        lower="${line,,}"
+        if [[ "$lower" =~ $DUMP_SET_RE || "$line" =~ $DUMP_SANDBOX_RE ]]; then continue; fi
+        if [[ "$line" =~ $DUMP_DROP_RE ]]; then
+            drops+="${BASH_REMATCH[1]}"$'\n'
+            seq=$((seq + 1))
+            [[ -n "${dropidx[${BASH_REMATCH[1]}]:-}" ]] || dropidx[${BASH_REMATCH[1]}]=$seq
+            continue
+        fi
+        if [[ "$line" =~ $DUMP_CREATE_RE ]]; then
+            creates+="${BASH_REMATCH[1]}"$'\n'
+            seq=$((seq + 1))
+            [[ -n "${createidx[${BASH_REMATCH[1]}]:-}" ]] || createidx[${BASH_REMATCH[1]}]=$seq
+            state=create body=0 comma=no
             continue
         fi
         echo "it has a statement this check does not recognise (line $lineno, begins '${line%% *}')"; return 1 # guard:G25-dump-unrecognised
     done <"$file"
-    [[ "$state" == top ]] || { echo "it ends inside a statement"; return 1; } # guard:G25-dump-complete
-    inventory="$(upgraded_inventory)"
+    [[ "$state" == top && -z "$locked" ]] || { echo "it ends inside a statement"; return 1; } # guard:G25-dump-complete
     [[ "$(printf '%s' "$creates" | LC_ALL=C sort)" == "$inventory" ]] || { echo "it does not create exactly the 34 tables of the current schema, once each"; return 1; } # guard:G25-dump-creates
     [[ "$(printf '%s' "$drops" | LC_ALL=C sort)" == "$inventory" ]] || { echo "it does not drop exactly the 34 tables it creates, once each"; return 1; } # guard:G25-dump-drops
-    for name in "${!inserted[@]}"; do
-        grep -Fxq -- "$name" <<<"$inventory" || { echo "it carries rows for a table that is not one of the 34"; return 1; } # guard:G25-dump-unknown-table
-    done
+    while read -r name; do
+        [[ "${dropidx[$name]}" -lt "${createidx[$name]}" ]] || { echo "it creates the table $name before it drops it"; return 1; } # guard:G25-dump-create-order
+    done <<<"$inventory"
     while read -r name rows _; do
         [[ -n "$name" ]] || continue
-        if in_array "$name" "${TRANSIENT_TABLES[@]}"; then
-            [[ -z "${inserted[$name]:-}" ]] || { echo "it carries rows for the transient table $name"; return 1; } # guard:G25-dump-transient-empty
-        else
-            [[ "${rowcount[$name]:-0}" == "$rows" ]] || { echo "it holds ${rowcount[$name]:-0} row(s) for the durable table $name, and the database held $rows"; return 1; } # guard:G25-dump-rows
-        fi
+        ! in_array "$name" "${TRANSIENT_TABLES[@]}" || continue
+        [[ "${rowcount[$name]:-0}" == "$rows" ]] || { echo "it holds ${rowcount[$name]:-0} row(s) for the durable table $name, and the database held $rows"; return 1; } # guard:G25-dump-rows
     done <<<"$measured"
     return 0
 }
@@ -2210,8 +2284,17 @@ structure_aggregate() { awk '{ print $1 " " $4 }' <<<"$1" | sha256sum | cut -c1-
 
 # recovery_unit_problem MANIFEST DUMP FILES_MANIFEST ARCHIVE: the four files are ONE recovery unit of this run, or the reason they are not. It takes the paths (the
 # temporary files before they are put in place, the final ones afterwards) and reads nothing from the database: it is what a restore may rely on before it touches
-# anything. Needs load_keyring. A manifest is never accepted because it says what it should: every fact in it is recomputed from the files, and the whole document must be
-# exactly what recovery_manifest_text writes from what it says (so an extra, missing, repeated or reordered line, or a changed value, is found).
+# anything. Needs load_keyring. What it establishes, in three groups, and what it does not:
+#   ARTIFACT INTEGRITY: the dump and the Resource-files archive are the files the manifest names, by SHA-256 and size; the Resource-files manifest is consistent with the
+#     archive (the L3b rules) and is the one the recovery manifest binds; the recovery manifest is of this run (the token's fingerprint) and of the commit the source was prepared from.
+#   STRUCTURAL CONSISTENCY: the dump is made only of the line forms current_dump_problem accepts, creates and drops exactly the 34 tables, and holds as many row LINES for each
+#     durable table as the manifest says the database held; the manifest's own facts agree with each other (the table list, the classes, the 27 and 7, the structure
+#     aggregate, the ledger, the keyring, the file count, the asset rows) and the whole document is exactly what recovery_manifest_text writes from what it says.
+#   NOT ESTABLISHED: that any table's rows in the dump are the rows the manifest's row digest was taken of (no row's value is read from the dump, and no digest is derived from
+#     it: a dump with the same number of rows and other content is accepted if its checksum is re-recorded); that the recorded structure digests describe the dump's structures;
+#     that the recorded digests are the database's (they are the first measurement's, recorded, not authenticated: the state directory is private to the run and a manifest is
+#     as trustworthy as the directory). Those are properties of the RESTORED database, and a restore establishes them by measuring it with snapshot-all and comparing with the
+#     manifest (docs, "WU4" and "the contract for WU5"). A unit that passes this check is intact and consistent, not proven to restore to the recorded content.
 recovery_unit_problem() {
     local m="$1" dump="$2" fm="$3" archive="$4" value why missing name rows row_sha struct_sha class line lines='' with_data schema_only fm_state
     RM_TAKEN='' RM_FP='' RM_COMMIT='' RM_SERVER='' RM_TABLES=''
@@ -2242,7 +2325,7 @@ recovery_unit_problem() {
     schema_only="$(manifest_names "$m" tables_schema_only)"
     [[ "$schema_only" == "$(sorted_list "${TRANSIENT_TABLES[@]}")" && "$with_data" == "$(current_durable_inventory)" ]] || { echo "its durable and schema-only tables are not the contract's 27 and 7"; return 1; } # guard:G25-rm-lists
     [[ "$(manifest_value "$m" structure_sha256)" == "$(structure_aggregate "$RM_TABLES")" ]] || { echo "its structure digest is not that of the structure digests it lists"; return 1; } # guard:G25-rm-structure
-    why="$(current_dump_problem "$dump" "$(awk '{ print $1 " " $2 " " $3 }' <<<"$RM_TABLES")")" || { echo "the dump is not what the manifest says the database held: $why"; return 1; } # guard:G25-rm-dump-content
+    why="$(current_dump_problem "$dump" "$(awk '{ print $1 " " $2 " " $3 }' <<<"$RM_TABLES")")" || { echo "the dump is not consistent with the manifest (its statement forms, table inventory or row counts): $why"; return 1; } # guard:G25-rm-dump-content
     why="$(files_manifest_problem "$fm")" || { echo "the Resource-files manifest cannot be relied on: $why"; return 1; } # guard:G25-rm-files-manifest
     [[ "$(manifest_value "$m" resources_manifest_file)" == "$FILES_MANIFEST_FILE" && "$(sha256sum <"$fm" | cut -c1-64)" == "$(manifest_value "$m" resources_manifest_sha256)" && "$(wc -c <"$fm" | tr -d ' ')" == "$(manifest_value "$m" resources_manifest_bytes)" ]] || { echo "the Resource-files manifest is not the one this manifest binds (its name, SHA-256 or size differs)"; return 1; } # guard:G25-rm-files-manifest-bound
     [[ "$(manifest_value "$m" taken_at)" == "$(manifest_value "$fm" taken_at)" ]] || { echo "the Resource-files manifest was not taken at the same time"; return 1; } # guard:G25-rm-taken-same
@@ -3266,6 +3349,7 @@ paired_measure() {
 
 PAIRED_TMPS=()
 PAIRED_COMMITTED=()
+PAIRED_VERIFIED=no # set when require_recovery_unit has accepted the files this stage put in place
 # paired_temp VAR: a private temporary file in the state directory for an artifact that is not yet a part of the backup, removed when the stage ends (on_paired_exit).
 paired_temp() {
     local tmp
@@ -3279,11 +3363,26 @@ commit_state_file() {
     ln -- "$1" "$ROOT/$2" 2>/dev/null || refuse "$2 is in the state directory already, and a backup is never put over a file. $(paired_partial_note)" # guard:G25-commit-no-clobber
     PAIRED_COMMITTED+=("$2")
 }
+# paired_partial_note: what is true of the state directory, in words, when the stage stops. Three phases are told apart by what the stage itself did (PAIRED_COMMITTED, the
+# names it put in place, and PAIRED_VERIFIED, set only once require_recovery_unit accepted them), never by assumption: (1) nothing was put in place; (2) some files were, and
+# the recovery manifest was not; (3) the recovery manifest was put in place, and the stage then failed, in the final verification or after it. In the third phase the files
+# may exist and may be a recovery unit, and nothing here says which: only require_recovery_unit accepting them makes them one. Nothing is removed, renamed or repaired.
 paired_partial_note() {
-    if ((${#PAIRED_COMMITTED[@]} > 0)); then
-        printf 'These parts of the backup were already in place: %s. %s was not written, so they are NOT a recovery unit, whatever they hold.' "${PAIRED_COMMITTED[*]}" "$RECOVERY_MANIFEST_FILE"
+    local part wrote=no placed=() other=''
+    for part in ${PAIRED_COMMITTED[@]+"${PAIRED_COMMITTED[@]}"}; do
+        if [[ "$part" == "$RECOVERY_MANIFEST_FILE" ]]; then wrote=yes; else placed+=("$part"); fi
+    done
+    if [[ "$wrote" == yes && "$PAIRED_VERIFIED" == yes ]]; then
+        printf '%s was put in place last, with %s, and require_recovery_unit accepted them; the stage failed after that. Nothing was removed. Whether they may be relied on is for require_recovery_unit to say again, not for this message.' "$RECOVERY_MANIFEST_FILE" "${placed[*]}"
+    elif [[ "$wrote" == yes ]]; then
+        printf 'All four files were put in place (%s last) but the stage failed before it had verified them as put in place. They may be a recovery unit and may not: only require_recovery_unit accepting them makes them one, and nothing may rely on them until it does. Nothing was removed or repaired.' "$RECOVERY_MANIFEST_FILE"
     else
-        printf 'Nothing of this backup was put in place.'
+        if [[ -e "$ROOT/$RECOVERY_MANIFEST_FILE" || -L "$ROOT/$RECOVERY_MANIFEST_FILE" ]]; then other=" A file named $RECOVERY_MANIFEST_FILE is in the state directory that this stage did not write, and it is not part of this backup."; fi
+        if ((${#placed[@]} > 0)); then
+            printf 'These parts of the backup were already in place: %s. %s was not written, so they are NOT a recovery unit, whatever they hold.%s' "${placed[*]}" "$RECOVERY_MANIFEST_FILE" "$other"
+        else
+            printf 'Nothing of this backup was put in place.%s' "$other"
+        fi
     fi
 }
 on_paired_exit() {
@@ -3379,10 +3478,11 @@ cmd_backup_paired() {
     commit_state_file "$fm_tmp" "$FILES_MANIFEST_FILE"
     commit_state_file "$rm_tmp" "$RECOVERY_MANIFEST_FILE" # the commit point
     require_recovery_unit
+    PAIRED_VERIFIED=yes
     say "ok   the dump creates and drops exactly the 34 tables, once each, and holds exactly the rows the first measurement counted for the 27 durable tables (nothing for the 7 transient ones): $dump_bytes bytes, sha256 ${dump_sha:0:16}..."
     say "ok   $m1_count Resource files archived and read back ($archive_bytes bytes, sha256 ${archive_sha:0:16}...), each the key, size and SHA-256 the asset rows and the directory agree on"
     say "ok   keyring: current $CURRENT_FP, previous $PREVIOUS_FP, ring $RING_FP (fingerprints only)"
-    say "ok   $RECOVERY_MANIFEST_FILE binds the dump, the archive and the Resource-files manifest by SHA-256 and size, the 34 tables' rows and structure, the ledger and the keyring; it was verified from the files as put in place"
+    say "ok   $RECOVERY_MANIFEST_FILE binds the dump, the archive and the Resource-files manifest by SHA-256 and size, and records the 34 tables' rows and structure, the ledger and the keyring; the files as put in place were verified for integrity and structural consistency, and the restored CONTENT is not verified by this stage (a restore measures it)"
     say "Paired backup done: no change was observed between the two measurements around both artifacts. This is not an atomic snapshot; see the development note, 'WU4'."
 }
 

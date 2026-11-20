@@ -123,3 +123,22 @@ it('does not depend on the order the rows were written in', function (): void {
 
     expect(s22c3_take()['people'])->toBe($first);
 });
+
+/*
+ * R1 of the WU4 review. The backup's dump check (scripts/rehearsal/restore-rehearsal.sh, current_dump_problem) accepts the lines of a CREATE TABLE body only in the forms the
+ * schema uses, and scripts/tests/rehearsal.sh runs it over the fixture below. The fixture is what the migrated schema's own SHOW CREATE TABLE says, and mariadb-dump writes the
+ * same text for the structure of a table, so the check is held to the real column, key and foreign-key forms. This test is what keeps the fixture honest: a migration that
+ * changes a table makes it fail, and the remedy is to regenerate the fixture (the statements with AUTO_INCREMENT counters removed, each ending in `;`, in table order) and to
+ * widen the check only if it then refuses the new form. It is NOT a probe of mariadb-dump, whose complete output has not been read (docs, "WU4").
+ */
+it('has the CREATE TABLE statements of the migrated schema in the fixture the dump check is tested against', function (): void {
+    $text = '';
+    foreach (Snapshot::TABLES as $table) {
+        $row = (array) DB::selectOne("SHOW CREATE TABLE `$table`");
+        $statement = $row['Create Table'] ?? null;
+        Assert::assertIsString($statement);
+        $text .= preg_replace('/ AUTO_INCREMENT=\d+/', '', $statement).";\n";
+    }
+
+    expect($text)->toBe((string) file_get_contents(__DIR__.'/../../Fixtures/rehearsal/current-create-tables.sql'));
+});
