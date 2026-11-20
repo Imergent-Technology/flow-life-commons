@@ -11,6 +11,8 @@ use Illuminate\Encryption\Encrypter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Symfony\Component\Console\Output\BufferedOutput;
+use Tests\Support\CurrentSnapshot;
+use Tests\Support\CurrentSnapshotRefusal;
 use Tests\Support\HalfFailedShape;
 use Tests\Support\HistoricalFixture;
 use Tests\Support\HistoricalSnapshot;
@@ -26,6 +28,10 @@ use Tests\Support\UpgradeDatabase;
 //                  every table's structure.
 //   snapshot       in any tree: prints the per-table row digests of the 16 v0.3.0 tables and the structure digest of every table present
 //                  as they are now. Read-only.
+//   snapshot-all   (S2.2C-3 WU4) in the CURRENT tree: refuses unless the database is exactly the 34-table current schema (every table a base table) with the 29
+//                  migrations an upgrade from v0.3.0 leaves; prints the fingerprints of the keys the application used, one `all-table <table> <rows> <digest>`
+//                  line for each of the 34 tables (the rows in order of each table's primary key), the structure digest of each, and the ledger's count, last
+//                  migration and digest. A kind of its own, so nothing reads it as the 16 `table` lines of `snapshot`, which is unchanged. Read-only.
 //   mark           in the CURRENT tree: refuses unless the database is exactly the upgraded schema, then adds one clearly synthetic
 //                  post-upgrade Person and CRM profile, so a recovery can tell the upgraded state from the historical one.
 //   half-migrate   (S2.2C-1) in the CURRENT tree: refuses unless the database is exactly the 16 v0.3.0 tables plus the one stub table the script placed
@@ -243,7 +249,7 @@ function bootHttp(): array
 function loadSupport(): void
 {
     $support = dirname(__DIR__).'/current/tests/Support';
-    foreach (['HistoricalFixture', 'HistoricalSnapshot', 'UpgradeDatabase', 'Totp', 'HalfFailedShape'] as $class) {
+    foreach (['HistoricalFixture', 'HistoricalSnapshot', 'UpgradeDatabase', 'Totp', 'HalfFailedShape', 'CurrentSnapshot', 'CurrentSnapshotRefusal'] as $class) {
         if (! is_file("$support/$class.php")) {
             throw new HarnessRefusal("the test support file $class.php is not in the prepared source");
         }
@@ -327,6 +333,40 @@ function actionSnapshot(): void
     echo tableLines('table', HistoricalSnapshot::take($db));
     echo structureLines($db);
     echo "snapshot:complete=ok\n";
+}
+
+/**
+ * The current-schema counterpart of `snapshot` (S2.2C-3 WU4): the 34 tables, not the 16, and the ledger's identity. It is what the paired backup measures twice.
+ * Anything that is not exactly the current schema is a refusal, never a smaller snapshot.
+ */
+function actionSnapshotAll(): void
+{
+    [, $db] = bootApplication();
+    loadSupport();
+    try {
+        $tables = CurrentSnapshot::take($db);
+        $ledger = CurrentSnapshot::ledger($db);
+    } catch (CurrentSnapshotRefusal $refusal) {
+        throw new HarnessRefusal($refusal->getMessage());
+    }
+    if ($ledger !== migrationNames([...UpgradeDatabase::HISTORICAL, ...HistoricalFixture::UPGRADE_MIGRATIONS])) {
+        throw new HarnessRefusal('the migration ledger is not the 29 migrations of an upgrade from v0.3.0');
+    }
+    $evidence = CurrentSnapshot::evidence($ledger);
+
+    // The keys the application actually used, as fingerprints, so the wrapper can compare them with the keys it generated.
+    echo 'key:current='.keyFingerprint((string) config('app.key'))."\n";
+    $previous = array_map(static fn (mixed $key): string => keyFingerprint((string) $key), (array) config('app.previous_keys'));
+    sort($previous, SORT_STRING);
+    foreach ($previous as $fingerprint) {
+        echo "key:previous=$fingerprint\n";
+    }
+    echo CurrentSnapshot::lines($tables);
+    echo structureLines($db);
+    echo "ledger:count={$evidence['count']}\n";
+    echo "ledger:last={$evidence['last']}\n";
+    echo "ledger:digest={$evidence['digest']}\n";
+    echo "snapshot-all:complete=ok\n";
 }
 
 function actionMark(): void
@@ -566,10 +606,10 @@ function actionSignin(): void
 if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
     $actions = [
         'fixture-load' => 'actionFixtureLoad', 'snapshot' => 'actionSnapshot', 'mark' => 'actionMark', 'signin' => 'actionSignin',
-        'half-migrate' => 'actionHalfMigrate', 'revoke' => 'actionRevoke',
+        'half-migrate' => 'actionHalfMigrate', 'revoke' => 'actionRevoke', 'snapshot-all' => 'actionSnapshotAll',
     ];
     if ($argc !== 2 || ! isset($actions[$argv[1]])) {
-        fwrite(STDERR, "usage: rehearse.php fixture-load|snapshot|mark|signin|half-migrate|revoke\n");
+        fwrite(STDERR, "usage: rehearse.php fixture-load|snapshot|snapshot-all|mark|signin|half-migrate|revoke\n");
         exit(64);
     }
     try {
