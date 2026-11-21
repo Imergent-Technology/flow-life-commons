@@ -3836,13 +3836,16 @@ preserve_commit() {
 # rows, or the files volume holds a Resources directory with files, the clear is refused unless a preservation record exists, is intact (require_preserve_record) and equals the
 # database and the files as they are now (preserve_state_differences). With no asset row and no file (every earlier scenario) nothing is required and no record is made.
 require_failed_state_preserved() {
-    local checked differs needed
+    local checked differs needed volume_listing
     files_db_rows
     FILES_COUNT=0
-    if [[ -e "$ROOT/$FILES_VOLUME_MARKER" || -L "$ROOT/$FILES_VOLUME_MARKER" ]]; then # no files action has ever run in this rehearsal when there is no record of the volume: it holds nothing
+    if [[ -e "$ROOT/$FILES_VOLUME_MARKER" || -L "$ROOT/$FILES_VOLUME_MARKER" ]]; then
         capture checked 'reading the Resources directory' run_files check "$DB_ROWS_SPEC"
         grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok. Nothing was changed." # guard:G26-gate-check-reported
         files_report "$checked"
+    else # no record of the volume is "nothing was ever made" only if the daemon agrees: a volume of the rehearsal's name that exists without its record is never assumed empty
+        capture volume_listing 'looking for the files volume' dkr volume ls --filter "name=$FILES_VOLUME_NAME" --format '{{.Name}}'
+        ! in_list "$FILES_VOLUME_NAME" "$volume_listing" || refuse "the files volume $FILES_VOLUME_NAME exists, but the state directory has no record that this run established it, so whether it holds Resource files cannot be told. Nothing was changed. Run cleanup and start again." # guard:G26-gate-volume-unrecorded
     fi
     needed=yes
     { [[ "$DB_ROWS_SPEC" == none || "$DB_ROWS_SPEC" == empty ]] && ((FILES_COUNT == 0)); } && needed=no # guard:G26-gate-needed

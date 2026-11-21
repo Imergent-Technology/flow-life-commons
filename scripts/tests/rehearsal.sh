@@ -9033,8 +9033,17 @@ t_g26_restore_requires_preservation() {
         preserved_restore_world; fout absent 0 files:check=ok >"$W/out_files_check"; rm -f "$T/root/preserve.record" "$T/root/failed-state.dump.sql"
         preserve_gate_refused 'asset rows with no files, and no preservation' 'no complete failed-state preservation'
         # No volume was ever made, and a row is there all the same.
-        preserved_restore_world; rm -f "$T/root/files.volume" "$T/root/preserve.record" "$T/root/failed-state.dump.sql"
+        preserved_restore_world; rm -f "$T/root/files.volume" "$T/root/preserve.record" "$T/root/failed-state.dump.sql"; rm -rf "$W/v/$NAME_FV"
         preserve_gate_refused 'a row and no files volume' 'no complete failed-state preservation'
+    fi
+    if want_case G26-gate-volume-unrecorded; then
+        # The files volume exists and holds files, no asset row refers to them, and the record of the volume is gone: the volume is never assumed empty.
+        preserved_restore_world; : >"$W/asset_rows"; rm -f "$T/root/files.volume" "$T/root/preserve.record" "$T/root/failed-state.dump.sql"
+        preserve_gate_refused 'files in a volume the state directory has no record of, and no asset row' 'has no record that this run established it'
+        no_snapshot_all_ran 'an unrecorded files volume'
+        # Even an empty table and an empty volume: whether it is empty cannot be told without the record.
+        ensure_cache; restore_world; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+        preserve_gate_refused 'an unrecorded files volume and no asset row' 'has no record that this run established it'
     fi
     if want_case G26-gate-check-reported; then
         preserved_restore_world; printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
@@ -9741,6 +9750,7 @@ declare -A GUARD_TESTS=(
     [G26-gate-check-reported]='t_g26_restore_requires_preservation'
     [G26-gate-matches]='t_g26_restore_requires_preservation'
     [G26-gate-needed]='t_g26_restore_requires_preservation'
+    [G26-gate-volume-unrecorded]='t_g26_restore_requires_preservation'
     [G26-measure-agree]='t_g26_preserve_measurement_is_validated'
     [G26-measure-check-reported]='t_g26_preserve_measurement_is_validated'
     [G26-measure-two-readers]='t_g26_preserve_measurement_is_validated'
