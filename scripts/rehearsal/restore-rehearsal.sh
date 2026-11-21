@@ -34,6 +34,10 @@
 #   restore-rehearsal.sh restore-files
 #                                     (2.2C-2) verify the files backup, then extract it where there is no Resources directory (the database restore
 #                                     is not part of it)
+#   restore-rehearsal.sh backup-paired
+#                                     (slice 2.2C-3, WU4) from the UPGRADED database with its seeded Resource files: measure the 34 tables and the Resources
+#                                     directory, take the two-pass dump and the files archive, measure again, and bind both in recovery.manifest.json. Changes
+#                                     no database and no volume; its only writes are four files in the state directory, put in place last and never over a file
 #
 # WHAT THIS IS. A rehearsal environment for proving, with synthetic data on a local machine, that the organization can recover
 # v0.3.0 after an unsuccessful upgrade (docs/audits/g6/README.md, WP3c). Slice 1 is the isolated database server and the checks that
@@ -112,6 +116,16 @@
 #       writes and extracts only into a volume with no Resources directory; `aside-files` renames and deletes nothing. The file and archive logic itself is
 #       apps/platform/tests/Support/ResourceFileArchive.php, whose own guards (`F-*`) are held by tests/Unit/Rehearsal/ResourceFileArchiveTest.php.
 #
+#   G25 (slice 2.2C-3, WU4) the CURRENT profile of the backup: 34 tables (27 durable, 7 transient), 29 migrations, and one recovery unit for the database and the Resource
+#       files. The historical profile (16 tables, 9 durable) and its functions are unchanged; no profile is chosen by the caller. `snapshot-all` is a read-only helper of its own
+#       (the 34 tables' rows as digests in primary-key order, their structure, the ledger, the keys), validated as completely as the historical snapshot is. `backup-paired`
+#       starts only from the upgraded 34-table database with the four seeded Resource files and their asset rows, measures database and directory before and after BOTH artifacts
+#       and refuses any difference, checks the dump line by line against the forms in current_dump_problem (an unrecognised statement is a refusal, a durable table with no rows
+#       needs no INSERT, and every durable table's rows are those the first measurement counted), verifies the archive, and puts nothing in place until the whole recovery unit is
+#       verified (recovery_unit_problem: the artifacts' integrity and the dump's and the manifest's structural consistency; it does NOT read a row's content from the dump, and
+#       what the restored database holds is for the restore's own verification to establish). It claims no change was OBSERVED, never an atomic snapshot (cmd_backup_paired
+#       says why). Nothing is overwritten and the recovery manifest is the last file put in place: without it the others are not a recovery unit.
+#
 # Exit status: 0 success; 1 a failure; 3 a safeguard refused; 64 usage.
 set -Eeuo pipefail
 
@@ -141,7 +155,7 @@ readonly HARNESS_FILES=(db-ping.php probe.php rehearse.php files.php)
 # The test-support classes the helpers load BY PATH from the current tree of the source volume (rehearse.php's and files.php's loadSupport(), and nothing else: no
 # autoload-dev is installed). Each is attested individually: the digest the verified commit holds is compared with the one taken inside the volume, and recorded.
 readonly SUPPORT_DIR='tests/Support'
-readonly SUPPORT_FILES=(HalfFailedShape HistoricalFixture HistoricalSnapshot ResourceFileArchive ResourceFileRefusal Totp UpgradeDatabase)
+readonly SUPPORT_FILES=(CurrentSnapshot CurrentSnapshotRefusal HalfFailedShape HistoricalFixture HistoricalSnapshot ResourceFileArchive ResourceFileRefusal Totp UpgradeDatabase)
 # Slice 2.2C-2. The Resource FILES: one more rehearsal-owned, labelled volume (the files volume, whose root is the application's storage/app/private, so its
 # `resources` directory is the private Resources disk's root) and one more disposable container (the files container: no network, no credentials, no
 # application, no Docker socket; the prepared source read-only and the files volume, read-only unless the action writes). tests/Support/ResourceFileArchive.php
@@ -186,6 +200,51 @@ readonly MANIFEST_FILE='historical.manifest.json'
 readonly PREPARED_FILE='prepared.source'      # slice 2.2B: what `prepare` put in the source volume (the two commits, the helper scripts' digests)
 readonly UPGRADED_FILE='upgraded.structure'   # slice 2.2B: the structure digests of the 34 tables after the first upgrade, for the re-upgrade to equal
 readonly HALF_FILE='halfmigrated.state'       # slice 2.2C-1: what `half-fail-upgrade` observed and verified, for `restore-historical` to compare the database with
+# Slice 2.2C-3 (WU4). The CURRENT-schema profile of the backup: the 34 tables (HISTORICAL_TABLES and NEWER_TABLES), the same seven of them transient and the other 27
+# durable, the 29 migrations, and one RECOVERY UNIT that binds the database dump to the Resource files. The historical profile (16 tables, nine durable) and everything
+# it uses is not touched: a function of this script is for one profile by its name, or by an argument the stage that calls it fixes. No profile is chosen by whoever
+# runs the script, and no stage takes a file, a table, a database or a statement from the caller.
+readonly CURRENT_DUMP_FILE='current.dump.sql'                # the two-pass dump of the 34-table database (the historical profile's is $DUMP_FILE)
+readonly RECOVERY_MANIFEST_FILE='recovery.manifest.json'      # the commit point of a paired backup: it exists only when the dump, the archive and both manifests were verified
+readonly RECOVERY_MANIFEST_VERSION=1
+readonly CURRENT_RELEASE_VERSION='unreleased'                 # the tree under test is a commit, not a tag: `release.json` is made by `./flow release build` and is not in a `git archive`
+readonly CURRENT_LEDGER_COUNT=29                              # the migrations of the current schema: v0.3.0's 15 and the 14 after; scripts/tests/rehearsal.sh pins both against the repository
+readonly CURRENT_LAST_MIGRATION='2026_10_11_000001_add_provenance_to_contact_methods'
+readonly BT=$'\x60' # a backtick, for the dump's quoted table names
+readonly BS=$'\\' # a backslash, which a comment of the dump may not hold
+# The only line forms a current-profile dump may hold (current_dump_problem); a line of any other form is refused. Each is a pattern for ONE line and is as narrow as the
+# real tool's output allows: a variable, a column type or an ENGINE option this list does not name is a refusal, so that what is accepted is only what is recognised.
+# They are NOT a SQL parser and they do not prove an arbitrary dump safe: they decide whether the dump is made only of the statement forms the fixed two-pass contract
+# writes. What they were composed from, and what has not been seen from a real 34-table dump, is the development note's "WU4" section.
+readonly DUMP_COMMENT_RE=$'^--( [ -~\t]*)?$'                    # `--` alone, or `-- ` and printable ASCII or tabs (a backslash is refused beside it: current_dump_problem)
+readonly DUMP_SANDBOX_RE='^/\*M!999999\\- enable the sandbox mode \*/ ?$' # mariadb-dump 10.19 of MariaDB 10.11.18 writes ONE space after `*/` (live diagnostic, 2026-11-20): none or one, and nothing else
+# A conditional `SET` is one of the lines in dump_set_kind, byte for byte, and no other: the pairs mariadb-dump 10.19 of MariaDB 10.11.18 writes, as a live two-pass dump of the
+# 34 tables showed them (2026-11-20). Nothing is matched by pattern, so a user variable cannot be given another system variable than its own, a value cannot be another, and a
+# statement cannot hide in a comment the server would run. Two settings change how the rest of the file is READ, and current_dump_problem follows them: sql_mode (a dump could
+# otherwise switch on NO_BACKSLASH_ESCAPES, which turns the backslash in a string into data) and the client character set (a multi-byte set can swallow a backslash). Rows are
+# accepted only while the pinned SQL mode and `utf8mb4` are in effect, and the pin, the per-table save and the closing restores must come in the order the tool writes them.
+readonly DUMP_KEYS_RE="^/\\*!40000 ALTER TABLE ${BT}([a-z0-9_]+)${BT} (DISABLE|ENABLE) KEYS \\*/;\$"
+readonly DUMP_DROP_RE="^DROP TABLE IF EXISTS ${BT}([a-z0-9_]+)${BT};\$"
+readonly DUMP_CREATE_RE="^CREATE TABLE ${BT}([a-z0-9_]+)${BT} \\(\$"
+readonly DUMP_INSERT_RE="^INSERT INTO ${BT}([a-z0-9_]+)${BT} VALUES\$"
+readonly DUMP_LOCK_RE="^LOCK TABLES ${BT}([a-z0-9_]+)${BT} WRITE;\$"
+# The body of a CREATE TABLE, one line each, as SHOW CREATE TABLE writes the 34 tables of the current schema (apps/platform/tests/Fixtures/rehearsal/current-create-tables.sql
+# holds them, and a test holds that file to the migrated schema): a column (the types and options the schema uses), PRIMARY KEY, [UNIQUE] KEY and a FOREIGN KEY, each with
+# its comma except the last line; and the closing line. A column type, a table option or an ENGINE the schema does not use is not accepted.
+readonly DUMP_ID="${BT}[a-z0-9_]+${BT}"
+readonly DUMP_IDS="${DUMP_ID}(,${DUMP_ID})*"
+readonly DUMP_COLUMN_RE="^  ${DUMP_ID} ((tiny|small|medium|big)?int\\([0-9]{1,3}\\)( unsigned)?|(var)?char\\([0-9]{1,5}\\)|(tiny|medium|long)?text|datetime|timestamp)( CHARACTER SET [a-z0-9_]+ COLLATE [a-z0-9_]+)?( NOT NULL| DEFAULT NULL)?( DEFAULT ('[^'\\\;]*'|-?[0-9]+|current_timestamp\\(\\)))?( AUTO_INCREMENT)?( CHECK \\(json_valid\\(${DUMP_ID}\\)\\))?,?\$"
+readonly DUMP_PRIMARY_RE="^  PRIMARY KEY \\(${DUMP_IDS}\\),?\$"
+readonly DUMP_KEY_RE="^  (UNIQUE )?KEY ${DUMP_ID} \\(${DUMP_IDS}\\),?\$"
+readonly DUMP_FOREIGN_RE="^  CONSTRAINT ${DUMP_ID} FOREIGN KEY \\(${DUMP_IDS}\\) REFERENCES ${DUMP_ID} \\(${DUMP_IDS}\\)( ON (DELETE|UPDATE) (CASCADE|SET NULL|RESTRICT|NO ACTION))*,?\$"
+readonly DUMP_REFERENCES_RE="REFERENCES ${BT}([a-z0-9_]+)${BT} "
+readonly DUMP_CREATE_END_RE='^\) ENGINE=InnoDB( AUTO_INCREMENT=[0-9]+)? DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;$'
+# One row of an INSERT, on its own line: `(`, one or more values, `)`, and `,` or `;`. A value is NULL, a number, a hexadecimal literal or a quoted string (with the
+# backslash escapes mariadb-dump writes); nothing else may stand between the parentheses, so a `;` outside a string, or a second statement, cannot be part of a row line.
+readonly DUMP_ROW_VALUE="(NULL|-?[0-9]+(\\.[0-9]+)?([eE][-+]?[0-9]+)?|0x[0-9A-Fa-f]+|(_binary )?'([^'\\\\]|\\\\.)*')"
+readonly DUMP_ROW_RE="^\\(${DUMP_ROW_VALUE}(,${DUMP_ROW_VALUE})*\\)[,;]\$"
+# One line of the recovery manifest's table list: the table, its class, its rows, the digest of its rows and of its structure.
+readonly RM_TABLE_RE='^    \{ "name": "([a-z0-9_]+)", "class": "(durable|transient)", "rows": (0|[1-9][0-9]{0,11}), "row_sha256": "([0-9a-f]{64})", "structure_sha256": "([0-9a-f]{64})" \},?$'
 # Slice 2.2C-1. The half-failed upgrade. A stub table is placed where the Relationships migration (the 11th of the 14 after v0.3.0) creates its THIRD table;
 # the ten migrations before it complete and commit (MariaDB commits every DDL statement), the migration creates its first two tables and fails on the
 # third with error 1050, and its record is never written. tests/Upgrade/HalfFailedMigrationTest.php measures exactly this on a real MariaDB with the real
@@ -224,7 +283,7 @@ readonly REVOKE_AFTER=$'11\t9\t0\t1\t1'
 EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
 readonly EMPTY_DIGEST
 # Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
-readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER")
+readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER" "$CURRENT_DUMP_FILE" "$RECOVERY_MANIFEST_FILE")
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_|FILES_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
@@ -274,7 +333,7 @@ Usage: restore-rehearsal.sh <command>
   run <historical|current> <command>
                 Run one approved Artisan command (about, migrate, migrate:status, relationships:check, release:show,
                 resources:assets:prune) or helper (helper:db-ping, helper:fixture-load, helper:snapshot,
-                helper:post-upgrade-mark, helper:sign-in, helper:half-migrate, helper:revoke) in a disposable PHP runner. The script
+                helper:snapshot-all, helper:post-upgrade-mark, helper:sign-in, helper:half-migrate, helper:revoke) in a disposable PHP runner. The script
                 supplies every option.
   probe         Check the runner and the restricted SQL client are isolated as intended. Read-only.
   baseline      Build the v0.3.0 schema with the v0.3.0 application in the empty rehearsal database, load the synthetic
@@ -304,6 +363,9 @@ Usage: restore-rehearsal.sh <command>
                 read it before and after, and require the two to be identical. Nothing is deleted.
   restore-files Verify the files backup, then extract it into a files volume that has no Resources directory (or, for a zero-file
                 backup, require there to be none). The database restore is not part of it.
+  backup-paired From the upgraded database with its seeded Resource files only: measure the 34 tables and the Resources directory, take the
+                two-pass dump and the Resource-files archive, measure again, and bind the four files in one recovery.manifest.json. Nothing
+                is put in place unless every check passes, and nothing is overwritten. (Slice 2.2C-3, WU4.)
   cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
                 labelled is kept or cannot be removed, cleanup says what remains, keeps its state file and exits 1; run
                 it again once the cause is gone. --stale is needed only when the private state file is gone (the run
@@ -933,13 +995,14 @@ runner_command() {
         helper:db-ping) RUN_CMD=(php "$SRC_MOUNT/harness/db-ping.php") ;;
         helper:fixture-load) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" fixture-load) ;;
         helper:snapshot) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" snapshot) ;;
+        helper:snapshot-all) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" snapshot-all) ;;
         helper:post-upgrade-mark) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" mark) ;;
         helper:sign-in) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" signin) ;;
         helper:half-migrate) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" half-migrate) ;;
         helper:revoke) RUN_CMD=(php "$SRC_MOUNT/harness/rehearse.php" revoke) ;;
         *) ;;
     esac
-    ((${#RUN_CMD[@]} > 0)) || refuse "'$name' is not a command the rehearsal runs. Approved: ${ARTISAN_ALLOWED[*]} helper:db-ping helper:fixture-load helper:snapshot helper:post-upgrade-mark helper:sign-in helper:half-migrate helper:revoke." # guard:G11-allowlist
+    ((${#RUN_CMD[@]} > 0)) || refuse "'$name' is not a command the rehearsal runs. Approved: ${ARTISAN_ALLOWED[*]} helper:db-ping helper:fixture-load helper:snapshot helper:snapshot-all helper:post-upgrade-mark helper:sign-in helper:half-migrate helper:revoke." # guard:G11-allowlist
     if [[ "${RUN_CMD[1]:-}" == artisan ]]; then
         why="$(artisan_problem "${RUN_CMD[@]:2}")" || refuse "$why." # guard:G11-artisan-policy
     fi
@@ -1591,7 +1654,7 @@ require_inventory() {
 # sign-in and the checks included, may change something as far as a failed stage may say.
 helper_is_read_only() {
     case "$1" in
-        helper:db-ping | helper:snapshot | migrate:status | about | release:show) return 0 ;;
+        helper:db-ping | helper:snapshot | helper:snapshot-all | migrate:status | about | release:show) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -1998,6 +2061,337 @@ require_backup() {
     why="$(manifest_problem "$ROOT/$MANIFEST_FILE" "$SNAPSHOT_TABLES")" || refuse "the manifest cannot be relied on: $why."
     why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump cannot be relied on: $why."
     why="$(dump_problem "$ROOT/$DUMP_FILE")" || refuse "the dump cannot be relied on: $why."
+}
+
+# --- the current profile: the 34-table dump, the snapshot of it, and the recovery unit (slice 2.2C-3, WU4) ---------------------------------------------------
+
+current_durable_inventory() { set_minus "$(upgraded_inventory)" "$(sorted_list "${TRANSIENT_TABLES[@]}")"; }
+
+# all_table_lines TEXT: the `all-table <table> <rows> <digest>` lines of `snapshot-all`, validated and sorted, as `<table> <rows> <digest>`. Exactly one for each of the 34
+# tables or a refusal: a snapshot with a table missing, repeated or malformed is not a smaller one and is not equal to anything. (The historical snapshot's `table`
+# lines and table_lines are not touched; the kind is a different one so that nothing reads one as the other.)
+all_table_lines() {
+    local text="$1" k name rows digest extra lines='' names
+    while IFS=' ' read -r k name rows digest extra; do
+        [[ "$k" == all-table ]] || continue
+        [[ -z "$extra" && "$name" =~ ^[a-z0-9_]+$ && "$rows" =~ ^(0|[1-9][0-9]{0,11})$ && "$digest" =~ ^[0-9a-f]{64}$ ]] || refuse "an 'all-table' line of the snapshot is malformed." # guard:G25-all-line-shape
+        lines+="$name $rows $digest"$'\n'
+    done <<<"$text"
+    lines="${lines%$'\n'}"
+    names="$(cut -d' ' -f1 <<<"$lines" | LC_ALL=C sort)"
+    [[ "$names" == "$(upgraded_inventory)" ]] || refuse "the snapshot's 'all-table' lines are not exactly one for each of the 34 tables of the current schema (a failed query or an absent table is a refusal, never a smaller snapshot)." # guard:G25-all-complete
+    printf '%s' "$(LC_ALL=C sort <<<"$lines")"
+}
+
+# snapshot_value TEXT KEY: the one value of a `KEY=value` line of a helper's output, or nothing (and a failure) when it is absent or repeated.
+snapshot_value() {
+    local found
+    found="$(sed -n "s/^$2=\(.*\)\$/\1/p" <<<"$1")"
+    [[ -n "$found" && "$found" != *$'\n'* ]] || return 1
+    printf '%s' "$found"
+}
+
+# dump_set_kind LINE: the kind of one conditional `SET` line of the dump, or a failure for any other line. Exact text, case included; the table is the whole list.
+dump_set_kind() {
+    case "$1" in
+        '/*!40101 SET NAMES utf8mb4 */;') echo names ;;
+        "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;") echo mode-pin ;;
+        '/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;') echo mode-restore ;;
+        '/*!40101 SET @saved_cs_client     = @@character_set_client */;') echo cs-table-save ;;
+        '/*!40101 SET character_set_client = utf8mb4 */;') echo cs-table-set ;;
+        '/*!40101 SET character_set_client = @saved_cs_client */;') echo cs-table-restore ;;
+        '/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;') echo cs-restore-client ;;
+        '/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;' | '/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;' \
+            | '/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;' | '/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;' \
+            | '/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;' \
+            | '/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;' | "/*!40103 SET TIME_ZONE='+00:00' */;" | '/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;' \
+            | '/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;' | '/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;' \
+            | '/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;' | '/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;' \
+            | '/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;' | '/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;') echo plain ;;
+        *) return 1 ;;
+    esac
+}
+
+# current_dump_problem FILE TABLE_LINES: what the backup contract requires of the dump of the CURRENT schema, judged against what the database held when it was
+# taken (TABLE_LINES: `<table> <rows> <digest>` for each of the 34). Unlike dump_problem, which reads a v0.3.0 dump for table names alone, every line of the dump
+# must be one of the forms named by the DUMP_*_RE patterns, and a line of any other form is a refusal, never skipped:
+#   comments, blank lines, the sandbox comment, a conditional `SET` of the variables mariadb-dump sets, `DROP TABLE IF EXISTS `t`;`, a `CREATE TABLE `t` (` with a body of
+#   columns and keys of the forms the schema uses and its closing `) ENGINE=InnoDB ...;`, `LOCK TABLES `t` WRITE;`, `/*!40000 ALTER TABLE `t` DISABLE|ENABLE KEYS */;`,
+#   `INSERT INTO `t` VALUES` and then one line for each row, `(...),` and the last `(...);`, and `UNLOCK TABLES;`.
+# Context is checked as well as form: a table named by a LOCK, an ALTER, an INSERT, a DROP, a CREATE or a foreign key must be one of the 34; a CREATE follows its DROP; a
+# LOCK is for a durable table that has been created, once, and ends in an UNLOCK; the ALTER and the INSERT are for the table that is locked, and DISABLE comes before ENABLE;
+# nothing else is between a LOCK and its UNLOCK. Then: exactly the 34 tables are created and dropped, once each; no transient table has an INSERT; each durable table has as
+# many row lines as the database held rows (so a durable table with no rows has none, and is not "missing"); and no table outside the 34 has anything.
+# What this is not: a SQL parser, and not a proof that arbitrary SQL is safe. It decides whether a file is made only of the line forms the two-pass dump writes, with the
+# rows' values held to the literal forms of a row; the row COUNT is checked against the measurement, a row's CONTENT is not (nothing here reads a row's values: that is
+# what the restored database's own digests are for, in WU5). A row that mariadb-dump wrote over several lines is refused, not miscounted. The forms were checked against ONE live
+# two-pass dump of the 34 tables (docs, "WU4"); a form that dump did not show, and this list lacks, would refuse a good dump, which is the safe way to be wrong.
+current_dump_problem() {
+    local file="$1" measured="$2" line state=top table='' lineno=0 name rows creates='' drops='' inventory op want new ref ok seq=0 kind
+    local locked='' keys=off body=0 comma=no
+    local modestate=none csclient=orig tsaved=no # the SQL mode and the client character set, as the dump's own SET lines have left them (see dump_set_kind)
+    local -A rowcount=() dropidx=() createidx=() lockdone=() known=()
+    local LC_ALL=C
+    [[ -f "$file" && ! -L "$file" ]] || { echo "it is not a regular file"; return 1; }
+    [[ "$(tr -d '\0' <"$file" | sha256sum)" == "$(sha256sum <"$file")" ]] || { echo "it holds a NUL byte"; return 1; } # guard:G25-dump-nul
+    inventory="$(upgraded_inventory)"
+    while read -r name; do known[$name]=1; done <<<"$inventory"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        lineno=$((lineno + 1))
+        if [[ "$state" == create ]]; then
+            if [[ "$line" =~ $DUMP_CREATE_END_RE ]]; then
+                [[ "$body" -ge 1 && "$comma" == no ]] || { echo "a CREATE TABLE of the dump has no column, or its last line has a comma (line $lineno)"; return 1; } # guard:G25-dump-create-last
+                state=top
+                continue
+            fi
+            [[ "$body" == 0 || "$comma" == yes ]] || { echo "a CREATE TABLE of the dump has a line after one that has no comma (line $lineno)"; return 1; } # guard:G25-dump-create-commas
+            ok=no
+            [[ "$line" =~ $DUMP_COLUMN_RE || "$line" =~ $DUMP_PRIMARY_RE || "$line" =~ $DUMP_KEY_RE ]] && ok=yes
+            if [[ "$ok" == no && "$line" =~ $DUMP_FOREIGN_RE ]]; then
+                ok=yes
+                [[ "$line" =~ $DUMP_REFERENCES_RE ]] && ref="${BASH_REMATCH[1]}" || ref=''
+                [[ -n "$ref" && -n "${known[$ref]:-}" ]] || { echo "a foreign key of the dump references a table that is not one of the 34 (line $lineno)"; return 1; } # guard:G25-dump-create-reference
+            fi
+            [[ "$ok" == yes ]] || { echo "a CREATE TABLE of the dump holds a line that is not a column or key of the forms the schema uses (line $lineno)"; return 1; } # guard:G25-dump-create-body
+            body=$((body + 1))
+            [[ "$line" == *, ]] && comma=yes || comma=no
+            continue
+        fi
+        if [[ "$state" == insert ]]; then
+            [[ "$line" =~ $DUMP_ROW_RE ]] || { echo "an INSERT of the dump holds a line that is not a row of literal values (line $lineno)"; return 1; } # guard:G25-dump-row-form
+            rowcount[$table]=$((${rowcount[$table]:-0} + 1))
+            [[ "$line" != *';' ]] || state=top
+            continue
+        fi
+        if [[ -z "$line" || ("$line" =~ $DUMP_COMMENT_RE && "$line" != *"$BS"*) ]]; then continue; fi
+        if [[ "$line" == 'UNLOCK TABLES;' ]]; then
+            [[ -n "$locked" && "$keys" != disabled ]] || { echo "an UNLOCK TABLES of the dump is not for a table it locked, or leaves the keys of one disabled (line $lineno)"; return 1; } # guard:G25-dump-unlock-context
+            locked=''
+            continue
+        fi
+        if [[ "$line" =~ $DUMP_LOCK_RE ]]; then
+            name="${BASH_REMATCH[1]}"
+            [[ -n "${known[$name]:-}" ]] || { echo "a LOCK TABLES of the dump names a table that is not one of the 34 (line $lineno)"; return 1; } # guard:G25-dump-lock-known
+            ! in_array "$name" "${TRANSIENT_TABLES[@]}" || { echo "a LOCK TABLES of the dump names the transient table $name, which the data pass ignores (line $lineno)"; return 1; } # guard:G25-dump-lock-transient
+            [[ -z "$locked" && -z "${lockdone[$name]:-}" && -n "${createidx[$name]:-}" ]] || { echo "a LOCK TABLES of the dump is nested, repeated, or for a table not created before it (line $lineno)"; return 1; } # guard:G25-dump-lock-context
+            locked="$name" keys=off
+            lockdone[$name]=1
+            continue
+        fi
+        if [[ "$line" =~ $DUMP_KEYS_RE ]]; then
+            name="${BASH_REMATCH[1]}" op="${BASH_REMATCH[2]}"
+            [[ -n "${known[$name]:-}" ]] || { echo "an ALTER TABLE of the dump names a table that is not one of the 34 (line $lineno)"; return 1; } # guard:G25-dump-keys-known
+            if [[ "$op" == DISABLE ]]; then want=off new=disabled; else want=disabled new=enabled; fi
+            [[ "$locked" == "$name" && "$keys" == "$want" ]] || { echo "an ALTER TABLE ... $op KEYS of the dump is not for the table that is locked, or is out of order (line $lineno)"; return 1; } # guard:G25-dump-keys-context
+            keys="$new"
+            continue
+        fi
+        if [[ "$line" =~ $DUMP_INSERT_RE ]]; then
+            table="${BASH_REMATCH[1]}"
+            [[ -n "${known[$table]:-}" ]] || { echo "it carries rows for a table that is not one of the 34"; return 1; } # guard:G25-dump-unknown-table
+            ! in_array "$table" "${TRANSIENT_TABLES[@]}" || { echo "it carries rows for the transient table $table"; return 1; } # guard:G25-dump-transient-empty
+            [[ "$locked" == "$table" && "$keys" != enabled ]] || { echo "an INSERT of the dump is not for the table that is locked (line $lineno)"; return 1; } # guard:G25-dump-insert-context
+            [[ "$modestate" == pinned ]] || { echo "an INSERT of the dump comes where the SQL mode is not the one the dump pins (line $lineno)"; return 1; } # guard:G25-dump-insert-mode
+            [[ "$csclient" == safe ]] || { echo "an INSERT of the dump comes where the client character set is not the one the dump sets (line $lineno)"; return 1; } # guard:G25-dump-insert-charset
+            state=insert
+            continue
+        fi
+        [[ -z "$locked" ]] || { echo "a statement between a LOCK TABLES and its UNLOCK is not one of the table's own (line $lineno)"; return 1; } # guard:G25-dump-locked-only
+        if [[ "$line" =~ $DUMP_SANDBOX_RE ]]; then continue; fi
+        if kind="$(dump_set_kind "$line")"; then
+            case "$kind" in
+                names) csclient=safe ;;
+                cs-table-set) csclient=safe ;;
+                cs-table-save)
+                    [[ "$csclient" == safe ]] || { echo "the dump saves the client character set while it is not the one the dump sets (line $lineno)"; return 1; } # guard:G25-dump-cs-table-save
+                    tsaved=yes ;;
+                cs-table-restore)
+                    [[ "$tsaved" == yes ]] || { echo "the dump restores a client character set it did not save (line $lineno)"; return 1; } # guard:G25-dump-cs-table-restore
+                    tsaved=no ;;
+                cs-restore-client)
+                    [[ "$csclient" == safe && "$tsaved" == no ]] || { echo "the dump restores the client character set that it did not set, or in the middle of a table (line $lineno)"; return 1; } # guard:G25-dump-cs-restore
+                    csclient=orig ;;
+                mode-pin)
+                    [[ "$modestate" == none ]] || { echo "the dump pins the SQL mode while it is pinned already (line $lineno)"; return 1; } # guard:G25-dump-mode-pin
+                    modestate=pinned ;;
+                mode-restore)
+                    [[ "$modestate" == pinned ]] || { echo "the dump restores an SQL mode it did not pin (line $lineno)"; return 1; } # guard:G25-dump-mode-restore
+                    modestate=none ;;
+            esac
+            continue
+        fi
+        if [[ "$line" =~ $DUMP_DROP_RE ]]; then
+            drops+="${BASH_REMATCH[1]}"$'\n'
+            seq=$((seq + 1))
+            [[ -n "${dropidx[${BASH_REMATCH[1]}]:-}" ]] || dropidx[${BASH_REMATCH[1]}]=$seq
+            continue
+        fi
+        if [[ "$line" =~ $DUMP_CREATE_RE ]]; then
+            creates+="${BASH_REMATCH[1]}"$'\n'
+            seq=$((seq + 1))
+            [[ -n "${createidx[${BASH_REMATCH[1]}]:-}" ]] || createidx[${BASH_REMATCH[1]}]=$seq
+            state=create body=0 comma=no
+            continue
+        fi
+        echo "it has a statement this check does not recognise (line $lineno, begins '${line%% *}')"; return 1 # guard:G25-dump-unrecognised
+    done <"$file"
+    [[ "$state" == top && -z "$locked" ]] || { echo "it ends inside a statement"; return 1; } # guard:G25-dump-complete
+    [[ "$modestate" == none && "$csclient" == orig && "$tsaved" == no ]] || { echo "it ends with the SQL mode or the client character set still changed: its closing restore lines are missing"; return 1; } # guard:G25-dump-set-balanced
+    [[ "$(printf '%s' "$creates" | LC_ALL=C sort)" == "$inventory" ]] || { echo "it does not create exactly the 34 tables of the current schema, once each"; return 1; } # guard:G25-dump-creates
+    [[ "$(printf '%s' "$drops" | LC_ALL=C sort)" == "$inventory" ]] || { echo "it does not drop exactly the 34 tables it creates, once each"; return 1; } # guard:G25-dump-drops
+    while read -r name; do
+        [[ "${dropidx[$name]}" -lt "${createidx[$name]}" ]] || { echo "it creates the table $name before it drops it"; return 1; } # guard:G25-dump-create-order
+    done <<<"$inventory"
+    while read -r name rows _; do
+        [[ -n "$name" ]] || continue
+        ! in_array "$name" "${TRANSIENT_TABLES[@]}" || continue
+        [[ "${rowcount[$name]:-0}" == "$rows" ]] || { echo "it holds ${rowcount[$name]:-0} row(s) for the durable table $name, and the database held $rows"; return 1; } # guard:G25-dump-rows
+    done <<<"$measured"
+    return 0
+}
+
+# --- the recovery manifest ---------------------------------------------------------------------------------------------------------------------------
+
+# recovery_manifest_text: the one document that binds a paired backup, written from the RM_* values (RM_TAKEN, RM_FP, RM_COMMIT, RM_SERVER, RM_DUMP_SHA, RM_DUMP_BYTES,
+# RM_MIG_SHA, RM_STRUCT_SHA, RM_FM_SHA, RM_FM_BYTES, RM_AR_SHA, RM_AR_BYTES, RM_FILES, RM_ROWS, RM_INV_SHA and RM_TABLES, the `<table> <rows> <row digest> <structure
+# digest>` lines) and the keyring (CURRENT_FP, PREVIOUS_FP, RING_FP). It reuses the formats proven in L2 and L3b by REFERENCE: the Resource-files manifest is the file
+# resources.manifest.json as it is, bound here by its SHA-256 and size, and the database part uses the historical manifest's field names. One fact to a line, so that a
+# changed, missing, repeated or reordered line is found. No key, password, token or secret: fingerprints, names, counts and digests.
+recovery_manifest_text() {
+    local with_data=() schema_only=() name rows row_sha struct_sha class list=''
+    mapfile -t with_data < <(current_durable_inventory)
+    mapfile -t schema_only < <(sorted_list "${TRANSIENT_TABLES[@]}")
+    while read -r name rows row_sha struct_sha; do
+        [[ -n "$name" ]] || continue
+        class=durable
+        ! in_array "$name" "${TRANSIENT_TABLES[@]}" || class=transient
+        list+="    { \"name\": \"$name\", \"class\": \"$class\", \"rows\": $rows, \"row_sha256\": \"$row_sha\", \"structure_sha256\": \"$struct_sha\" },"$'\n'
+    done <<<"$RM_TABLES"
+    list="${list%,$'\n'}"
+    cat <<MANIFEST
+{
+  "recovery_manifest_version": $RECOVERY_MANIFEST_VERSION,
+  "backup_id": "${RM_TAKEN//[-:]/}",
+  "taken_at": "$RM_TAKEN",
+  "reason": "rehearsal",
+  "run_token_fingerprint": "$RM_FP",
+  "release": {
+    "version": "$CURRENT_RELEASE_VERSION",
+    "commit": "$RM_COMMIT"
+  },
+  "database": {
+    "connection": "mariadb",
+    "name": "$APP_DB",
+    "server_version": "$RM_SERVER"
+  },
+  "keyring": {
+    "current_key_fingerprint": "$CURRENT_FP",
+    "previous_key_fingerprints": ["$PREVIOUS_FP"],
+    "keyring_fingerprint": "$RING_FP",
+    "previous_keys_configured": true
+  },
+  "database_dump_file": "$CURRENT_DUMP_FILE",
+  "database_dump_sha256": "$RM_DUMP_SHA",
+  "database_dump_bytes": $RM_DUMP_BYTES,
+  "migrations_count": $CURRENT_LEDGER_COUNT,
+  "migrations_last": "$CURRENT_LAST_MIGRATION",
+  "migrations_sha256": "$RM_MIG_SHA",
+  "structure_sha256": "$RM_STRUCT_SHA",
+  "tables_with_data": $(json_list "${with_data[@]}"),
+  "tables_schema_only": $(json_list "${schema_only[@]}"),
+  "resources_manifest_file": "$FILES_MANIFEST_FILE",
+  "resources_manifest_sha256": "$RM_FM_SHA",
+  "resources_manifest_bytes": $RM_FM_BYTES,
+  "resources_archive_file": "$FILES_ARCHIVE_FILE",
+  "resources_archive_sha256": "$RM_AR_SHA",
+  "resources_archive_bytes": $RM_AR_BYTES,
+  "resources_files_count": $RM_FILES,
+  "resources_asset_rows": $RM_ROWS,
+  "resources_inventory_sha256": "$RM_INV_SHA",
+  "tables": [
+$list
+  ]
+}
+MANIFEST
+}
+
+# join_tables TABLE_LINES STRUCTURE_LINES: `<table> <rows> <row digest> <structure digest>`, one line for each table. Both inputs are already validated to name the same 34 tables.
+join_tables() {
+    awk 'NR == FNR { s[$1] = $2; next } { print $1 " " $2 " " $3 " " s[$1] }' <(printf '%s\n' "$2") <(printf '%s\n' "$1")
+}
+
+# structure_aggregate TABLE_LINES (`<table> <rows> <row digest> <structure digest>`): one digest of every table's structure digest, in table order.
+structure_aggregate() { awk '{ print $1 " " $4 }' <<<"$1" | sha256sum | cut -c1-64; }
+
+# recovery_unit_problem MANIFEST DUMP FILES_MANIFEST ARCHIVE: the four files are ONE recovery unit of this run, or the reason they are not. It takes the paths (the
+# temporary files before they are put in place, the final ones afterwards) and reads nothing from the database: it is what a restore may rely on before it touches
+# anything. Needs load_keyring. What it establishes, in three groups, and what it does not:
+#   ARTIFACT INTEGRITY: the dump and the Resource-files archive are the files the manifest names, by SHA-256 and size; the Resource-files manifest is consistent with the
+#     archive (the L3b rules) and is the one the recovery manifest binds; the recovery manifest is of this run (the token's fingerprint) and of the commit the source was prepared from.
+#   STRUCTURAL CONSISTENCY: the dump is made only of the line forms current_dump_problem accepts, creates and drops exactly the 34 tables, and holds as many row LINES for each
+#     durable table as the manifest says the database held; the manifest's own facts agree with each other (the table list, the classes, the 27 and 7, the structure
+#     aggregate, the ledger, the keyring, the file count, the asset rows) and the whole document is exactly what recovery_manifest_text writes from what it says.
+#   NOT ESTABLISHED: that any table's rows in the dump are the rows the manifest's row digest was taken of (no row's value is read from the dump, and no digest is derived from
+#     it: a dump with the same number of rows and other content is accepted if its checksum is re-recorded); that the recorded structure digests describe the dump's structures;
+#     that the recorded digests are the database's (they are the first measurement's, recorded, not authenticated: the state directory is private to the run and a manifest is
+#     as trustworthy as the directory). Those are properties of the RESTORED database, and a restore establishes them by measuring it with snapshot-all and comparing with the
+#     manifest (docs, "WU4" and "the contract for WU5"). A unit that passes this check is intact and consistent, not proven to restore to the recorded content.
+recovery_unit_problem() {
+    local m="$1" dump="$2" fm="$3" archive="$4" value why missing name rows row_sha struct_sha class line lines='' with_data schema_only fm_state
+    RM_TAKEN='' RM_FP='' RM_COMMIT='' RM_SERVER='' RM_TABLES=''
+    value="$(manifest_value "$m" recovery_manifest_version)" && [[ "$value" == "$RECOVERY_MANIFEST_VERSION" ]] || { echo "its recovery_manifest_version is not $RECOVERY_MANIFEST_VERSION"; return 1; } # guard:G25-rm-version
+    RM_FP="$(manifest_value "$m" run_token_fingerprint)" && [[ "$RM_FP" == "$(token_fingerprint "$(state_token "$ROOT")")" ]] || { echo "it is not this run's (its run token fingerprint differs)"; return 1; } # guard:G25-rm-run
+    RM_TAKEN="$(manifest_value "$m" taken_at)" && [[ "$RM_TAKEN" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { echo "its taken_at is not a UTC time"; return 1; } # guard:G25-rm-taken
+    RM_COMMIT="$(manifest_value "$m" commit)" && [[ "$RM_COMMIT" =~ ^[0-9a-f]{40}$ && "$RM_COMMIT" == "$(sed -n 's/^current=//p' "$ROOT/$PREPARED_FILE")" ]] || { echo "it is not for the current commit the source volume was prepared from"; return 1; } # guard:G25-rm-release
+    value="$(manifest_value "$m" version)" && [[ "$value" == "$CURRENT_RELEASE_VERSION" ]] || { echo "its release version is not '$CURRENT_RELEASE_VERSION'"; return 1; } # guard:G25-rm-release-version
+    RM_SERVER="$(manifest_value "$m" server_version)" && [[ "$RM_SERVER" =~ $SERVER_VERSION_RE && "$(manifest_value "$m" connection)" == mariadb && "$(manifest_value "$m" name)" == "$APP_DB" ]] || { echo "its database is not the rehearsal's MariaDB 10.11.18"; return 1; } # guard:G25-rm-database
+    value="$(manifest_value "$m" keyring_fingerprint)" || value=''
+    [[ "$value" == "$(keyring_fingerprint "$(manifest_value "$m" current_key_fingerprint)" "$(manifest_names "$m" previous_key_fingerprints)")" ]] || { echo "its keyring fingerprint is not that of the fingerprints it lists"; return 1; } # guard:G25-rm-keyring
+    missing="$(keyring_missing "$(printf '%s\n%s\n' "$(manifest_value "$m" current_key_fingerprint)" "$(manifest_names "$m" previous_key_fingerprints)")" "$(printf '%s\n%s\n' "$CURRENT_FP" "$PREVIOUS_FP")")"
+    [[ -z "$missing" ]] || { echo "the live keyring lacks a key fingerprint the backup requires"; return 1; } # guard:G25-rm-keyring-live
+    value="$(manifest_value "$m" database_dump_file)" && [[ "$value" == "$CURRENT_DUMP_FILE" ]] || { echo "its dump is not $CURRENT_DUMP_FILE"; return 1; } # guard:G25-rm-dump-name
+    [[ "$(sha256sum <"$dump" | cut -c1-64)" == "$(manifest_value "$m" database_dump_sha256)" ]] || { echo "the dump's SHA-256 is not the manifest's"; return 1; } # guard:G25-rm-dump-sha
+    [[ "$(wc -c <"$dump" | tr -d ' ')" == "$(manifest_value "$m" database_dump_bytes)" ]] || { echo "the dump's size is not the manifest's"; return 1; } # guard:G25-rm-dump-bytes
+    [[ "$(manifest_value "$m" migrations_count)" == "$CURRENT_LEDGER_COUNT" && "$(manifest_value "$m" migrations_last)" == "$CURRENT_LAST_MIGRATION" && "$(manifest_value "$m" migrations_sha256)" =~ ^[0-9a-f]{64}$ ]] || { echo "its migration ledger is not the current schema's $CURRENT_LEDGER_COUNT migrations"; return 1; } # guard:G25-rm-migrations
+    while IFS= read -r line; do
+        [[ "$line" =~ $RM_TABLE_RE ]] || continue
+        name="${BASH_REMATCH[1]}" class="${BASH_REMATCH[2]}" rows="${BASH_REMATCH[3]}" row_sha="${BASH_REMATCH[4]}" struct_sha="${BASH_REMATCH[5]}"
+        if in_array "$name" "${TRANSIENT_TABLES[@]}"; then value=transient; else value=durable; fi
+        [[ "$class" == "$value" ]] || { echo "its class for $name is not the contract's ($value)"; return 1; } # guard:G25-rm-class
+        lines+="$name $rows $row_sha $struct_sha"$'\n'
+    done <"$m"
+    RM_TABLES="${lines%$'\n'}"
+    [[ "$(cut -d' ' -f1 <<<"$RM_TABLES")" == "$(upgraded_inventory)" ]] || { echo "its table list is not exactly the 34 tables of the current schema, in order"; return 1; } # guard:G25-rm-tables
+    with_data="$(manifest_names "$m" tables_with_data)"
+    schema_only="$(manifest_names "$m" tables_schema_only)"
+    [[ "$schema_only" == "$(sorted_list "${TRANSIENT_TABLES[@]}")" && "$with_data" == "$(current_durable_inventory)" ]] || { echo "its durable and schema-only tables are not the contract's 27 and 7"; return 1; } # guard:G25-rm-lists
+    [[ "$(manifest_value "$m" structure_sha256)" == "$(structure_aggregate "$RM_TABLES")" ]] || { echo "its structure digest is not that of the structure digests it lists"; return 1; } # guard:G25-rm-structure
+    why="$(current_dump_problem "$dump" "$(awk '{ print $1 " " $2 " " $3 }' <<<"$RM_TABLES")")" || { echo "the dump is not consistent with the manifest (its statement forms, table inventory or row counts): $why"; return 1; } # guard:G25-rm-dump-content
+    why="$(files_manifest_problem "$fm")" || { echo "the Resource-files manifest cannot be relied on: $why"; return 1; } # guard:G25-rm-files-manifest
+    [[ "$(manifest_value "$m" resources_manifest_file)" == "$FILES_MANIFEST_FILE" && "$(sha256sum <"$fm" | cut -c1-64)" == "$(manifest_value "$m" resources_manifest_sha256)" && "$(wc -c <"$fm" | tr -d ' ')" == "$(manifest_value "$m" resources_manifest_bytes)" ]] || { echo "the Resource-files manifest is not the one this manifest binds (its name, SHA-256 or size differs)"; return 1; } # guard:G25-rm-files-manifest-bound
+    [[ "$(manifest_value "$m" taken_at)" == "$(manifest_value "$fm" taken_at)" ]] || { echo "the Resource-files manifest was not taken at the same time"; return 1; } # guard:G25-rm-taken-same
+    fm_state="$(manifest_value "$fm" resources_directory)"
+    files_manifest_entries "$fm"
+    [[ "$fm_state" == present && "$MANIFEST_LINES" -ge 1 ]] || { echo "the Resource files are not a directory holding files, which is what a paired backup of a database with Resource-file records is"; return 1; } # guard:G25-rm-files-present
+    why="$(files_archive_matches_manifest "$archive" "$fm")" || { echo "the Resource-files archive cannot be relied on: $why"; return 1; } # guard:G25-rm-archive
+    [[ "$(manifest_value "$m" resources_archive_file)" == "$FILES_ARCHIVE_FILE" && "$(manifest_value "$m" resources_archive_sha256)" == "$(manifest_value "$fm" resource_files_sha256)" && "$(manifest_value "$m" resources_archive_bytes)" == "$(manifest_value "$fm" resource_files_bytes)" ]] || { echo "the archive this manifest binds is not the one the Resource-files manifest describes"; return 1; } # guard:G25-rm-archive-bound
+    [[ "$(manifest_value "$m" resources_files_count)" == "$MANIFEST_LINES" && "$(manifest_value "$m" resources_asset_rows)" == "$MANIFEST_LINES" && "$(awk '$1 == "resource_assets" { print $2 }' <<<"$RM_TABLES")" == "$MANIFEST_LINES" ]] || { echo "the files, the asset rows the manifest records and the resource_assets rows it measured are not one number"; return 1; } # guard:G25-rm-assets
+    [[ "$(manifest_value "$m" resources_inventory_sha256)" == "$(printf '%s' "$MANIFEST_SPEC" | sha256sum | cut -c1-64)" ]] || { echo "its Resource-file inventory digest is not that of the files the Resource-files manifest lists"; return 1; } # guard:G25-rm-inventory
+    RM_DUMP_SHA="$(manifest_value "$m" database_dump_sha256)" RM_DUMP_BYTES="$(manifest_value "$m" database_dump_bytes)" RM_MIG_SHA="$(manifest_value "$m" migrations_sha256)"
+    RM_STRUCT_SHA="$(manifest_value "$m" structure_sha256)" RM_FM_SHA="$(manifest_value "$m" resources_manifest_sha256)" RM_FM_BYTES="$(manifest_value "$m" resources_manifest_bytes)"
+    RM_AR_SHA="$(manifest_value "$m" resources_archive_sha256)" RM_AR_BYTES="$(manifest_value "$m" resources_archive_bytes)" RM_FILES="$(manifest_value "$m" resources_files_count)"
+    RM_ROWS="$(manifest_value "$m" resources_asset_rows)" RM_INV_SHA="$(manifest_value "$m" resources_inventory_sha256)"
+    [[ "$(<"$m")" == "$(recovery_manifest_text)" ]] || { echo "it is not exactly what this script writes (an extra, missing or reordered line)"; return 1; } # guard:G25-rm-exact
+    return 0
+}
+
+# require_recovery_unit: the paired backup an earlier stage took is present, complete, this run's and consistent in every part, or nothing may rely on it. The
+# recovery manifest is the commit point: the files beside it are not a recovery unit without it, and the historical backup's files (historical.*) are never one.
+require_recovery_unit() {
+    local why
+    load_keyring
+    { state_file_ok "$RECOVERY_MANIFEST_FILE" && state_file_ok "$CURRENT_DUMP_FILE" && state_file_ok "$FILES_MANIFEST_FILE" && state_file_ok "$FILES_ARCHIVE_FILE"; } || refuse "there is no complete recovery unit in the state directory ($RECOVERY_MANIFEST_FILE, $CURRENT_DUMP_FILE, $FILES_MANIFEST_FILE and $FILES_ARCHIVE_FILE, each a private file of this script's). Nothing was changed." # guard:G25-unit-required
+    why="$(recovery_unit_problem "$ROOT/$RECOVERY_MANIFEST_FILE" "$ROOT/$CURRENT_DUMP_FILE" "$ROOT/$FILES_MANIFEST_FILE" "$ROOT/$FILES_ARCHIVE_FILE")" || refuse "the recovery unit cannot be relied on: $why."
 }
 
 # --- the stages ----------------------------------------------------------------------------------------------------------------------------
@@ -2965,6 +3359,181 @@ cmd_restore_files() {
     say "Restored files only. The database restore, the prune dry-run check and the reopening are the next slice's."
 }
 
+# --- backup-paired (slice 2.2C-3, WU4) -----------------------------------------------------------------------------------------------------------------------
+
+# paired_measure: ONE measurement of everything the paired backup is of, so that the two taken around the artifacts are the same kind of thing: the asset rows the
+# database holds (the same two reads backup-files makes), the Resources directory held to them by the files container, and the application's own `snapshot-all` (the
+# 34 tables' rows and structure as digests, the ledger, the keys the application used). Sets MEAS_TABLES (`<table> <rows> <digest>`), MEAS_STRUCT (`<table> <digest>`),
+# MEAS_LEDGER (`<count> <last> <digest>`), DB_ROWS_SPEC and DB_ROWS_COUNT (files_db_rows), FILES_STATE, FILES_COUNT and FILES_SPEC (files_report). Every part must be
+# there and agree with the others, or it is a refusal: the two readers of the asset rows (the SQL client and the application's snapshot) must give one number.
+paired_measure() {
+    local checked out ledger_count ledger_last ledger_digest why assets
+    files_db_rows
+    [[ "$DB_ROWS_SPEC" != none && "$DB_ROWS_SPEC" != empty && "$DB_ROWS_COUNT" == "$FILES_SEED_COUNT" ]] || refuse "resource_assets does not hold the $FILES_SEED_COUNT synthetic asset rows seed-files writes, so there are no Resource-file records for a paired backup to bind. Nothing was changed." # guard:G25-paired-assets
+    capture checked 'checking the Resources directory' run_files check "$DB_ROWS_SPEC"
+    grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok." # guard:G25-paired-check-reported
+    files_report "$checked"
+    [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$DB_ROWS_SPEC" ]] || refuse "the Resources directory and the asset rows the database holds do not agree on every key, size and SHA-256. Nothing was changed." # guard:G25-paired-agree
+    run_helper current helper:snapshot-all out
+    grep -Fxq 'snapshot-all:complete=ok' <<<"$out" || refuse "the snapshot helper did not report snapshot-all:complete=ok: its output is incomplete, and an incomplete snapshot is refused, never read as smaller." # guard:G25-snapshot-all-reported
+    capture MEAS_TABLES 'validating the current snapshot' all_table_lines "$out"
+    capture MEAS_STRUCT 'validating the current structure' structure_lines "$out" "$(upgraded_inventory)"
+    ledger_count="$(snapshot_value "$out" ledger:count)" || ledger_count=''
+    ledger_last="$(snapshot_value "$out" ledger:last)" || ledger_last=''
+    ledger_digest="$(snapshot_value "$out" ledger:digest)" || ledger_digest=''
+    [[ "$ledger_count" == "$CURRENT_LEDGER_COUNT" && "$ledger_last" == "$CURRENT_LAST_MIGRATION" && "$ledger_digest" =~ ^[0-9a-f]{64}$ ]] || refuse "the snapshot's migration ledger is not the $CURRENT_LEDGER_COUNT migrations of the current schema, ending at $CURRENT_LAST_MIGRATION." # guard:G25-ledger-evidence
+    MEAS_LEDGER="$ledger_count $ledger_last $ledger_digest"
+    why="$(keys_problem "$out")" || refuse "$why."
+    assets="$(awk '$1 == "resource_assets" { print $2 }' <<<"$MEAS_TABLES")"
+    [[ "$assets" == "$DB_ROWS_COUNT" ]] || refuse "the application's snapshot counts $assets resource_assets rows and the query for the asset rows $DB_ROWS_COUNT." # guard:G25-assets-two-readers
+}
+
+PAIRED_TMPS=()
+PAIRED_COMMITTED=()
+PAIRED_PENDING='' PAIRED_PENDING_TMP='' # the name commit_state_file is placing, and the temporary file it is linked from
+PAIRED_VERIFIED=no # set when require_recovery_unit has accepted the files this stage put in place
+# paired_temp VAR: a private temporary file in the state directory for an artifact that is not yet a part of the backup, removed when the stage ends (on_paired_exit).
+paired_temp() {
+    local tmp
+    mutation_begins # the first thing written to the state directory
+    tmp="$(umask 077 && mktemp -- "$ROOT/.paired.XXXXXX")" || fail "a temporary file could not be made in the state directory"
+    PAIRED_TMPS+=("$tmp")
+    printf -v "$1" '%s' "$tmp"
+}
+# commit_state_file TEMP NAME: the finished temporary file under its final name, by a hard link that fails if the name is taken, so that nothing is ever put over a file that is there.
+commit_state_file() {
+    PAIRED_PENDING="$2" PAIRED_PENDING_TMP="$1" # what the link below is about to place, so that an interruption between the link and the next line does not hide it from the note
+    ln -- "$1" "$ROOT/$2" 2>/dev/null || refuse "$2 is in the state directory already, and a backup is never put over a file. $(paired_partial_note)" # guard:G25-commit-no-clobber
+    PAIRED_COMMITTED+=("$2")
+    PAIRED_PENDING=''
+}
+# paired_partial_note: what is true of the state directory, in words, when the stage stops. Three phases are told apart by what the stage itself did (PAIRED_COMMITTED, the
+# names it put in place, and PAIRED_VERIFIED, set only once require_recovery_unit accepted them), never by assumption: (1) nothing was put in place; (2) some files were, and
+# the recovery manifest was not; (3) the recovery manifest was put in place, and the stage then failed, in the final verification or after it. In the third phase the files
+# may exist and may be a recovery unit, and nothing here says which: only require_recovery_unit accepting them makes them one. Nothing is removed, renamed or repaired.
+paired_partial_note() {
+    local part wrote=no placed=() other=''
+    # A signal can arrive after the link made a name and before PAIRED_COMMITTED learned of it. The name then is, and only then, the very file this stage was linking (same inode as
+    # its temporary file, which is still there at this point): it counts as placed. A name that is another file's (the link failed because it was taken) is never counted.
+    if [[ -n "$PAIRED_PENDING" && "$ROOT/$PAIRED_PENDING" -ef "$PAIRED_PENDING_TMP" ]] && ! in_array "$PAIRED_PENDING" ${PAIRED_COMMITTED[@]+"${PAIRED_COMMITTED[@]}"}; then PAIRED_COMMITTED+=("$PAIRED_PENDING"); fi
+    for part in ${PAIRED_COMMITTED[@]+"${PAIRED_COMMITTED[@]}"}; do
+        if [[ "$part" == "$RECOVERY_MANIFEST_FILE" ]]; then wrote=yes; else placed+=("$part"); fi
+    done
+    if [[ "$wrote" == yes && "$PAIRED_VERIFIED" == yes ]]; then
+        printf '%s was put in place last, with %s, and require_recovery_unit accepted them; the stage failed after that. Nothing was removed. Whether they may be relied on is for require_recovery_unit to say again, not for this message.' "$RECOVERY_MANIFEST_FILE" "${placed[*]}"
+    elif [[ "$wrote" == yes ]]; then
+        printf 'All four files were put in place (%s last) but the stage failed before it had verified them as put in place. They may be a recovery unit and may not: only require_recovery_unit accepting them makes them one, and nothing may rely on them until it does. Nothing was removed or repaired.' "$RECOVERY_MANIFEST_FILE"
+    else
+        if [[ -e "$ROOT/$RECOVERY_MANIFEST_FILE" || -L "$ROOT/$RECOVERY_MANIFEST_FILE" ]]; then other=" A file named $RECOVERY_MANIFEST_FILE is in the state directory that this stage did not write, and it is not part of this backup."; fi
+        if ((${#placed[@]} > 0)); then
+            printf 'These parts of the backup were already in place: %s. %s was not written, so they are NOT a recovery unit, whatever they hold.%s' "${placed[*]}" "$RECOVERY_MANIFEST_FILE" "$other"
+        else
+            printf 'Nothing of this backup was put in place.%s' "$other"
+        fi
+    fi
+}
+on_paired_exit() {
+    local status=$? tmp note=''
+    if ((status != 0)); then note="$(paired_partial_note)"; fi # before the temporary files go: it compares them with the names that were linked from them
+    for tmp in ${PAIRED_TMPS[@]+"${PAIRED_TMPS[@]}"}; do rm -f -- "$tmp"; done
+    if ((status != 0)); then
+        stage_trailer 'The rehearsal files and database'
+        warn "$note"
+    fi
+    stage_record_remove
+}
+
+# backup-paired: ONE recovery unit of the current schema: the two-pass dump of the 34-table database and the Resource files archive, taken from a database and a
+# directory that were measured to agree, measured again afterwards to be exactly as they were, and bound by one manifest.
+#
+# What "one recovery unit" does and does not claim. A dump and an archive are two commands, not one atomic snapshot, and both succeeding proves nothing about when each
+# saw the data. What supports the claim is this, all of it: (1) the rehearsal database is private, reached only through this script's own containers one at a time under the
+# one-run lock, and no other rehearsal container exists (checked by every container it creates), so nothing else writes between the steps; (2) the database (34 tables'
+# rows and structure, the ledger) and the Resources directory (every key, size and SHA-256, held to the asset rows) are measured BEFORE and AFTER both artifacts are
+# captured, and any difference at all is a refusal; (3) the dump holds, for every durable table, exactly the rows the first measurement counted, and nothing for the
+# transient ones; (4) the archive is read back and verified against the files measured. That is detection by before/after equality, not isolation: a change made and exactly
+# reversed between the two measurements is not noticed (the same state has the same digest), and the dump's own pass 2 is one transaction (`--single-transaction`) but pass 1 and
+# pass 2 are two. The claim is "no change was observed", never "an atomic snapshot".
+#
+# Nothing is put in place until everything has been verified, and then in this order: the dump, the archive, the Resource-files manifest, and last the recovery manifest, by a
+# hard link that fails if the name is taken. The recovery manifest is the commit point. An interruption or a failure before it leaves no recovery unit, said so, and the
+# parts that were already in place named; the next backup-paired refuses (it never overwrites) and the rehearsal is cleaned up and started again.
+cmd_backup_paired() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local name counts version taken fp dump_tmp archive_tmp fm_tmp rm_tmp verified dump_sha dump_bytes archive_sha archive_bytes changed
+    local m1_tables m1_struct m1_ledger m1_spec m1_rows_spec m1_count
+    for name in "$CURRENT_DUMP_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$RECOVERY_MANIFEST_FILE"; do
+        [[ ! -e "$ROOT/$name" && ! -L "$ROOT/$name" ]] || refuse "'$name' is already in the state directory, and a backup is never overwritten. The rehearsal is disposable: run cleanup, then start again." # guard:G25-paired-no-overwrite
+    done
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the current schema (a paired backup is taken from the upgraded database)' # guard:G25-paired-inventory
+    capture counts 'reading the upgraded state' app_query "$COUNTS_SQL"
+    [[ "$counts" == "$((FIXTURE_PEOPLE + 1))"$'\t1\t29\t0' ]] || refuse "the database is not the post-upgrade state this stage starts from (Persons, profiles, migrations, profiles without a Person: ${counts//$'\t'/, }; expected $((FIXTURE_PEOPLE + 1)), 1, 29, 0). Nothing was changed." # guard:G25-paired-state
+    load_keyring
+
+    arm_stage backup-paired on_paired_exit
+    say "Measuring the database and the Resources directory, before anything is taken ..."
+    paired_measure
+    m1_tables="$MEAS_TABLES" m1_struct="$MEAS_STRUCT" m1_ledger="$MEAS_LEDGER" m1_spec="$FILES_SPEC" m1_rows_spec="$DB_ROWS_SPEC" m1_count="$DB_ROWS_COUNT"
+    say "ok   34 tables, $m1_count Resource files held to $m1_count asset rows, and a ledger of $CURRENT_LEDGER_COUNT migrations: measured"
+
+    say "Taking the two-pass dump of the 34 tables as the application account ..."
+    paired_temp dump_tmp
+    take_dump "$dump_tmp" || exit 1
+    verified="$(current_dump_problem "$dump_tmp" "$m1_tables")" || refuse "the dump is not what the backup contract requires: $verified. It was removed." # guard:G25-paired-dump-checked
+    capture version 'reading the server version' server_version_text "$CID"
+    [[ "$version" =~ $SERVER_VERSION_RE ]] || refuse "the server reports version '$version', not 10.11.18."
+    dump_sha="$(sha256sum <"$dump_tmp" | cut -c1-64)"
+    dump_bytes="$(wc -c <"$dump_tmp" | tr -d ' ')"
+
+    say "Archiving the $m1_count file(s) with the runbook's command, then reading the archive back ..."
+    paired_temp archive_tmp
+    run_files archive "$m1_rows_spec" >"$archive_tmp"
+    [[ -s "$archive_tmp" ]] || refuse "the archive is empty." # guard:G25-paired-archive-nonempty
+    capture verified 'verifying the archive' run_files verify-archive "$m1_spec" <"$archive_tmp"
+    files_verified_ok "$verified" "$m1_count" || refuse "the archive was not verified against the files it was made from." # guard:G25-paired-archive-verified
+    archive_sha="$(sha256sum <"$archive_tmp" | cut -c1-64)"
+    archive_bytes="$(wc -c <"$archive_tmp" | tr -d ' ')"
+
+    say "Measuring again, now that both artifacts are taken ..."
+    paired_measure
+    changed="$(digest_differences "$m1_tables" "$MEAS_TABLES")"
+    [[ "$m1_struct" == "$MEAS_STRUCT" ]] || changed+=" structure"
+    [[ "$m1_ledger" == "$MEAS_LEDGER" ]] || changed+=" ledger"
+    [[ "$m1_spec" == "$FILES_SPEC" && "$m1_rows_spec" == "$DB_ROWS_SPEC" ]] || changed+=" resource-files"
+    [[ -z "${changed// /}" ]] || refuse "the database or the Resources directory changed while the backup was being taken (changed: $(tr '\n' ' ' <<<"$changed")). Nothing was put in place; the artifacts taken are removed, and the backup is not one recovery unit." # guard:G25-paired-quiescent
+    say "ok   measured again afterwards: every table's rows and structure, the ledger, every Resource file and every asset row are exactly as before"
+
+    taken="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fp="$(token_fingerprint "$(state_token "$ROOT")")"
+    paired_temp fm_tmp
+    printf '%s\n' "$(files_manifest_text present "$archive_sha" "$archive_bytes" "$m1_count" "$m1_spec" "$taken" "$fp")" >"$fm_tmp"
+    verified="$(files_manifest_problem "$fm_tmp")" || refuse "the Resource-files manifest just made is not consistent: $verified." # guard:G25-paired-files-manifest-checked
+    verified="$(files_archive_matches_manifest "$archive_tmp" "$fm_tmp")" || refuse "the archive just made does not match its manifest: $verified."
+    RM_TAKEN="$taken" RM_FP="$fp" RM_COMMIT="$(sed -n 's/^current=//p' "$ROOT/$PREPARED_FILE")" RM_SERVER="$version"
+    RM_DUMP_SHA="$dump_sha" RM_DUMP_BYTES="$dump_bytes" RM_MIG_SHA="${m1_ledger##* }"
+    RM_TABLES="$(join_tables "$m1_tables" "$m1_struct")"
+    RM_STRUCT_SHA="$(structure_aggregate "$RM_TABLES")"
+    RM_FM_SHA="$(sha256sum <"$fm_tmp" | cut -c1-64)" RM_FM_BYTES="$(wc -c <"$fm_tmp" | tr -d ' ')"
+    RM_AR_SHA="$archive_sha" RM_AR_BYTES="$archive_bytes" RM_FILES="$m1_count" RM_ROWS="$m1_count" RM_INV_SHA="$(printf '%s' "$m1_spec" | sha256sum | cut -c1-64)"
+    paired_temp rm_tmp
+    printf '%s\n' "$(recovery_manifest_text)" >"$rm_tmp"
+    verified="$(recovery_unit_problem "$rm_tmp" "$dump_tmp" "$fm_tmp" "$archive_tmp")" || refuse "the recovery unit just made is not consistent: $verified. Nothing was put in place." # guard:G25-paired-unit-checked
+
+    commit_state_file "$dump_tmp" "$CURRENT_DUMP_FILE"
+    commit_state_file "$archive_tmp" "$FILES_ARCHIVE_FILE"
+    commit_state_file "$fm_tmp" "$FILES_MANIFEST_FILE"
+    commit_state_file "$rm_tmp" "$RECOVERY_MANIFEST_FILE" # the commit point
+    require_recovery_unit
+    PAIRED_VERIFIED=yes
+    say "ok   the dump creates and drops exactly the 34 tables, once each, and holds exactly the rows the first measurement counted for the 27 durable tables (nothing for the 7 transient ones): $dump_bytes bytes, sha256 ${dump_sha:0:16}..."
+    say "ok   $m1_count Resource files archived and read back ($archive_bytes bytes, sha256 ${archive_sha:0:16}...), each the key, size and SHA-256 the asset rows and the directory agree on"
+    say "ok   keyring: current $CURRENT_FP, previous $PREVIOUS_FP, ring $RING_FP (fingerprints only)"
+    say "ok   $RECOVERY_MANIFEST_FILE binds the dump, the archive and the Resource-files manifest by SHA-256 and size, and records the 34 tables' rows and structure, the ledger and the keyring; the files as put in place were verified for integrity and structural consistency, and the restored CONTENT is not verified by this stage (a restore measures it)"
+    say "Paired backup done: no change was observed between the two measurements around both artifacts. This is not an atomic snapshot; see the development note, 'WU4'."
+}
+
 
 main() {
     local command="${1:-}"
@@ -2988,6 +3557,7 @@ main() {
         backup-files) shift; cmd_backup_files "$@" ;;
         aside-files) shift; cmd_aside_files "$@" ;;
         restore-files) shift; cmd_restore_files "$@" ;;
+        backup-paired) shift; cmd_backup_paired "$@" ;;
         help | -h | --help) usage ;;
         *) usage >&2; exit 64 ;;
     esac

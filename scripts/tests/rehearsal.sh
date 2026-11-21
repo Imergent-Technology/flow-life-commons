@@ -452,6 +452,7 @@ case "$1 ${2:-}" in
         cmd="$(cat "$W/c/$id/cmd" 2>/dev/null)"; wd="$(cat "$W/c/$id/workdir" 2>/dev/null)"; key=''
         case "$cmd" in
             *'rehearse.php fixture-load'*) key=fixture_load ;;
+            *'rehearse.php snapshot-all'*) key=snapshot_all ;; # slice 2.2C-3 (WU4): BEFORE `snapshot`, which is a prefix of it (out_snapshot_all, out_snapshot_all.<n> for the nth run)
             *'rehearse.php snapshot'*) key="snapshot_${wd##*/}" ;;
             *'rehearse.php mark'*) key=mark ;;
             *'rehearse.php signin'*) key=signin ;;
@@ -1982,7 +1983,7 @@ t_g5_malformed_state_recovery_path() {
 harness_sums() { (cd "$SUT/php" && sha256sum -- db-ping.php probe.php rehearse.php files.php); }
 # The test-support classes the helpers load, as WU1 attests them (HalfFailedShape ... UpgradeDatabase), and their digests as the fake git gives a commit's blob
 # (`BLOB <commit>:<path>`, one line) and as a container would print them from the support directory.
-SUPPORT_EXPECTED=(HalfFailedShape HistoricalFixture HistoricalSnapshot ResourceFileArchive ResourceFileRefusal Totp UpgradeDatabase)
+SUPPORT_EXPECTED=(CurrentSnapshot CurrentSnapshotRefusal HalfFailedShape HistoricalFixture HistoricalSnapshot ResourceFileArchive ResourceFileRefusal Totp UpgradeDatabase)
 support_sums() { local n; for n in "${SUPPORT_EXPECTED[@]}"; do printf '%s  %s.php\n' "$(printf 'BLOB %s:apps/platform/tests/Support/%s.php\n' "$HEAD_SHA" "$n" | sha256sum | cut -c1-64)" "$n"; done; }
 # What `prepare` records, for a state directory that has been prepared: the two commits, each helper script's digest and each support class's.
 prepared_text() { printf 'prepared-v2\nhistorical=%s\ncurrent=%s\n' "$HIST" "$HEAD_SHA"; harness_sums | sed 's/^/harness /'; support_sums | sed 's/^/support /'; }
@@ -2087,6 +2088,7 @@ t_g11_fixed_argument_vectors() {
         [relationships:check]='php artisan relationships:check' [release:show]='php artisan release:show'
         [resources:assets:prune]='php artisan resources:assets:prune --dry-run' [helper:db-ping]='php /var/www/html/harness/db-ping.php'
         [helper:fixture-load]='php /var/www/html/harness/rehearse.php fixture-load' [helper:snapshot]='php /var/www/html/harness/rehearse.php snapshot'
+        [helper:snapshot-all]='php /var/www/html/harness/rehearse.php snapshot-all'
         [helper:post-upgrade-mark]='php /var/www/html/harness/rehearse.php mark' [helper:sign-in]='php /var/www/html/harness/rehearse.php signin'
         [helper:half-migrate]='php /var/www/html/harness/rehearse.php half-migrate' [helper:revoke]='php /var/www/html/harness/rehearse.php revoke'
     )
@@ -2291,7 +2293,7 @@ t_g10_prepare_happy_path() {
     # records is the two commits and those digests, in a private file.
     expect_has 'the volume check' "$(tail -n 2 <<<"$creates" | head -n 1)" 'exec sha256sum -- "$@" sh /var/www/html/harness db-ping.php probe.php rehearse.php files.php'
     # WU1: and the support classes the helpers load, digested inside the volume by a container with no network (the seventh), after the harness check.
-    expect_has 'the support classes check' "$(tail -n 1 <<<"$creates")" 'exec sha256sum -- "$@" sh /var/www/html/current/tests/Support HalfFailedShape.php HistoricalFixture.php HistoricalSnapshot.php ResourceFileArchive.php ResourceFileRefusal.php Totp.php UpgradeDatabase.php'
+    expect_has 'the support classes check' "$(tail -n 1 <<<"$creates")" 'exec sha256sum -- "$@" sh /var/www/html/current/tests/Support CurrentSnapshot.php CurrentSnapshotRefusal.php HalfFailedShape.php HistoricalFixture.php HistoricalSnapshot.php ResourceFileArchive.php ResourceFileRefusal.php Totp.php UpgradeDatabase.php'
     expect_has 'the support classes check has no network' "$(tail -n 1 <<<"$creates")" '--network none'
     expect_has 'recorded' "$OUT" 'recorded: both commits'
     [[ "$("$REAL_STAT" -c %a "$T/root/prepared.source")" == 600 ]] || bad 'prepared.source is not mode 600'
@@ -4881,15 +4883,15 @@ t_g23_a_change_record_that_cannot_be_written_stops_the_stage() {
     [[ "$RC" != 0 && "$OUT" != *SURVIVED* && "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad "a files volume was created although the change record could not be written: $RC ${ERR:0:200}"
 }
 
-# F3. The approved commands that are read-only, for the purpose of what a failed stage may say, are exactly five. Any other approved name, and anything that is not
+# F3. The approved commands that are read-only, for the purpose of what a failed stage may say, are exactly six. Any other approved name, and anything that is not
 # an approved name, is classified as one that may change something. The test knows every approved name (read from runner_command), so a new one, or a writing
-# helper added to the five, cannot pass without this list being changed on purpose.
+# helper added to the six, cannot pass without this list being changed on purpose.
 t_g23_the_read_only_helpers_are_exactly_these() {
-    local -a read_only=(helper:db-ping helper:snapshot migrate:status about release:show)
+    local -a read_only=(helper:db-ping helper:snapshot helper:snapshot-all migrate:status about release:show)
     local -a approved=() other=()
     local name got
     mapfile -t approved < <(sed -n '/^runner_command() {/,/^}/p' "$SRC/restore-rehearsal.sh" | grep -E '^        [a-z:| -]+\) RUN_CMD=' | sed 's/).*//' | tr '|' '\n' | tr -d ' ')
-    ((${#approved[@]} == 13)) || bad "runner_command approves ${#approved[@]} names, not the 13 this test knows: ${approved[*]}"
+    ((${#approved[@]} == 14)) || bad "runner_command approves ${#approved[@]} names, not the 14 this test knows: ${approved[*]}"
     for name in "${read_only[@]}"; do
         [[ " ${approved[*]} " == *" $name "* ]] || bad "$name is not an approved command any more, so it cannot be a read-only one"
     done
@@ -4897,9 +4899,9 @@ t_g23_the_read_only_helpers_are_exactly_these() {
         run_fn "helper_is_read_only '$name' && echo read-only || echo may-change"
         got="$OUT"
         if [[ " ${read_only[*]} " == *" $name "* && -n "$name" ]]; then
-            [[ "$got" == read-only ]] || bad "'$name' is one of the five read-only commands but is classified as one that may change something"
+            [[ "$got" == read-only ]] || bad "'$name' is one of the six read-only commands but is classified as one that may change something"
         else
-            [[ "$got" == may-change ]] || bad "'$name' is classified as read-only: a command that is not one of the five must be one that may change something"
+            [[ "$got" == may-change ]] || bad "'$name' is classified as read-only: a command that is not one of the six must be one that may change something"
             other+=("$name")
         fi
     done
@@ -5170,17 +5172,17 @@ t_g24_a_runner_create_is_a_recorded_change() {
     [[ -z "$(find "$T/marker-tmp" -mindepth 1)" ]] || bad 'a change record was left behind'
 }
 
-# run_helper records a change for every command that is not one of the five read-only ones, BEFORE it asks for the runner. Since every runner's create is recorded as
+# run_helper records a change for every command that is not one of the six read-only ones, BEFORE it asks for the runner. Since every runner's create is recorded as
 # well (above), this is the earlier of two records, and is tested on its own: run_in_runner is replaced by a stand-in that only says whether the record existed.
 t_g24_run_helper_records_a_writing_helper_before_the_runner() {
     local name got
     for name in helper:fixture-load helper:post-upgrade-mark helper:half-migrate helper:revoke helper:sign-in migrate relationships:check resources:assets:prune \
-        helper:db-ping helper:snapshot migrate:status about release:show; do
+        helper:db-ping helper:snapshot helper:snapshot-all migrate:status about release:show; do
         mkdir -p "$T/marker-tmp"
         run_fn "ROOT=/stand-in; run_in_runner() { if [[ -e \"\$MUTATION_MARK.changed\" ]]; then echo recorded; else echo unrecorded; fi; }; arm_stage stand-in on_stage_exit; run_helper current $name got; echo \"\$got\"" TMPDIR="$T/marker-tmp"
         expect_rc "run_helper $name" 0
         got="$OUT"
-        if [[ "$name" == helper:db-ping || "$name" == helper:snapshot || "$name" == migrate:status || "$name" == about || "$name" == release:show ]]; then
+        if [[ "$name" == helper:db-ping || "$name" == helper:snapshot || "$name" == helper:snapshot-all || "$name" == migrate:status || "$name" == about || "$name" == release:show ]]; then
             [[ "$got" == unrecorded ]] || bad "$name is read-only, and a change was recorded before its runner: $got"
         else
             [[ "$got" == recorded ]] || bad "$name may change something, and no change was recorded before its runner: $got"
@@ -7562,11 +7564,1153 @@ t_g22_static_the_files_slice_is_what_the_contract_says() {
     grep -q 'plain_docker' "$T/run_files.txt" || bad 'the files container is not created by the credential-free launcher'
     ! grep -q 'launch_docker' "$T/run_files.txt" || bad 'the files container is created by the launcher that carries the database password and keys'
     # The two new state files are the only ones added, and cleanup lists them.
-    grep -q 'STATE_FILES=.*"\$FILES_ARCHIVE_FILE" "\$FILES_MANIFEST_FILE" "\$FILES_VOLUME_MARKER")' "$script" || bad 'the state files do not include the archive, its manifest and the record of the files volume'
+    grep -q 'STATE_FILES=.*"\$FILES_ARCHIVE_FILE" "\$FILES_MANIFEST_FILE" "\$FILES_VOLUME_MARKER"' "$script" || bad 'the state files do not include the archive, its manifest and the record of the files volume'
     # The compose file gains nothing: the files volume is not Compose's, and nothing in it names a files object.
     ! grep -qi 'files' "$SRC/compose.yaml" || bad 'compose.yaml mentions the files volume or container'
     # `php -l` where there is a php.
     if command -v php >/dev/null 2>&1; then php -l "$helper" >/dev/null 2>&1 || bad 'files.php does not parse'; fi
+}
+
+# --- tests: slice 2.2C-3, WU4: the current profile, snapshot-all, backup-paired and the recovery unit ----------------------------------------------------------------
+#
+# The harness (php/rehearse.php, php/files.php) runs in containers, so here it is a fake, as everywhere: out_snapshot_all (out_snapshot_all.<n> for the nth run) is what
+# `rehearse.php snapshot-all` prints, out_files_<action> what the files helper prints, dump_pass1 and dump_pass2 the two passes of the dump client. What the PHP side
+# does with a real database is apps/platform/tests/Unit/Rehearsal/CurrentSnapshotTest.php and tests/Feature/Rehearsal/CurrentSnapshotDatabaseTest.php.
+# Nothing in the historical profile's tests is changed by this slice: the tests above still run, as they did, against the same functions.
+
+LEDGER_LAST='2026_10_11_000001_add_provenance_to_contact_methods'
+sorted_up() { up_names | LC_ALL=C sort; }
+crows_of() { # TABLE: the rows of each of the 34 tables in the post-upgrade, post-seed state: the fixture's, the upgrade's marker profile and Person, the four seeded assets
+    case "$1" in
+        account_invitations) echo 4 ;; account_recovery_codes) echo 5 ;; account_totp_factors) echo 3 ;; accounts) echo 11 ;; membership_grants) echo 5 ;;
+        migrations) echo 29 ;; password_reset_tokens) echo 2 ;; people) echo 14 ;; role_assignments) echo 12 ;; security_events) echo 8 ;; sessions) echo 3 ;;
+        contact_profiles) echo 1 ;; resource_assets) echo 4 ;;
+        *) echo 0 ;;
+    esac
+}
+all_block() { # SEED: the `all-table` lines of the 34 tables, by name (a table with no rows has the digest of none)
+    local t
+    for t in $(sorted_up); do
+        if [[ "$(crows_of "$t")" == 0 ]]; then printf 'all-table %s 0 %s\n' "$t" "$EMPTY_DIGEST"; else printf 'all-table %s %s %s\n' "$t" "$(crows_of "$t")" "$(fake_digest "$t$1")"; fi
+    done
+}
+snapshot_all_output() { # SEED [LEDGER_DIGEST]: what `snapshot-all` prints
+    printf 'key:current=%s\nkey:previous=%s\n' "$FP_CUR" "$FP_PREV"
+    all_block "$1"
+    structure_block up
+    printf 'ledger:count=29\nledger:last=%s\nledger:digest=%s\nsnapshot-all:complete=ok\n' "$LEDGER_LAST" "${2:-$(fake_digest ledger)}"
+}
+# The two passes of the 34-table dump in the form mariadb-dump 10.19 of MariaDB 10.11.18 writes them: the header, the per-table lines, the footer, the sandbox line WITH ITS
+# TRAILING SPACE and the SET pairs are the bytes a live diagnostic of the real two-pass dump of the 34 tables showed (2026-11-20); the CREATE bodies and the rows are minimal
+# (the real structures are in the fixture the Pest test holds to the schema, and a row's text is not read). Rows are on the lines after VALUES; a durable table with no rows has only
+# its LOCK and KEYS lines; a transient table is ignored by the second pass and has structure only.
+real_dump_header() { # PASS (1 or 2): the second pass has no UNIQUE_CHECKS lines
+    printf '/*M!999999\\- enable the sandbox mode */ \n-- MariaDB dump 10.19  Distrib 10.11.18-MariaDB, for debian-linux-gnu (x86_64)\n--\n-- Host: 127.0.0.1    Database: flc_rehearsal_app\n-- ------------------------------------------------------\n-- Server version\t10.11.18-MariaDB-ubu2204\n\n'
+    printf '/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\n/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;\n/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;\n/*!40101 SET NAMES utf8mb4 */;\n'
+    printf '/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;\n/*!40103 SET TIME_ZONE='"'"'+00:00'"'"' */;\n'
+    [[ "$1" == 2 ]] || printf '/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;\n'
+    printf '/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\n/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='"'"'NO_AUTO_VALUE_ON_ZERO'"'"' */;\n/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;\n\n'
+}
+real_dump_footer() { # PASS
+    printf '/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;\n\n/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;\n/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n'
+    [[ "$1" == 2 ]] || printf '/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;\n'
+    printf '/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;\n/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;\n/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;\n/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;\n\n-- Dump completed on 2026-11-20 12:00:00\n'
+}
+put_current_dumps() {
+    local t n i first1=yes first2=yes
+    real_dump_header 1 >"$W/dump_pass1"
+    real_dump_header 2 >"$W/dump_pass2"
+    for t in $(sorted_up); do
+        # a blank line separates one table from the next, and the footer follows the last table directly
+        [[ "$first1" == yes ]] || printf '\n' >>"$W/dump_pass1"
+        first1=no
+        printf -- '--\n-- Table structure for table \x60%s\x60\n--\n\nDROP TABLE IF EXISTS \x60%s\x60;\n/*!40101 SET @saved_cs_client     = @@character_set_client */;\n/*!40101 SET character_set_client = utf8mb4 */;\nCREATE TABLE \x60%s\x60 (\n  \x60id\x60 int(11) NOT NULL,\n  PRIMARY KEY (\x60id\x60)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\n/*!40101 SET character_set_client = @saved_cs_client */;\n' "$t" "$t" "$t" >>"$W/dump_pass1"
+        [[ " ${TRANSIENT[*]} " != *" $t "* ]] || continue
+        [[ "$first2" == yes ]] || printf '\n' >>"$W/dump_pass2"
+        first2=no
+        n="$(crows_of "$t")"
+        printf -- '--\n-- Dumping data for table \x60%s\x60\n--\n\nLOCK TABLES \x60%s\x60 WRITE;\n/*!40000 ALTER TABLE \x60%s\x60 DISABLE KEYS */;\n' "$t" "$t" "$t" >>"$W/dump_pass2"
+        if ((n > 0)); then
+            printf 'INSERT INTO \x60%s\x60 VALUES\n' "$t" >>"$W/dump_pass2"
+            for ((i = 1; i <= n; i++)); do printf '(%d)%s\n' "$i" "$( ((i < n)) && echo , || echo ';')" >>"$W/dump_pass2"; done
+        fi
+        printf '/*!40000 ALTER TABLE \x60%s\x60 ENABLE KEYS */;\nUNLOCK TABLES;\n' "$t" >>"$W/dump_pass2"
+    done
+    real_dump_footer 1 >>"$W/dump_pass1"
+    real_dump_footer 2 >>"$W/dump_pass2"
+}
+
+# The upgraded database (34 tables, the post-upgrade state), the four seeded Resource files and their asset rows, the files volume, the prepared source, and what each helper
+# reports: the same measurement both times unless a test says otherwise. Not a thing the script is told: a world.
+paired_world() {
+    backup_files_world up present 4
+    add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+    snapshot_all_output one >"$W/out_snapshot_all"
+    put_current_dumps
+}
+PAIRED_FILES=(current.dump.sql resources.archive.tar.gz resources.manifest.json recovery.manifest.json)
+paired_nothing_in_place() { # DESC: no part of the backup, and no temporary file, is in the state directory
+    local f
+    for f in "${PAIRED_FILES[@]}"; do [[ ! -e "$T/root/$f" ]] || bad "$1: $f was put in place"; done
+    if compgen -G "$T/root/.paired.*" >/dev/null; then bad "$1: a temporary file was left in the state directory"; fi
+}
+no_snapshot_all_ran() { [[ ! -e "$W/runs" ]] || ! grep -q '^snapshot_all$' "$W/runs" || bad "$1: the snapshot helper ran"; }
+# ensure_paired_cache: one paired backup, made by the UNMUTATED script (SUT=$SRC, as prepare_caches does for the other fixtures) and kept for the tests of the recovery unit.
+# It builds a world of its own, so a test calls it BEFORE its own world. A file-based cache, so that it survives the subshell each mutant's tests run in.
+ensure_paired_cache() {
+    local sut="$SUT" f
+    [[ ! -s "$T/pcache/recovery.manifest.json" || ! -s "$T/pcache/current.dump.sql" || ! -s "$T/pcache/resources.manifest.json" || ! -s "$T/pcache/resources.archive.tar.gz" ]] || return 0
+    SUT="$SRC"
+    paired_world
+    run_script -- backup-paired
+    SUT="$sut"
+    [[ "$RC" == 0 ]] || bad "preparing the cached paired backup: exit $RC: ${ERR:0:300}"
+    rm -rf "${T:?}/pcache"
+    mkdir -p "$T/pcache"
+    for f in "${PAIRED_FILES[@]}"; do cp -p "$T/root/$f" "$T/pcache/"; done
+}
+install_paired() { local f; for f in "${PAIRED_FILES[@]}"; do cp -p "$T/pcache/$f" "$T/root/"; done; } # into the world's state directory
+expected_recovery_manifest() { # DUMP_SHA DUMP_BYTES FM_SHA FM_BYTES AR_SHA AR_BYTES: written out here, not by the script's own function
+    local t rows rsha class list='' with_data='' schema_only='' structure=''
+    for t in $(sorted_up); do
+        rows="$(crows_of "$t")"
+        if [[ "$rows" == 0 ]]; then rsha="$EMPTY_DIGEST"; else rsha="$(fake_digest "${t}one")"; fi
+        if [[ " ${TRANSIENT[*]} " == *" $t "* ]]; then class=transient schema_only+="${schema_only:+, }\"$t\""; else class=durable with_data+="${with_data:+, }\"$t\""; fi
+        list+="    { \"name\": \"$t\", \"class\": \"$class\", \"rows\": $rows, \"row_sha256\": \"$rsha\", \"structure_sha256\": \"$(fake_digest "struct-$t-up")\" },"$'\n'
+        structure+="$t $(fake_digest "struct-$t-up")"$'\n'
+    done
+    list="${list%,$'\n'}"
+    printf '{\n  "recovery_manifest_version": 1,\n  "backup_id": "20231114T221320Z",\n  "taken_at": "2023-11-14T22:13:20Z",\n  "reason": "rehearsal",\n  "run_token_fingerprint": "%s",\n  "release": {\n    "version": "unreleased",\n    "commit": "%s"\n  },\n  "database": {\n    "connection": "mariadb",\n    "name": "flc_rehearsal_app",\n    "server_version": "10.11.18-MariaDB-ubu2204"\n  },\n  "keyring": {\n    "current_key_fingerprint": "%s",\n    "previous_key_fingerprints": ["%s"],\n    "keyring_fingerprint": "%s",\n    "previous_keys_configured": true\n  },\n  "database_dump_file": "current.dump.sql",\n  "database_dump_sha256": "%s",\n  "database_dump_bytes": %s,\n  "migrations_count": 29,\n  "migrations_last": "%s",\n  "migrations_sha256": "%s",\n  "structure_sha256": "%s",\n  "tables_with_data": [%s],\n  "tables_schema_only": [%s],\n  "resources_manifest_file": "resources.manifest.json",\n  "resources_manifest_sha256": "%s",\n  "resources_manifest_bytes": %s,\n  "resources_archive_file": "resources.archive.tar.gz",\n  "resources_archive_sha256": "%s",\n  "resources_archive_bytes": %s,\n  "resources_files_count": 4,\n  "resources_asset_rows": 4,\n  "resources_inventory_sha256": "%s",\n  "tables": [\n%s\n  ]\n}' \
+        "$FP_RUN" "$HEAD_SHA" "$FP_CUR" "$FP_PREV" "$RING_CUR_PREV" "$1" "$2" "$LEDGER_LAST" "$(fake_digest ledger)" "$(printf '%s' "$structure" | sha256sum | cut -c1-64)" "$with_data" "$schema_only" \
+        "$3" "$4" "$5" "$6" "$(fspec 4 | tr -d '\n' | sha256sum | cut -c1-64)" "$list"
+}
+
+# --- the happy path ---
+
+# shellcheck disable=SC2016 # the client's own $MARIADB_PASSWORD is text to look for, not an expansion
+t_g25_paired_happy_path() {
+    local f m dump creates i line table
+    paired_world
+    run_script -- backup-paired
+    expect_rc backup-paired 0
+    expect_has 'the summary' "$OUT" 'Paired backup done'
+    expect_has 'no claim of atomicity' "$OUT" 'This is not an atomic snapshot'
+    expect_has 'measured twice' "$OUT" 'measured again afterwards'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all files_archive files_verify_archive files_check snapshot_all ' ]] || bad "the helpers did not run as check, snapshot, archive, verify, check, snapshot: $(tr '\n' ' ' <"$W/runs")"
+    for f in "${PAIRED_FILES[@]}"; do
+        [[ -f "$T/root/$f" && ! -L "$T/root/$f" && "$("$REAL_STAT" -c %a "$T/root/$f")" == 600 ]] || bad "$f is not a private regular file in the state directory"
+    done
+    if compgen -G "$T/root/.paired.*" >/dev/null; then bad 'a temporary file was left in the state directory'; fi
+    dump="$T/root/current.dump.sql"
+    [[ "$(cat "$W/dump_pass1" "$W/dump_pass2")" == "$(<"$dump")" ]] || bad 'the dump is not pass 1 followed by pass 2'
+    [[ "$(grep -c . "$W/dumpcalls")" == 2 ]] || bad 'the dump client was not called exactly twice'
+    [[ "$(sed -n 1p "$W/dumpcalls")" == 'DUMP args=[--no-data --no-tablespaces flc_rehearsal_app]' ]] || bad "pass 1 was: $(sed -n 1p "$W/dumpcalls")"
+    line='DUMP args=[--no-create-info --single-transaction --quick --no-tablespaces'
+    for table in "${TRANSIENT[@]}"; do line+=" --ignore-table=flc_rehearsal_app.$table"; done
+    [[ "$(sed -n 2p "$W/dumpcalls")" == "$line flc_rehearsal_app]" ]] || bad "pass 2 was: $(sed -n 2p "$W/dumpcalls")"
+    [[ "$(<"$T/root/recovery.manifest.json")" == "$(expected_recovery_manifest "$(sha256sum <"$dump" | cut -c1-64)" "$(wc -c <"$dump" | tr -d ' ')" \
+        "$(sha256sum <"$T/root/resources.manifest.json" | cut -c1-64)" "$(wc -c <"$T/root/resources.manifest.json" | tr -d ' ')" \
+        "$(sha256sum <"$T/root/resources.archive.tar.gz" | cut -c1-64)" "$(wc -c <"$T/root/resources.archive.tar.gz" | tr -d ' ')")" ]] || bad "the recovery manifest is not the one written out independently in this test: $(<"$T/root/recovery.manifest.json")"
+    printf 'ARCHIVE\x00BYTES\xff' | cmp -s - "$T/root/resources.archive.tar.gz" || bad 'the archive in the state directory is not the bytes the files container wrote to its standard output'
+    [[ "$(<"$T/root/resources.manifest.json")" == "$(expected_files_manifest present "$(sha256sum <"$T/root/resources.archive.tar.gz" | cut -c1-64)" "$(wc -c <"$T/root/resources.archive.tar.gz" | tr -d ' ')" 4 4)" ]] || bad 'the Resource-files manifest is not the proven format of L3b'
+    # The two runners of the snapshot: the CURRENT tree, the fixed command, and nothing the caller chose.
+    creates="$(grep -E "^create .*--name $NAME_R " "$W/calls")"
+    [[ "$(grep -c . <<<"$creates")" == 2 ]] || bad "expected two runners (the two measurements), got: $creates"
+    for i in 1 2; do
+        expect_has "runner $i is fixed" "$(sed -n "${i}p" <<<"$creates")" ' php /var/www/html/harness/rehearse.php snapshot-all'
+        expect_has "runner $i is in the current tree" "$(sed -n "${i}p" <<<"$creates")" '--workdir /var/www/html/current'
+    done
+    # The files containers: check, archive, verify, check. The first two and the last read the volume read-only.
+    creates="$(grep -E "^create .*--name $NAME_F " "$W/calls")"
+    [[ "$(grep -c . <<<"$creates")" == 4 ]] || bad "expected four files containers, got: $creates"
+    for i in 1 2 3 4; do expect_has "files container $i reads the volume read-only" "$(sed -n "${i}p" <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"; done
+    [[ "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad 'a paired backup created a volume'
+    # It changes nothing in the database: the only statements are reads.
+    if [[ -f "$W/sql.log" ]] && grep -qE 'CREATE|DROP|INSERT|DELETE|ALTER|UPDATE|TRUNCATE|GRANT' "$W/sql.log"; then bad 'a root statement changed data or schema'; fi
+    [[ "$(grep -cE 'DROP|ALTER|DELETE|UPDATE|TRUNCATE|INSERT|CREATE' "$W/appsql.log" || true)" == 0 ]] || bad 'the application account ran a statement other than a read'
+    # No historical artifact was made or read.
+    for f in historical.dump.sql historical.manifest.json historical.snapshot; do [[ ! -e "$T/root/$f" ]] || bad "$f appeared: the historical profile's files are not part of this stage"; done
+    for f in "$KEY_CUR" "$KEY_PREV" "${KEY_CUR#base64:}" "${KEY_PREV#base64:}" "$APP_PW" "$ROOT_PW" "$TOKEN"; do expect_lacks 'the recovery manifest' "$(<"$T/root/recovery.manifest.json")" "$f"; done
+    only_database_left backup-paired
+    no_secret_anywhere backup-paired
+    # And the unit is one: the verifier that a restore will rely on accepts what the stage just put in place.
+    run_fn "ROOT='$T/root'; require_recovery_unit"
+    expect_rc 'the recovery unit as put in place' 0
+}
+
+t_g25_paired_takes_no_arguments() {
+    paired_world
+    run_script -- backup-paired anything
+    [[ "$RC" == 64 ]] || bad "backup-paired with an argument exited $RC, not 64"
+    expect_has 'usage' "$ERR" 'backup-paired'
+    no_helper_ran 'an argument'
+    paired_nothing_in_place 'an argument'
+}
+
+# --- what it refuses before anything is taken ---
+
+t_g25_paired_preconditions() {
+    local f
+    if want_case G25-paired-no-overwrite; then
+        for f in "${PAIRED_FILES[@]}"; do
+            paired_world
+            printf 'x' >"$T/root/$f"
+            chmod 600 "$T/root/$f"
+            run_script -- backup-paired
+            expect_refused "an existing $f" 'never overwritten'
+            expect_has "the file is named" "$ERR" "'$f'"
+            no_helper_ran "an existing $f"
+            [[ "$(<"$T/root/$f")" == x ]] || bad "an existing $f was changed"
+            [[ ! -e "$W/dumpcalls" ]] || bad "a dump was taken although $f exists"
+        done
+    fi
+    if want_case G25-paired-inventory; then
+        paired_world; hist_names >"$W/inventory"
+        run_script -- backup-paired
+        expect_refused 'the v0.3.0 database' 'not exactly the 34 tables of the current schema'
+        no_helper_ran 'the v0.3.0 database'
+        paired_world; { up_names; echo extra_table; } >"$W/inventory"
+        run_script -- backup-paired
+        expect_refused 'a database with an extra table' 'not exactly the 34 tables of the current schema'
+        paired_world; up_names | grep -vx sourced_role_grants >"$W/inventory"
+        run_script -- backup-paired
+        expect_refused 'a database with a table missing' 'not exactly the 34 tables of the current schema'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken from a database that is not the current schema'
+    fi
+    if want_case G25-paired-state; then
+        paired_world; printf '13\t1\t15\t1\n' >"$W/counts"
+        run_script -- backup-paired
+        expect_refused 'the WP3-01 state' 'not the post-upgrade state'
+        no_helper_ran 'the WP3-01 state'
+        paired_world; printf '14\t0\t29\t0\n' >"$W/counts"
+        run_script -- backup-paired
+        expect_refused 'an upgraded database without the marker' 'not the post-upgrade state'
+    fi
+    if want_case G25-paired-assets; then
+        paired_world; : >"$W/asset_rows"
+        run_script -- backup-paired
+        expect_refused 'no asset rows' 'does not hold the 4 synthetic asset rows'
+        no_files_container 'no asset rows'
+        paired_world; frows 3 >"$W/asset_rows"
+        run_script -- backup-paired
+        expect_refused 'three asset rows' 'does not hold the 4 synthetic asset rows'
+        paired_world; printf '0\n' >"$W/assets_table"
+        run_script -- backup-paired
+        expect_refused 'no resource_assets table' 'does not hold the 4 synthetic asset rows'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken with no Resource-file records to bind'
+    fi
+    if want_case G25-paired-check-reported; then
+        paired_world; fout present 4 >"$W/out_files_check"
+        run_script -- backup-paired
+        expect_refused 'a check the helper did not report' 'files:check=ok'
+        paired_nothing_in_place 'a check the helper did not report'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken after a check that was not reported'
+    fi
+    if want_case G25-paired-agree; then
+        paired_world; fout present 4 files:check=ok | sed "s/ $(fsha 2)\$/ $(fsha 9)/" >"$W/out_files_check"
+        run_script -- backup-paired
+        expect_refused 'a listing that is not the rows' 'do not agree on every key, size and SHA-256'
+        paired_world; fout absent 0 files:check=ok >"$W/out_files_check"
+        run_script -- backup-paired
+        expect_refused 'an absent directory while rows exist' 'do not agree on every key, size and SHA-256'
+        paired_nothing_in_place 'a directory that does not agree'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken from a directory that does not agree with the rows'
+        no_snapshot_all_ran 'a directory that does not agree'
+    fi
+}
+
+# --- what it refuses when the helper's measurement is not complete, or not one the other readers agree with ---
+
+t_g25_paired_the_measurement_is_validated() {
+    local good
+    good() { snapshot_all_output one; }
+    if want_case G25-snapshot-all-reported; then
+        paired_world; good | grep -v '^snapshot-all:complete=ok$' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a snapshot that did not say it finished' 'did not report snapshot-all:complete=ok'
+        paired_nothing_in_place 'a snapshot that did not say it finished'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken after an incomplete snapshot'
+    fi
+    if want_case G25-all-line-shape; then
+        paired_world; good | sed 's/^all-table people \([0-9]*\) [0-9a-f]*$/all-table people \1 nothex/' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a digest that is not a SHA-256' "an 'all-table' line of the snapshot is malformed"
+        paired_world; good | sed 's/^all-table people \([0-9]*\) /all-table people -\1 /' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a row count that is not a number' "an 'all-table' line of the snapshot is malformed"
+        paired_world; good | sed 's/^all-table people \(.*\)$/all-table people \1 extra/' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a line with a field too many' "an 'all-table' line of the snapshot is malformed"
+    fi
+    if want_case G25-all-complete; then
+        paired_world; good | grep -v '^all-table sourced_role_grants ' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a table missing from the snapshot' 'not exactly one for each of the 34 tables'
+        paired_world; { good; all_block one | grep '^all-table people '; } >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a table repeated in the snapshot' 'not exactly one for each of the 34 tables'
+        paired_world; { good; echo "all-table surprise 0 $EMPTY_DIGEST"; } >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a table the schema does not have' 'not exactly one for each of the 34 tables'
+        paired_world; { printf 'key:current=%s\nkey:previous=%s\n' "$FP_CUR" "$FP_PREV"; table_block table one; structure_block up; printf 'ledger:count=29\nledger:last=%s\nledger:digest=%s\nsnapshot-all:complete=ok\n' "$LEDGER_LAST" "$(fake_digest ledger)"; } >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'the 16 table lines of the historical snapshot instead' 'not exactly one for each of the 34 tables'
+        paired_nothing_in_place 'a snapshot that is not the 34 tables'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken after a snapshot that is not the 34 tables'
+    fi
+    if want_case G25-ledger-evidence; then
+        paired_world; good | sed 's/^ledger:count=29$/ledger:count=28/' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a ledger of 28' 'migration ledger is not the 29 migrations'
+        paired_world; good | sed 's/^ledger:last=.*$/ledger:last=2026_10_09_000003_create_sourced_role_grants_table/' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a ledger that ends elsewhere' 'migration ledger is not the 29 migrations'
+        paired_world; good | sed 's/^ledger:digest=.*$/ledger:digest=short/' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a ledger digest that is not a SHA-256' 'migration ledger is not the 29 migrations'
+        paired_world; good | grep -v '^ledger:digest=' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a ledger with no digest' 'migration ledger is not the 29 migrations'
+        paired_world; { good; echo "ledger:count=29"; } >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a ledger count said twice' 'migration ledger is not the 29 migrations'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken after an unreadable ledger'
+    fi
+    if want_case G25-assets-two-readers; then
+        paired_world; good | sed 's/^all-table resource_assets 4 /all-table resource_assets 3 /' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'the application and the query disagree about the asset rows' 'counts 3 resource_assets rows and the query for the asset rows 4'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken while two readers of the asset rows disagreed'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        # Not new guards, but new uses of two older ones: the structure lines (G13-structure-complete) and the keys the application used (G14-keys-agree).
+        paired_world; good | grep -v '^structure sourced_role_grants ' >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'a structure line missing' 'structure lines are not exactly one for each expected table'
+        paired_world; good | sed "s/^key:current=.*/key:current=$FP_FF/" >"$W/out_snapshot_all"
+        run_script -- backup-paired
+        expect_refused 'keys the application used that are not this run' 'not the one this run generated'
+        paired_nothing_in_place 'a measurement that is not valid'
+    fi
+}
+
+# --- the second measurement: anything that changed while the artifacts were taken ---
+
+t_g25_paired_a_change_during_the_backup_is_refused() {
+    local why
+    if want_case G25-paired-quiescent; then
+        change() { # DESC NEEDLE: the second measurement is the one written to out_snapshot_all.2 (and whatever the caller did to the world)
+            run_script -- backup-paired
+            expect_refused "$1" 'changed while the backup was being taken'
+            expect_has "$1: what changed" "$ERR" "$2"
+            expect_has "$1: nothing in place" "$ERR" 'Nothing was put in place'
+            paired_nothing_in_place "$1"
+            [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all files_archive files_verify_archive files_check snapshot_all ' ]] || bad "$1: the second measurement did not run after both artifacts: $(tr '\n' ' ' <"$W/runs")"
+            only_database_left "$1"
+        }
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output two >"$W/out_snapshot_all.2"
+        change 'every durable table with rows changed' 'people'
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output one | sed "s/^all-table security_events \([0-9]*\) [0-9a-f]*\$/all-table security_events \1 $(fake_digest altered)/" >"$W/out_snapshot_all.2"
+        change 'one durable table changed in content, its row count the same' 'security_events'
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output one | sed 's/^all-table people 14 /all-table people 15 /' >"$W/out_snapshot_all.2"
+        change 'a Person added' 'people'
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output one | sed "s/^all-table sessions \([0-9]*\) [0-9a-f]*\$/all-table sessions 4 $(fake_digest session)/" >"$W/out_snapshot_all.2"
+        change 'a session appeared (a transient table is measured too)' 'sessions'
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output one | sed "s/^structure people .*\$/structure people $(fake_digest altered-structure)/" >"$W/out_snapshot_all.2"
+        change 'a table whose structure changed' 'structure'
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output one "$(fake_digest other-ledger)" >"$W/out_snapshot_all.2"
+        change 'the ledger changed' 'ledger'
+        # The Resource files: a file and its asset row both change after the archive was verified; the database and the directory still agree with each other,
+        # but not with what was measured the first time.
+        paired_world
+        frows 4 | sed "2s/\\t$(fsha 2)\$/\\t$(fsha 9)/" >"$W/rows_changed"
+        printf 'cp "%s/rows_changed" "%s/asset_rows"\n' "$W" "$W" >"$W/after_files_verify_archive"
+        fout present 4 files:check=ok >"$W/out_files_check.1"
+        fout present 4 files:check=ok | sed "s/ $(fsha 2)\$/ $(fsha 9)/" >"$W/out_files_check.2"
+        change 'a Resource file and its row changed' 'resource-files'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        # The same refusal leaves the earlier evidence honest: it says the stage did not finish.
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output two >"$W/out_snapshot_all.2"
+        run_script -- backup-paired
+        expect_has 'the trailer' "$ERR" 'backup-paired did not finish'
+        expect_has 'the recovery' "$ERR" 'cleanup'
+        expect_has 'nothing of this backup was put in place' "$ERR" 'Nothing of this backup was put in place'
+        why="$(grep -c 'no change was observed' <<<"$OUT" || true)"
+        [[ "$why" == 0 ]] || bad 'a backup that was refused said no change was observed'
+    fi
+}
+
+# --- the dump of the current schema, as a stage and as a validator ---
+
+# fresh_dump: the two passes of a world, joined as the stage joins them, and what the first measurement counted, in files the validator is run against. The world is built once
+# for the test process (building it is most of what a case costs) and copied for each case.
+fresh_dump() {
+    if [[ ! -s "$T/fresh.sql" ]]; then
+        paired_world
+        cat "$W/dump_pass1" "$W/dump_pass2" >"$T/fresh.sql"
+        all_block one | awk '{ print $2 " " $3 " " $4 }' >"$T/fresh.measured"
+    fi
+    cp "$T/fresh.sql" "$T/dump.sql"
+    cp "$T/fresh.measured" "$T/measured.txt"
+}
+dump_check() { # DESC NEEDLE: the dump in $T/dump.sql judged against $T/measured.txt; no NEEDLE means it must be accepted
+    run_fn "current_dump_problem '$T/dump.sql' \"\$(<'$T/measured.txt')\""
+    if [[ -z "$2" ]]; then
+        [[ "$RC" == 0 ]] || bad "$1: refused: ${OUT:0:200}"
+    else
+        [[ "$RC" == 1 && "$OUT" == *"$2"* ]] || bad "$1: expected the refusal '$2', got exit $RC: ${OUT:0:200}"
+    fi
+}
+# The edits the cases make to a fresh dump, each one a plain text change that does not depend on the validator.
+dump_append() { printf '%b\n' "$1" >>"$T/dump.sql"; }                          # TEXT: lines at the end (\x60 is a backtick, \n a line break)
+dump_after() { # LINE TEXT: TEXT after the first line of the dump that is exactly LINE
+    DUMP_TEXT="$(printf '%b' "$2")" awk -v key="$(printf '%b' "$1")" '{ print } !done && $0 == key { print ENVIRON["DUMP_TEXT"]; done = 1 }' "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+}
+dump_before() { # LINE TEXT: TEXT before the first line of the dump that is exactly LINE
+    DUMP_TEXT="$(printf '%b' "$2")" awk -v key="$(printf '%b' "$1")" '!done && $0 == key { print ENVIRON["DUMP_TEXT"]; done = 1 } { print }' "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+}
+dump_replace() { # LINE TEXT: the first line of the dump that is exactly LINE, replaced by TEXT (no text: removed)
+    DUMP_TEXT="$(printf '%b' "$2")" awk -v key="$(printf '%b' "$1")" '!done && $0 == key { if (ENVIRON["DUMP_TEXT"] != "") print ENVIRON["DUMP_TEXT"]; done = 1; next } { print }' "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+}
+dump_drop_last() { # LINE: the LAST line of the dump that is exactly LINE, removed
+    local n
+    n="$(grep -n -x -F -- "$(printf '%b' "$1")" "$T/dump.sql" | tail -1 | cut -d: -f1)"
+    [[ -n "$n" ]] || { bad "the line '$1' is not in the dump"; return 1; }
+    sed -i "${n}d" "$T/dump.sql"
+}
+# The conditional SET lines the cases move, as the real dump writes them.
+PIN="/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;"
+MODE_RESTORE='/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;'
+NAMES='/*!40101 SET NAMES utf8mb4 */;'
+CS_SAVE='/*!40101 SET @saved_cs_client     = @@character_set_client */;'
+CS_RESTORE='/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;'
+FIRST_DATA='-- Dumping data for table \x60account_invitations\x60'
+CREATE_JOBS='CREATE TABLE \x60jobs\x60 ('
+DISABLE_PEOPLE='/*!40000 ALTER TABLE \x60people\x60 DISABLE KEYS */;'
+ENABLE_PEOPLE='/*!40000 ALTER TABLE \x60people\x60 ENABLE KEYS */;'
+END_OF_TABLE=') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;'
+extra_table() { printf 'CREATE TABLE \x60%s\x60 (\n  \x60id\x60 int(11) NOT NULL\n%s\n' "$1" "$END_OF_TABLE"; }
+# fresh_dump with the structure of every table as the real schema's own SHOW CREATE TABLE writes it (the fixture a Pest test holds to the migrated schema).
+real_structures() {
+    local fixture="$ROOT/apps/platform/tests/Fixtures/rehearsal/current-create-tables.sql"
+    [[ -s "$fixture" ]] || { bad 'the fixture of the real CREATE TABLE statements is missing'; return 1; }
+    awk 'NR == FNR { if ($0 ~ /^CREATE TABLE /) { name = $3; skipping = 1 } text[name] = text[name] $0 "\n"; next }
+         /^CREATE TABLE / { name = $3; printf "%s", text[name]; skip = 1; next }
+         skip { if ($0 ~ /^\) ENGINE/) skip = 0; next }
+         { print }' "$fixture" "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+}
+
+t_g25_current_dump_contract() {
+    local stmt line table
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        fresh_dump; dump_check 'the dump of the current schema as mariadb-dump writes it' ''
+        [[ "$(grep -c '^INSERT INTO' "$T/dump.sql")" == 11 ]] || bad 'the test dump does not have an INSERT for each of the 11 durable tables that hold rows'
+        [[ "$(grep -c '^LOCK TABLES' "$T/dump.sql")" == 27 ]] || bad 'the test dump does not have a LOCK for each of the 27 durable tables, empty or not'
+        # An empty durable table has no INSERT and is not "missing".
+        ! grep -q 'INSERT INTO .contact_tags.' "$T/dump.sql" || bad 'the test dump has an INSERT for an empty table'
+        # The profiles are separate: a v0.3.0 dump is not a current dump, and a current dump is not a v0.3.0 one.
+        paired_world; put_dumps; cat "$W/dump_pass1" "$W/dump_pass2" >"$T/dump.sql"; all_block one | awk '{ print $2 " " $3 " " $4 }' >"$T/measured.txt"
+        dump_check 'a v0.3.0 dump taken as a current one' 'of the dump'
+        fresh_dump; run_fn "dump_problem '$T/dump.sql'"
+        [[ "$RC" == 1 && "$OUT" == *'does not create exactly the 16'* ]] || bad "the historical validator did not refuse the 34-table dump: $RC ${OUT:0:200}"
+        # The single-line form of INSERT, which the historical validator accepts, is not one the current profile has seen from the real tool.
+        fresh_dump; sed -i '/^INSERT INTO \x60people\x60 VALUES$/,/;$/d' "$T/dump.sql"; printf 'INSERT INTO \x60people\x60 VALUES (1),(2);\n' >>"$T/dump.sql"
+        dump_check 'the single-line INSERT' 'does not recognise'
+        # What is accepted besides the minimal test dump: the real schema's own structures (every table of it), an AUTO_INCREMENT counter in a closing line, the header of a
+        # real dump, and rows of the literal forms mariadb-dump writes, a string holding a `;`, a `)`, a `--` or a statement being data.
+        fresh_dump; real_structures; dump_check 'the CREATE TABLE statements of the real migrated schema' ''
+        [[ "$(grep -c '^CREATE TABLE' "$T/dump.sql")" == 34 && "$(grep -c 'FOREIGN KEY' "$T/dump.sql")" -ge 20 ]] || bad 'the real structures were not put in the dump'
+        fresh_dump; dump_replace ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;' ') ENGINE=InnoDB AUTO_INCREMENT=30 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;'
+        dump_check 'a closing line with an AUTO_INCREMENT counter' ''
+        # The conditional SETs that change nothing the check follows, each as the real dump writes it (the ones that move the SQL mode or the client character set are in the cases
+        # of their own guards below), the comment lines of a real dump, and the sandbox line with its one trailing space and without.
+        for line in "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;" "/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;" "/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;" \
+            "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;" "/*!40103 SET TIME_ZONE='+00:00' */;" "/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;" \
+            "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;" "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;" \
+            "/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;" "/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;" "/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;" \
+            "/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;" "/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;" "/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;" \
+            "-- Server version	10.11.18-MariaDB-ubu2204" "-- Dump completed on 2026-11-20 12:00:00" '/*M!999999\- enable the sandbox mode */' '/*M!999999\- enable the sandbox mode */ '; do
+            fresh_dump; dump_append "$line"
+            dump_check "the line '$line'" ''
+        done
+        # The real bytes: the first line of a real dump is the sandbox directive and ONE space; the same line without the space is accepted too.
+        fresh_dump; [[ "$(head -n 1 "$T/dump.sql" | tail -c 4 | od -An -tx1 | tr -d ' \n')" == 2a2f200a ]] || bad 'the test dump does not begin with the sandbox directive and its one trailing space'
+        fresh_dump; sed -i '1s/ $//' "$T/dump.sql"; dump_check 'the sandbox directive without its trailing space' ''
+        [[ "$(grep -c '^/\*M!999999' "$T/dump.sql")" == 2 ]] || bad 'the test dump does not have the sandbox directive at the start of each pass'
+        # What the two passes do with the SQL mode and the client character set: save and pin, restore, and again for the second pass; accepted as one dump.
+        fresh_dump; [[ "$(grep -c -F -x -- "$PIN" "$T/dump.sql")" == 2 && "$(grep -c -F -x -- "$MODE_RESTORE" "$T/dump.sql")" == 2 && "$(grep -c -F -x -- "$NAMES" "$T/dump.sql")" == 2 ]] \
+            || bad 'the test dump does not pin and restore the SQL mode once in each pass'
+        fresh_dump; dump_replace '(1),' "(1,'O\\\\'Brien; DROP TABLE people; -- (x)',NULL,-3.5,1e-7,0x41424344,_binary 'a\\\\0b\\\\nc','',''),"
+        dump_check 'a row of every literal form, with SQL inside its strings' ''
+    fi
+    if want_case G25-dump-unrecognised; then
+        for stmt in 'USE other_db;' 'CREATE DATABASE other_db;' 'DELETE FROM people;' 'TRUNCATE TABLE people;' 'GRANT ALL ON *.* TO x;' 'SET @x = 1;' $'INSERT IGNORE INTO \x60people\x60 VALUES' \
+            $'INSERT INTO \x60people\x60 (\x60id\x60) VALUES' $'ALTER TABLE \x60people\x60 ADD x int;' $'REPLACE INTO \x60people\x60 VALUES' '/*!50001 DROP DATABASE x */;' \
+            '/*!40101 SET @x=1 */; DROP DATABASE y;' $'LOCK TABLES \x60people\x60 READ;' 'select 1;' 'DELIMITER ;;' '\! ls' 'source /etc/passwd' 'LOAD DATA INFILE "/etc/passwd" INTO TABLE people;' \
+            $'drop table if exists \x60people\x60;' '--DROP DATABASE y;' $'-- a comment with a backslash \\ in it' $'-- a comment with a carriage return\r' $'DROP TABLE IF EXISTS \x60people\x60; DROP DATABASE y;' \
+            $'DROP TABLE IF EXISTS \x60people\x60;\r' '/* DROP DATABASE y */;' '/*M!999999\- enable the sandbox mode */ DROP DATABASE y;' $'/*!40000 ALTER TABLE \x60people\x60 DISABLE KEYS */; DROP DATABASE y;' \
+            $'/*!40101 SET @a=1 */ DROP TABLE people /* */;' '/*!40101 SET GLOBAL max_connections=1 */;' "/*!40101 SET sql_mode='NO_BACKSLASH_ESCAPES' */;" '/*!40101 SET @m=@@sql_mode, sql_mode=@m */;' \
+            "/*!40101 SET @x='NO_BACKSLASH_ESCAPES' */;" '/*!40101 SET character_set_client = gbk */;' '/*!40101 SET NAMES big5 */;' '/*!40101 SET @a=1, DROP DATABASE y */;' \
+            $'-- a comment with a vertical tab \v' \
+            '/*M!999999\- enable the sandbox mode */  ' $'/*M!999999\\- enable the sandbox mode */\t' '/*M!999999\- enable the sandbox mode */ x' '/*M!999999\- enable the sandbox mode */ ;' $'/*M!999999\\- enable the sandbox mode */ \r' \
+            ' /*M!999999\- enable the sandbox mode */' '/*M!999999\- enable the sandbox mode */ /*M!999999\- enable the sandbox mode */' '/*M!999999\- enable the sandbox mode*/' '/*M!999999\- disable the sandbox mode */' \
+            '/*!40101 SET @OLD_SQL_MODE=@@CHARACTER_SET_CLIENT, SQL_MODE='"'"'NO_AUTO_VALUE_ON_ZERO'"'"' */;' '/*!40101 SET SQL_MODE=@OLD_CHARACTER_SET_CLIENT */;' '/*!40014 SET @OLD_UNIQUE_CHECKS=@@SQL_MODE, UNIQUE_CHECKS=0 */;' \
+            '/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_SQL_MODE */;' '/*!40103 SET TIME_ZONE=@OLD_SQL_MODE */;' '/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE */;' \
+            "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO,NO_BACKSLASH_ESCAPES' */;" "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='' */;" \
+            "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO', @x=1 */;" '/*!40101 SET SQL_MODE=@OLD_SQL_MODE, SQL_MODE=@@GLOBAL.SQL_MODE */;' \
+            "/*!40101 SET SQL_MODE=CONCAT(@@SQL_MODE, ',NO_BACKSLASH_ESCAPES') */;" '/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@SQL_MODE */;' '/*!40101 SET @saved_cs_client = @@sql_mode */;' \
+            '/*!40101 SET character_set_client = @OLD_SQL_MODE */;' '/*!40101 SET @saved_cs_client = @@character_set_client */;' '/*!40101 set sql_mode=@old_sql_mode */;' \
+            '/*!40101 SET  NAMES utf8mb4 */;' '/*!40101 SET NAMES utf8 */;' '/*!40101 SET NAMES utf8mb3 */;' '/*!50503 SET NAMES utf8mb4 */;' '/*M!100001 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;' \
+            '/*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;' '/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_RESULTS */;' '/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT, SQL_MODE=@OLD_SQL_MODE */;' \
+            "/*!40103 SET TIME_ZONE='+01:00' */;" "/*!40103 SET TIME_ZONE='SYSTEM' */;" '/*!40014 SET UNIQUE_CHECKS=1 */;'; do
+            fresh_dump; dump_append "$stmt"
+            dump_check "the statement '$stmt'" 'does not recognise'
+        done
+    fi
+    if want_case G25-dump-nul; then
+        fresh_dump; printf -- '-- a comment\0 with a NUL byte\n' >>"$T/dump.sql"
+        dump_check 'a NUL byte, which the line reader would drop' 'NUL byte'
+    fi
+    if want_case G25-dump-create-body; then
+        for line in 'DELETE FROM people;' '  \x60x\x60 int(11)); DROP DATABASE d; --' '  \x60x\x60 int(11) NOT NULL); DROP TABLE people; -- ,' '  \x60x\x60 int(11) NOT NULL, DROP TABLE y' '  DROP TABLE people;' \
+            '  KEY \x60k\x60 (\x60id\x60)); DROP TABLE people;' '  CONSTRAINT \x60c\x60 CHECK (1),' '  \x60x\x60 json NOT NULL,' '  \x60x\x60 int NOT NULL,' '  \x60x\x60 varchar(10) DEFAULT '"'"'a;b'"'"',' \
+            '  \x60x\x60 int(11) NOT NULL COMMENT '"'"'x'"'"',' '  \x60x\x60 int(11) NOT NULL DEFAULT (select 1),' '  \x60x\x60 int(11) GENERATED ALWAYS AS (1) VIRTUAL,' '  ' '' '   \x60x\x60 int(11) NOT NULL,' \
+            '  \x60x\x60 int(11) NOT NULL; DROP TABLE people;' '  PRIMARY KEY (\x60id\x60) USING BTREE,' '  \x60X\x60 int(11) NOT NULL,' '  FULLTEXT KEY \x60f\x60 (\x60id\x60),' \
+            '  CONSTRAINT \x60c\x60 FOREIGN KEY (\x60id\x60) REFERENCES \x60people\x60 (\x60id\x60) ON DELETE CASCADE; DROP TABLE y,' \
+            "$END_OF_TABLE"$' DROP DATABASE y;' ') ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;' ') ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci;' \
+            ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='x';" ') ENGINE=InnoDB;' ')'; do
+            fresh_dump; dump_after "$CREATE_JOBS" "$line"
+            dump_check "a CREATE TABLE body holding '${line//\\x60/\`}'" 'not a column or key of the forms the schema uses'
+        done
+    fi
+    if want_case G25-dump-create-last; then
+        fresh_dump; dump_replace '  PRIMARY KEY (\x60id\x60)' '  PRIMARY KEY (\x60id\x60),'
+        dump_check 'a CREATE TABLE whose last line has a comma' 'no column, or its last line has a comma'
+        fresh_dump; sed -i '/^CREATE TABLE \x60jobs\x60 (/,/^) ENGINE/{/^  /d}' "$T/dump.sql"
+        dump_check 'a CREATE TABLE with no column' 'no column, or its last line has a comma'
+    fi
+    if want_case G25-dump-create-commas; then
+        fresh_dump; sed -i '/^CREATE TABLE \x60jobs\x60 (/,/^) ENGINE/s/^  \x60id\x60 int(11) NOT NULL,$/  \x60id\x60 int(11) NOT NULL/' "$T/dump.sql"
+        dump_check 'two lines of a body with no comma between them' 'a line after one that has no comma'
+    fi
+    if want_case G25-dump-create-reference; then
+        fresh_dump; dump_after "$CREATE_JOBS" '  \x60x\x60 int(11) NOT NULL,\n  CONSTRAINT \x60jobs_x_foreign\x60 FOREIGN KEY (\x60x\x60) REFERENCES \x60other\x60 (\x60id\x60),'
+        dump_check 'a foreign key to a table that is not one of the 34' 'references a table that is not one of the 34'
+        fresh_dump; dump_after "$CREATE_JOBS" '  \x60x\x60 int(11) NOT NULL,\n  CONSTRAINT \x60jobs_x_foreign\x60 FOREIGN KEY (\x60x\x60) REFERENCES \x60people\x60 (\x60id\x60) ON DELETE CASCADE ON UPDATE NO ACTION,'
+        dump_check 'a foreign key to a table of the schema' ''
+    fi
+    if want_case G25-dump-row-form; then
+        fresh_dump; sed -i '0,/^INSERT INTO \x60people\x60 VALUES$/s//&\nSELECT 1;/' "$T/dump.sql"
+        dump_check 'an INSERT with a statement among its rows' 'not a row of literal values'
+        fresh_dump; sed -i '0,/^INSERT INTO \x60people\x60 VALUES$/s//&\n/' "$T/dump.sql"
+        dump_check 'an INSERT with a blank line among its rows' 'not a row of literal values'
+        for line in '(1); DROP TABLE people;' '(1);DELETE FROM people;' '(1)); DROP DATABASE x; --' "(1,'a'); INSERT INTO other VALUES (2);" '(1),(2);' '(1),(2),' '(1) , (2),' "(1,'a" "(1,'a')x," '(1,foo),' '(1,@x),' '(1,(SELECT 1)),' '(1,now()),' \
+            "(1,'a''b')'c')," "(1,'a'" "(1,'a');  " "(1,'a') ;" ' (1),' $'(1)\r,' '(),' '(1,),' "(1,'a'  ,2)," "(1,'a'/*x*/)," '(1,0xZZ),' '(1,-),' '(1,1.),' "(1,_utf8 'a')," "(1,N'a'),"; do
+            fresh_dump; dump_replace '(1),' "$line"
+            dump_check "the row line '$line'" 'not a row of literal values'
+        done
+    fi
+    if want_case G25-dump-complete; then
+        fresh_dump; printf 'CREATE TABLE \x60people\x60 (\n  \x60id\x60 int(11) NOT NULL,\n' >>"$T/dump.sql"
+        dump_check 'a dump that ends inside a CREATE TABLE' 'ends inside a statement'
+        fresh_dump; table="$(grep -n '^(1),$' "$T/dump.sql" | head -1 | cut -d: -f1)"; head -n "$table" "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+        dump_check 'a dump that ends inside an INSERT' 'ends inside a statement'
+        fresh_dump; table="$(grep -n '^UNLOCK TABLES;$' "$T/dump.sql" | tail -1 | cut -d: -f1)"; head -n "$((table - 1))" "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
+        dump_check 'a dump that ends between a LOCK TABLES and its UNLOCK' 'ends inside a statement'
+    fi
+    if want_case G25-dump-creates; then
+        fresh_dump; sed -i '/^CREATE TABLE \x60jobs\x60 (/,/^) ENGINE/d' "$T/dump.sql"
+        dump_check 'a table whose structure is missing' 'does not create exactly the 34 tables'
+        fresh_dump; extra_table jobs >>"$T/dump.sql"
+        dump_check 'a table created twice' 'does not create exactly the 34 tables'
+        fresh_dump; extra_table extra >>"$T/dump.sql"
+        dump_check 'a 35th table' 'does not create exactly the 34 tables'
+    fi
+    if want_case G25-dump-drops; then
+        fresh_dump; sed -i '/^DROP TABLE IF EXISTS \x60jobs\x60;$/d' "$T/dump.sql"
+        dump_check 'a table that is not dropped before it is created' 'does not drop exactly the 34 tables'
+        fresh_dump; printf 'DROP TABLE IF EXISTS \x60jobs\x60;\n' >>"$T/dump.sql"
+        dump_check 'a table dropped twice' 'does not drop exactly the 34 tables'
+        fresh_dump; printf 'DROP TABLE IF EXISTS \x60other\x60;\n' >>"$T/dump.sql"
+        dump_check 'a table that is not one of the 34, dropped' 'does not drop exactly the 34 tables'
+    fi
+    if want_case G25-dump-create-order; then
+        fresh_dump; sed -i '/^DROP TABLE IF EXISTS \x60jobs\x60;$/d' "$T/dump.sql"; printf 'DROP TABLE IF EXISTS \x60jobs\x60;\n' >>"$T/dump.sql"
+        dump_check 'a table dropped after it is created' 'creates the table jobs before it drops it'
+    fi
+    if want_case G25-dump-unknown-table; then
+        fresh_dump; printf 'INSERT INTO \x60other\x60 VALUES\n(1);\n' >>"$T/dump.sql"
+        dump_check 'rows for a table that is not one of the 34' 'rows for a table that is not one of the 34'
+    fi
+    if want_case G25-dump-transient-empty; then
+        fresh_dump; printf 'INSERT INTO \x60sessions\x60 VALUES\n(1);\n' >>"$T/dump.sql"
+        dump_check 'rows of a transient table' 'rows for the transient table sessions'
+        fresh_dump; printf 'INSERT INTO \x60cache\x60 VALUES\n(1),\n(2);\n' >>"$T/dump.sql"
+        dump_check 'rows of another transient table' 'rows for the transient table cache'
+    fi
+    if want_case G25-dump-lock-known; then
+        fresh_dump; dump_append 'LOCK TABLES \x60other\x60 WRITE;\nUNLOCK TABLES;'
+        dump_check 'a LOCK TABLES of a table that is not one of the 34' 'LOCK TABLES of the dump names a table that is not one of the 34'
+    fi
+    if want_case G25-dump-lock-transient; then
+        fresh_dump; dump_append 'LOCK TABLES \x60sessions\x60 WRITE;\nUNLOCK TABLES;'
+        dump_check 'a LOCK TABLES of a transient table' 'names the transient table sessions'
+    fi
+    if want_case G25-dump-lock-context; then
+        fresh_dump; dump_after "$DISABLE_PEOPLE" 'LOCK TABLES \x60accounts\x60 WRITE;'
+        dump_check 'a LOCK TABLES inside another' 'nested, repeated, or for a table not created before it'
+        fresh_dump; dump_append 'LOCK TABLES \x60people\x60 WRITE;\nUNLOCK TABLES;'
+        dump_check 'a table locked twice' 'nested, repeated, or for a table not created before it'
+        fresh_dump; dump_before 'DROP TABLE IF EXISTS \x60accounts\x60;' 'LOCK TABLES \x60people\x60 WRITE;\nUNLOCK TABLES;'
+        dump_check 'a table locked before it is created' 'nested, repeated, or for a table not created before it'
+    fi
+    if want_case G25-dump-keys-known; then
+        fresh_dump; dump_append '/*!40000 ALTER TABLE \x60other\x60 DISABLE KEYS */;'
+        dump_check 'an ALTER TABLE of a table that is not one of the 34' 'ALTER TABLE of the dump names a table that is not one of the 34'
+    fi
+    if want_case G25-dump-keys-context; then
+        fresh_dump; dump_append '/*!40000 ALTER TABLE \x60people\x60 DISABLE KEYS */;'
+        dump_check 'an ALTER TABLE outside a LOCK TABLES' 'not for the table that is locked, or is out of order'
+        fresh_dump; dump_replace "$DISABLE_PEOPLE" '/*!40000 ALTER TABLE \x60accounts\x60 DISABLE KEYS */;'
+        dump_check 'an ALTER TABLE of another table than the one locked' 'not for the table that is locked, or is out of order'
+        fresh_dump; dump_after "$DISABLE_PEOPLE" "$DISABLE_PEOPLE"
+        dump_check 'keys disabled twice' 'not for the table that is locked, or is out of order'
+        fresh_dump; dump_replace "$DISABLE_PEOPLE" "$ENABLE_PEOPLE"
+        dump_check 'keys enabled before they are disabled' 'not for the table that is locked, or is out of order'
+    fi
+    if want_case G25-dump-unlock-context; then
+        fresh_dump; dump_append 'UNLOCK TABLES;'
+        dump_check 'an UNLOCK TABLES with nothing locked' 'not for a table it locked, or leaves the keys of one disabled'
+        fresh_dump; dump_replace "$ENABLE_PEOPLE" ''
+        dump_check 'an UNLOCK TABLES that leaves the keys disabled' 'not for a table it locked, or leaves the keys of one disabled'
+    fi
+    if want_case G25-dump-insert-context; then
+        fresh_dump; dump_append 'INSERT INTO \x60contact_tags\x60 VALUES\n(1);'
+        dump_check 'rows outside any LOCK TABLES' 'INSERT of the dump is not for the table that is locked'
+        fresh_dump; dump_after "$DISABLE_PEOPLE" 'INSERT INTO \x60accounts\x60 VALUES\n(1);'
+        dump_check 'rows of another table than the one locked' 'INSERT of the dump is not for the table that is locked'
+        fresh_dump; dump_after "$ENABLE_PEOPLE" 'INSERT INTO \x60people\x60 VALUES\n(1);'
+        dump_check 'rows after the keys are enabled again' 'INSERT of the dump is not for the table that is locked'
+    fi
+    if want_case G25-dump-locked-only; then
+        fresh_dump; dump_after "$DISABLE_PEOPLE" 'DROP TABLE IF EXISTS \x60people\x60;'
+        dump_check 'a DROP TABLE inside a LOCK TABLES' 'between a LOCK TABLES and its UNLOCK'
+        fresh_dump; dump_after "$DISABLE_PEOPLE" '/*!40101 SET NAMES utf8mb4 */;'
+        dump_check 'a SET inside a LOCK TABLES' 'between a LOCK TABLES and its UNLOCK'
+        fresh_dump; dump_after "$DISABLE_PEOPLE" 'DELETE FROM people;'
+        dump_check 'a DELETE inside a LOCK TABLES' 'between a LOCK TABLES and its UNLOCK'
+    fi
+    # The SQL mode and the client character set, followed through both passes. The real dump saves the mode and pins it, restores it, and does the same again for the second pass; rows
+    # are accepted only between a pin and its restore, and only while the client character set is the one the dump set.
+    if want_case G25-dump-mode-pin; then
+        fresh_dump; dump_after "$PIN" "$PIN"
+        dump_check 'the SQL mode pinned a second time, so that the saved mode is the pinned one' 'pins the SQL mode while it is pinned already'
+    fi
+    if want_case G25-dump-mode-restore; then
+        fresh_dump; dump_before "$PIN" "$MODE_RESTORE"
+        dump_check 'an SQL mode restored before it was pinned' 'restores an SQL mode it did not pin'
+        fresh_dump; dump_after "$MODE_RESTORE" "$MODE_RESTORE"
+        dump_check 'an SQL mode restored twice' 'restores an SQL mode it did not pin'
+    fi
+    if want_case G25-dump-insert-mode; then
+        fresh_dump; dump_before "$FIRST_DATA" "$MODE_RESTORE"
+        dump_check 'the SQL mode restored (to whatever the loading session had) before the rows' 'INSERT of the dump comes where the SQL mode is not the one the dump pins'
+        fresh_dump; sed -i '/^\/\*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE=/d; /^\/\*!40101 SET SQL_MODE=@OLD_SQL_MODE \*\/;$/d' "$T/dump.sql"
+        dump_check 'rows in a dump that never pins the SQL mode' 'INSERT of the dump comes where the SQL mode is not the one the dump pins'
+    fi
+    if want_case G25-dump-insert-charset; then
+        fresh_dump; dump_before "$FIRST_DATA" "$CS_RESTORE"
+        dump_check 'the client character set restored (to whatever the loading session had) before the rows' 'INSERT of the dump comes where the client character set is not the one the dump sets'
+        fresh_dump; sed -i '/^\/\*!40101 SET NAMES utf8mb4 \*\/;$/d; /saved_cs_client/d; /^\/\*!40101 SET character_set_client = utf8mb4 \*\/;$/d; /^\/\*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT \*\/;$/d' "$T/dump.sql"
+        dump_check 'rows in a dump that never sets the client character set' 'INSERT of the dump comes where the client character set is not the one the dump sets'
+    fi
+    if want_case G25-dump-cs-table-save; then
+        fresh_dump; dump_replace "$NAMES" ''
+        dump_check 'a client character set saved before the dump has set it' 'saves the client character set while it is not the one the dump sets'
+    fi
+    if want_case G25-dump-cs-table-restore; then
+        fresh_dump; dump_replace "$CS_SAVE" ''
+        dump_check 'a client character set restored that was never saved' 'restores a client character set it did not save'
+    fi
+    if want_case G25-dump-cs-restore; then
+        fresh_dump; dump_before "$NAMES" "$CS_RESTORE"
+        dump_check 'the client character set restored before the dump set it' 'restores the client character set that it did not set, or in the middle of a table'
+        fresh_dump; dump_after "$CS_SAVE" "$CS_RESTORE"
+        dump_check 'the client character set restored in the middle of a table' 'restores the client character set that it did not set, or in the middle of a table'
+    fi
+    if want_case G25-dump-set-balanced; then
+        fresh_dump; dump_drop_last "$MODE_RESTORE"
+        dump_check 'a dump that ends with the SQL mode still pinned' 'its closing restore lines are missing'
+        fresh_dump; dump_drop_last "$CS_RESTORE"
+        dump_check 'a dump that ends with the client character set still set' 'its closing restore lines are missing'
+    fi
+    if want_case G25-dump-rows; then
+        fresh_dump; sed -i 's/^people 14 /people 15 /' "$T/measured.txt"
+        dump_check 'a durable table with a row fewer than the database held' 'holds 14 row(s) for the durable table people, and the database held 15'
+        fresh_dump; sed -i 's/^people 14 /people 13 /' "$T/measured.txt"
+        dump_check 'a durable table with a row more than the database held' 'holds 14 row(s) for the durable table people, and the database held 13'
+        fresh_dump; sed -i '/^INSERT INTO \x60resource_assets\x60 VALUES$/,/;$/d' "$T/dump.sql"
+        dump_check 'a durable table that held rows and has none in the dump' 'holds 0 row(s) for the durable table resource_assets, and the database held 4'
+        fresh_dump; dump_after '/*!40000 ALTER TABLE \x60contact_tags\x60 DISABLE KEYS */;' 'INSERT INTO \x60contact_tags\x60 VALUES\n(1);'
+        dump_check 'rows for a durable table that held none' 'holds 1 row(s) for the durable table contact_tags, and the database held 0'
+    fi
+}
+
+# The stage's own use of that validator, and what it does with a dump that fails it.
+t_g25_paired_the_dump_is_checked() {
+    paired_world; printf 'INSERT INTO \x60sessions\x60 VALUES\n(1);\n' >>"$W/dump_pass2"
+    run_script -- backup-paired
+    expect_refused 'a dump with rows of a transient table' 'the dump is not what the backup contract requires'
+    expect_has 'the reason' "$ERR" 'rows for the transient table sessions'
+    paired_nothing_in_place 'a dump with rows of a transient table'
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all ' ]] || bad "an archive was attempted after the dump was refused: $(tr '\n' ' ' <"$W/runs")"
+    paired_world; printf 'USE other_db;\n' >>"$W/dump_pass2"
+    run_script -- backup-paired
+    expect_refused 'a dump that names a database' 'does not recognise'
+    paired_nothing_in_place 'a dump that names a database'
+}
+
+# --- failures while the artifacts are made, and the evidence they leave ---
+
+t_g25_paired_failures_leave_nothing_that_looks_like_a_backup() {
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        paired_world; touch "$W/dump_fail"
+        run_script -- backup-paired
+        expect_rc 'a dump client that fails' 1
+        paired_nothing_in_place 'a dump client that fails'
+        expect_has 'the trailer' "$ERR" 'backup-paired did not finish'
+        expect_has 'nothing of the backup was put in place' "$ERR" 'Nothing of this backup was put in place'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all ' ]] || bad "an archive was attempted after the dump failed: $(tr '\n' ' ' <"$W/runs")"
+        paired_world; printf '3\n' >"$W/fail_files_archive"
+        run_script -- backup-paired
+        expect_rc 'an archive the container could not make' 3
+        paired_nothing_in_place 'an archive the container could not make'
+        expect_has 'recovery is named' "$ERR" 'cleanup'
+        only_database_left 'an archive the container could not make'
+        paired_world; printf '3\n' >"$W/fail_snapshot_all"
+        run_script -- backup-paired
+        expect_rc 'a snapshot the helper refused' 3
+        paired_nothing_in_place 'a snapshot the helper refused'
+        [[ ! -e "$W/dumpcalls" ]] || bad 'a dump was taken after the snapshot helper refused'
+        # The second measurement fails: both artifacts exist as temporary files, and neither survives.
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; printf 'ledger:count=29\n' >"$W/out_snapshot_all.2"
+        run_script -- backup-paired
+        expect_refused 'a second snapshot that is incomplete' 'did not report snapshot-all:complete=ok'
+        paired_nothing_in_place 'a second snapshot that is incomplete'
+    fi
+    if want_case G25-paired-archive-nonempty; then
+        paired_world; : >"$W/out_files_archive"
+        run_script -- backup-paired
+        expect_refused 'an archive of no bytes' 'the archive is empty'
+        paired_nothing_in_place 'an archive of no bytes'
+    fi
+    if want_case G25-paired-archive-verified; then
+        paired_world; printf 'archive:entries=5\n' >"$W/out_files_verify_archive"
+        run_script -- backup-paired
+        expect_refused 'an archive that was not reported verified' 'not verified against the files it was made from'
+        paired_nothing_in_place 'an archive that was not reported verified'
+        paired_world; printf 'archive:entries=4\narchive:verified=ok\n' >"$W/out_files_verify_archive"
+        run_script -- backup-paired
+        expect_refused 'an archive with the wrong number of entries' 'not verified against the files it was made from'
+    fi
+    if want_case G25-paired-dump-checked; then
+        paired_world; printf 'INSERT INTO \x60cache\x60 VALUES\n(1);\n' >>"$W/dump_pass2"
+        run_script -- backup-paired
+        expect_refused 'a dump the contract refuses' 'the dump is not what the backup contract requires'
+    fi
+    if want_case G25-paired-files-manifest-checked; then
+        paired_world; printf 'not a time' >"$T/date-raw"
+        run_script -- backup-paired
+        expect_refused 'a Resource-files manifest that is not consistent' 'the Resource-files manifest just made is not consistent'
+        paired_nothing_in_place 'a Resource-files manifest that is not consistent'
+    fi
+    if want_case G25-paired-unit-checked; then
+        # The dump temporary file is altered after the stage has taken its checksum (a comment line, which the dump's own check accepts): the unit is not consistent.
+        paired_world
+        # shellcheck disable=SC2016 # the text is the hook's, run by bash in the fake daemon
+        printf 'for f in "%s"/root/.paired.*; do if grep -q "MariaDB dump" "$f"; then printf "%%s\\n" "-- altered" >>"$f"; fi; done\n' "$T" >"$W/after_files_verify_archive"
+        run_script -- backup-paired
+        expect_refused 'a unit that is not consistent' 'the recovery unit just made is not consistent'
+        expect_has 'what is not' "$ERR" "SHA-256 is not the manifest's"
+        paired_nothing_in_place 'a unit that is not consistent'
+    fi
+    if want_case G25-commit-no-clobber; then
+        # A file appears in the state directory after the stage began (the first check passed): nothing is put over it. What was already put in place stays, named, and is NOT a unit.
+        paired_world
+        printf 'printf planted >"%s/root/resources.manifest.json"; chmod 600 "%s/root/resources.manifest.json"\n' "$T" "$T" >"$W/after_files_verify_archive"
+        run_script -- backup-paired
+        expect_refused 'a file that appeared mid-stage' 'resources.manifest.json is in the state directory already, and a backup is never put over a file'
+        expect_has 'what was put in place' "$ERR" 'current.dump.sql resources.archive.tar.gz'
+        expect_has 'it is not a unit' "$ERR" 'recovery.manifest.json was not written, so they are NOT a recovery unit'
+        [[ "$(<"$T/root/resources.manifest.json")" == planted ]] || bad 'the file that appeared was overwritten'
+        [[ ! -e "$T/root/recovery.manifest.json" ]] || bad 'the recovery manifest was written although the unit was not complete'
+        if compgen -G "$T/root/.paired.*" >/dev/null; then bad 'a temporary file was left in the state directory'; fi
+        run_fn "ROOT='$T/root'; require_recovery_unit"
+        expect_refused 'what is left is not a unit' 'no complete recovery unit'
+        run_script -- backup-paired
+        expect_refused 'a second attempt' 'never overwritten'
+    fi
+}
+
+# Double invocation: a backup that was taken is never taken again over itself, and a second try changes nothing.
+t_g25_paired_is_never_taken_twice() {
+    local f before
+    paired_world
+    run_script -- backup-paired
+    expect_rc 'the first backup' 0
+    before="$(cd "$T/root" && sha256sum "${PAIRED_FILES[@]}")"
+    rm -f "$W/runs"
+    run_script -- backup-paired
+    expect_refused 'a second backup' 'never overwritten'
+    [[ "$(cd "$T/root" && sha256sum "${PAIRED_FILES[@]}")" == "$before" ]] || bad 'a second backup changed a file of the first'
+    no_helper_ran 'a second backup'
+    for f in "${PAIRED_FILES[@]}"; do [[ -f "$T/root/$f" ]] || bad "$f disappeared"; done
+}
+
+# --- the recovery unit: what a restore may rely on, and what it must not ---
+
+unit_check() { # DESC NEEDLE: the verifier on the state directory as the test left it
+    run_fn "ROOT='$T/root'; require_recovery_unit"
+    if [[ -z "$2" ]]; then
+        expect_rc "$1" 0
+    else
+        expect_refused "$1" "$2"
+    fi
+}
+unit_case() { # GUARD DESC NEEDLE SED_EXPRESSION: the cached unit, with one edit made to recovery.manifest.json
+    want_case "$1" || return 0
+    paired_world
+    install_paired
+    sed -i "$4" "$T/root/recovery.manifest.json"
+    unit_check "$2" "$3"
+}
+zeros() { printf '0%.0s' {1..64}; }
+
+t_g25_recovery_unit_manifest_is_verified() {
+    ensure_paired_cache
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        paired_world; install_paired
+        unit_check 'the unit as the stage made it' ''
+    fi
+    unit_case G25-rm-version 'another manifest version' 'recovery_manifest_version' 's/"recovery_manifest_version": 1,/"recovery_manifest_version": 2,/'
+    unit_case G25-rm-run 'another run' "not this run's" 's/"run_token_fingerprint": "[0-9a-f]*"/"run_token_fingerprint": "0000000000000000"/'
+    unit_case G25-rm-taken 'a taken_at that is not a time' 'taken_at is not a UTC time' 's/"taken_at": "[^"]*"/"taken_at": "yesterday"/'
+    unit_case G25-rm-release 'another release commit' 'not for the current commit' "s/\"commit\": \"$HEAD_SHA\"/\"commit\": \"$(printf 'a%.0s' {1..40})\"/"
+    unit_case G25-rm-release 'the historical commit' 'not for the current commit' "s/\"commit\": \"$HEAD_SHA\"/\"commit\": \"$HIST\"/"
+    unit_case G25-rm-release-version 'another release version' "release version is not 'unreleased'" 's/"version": "unreleased"/"version": "v0.3.0"/'
+    unit_case G25-rm-database 'another database' "not the rehearsal's MariaDB 10.11.18" 's/"name": "flc_rehearsal_app"/"name": "flowlife"/'
+    unit_case G25-rm-database 'another server version' "not the rehearsal's MariaDB 10.11.18" 's/"server_version": "[^"]*"/"server_version": "11.4.2-MariaDB"/'
+    unit_case G25-rm-keyring 'a keyring fingerprint that does not follow' 'keyring fingerprint is not that of the fingerprints it lists' 's/"keyring_fingerprint": "[0-9a-f]*"/"keyring_fingerprint": "0000000000000000"/'
+    if want_case G25-rm-keyring-live; then
+        # The listed key and the ring that follows from it are consistent with each other, and are not the keys this run holds.
+        run_fn "keyring_fingerprint $FP_FF $FP_PREV"
+        paired_world; install_paired
+        sed -i "s/\"current_key_fingerprint\": \"$FP_CUR\"/\"current_key_fingerprint\": \"$FP_FF\"/; s/\"keyring_fingerprint\": \"[0-9a-f]*\"/\"keyring_fingerprint\": \"$OUT\"/" "$T/root/recovery.manifest.json"
+        unit_check 'a backup that needs a key this run does not hold' 'live keyring lacks a key fingerprint the backup requires'
+    fi
+    unit_case G25-rm-dump-name 'another dump file' 'its dump is not current.dump.sql' 's/"database_dump_file": "current.dump.sql"/"database_dump_file": "historical.dump.sql"/'
+    unit_case G25-rm-dump-sha 'another dump checksum' "dump's SHA-256 is not the manifest's" "s/\"database_dump_sha256\": \"[0-9a-f]*\"/\"database_dump_sha256\": \"$(zeros)\"/"
+    unit_case G25-rm-dump-bytes 'another dump size' "dump's size is not the manifest's" 's/"database_dump_bytes": [0-9]*,/"database_dump_bytes": 1,/'
+    unit_case G25-rm-migrations 'a ledger of 28' 'migration ledger is not the current schema' 's/"migrations_count": 29,/"migrations_count": 28,/'
+    unit_case G25-rm-migrations 'a ledger that ends elsewhere' 'migration ledger is not the current schema' 's/"migrations_last": "[^"]*"/"migrations_last": "2026_10_09_000003_create_sourced_role_grants_table"/'
+    unit_case G25-rm-migrations 'a ledger digest that is not a SHA-256' 'migration ledger is not the current schema' 's/"migrations_sha256": "[0-9a-f]*"/"migrations_sha256": "short"/'
+    unit_case G25-rm-class 'a durable table classed as transient' 'class for people is not the contract' 's/"name": "people", "class": "durable"/"name": "people", "class": "transient"/'
+    unit_case G25-rm-class 'a transient table classed as durable' 'class for sessions is not the contract' 's/"name": "sessions", "class": "transient"/"name": "sessions", "class": "durable"/'
+    unit_case G25-rm-tables 'a table missing from the list' 'table list is not exactly the 34 tables' '/"name": "jobs", /d'
+    unit_case G25-rm-tables 'a table listed twice' 'table list is not exactly the 34 tables' '/"name": "jobs", /p'
+    unit_case G25-rm-tables 'a table the schema does not have' 'table list is not exactly the 34 tables' 's/^\(    { "name": "jobs", .*\)$/\1\n    { "name": "zzz", "class": "durable", "rows": 0, "row_sha256": "'"$EMPTY_DIGEST"'", "structure_sha256": "'"$(zeros)"'" },/'
+    unit_case G25-rm-lists 'a schema-only list that is not the contract' "not the contract's 27 and 7" 's/"tables_schema_only": \["cache", /"tables_schema_only": [/'
+    unit_case G25-rm-lists 'a durable list that is not the contract' "not the contract's 27 and 7" 's/"tables_with_data": \["account_invitations", /"tables_with_data": [/'
+    unit_case G25-rm-structure 'a structure digest that was changed' 'structure digest is not that of the structure digests it lists' "s/\\(\"name\": \"people\", .*\"structure_sha256\": \"\\)[0-9a-f]\\{64\\}/\\1$(zeros)/"
+    unit_case G25-rm-structure 'an aggregate structure digest that was changed' 'structure digest is not that of the structure digests it lists' "s/^  \"structure_sha256\": \"[0-9a-f]*\"/  \"structure_sha256\": \"$(zeros)\"/"
+    unit_case G25-rm-dump-content 'a manifest that says the database held one row more' 'the dump is not consistent with the manifest' 's/"name": "people", "class": "durable", "rows": 14,/"name": "people", "class": "durable", "rows": 15,/'
+    if want_case G25-rm-dump-content; then
+        paired_world; install_paired
+        sed -i '/^INSERT INTO \x60resource_assets\x60 VALUES$/,/;$/d' "$T/root/current.dump.sql"
+        # (the dump changed, so the manifest is re-bound to it: the content check, not the checksum, is what this case is about)
+        sed -i "s/\"database_dump_sha256\": \"[0-9a-f]*\"/\"database_dump_sha256\": \"$(sha256sum <"$T/root/current.dump.sql" | cut -c1-64)\"/; s/\"database_dump_bytes\": [0-9]*,/\"database_dump_bytes\": $(wc -c <"$T/root/current.dump.sql" | tr -d ' '),/" "$T/root/recovery.manifest.json"
+        unit_check 'a dump that lost the rows of a table, with its checksum corrected' 'the dump is not consistent with the manifest'
+    fi
+    unit_case G25-rm-inventory 'another inventory digest' 'inventory digest is not that of the files' "s/\"resources_inventory_sha256\": \"[0-9a-f]*\"/\"resources_inventory_sha256\": \"$(zeros)\"/"
+    unit_case G25-rm-assets 'a file count that is not the asset rows' 'not one number' 's/"resources_files_count": 4,/"resources_files_count": 3,/'
+    unit_case G25-rm-assets 'asset rows that are not the files' 'not one number' 's/"resources_asset_rows": 4,/"resources_asset_rows": 3,/'
+    unit_case G25-rm-archive-bound 'another archive checksum' 'archive this manifest binds is not the one' "s/\"resources_archive_sha256\": \"[0-9a-f]*\"/\"resources_archive_sha256\": \"$(zeros)\"/"
+    unit_case G25-rm-archive-bound 'another archive size' 'archive this manifest binds is not the one' 's/"resources_archive_bytes": [0-9]*,/"resources_archive_bytes": 1,/'
+    unit_case G25-rm-files-manifest-bound 'another Resource-files manifest checksum' 'is not the one this manifest binds' "s/\"resources_manifest_sha256\": \"[0-9a-f]*\"/\"resources_manifest_sha256\": \"$(zeros)\"/"
+    unit_case G25-rm-files-manifest-bound 'another Resource-files manifest name' 'is not the one this manifest binds' 's/"resources_manifest_file": "resources.manifest.json"/"resources_manifest_file": "other.json"/'
+    unit_case G25-rm-exact 'a line that is not one this script writes' 'not exactly what this script writes' 's/^  "reason": "rehearsal",$/  "reason": "rehearsal",\n  "extra": 1,/'
+    unit_case G25-rm-exact 'a backup id that is not the time' 'not exactly what this script writes' 's/"backup_id": "[0-9TZ]*"/"backup_id": "20990101T000000Z"/'
+    unit_case G25-rm-exact 'lines swapped' 'not exactly what this script writes' '/"reason": "rehearsal",/{N;s/\(.*\)\n\(.*\)/\2\n\1/}'
+}
+
+# What is wrong with the other three files, edited or replaced.
+t_g25_recovery_unit_artifacts_are_verified() {
+    local sha bytes f
+    ensure_paired_cache
+    ensure_files_cache
+    if want_case G25-unit-required; then
+        for f in "${PAIRED_FILES[@]}"; do
+            paired_world; install_paired; rm -f "$T/root/$f"
+            unit_check "no $f" 'no complete recovery unit'
+        done
+        paired_world; install_paired; chmod 644 "$T/root/recovery.manifest.json"
+        unit_check 'a manifest that is not private' 'no complete recovery unit'
+        paired_world; install_paired; rm -f "$T/root/current.dump.sql"; ln -s /dev/null "$T/root/current.dump.sql"
+        unit_check 'a dump that is a symbolic link' 'no complete recovery unit'
+    fi
+    if want_case G25-rm-dump-sha; then
+        paired_world; install_paired; printf -- '-- altered\n' >>"$T/root/current.dump.sql"
+        unit_check 'a dump altered in place' "dump's SHA-256 is not the manifest's"
+        # The same size, another checksum.
+        paired_world; install_paired; sed -i '0,/^(1),/s//(2),/' "$T/root/current.dump.sql"
+        unit_check 'a dump with one value changed, the same size' "dump's SHA-256 is not the manifest's"
+    fi
+    if want_case G25-rm-dump-bytes; then
+        # The checksum is corrected and the size is not: each is checked on its own.
+        paired_world; install_paired; printf -- '-- altered\n' >>"$T/root/current.dump.sql"
+        sed -i "s/\"database_dump_sha256\": \"[0-9a-f]*\"/\"database_dump_sha256\": \"$(sha256sum <"$T/root/current.dump.sql" | cut -c1-64)\"/" "$T/root/recovery.manifest.json"
+        unit_check 'a dump altered with its checksum corrected' "dump's size is not the manifest's"
+    fi
+    if want_case G25-rm-archive; then
+        paired_world; install_paired; printf 'x' >>"$T/root/resources.archive.tar.gz"
+        unit_check 'an archive that grew' 'archive cannot be relied on'
+        paired_world; install_paired; printf 'ARCHIVE\x00BYTEZ\xff' >"$T/root/resources.archive.tar.gz"
+        unit_check 'an archive with other bytes, the same size' 'archive cannot be relied on'
+    fi
+    if want_case G25-rm-files-manifest; then
+        paired_world; install_paired; sed -i 's/"resource_files_count": 4,/"resource_files_count": 3,/' "$T/root/resources.manifest.json"
+        unit_check 'a Resource-files manifest that is not consistent' 'Resource-files manifest cannot be relied on'
+        paired_world; install_paired; sed -i "s/\"run_token_fingerprint\": \"[0-9a-f]*\"/\"run_token_fingerprint\": \"0000000000000000\"/" "$T/root/resources.manifest.json"
+        unit_check 'a Resource-files manifest of another run' 'Resource-files manifest cannot be relied on'
+    fi
+    if want_case G25-rm-files-manifest-bound; then
+        # Another Resource-files manifest of this run that is valid on its own (the zero-file one) is not the one this manifest binds.
+        paired_world; install_paired; cp -p "$T/fcache/zero/resources.manifest.json" "$T/root/resources.manifest.json"
+        unit_check 'a swapped Resource-files manifest' 'is not the one this manifest binds'
+    fi
+    if want_case G25-rm-taken-same; then
+        paired_world; install_paired
+        sed -i 's/"taken_at": "2023-11-14T22:13:20Z"/"taken_at": "2023-11-14T22:13:21Z"/' "$T/root/resources.manifest.json"
+        sha="$(sha256sum <"$T/root/resources.manifest.json" | cut -c1-64)" bytes="$(wc -c <"$T/root/resources.manifest.json" | tr -d ' ')"
+        sed -i "s/\"resources_manifest_sha256\": \"[0-9a-f]*\"/\"resources_manifest_sha256\": \"$sha\"/; s/\"resources_manifest_bytes\": [0-9]*,/\"resources_manifest_bytes\": $bytes,/" "$T/root/recovery.manifest.json"
+        unit_check 'a Resource-files manifest taken at another time' 'not taken at the same time'
+    fi
+    if want_case G25-rm-files-present; then
+        # The zero-file manifest, valid for this run and bound by the recovery manifest: a paired backup of a database with Resource-file records is not a zero-file one.
+        paired_world; install_paired
+        cp -p "$T/fcache/zero/resources.manifest.json" "$T/root/resources.manifest.json"
+        sha="$(sha256sum <"$T/root/resources.manifest.json" | cut -c1-64)" bytes="$(wc -c <"$T/root/resources.manifest.json" | tr -d ' ')"
+        sed -i "s/\"resources_manifest_sha256\": \"[0-9a-f]*\"/\"resources_manifest_sha256\": \"$sha\"/; s/\"resources_manifest_bytes\": [0-9]*,/\"resources_manifest_bytes\": $bytes,/" "$T/root/recovery.manifest.json"
+        unit_check 'a zero-file Resource-files manifest bound as the unit' 'not a directory holding files'
+    fi
+}
+
+# Swapped, substituted and borrowed: parts that are each valid, put together wrongly, and files of the historical profile.
+t_g25_recovery_unit_substitutions() {
+    ensure_paired_cache
+    ensure_cache
+    ensure_files_cache
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        # A second, valid dump of the same database (the same rows, another comment): swapped in, it is not the one the manifest binds.
+        paired_world; install_paired
+        { cat "$W/dump_pass1" "$W/dump_pass2"; printf -- '-- another dump\n'; } >"$T/root/current.dump.sql"
+        unit_check 'a swapped database dump' "dump's SHA-256 is not the manifest's"
+        # A second, valid archive: another file set's bytes with their own manifest. The files manifest is bound by the unit and does not follow it.
+        paired_world; install_paired
+        printf 'ARCHIVE\x00OTHER\xff' >"$T/root/resources.archive.tar.gz"
+        unit_check 'a swapped Resource-files archive' 'archive cannot be relied on'
+        # The manifest of another run (another token) with every other file this run's.
+        paired_world; install_paired
+        rm -rf "${T:?}/root"; make_root "$OTHER_TOKEN"; put_prepared_source; install_paired
+        unit_check 'a unit of another run' "not this run's"
+        # The historical backup's files are not a recovery unit, with or without the files of the Resource backup beside them.
+        paired_world; install_state snapshot dump.sql manifest.json; cp -p "$T/fcache/resources.manifest.json" "$T/fcache/resources.archive.tar.gz" "$T/root/"
+        unit_check 'the historical backup and a files backup, no recovery manifest' 'no complete recovery unit'
+        paired_world; cp -p "$T/cache/historical.dump.sql" "$T/root/current.dump.sql"; cp -p "$T/cache/historical.manifest.json" "$T/root/recovery.manifest.json"
+        cp -p "$T/fcache/resources.manifest.json" "$T/fcache/resources.archive.tar.gz" "$T/root/"
+        unit_check 'the historical dump and manifest under the recovery unit names' 'recovery_manifest_version'
+        # The recovery manifest alone, and the files alone.
+        paired_world; cp -p "$T/pcache/recovery.manifest.json" "$T/root/"
+        unit_check 'a manifest with nothing it binds' 'no complete recovery unit'
+        paired_world; cp -p "$T/pcache/current.dump.sql" "$T/pcache/resources.manifest.json" "$T/pcache/resources.archive.tar.gz" "$T/root/"
+        unit_check 'the artifacts with no recovery manifest' 'no complete recovery unit'
+    fi
+}
+
+# --- the two profiles ---
+
+# --- R2 and R3 of the WU4 review ---
+
+# What the unit check establishes and what it does not. It establishes the integrity of the artifacts (checksums, sizes, the archive against its manifest) and the structural
+# consistency of the dump and the manifest (the statement forms, the inventory, the number of ROW LINES of each durable table against the recorded count). It does not read a
+# row's content from the dump and derives no digest from it, and the recorded digests are the first measurement's, not authenticated: those are checked by measuring a RESTORED
+# database and comparing it with the manifest (WU5's verification; docs, "the contract for WU5"). The cases below make the difference executable, so that the limit is a thing
+# a test states and not a sentence that can be read as more than it says.
+rebind_dump() { # the dump in the state directory as the manifest's: its SHA-256 and its size written into recovery.manifest.json
+    sed -i "s/\"database_dump_sha256\": \"[0-9a-f]*\"/\"database_dump_sha256\": \"$(sha256sum <"$T/root/current.dump.sql" | cut -c1-64)\"/; s/\"database_dump_bytes\": [0-9]*,/\"database_dump_bytes\": $(wc -c <"$T/root/current.dump.sql" | tr -d ' '),/" "$T/root/recovery.manifest.json"
+}
+t_g25_recovery_unit_verification_boundary() {
+    local before after
+    ensure_paired_cache
+    # Row COUNT agreement is verified: a dump that lost a row of a durable table is refused, whatever its checksum.
+    paired_world; install_paired
+    sed -i '/^INSERT INTO \x60people\x60 VALUES$/{n;d}' "$T/root/current.dump.sql"
+    rebind_dump
+    unit_check 'a dump with a row fewer, its checksum and size re-recorded' 'holds 13 row(s) for the durable table people, and the database held 14'
+    # Row CONTENT agreement is not: a dump with the same number of rows and another value in one, its checksum and size re-recorded, is accepted. This is the limit, stated.
+    paired_world; install_paired
+    sed -i '0,/^(1),$/s//(999),/' "$T/root/current.dump.sql"
+    rebind_dump
+    before="$(sha256sum <"$T/root/current.dump.sql")"
+    unit_check 'a dump with one row changed and the same number of rows, its checksum and size re-recorded (accepted: the unit check does not read row content)' ''
+    [[ "$(sha256sum <"$T/root/current.dump.sql")" == "$before" ]] || bad 'the unit check changed the dump'
+    # The recorded digests are not derived from anything in the unit: a changed recorded row digest is accepted too. It is the restored database's digest, compared with it, that
+    # shows the rows came back as recorded.
+    paired_world; install_paired
+    sed -i 's/"name": "people", "class": "durable", "rows": 14, "row_sha256": "[0-9a-f]*"/"name": "people", "class": "durable", "rows": 14, "row_sha256": "'"$(zeros)"'"/' "$T/root/recovery.manifest.json"
+    unit_check 'a manifest whose recorded row digest of a table is another (accepted: it is evidence to compare a restored database with, not a fact derived from the dump)' ''
+    # What IS held: the dump the manifest binds by checksum cannot be another one without the manifest being changed to match.
+    paired_world; install_paired
+    sed -i '0,/^(1),$/s//(999),/' "$T/root/current.dump.sql"
+    unit_check 'a dump with one row changed and the checksum not re-recorded' "dump's SHA-256 is not the manifest's"
+}
+
+# R3: the three phases of a stage that stops are told apart by the files that are really there.
+paired_files_hash() { (cd "$T/root" && sha256sum "${PAIRED_FILES[@]}" 2>/dev/null || true); }
+t_g25_paired_failure_phases_are_told_apart() {
+    local before
+    # Phase 1: before anything was put in place.
+    paired_world; touch "$W/dump_fail"
+    run_script -- backup-paired
+    paired_nothing_in_place 'phase 1'
+    expect_has 'phase 1: nothing was put in place' "$ERR" 'Nothing of this backup was put in place.'
+    [[ "$ERR" != *'put in place (recovery.manifest.json last)'* && "$ERR" != *'These parts'* ]] || bad "phase 1: the note speaks of files that were put in place: ${ERR:0:300}"
+    # Phase 2: some files were put in place and the recovery manifest was not, because a file of that name appeared (a file of another's: it is not part of this backup).
+    paired_world
+    printf 'printf planted >"%s/root/recovery.manifest.json"; chmod 600 "%s/root/recovery.manifest.json"\n' "$T" "$T" >"$W/after_files_verify_archive"
+    run_script -- backup-paired
+    expect_refused 'phase 2: the commit point is taken' 'recovery.manifest.json is in the state directory already, and a backup is never put over a file'
+    expect_has 'phase 2: what was put in place' "$ERR" 'current.dump.sql resources.archive.tar.gz resources.manifest.json'
+    expect_has 'phase 2: it is not a unit' "$ERR" 'recovery.manifest.json was not written, so they are NOT a recovery unit'
+    expect_has 'phase 2: the file there is not this stage' "$ERR" 'A file named recovery.manifest.json is in the state directory that this stage did not write'
+    [[ "$(<"$T/root/recovery.manifest.json")" == planted ]] || bad 'phase 2: the file that was there was overwritten'
+    [[ -s "$T/root/current.dump.sql" && -s "$T/root/resources.archive.tar.gz" && -s "$T/root/resources.manifest.json" ]] || bad 'phase 2: a file that was put in place was removed'
+    if compgen -G "$T/root/.paired.*" >/dev/null; then bad 'phase 2: a temporary file was left'; fi
+    # Phase 3: the recovery manifest was put in place, and the final verification failed. Four files exist; the note does not call them a backup.
+    paired_world
+    run_fn "require_recovery_unit() { refuse 'the final verification, forced to fail for the test'; }; main backup-paired"
+    expect_rc 'phase 3: the final verification fails' 3
+    expect_has 'phase 3: the cause' "$ERR" 'forced to fail for the test'
+    expect_has 'phase 3: all four files are there' "$ERR" 'All four files were put in place (recovery.manifest.json last) but the stage failed before it had verified them as put in place'
+    expect_has 'phase 3: no reliance' "$ERR" 'only require_recovery_unit accepting them makes them one, and nothing may rely on them until it does'
+    expect_has 'phase 3: nothing was repaired' "$ERR" 'Nothing was removed or repaired'
+    [[ "$ERR" != *'NOT a recovery unit'* && "$ERR" != *'require_recovery_unit accepted them'* ]] || bad "phase 3: the note says the files are not a unit, or that they were accepted: ${ERR:0:400}"
+    local f
+    for f in "${PAIRED_FILES[@]}"; do [[ -s "$T/root/$f" ]] || bad "phase 3: $f was removed"; done
+    if compgen -G "$T/root/.paired.*" >/dev/null; then bad 'phase 3: a temporary file was left'; fi
+    # The authority is require_recovery_unit: the real one accepts what is there (nothing was changed), and the files are as they were.
+    before="$(paired_files_hash)"
+    unit_check 'phase 3: the files the stage left, judged by require_recovery_unit itself' ''
+    [[ "$(paired_files_hash)" == "$before" ]] || bad 'phase 3: judging the files changed them'
+    # Phase 3, later: the final verification passed and the stage failed after it. The note says that, and no more.
+    paired_world
+    # shellcheck disable=SC2016 # the code is run by the inner bash
+    run_fn 'say() { case "$*" in *"binds the dump"*) exit 1 ;; esac; printf "%s\n" "$*"; }; main backup-paired'
+    expect_rc 'phase 3, later: the stage fails after the verification' 1
+    expect_has 'phase 3, later: accepted, then failed' "$ERR" 'recovery.manifest.json was put in place last, with current.dump.sql resources.archive.tar.gz resources.manifest.json, and require_recovery_unit accepted them; the stage failed after that'
+    expect_has 'phase 3, later: it is still the verifier that decides' "$ERR" 'Whether they may be relied on is for require_recovery_unit to say again'
+    [[ "$ERR" != *'NOT a recovery unit'* ]] || bad "phase 3, later: the note says the files are not a unit: ${ERR:0:400}"
+    # A signal can arrive after the hard link made a name and before the stage wrote that name down. The note still tells it: the name is the stage's own file when it is the same
+    # file as the temporary one it was linked from. A name that is another file's (the link failed because the name was taken) is never counted, and the stage's own record is not doubled.
+    local d="$T/pending"
+    mkdir -p "$d"; printf mine >"$d/.paired.tmp"; ln "$d/.paired.tmp" "$d/current.dump.sql"
+    run_fn "ROOT='$d'; PAIRED_PENDING=current.dump.sql PAIRED_PENDING_TMP='$d/.paired.tmp'; paired_partial_note"
+    [[ "$OUT" == 'These parts of the backup were already in place: current.dump.sql. recovery.manifest.json was not written, so they are NOT a recovery unit, whatever they hold.' ]] \
+        || bad "a file linked just before the stage was interrupted is not in the note: $OUT"
+    printf theirs >"$d/resources.manifest.json"
+    run_fn "ROOT='$d'; PAIRED_PENDING=resources.manifest.json PAIRED_PENDING_TMP='$d/.paired.tmp'; paired_partial_note"
+    [[ "$OUT" != *resources.manifest.json* ]] || bad "a name that is another file's was counted as put in place: $OUT"
+    run_fn "ROOT='$d'; PAIRED_COMMITTED=(current.dump.sql); PAIRED_PENDING=current.dump.sql PAIRED_PENDING_TMP='$d/.paired.tmp'; paired_partial_note"
+    [[ "$OUT" != *'current.dump.sql current.dump.sql'* ]] || bad "a file that was already written down was told twice: $OUT"
+}
+
+# shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+t_g25_the_profiles_are_separate() {
+    local f
+    # The historical profile: 16 tables, 9 durable, 7 transient, and the dump and manifest it always had.
+    run_fn 'historical_inventory | wc -l; durable_inventory | wc -l; printf "%s\n" "${TRANSIENT_TABLES[@]}" | wc -l'
+    [[ "$(tr '\n' ' ' <<<"$OUT")" == '16 9 7 ' ]] || bad "the historical profile is not 16, 9 and 7 tables: $OUT"
+    run_fn 'durable_inventory | tr "\n" " "'
+    [[ "$OUT" == 'account_invitations account_recovery_codes account_totp_factors accounts membership_grants migrations people role_assignments security_events ' ]] || bad "the historical durable tables are not the nine: $OUT"
+    # The current profile: 34 tables, 27 durable, the same 7 transient.
+    run_fn 'upgraded_inventory | wc -l; current_durable_inventory | wc -l'
+    [[ "$(tr '\n' ' ' <<<"$OUT")" == '34 27 ' ]] || bad "the current profile is not 34 and 27 tables: $OUT"
+    run_fn 'current_durable_inventory | grep -cxE "sessions|cache|cache_locks|failed_jobs|job_batches|jobs|password_reset_tokens" || true'
+    [[ "$OUT" == 0 ]] || bad 'a transient table is in the current durable list'
+    run_fn 'current_durable_inventory | grep -cxE "resource_assets|sourced_role_grants|contact_methods|person_relationship_field_values"'
+    [[ "$OUT" == 4 ]] || bad 'a newer durable table is not in the current durable list'
+    # The historical manifest is still what it was: written for a fixed set of inputs, it is this text and no other (the format L2 proved).
+    run_fn "ROOT='$T/root'; CURRENT_FP=$FP_CUR PREVIOUS_FP=$FP_PREV RING_FP=$RING_CUR_PREV manifest_text $(fake_digest dump) 1234 10.11.18-MariaDB 2023-11-14T22:13:20Z 0123456789abcdef"
+    [[ "$OUT" == "$(printf '{\n  "manifest_version": 1,\n  "backup_id": "20231114T221320Z",\n  "taken_at": "2023-11-14T22:13:20Z",\n  "reason": "rehearsal",\n  "dump_file": "historical.dump.sql",\n  "dump_sha256": "%s",\n  "dump_bytes": 1234,\n  "release": {\n    "version": "v0.3.0",\n    "commit": "%s"\n  },\n  "database": {\n    "connection": "mariadb",\n    "name": "flc_rehearsal_app",\n    "server_version": "10.11.18-MariaDB",\n    "run_token_fingerprint": "0123456789abcdef"\n  },\n  "keyring": {\n    "current_key_fingerprint": "%s",\n    "previous_key_fingerprints": ["%s"],\n    "keyring_fingerprint": "%s",\n    "previous_keys_configured": true\n  },\n  "tables_with_data": ["account_invitations", "account_recovery_codes", "account_totp_factors", "accounts", "membership_grants", "migrations", "people", "role_assignments", "security_events"],\n  "tables_schema_only": ["cache", "cache_locks", "failed_jobs", "job_batches", "jobs", "password_reset_tokens", "sessions"]\n}' "$(fake_digest dump)" "$HIST" "$FP_CUR" "$FP_PREV" "$RING_CUR_PREV")" ]] || bad "the historical manifest is not what it was: $OUT"
+    # The files of the two profiles have different names, and cleanup knows all of them.
+    for f in historical.dump.sql historical.manifest.json historical.snapshot current.dump.sql recovery.manifest.json resources.archive.tar.gz resources.manifest.json; do
+        run_fn "printf '%s\n' \"\${STATE_FILES[@]}\" | grep -cxF '$f'"
+        [[ "$OUT" == 1 ]] || bad "$f is not one of the state files cleanup removes"
+    done
+    # No command takes a profile: the current profile is chosen by the stage that uses it, and the historical stages are not given the current functions.
+    run_fn 'declare -f cmd_take_backup | grep -c "current_dump_problem\|upgraded_inventory\|recovery_" || true'
+    [[ "$OUT" == 0 ]] || bad 'take-backup (the historical stage) uses the current profile'
+    run_fn 'declare -f cmd_restore_historical cmd_reproduce_wp3_01 cmd_upgrade | grep -c "current_dump_problem\|recovery_unit\|CURRENT_DUMP_FILE" || true'
+    [[ "$OUT" == 0 ]] || bad 'a historical stage uses the current profile'
+    run_fn 'declare -f cmd_backup_paired | grep -c "\bdump_problem \|historical_inventory\|\bDUMP_FILE\b\|\bMANIFEST_FILE\b" || true'
+    [[ "$OUT" == 0 ]] || bad "the paired backup uses the historical profile's names or functions"
+}
+
+# --- statics: what the script and the PHP support say about the current schema must be one thing ---
+
+# shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+t_static_wu4_lists_agree() {
+    local php_tables php_transient script_tables line f
+    run_fn 'printf "%s\n" "${HISTORICAL_TABLES[@]}" "${NEWER_TABLES[@]}" | LC_ALL=C sort'
+    script_tables="$OUT"
+    [[ "$(grep -c . <<<"$script_tables")" == 34 ]] || bad 'the script does not list 34 tables'
+    run_fn 'printf "%s\n" "${TRANSIENT_TABLES[@]}" | LC_ALL=C sort'
+    [[ "$OUT" == "$(printf '%s\n' "${TRANSIENT[@]}" | LC_ALL=C sort)" ]] || bad 'the script and this test do not list the same transient tables'
+    run_fn 'printf "%s" "$CURRENT_LAST_MIGRATION"'
+    [[ "$OUT" == "$LEDGER_LAST" && "$OUT" == "$(migration_files | awk 'NR == 29')" ]] || bad "the script's CURRENT_LAST_MIGRATION is not the repository's 29th migration"
+    run_fn 'printf "%s" "$CURRENT_LEDGER_COUNT"'
+    [[ "$OUT" == "$(migration_files | wc -l)" ]] || bad "the script's CURRENT_LEDGER_COUNT is not the number of migrations in the repository"
+    f="$ROOT/apps/platform/tests/Support/CurrentSnapshot.php"
+    [[ -f "$f" && -f "$ROOT/apps/platform/tests/Support/CurrentSnapshotRefusal.php" ]] || bad 'CurrentSnapshot.php or CurrentSnapshotRefusal.php is not in the tests support directory'
+    grep -qxF 'namespace Tests\Support;' "$f" || bad 'CurrentSnapshot.php is not in the Tests\Support namespace the helper imports'
+    grep -qxF 'use Tests\Support\CurrentSnapshot;' "$SRC/php/rehearse.php" || bad 'rehearse.php does not import Tests\Support\CurrentSnapshot'
+    grep -qxF 'use Tests\Support\CurrentSnapshotRefusal;' "$SRC/php/rehearse.php" || bad 'rehearse.php does not import Tests\Support\CurrentSnapshotRefusal'
+    grep -qF "'snapshot-all' => 'actionSnapshotAll'" "$SRC/php/rehearse.php" || bad 'rehearse.php has no snapshot-all action'
+    # Every line the script requires of the helper is one the helper prints.
+    for line in 'snapshot-all:complete=ok' 'ledger:count=' 'ledger:last=' 'ledger:digest=' 'key:current=' 'key:previous='; do
+        grep -qF "echo \"$line" "$SRC/php/rehearse.php" || grep -qF "echo '$line" "$SRC/php/rehearse.php" || bad "the script requires $line of snapshot-all, which rehearse.php never prints"
+    done
+    grep -qF "'all-table %s %d %s" "$f" || grep -qF '"all-table %s %d %s' "$f" || bad "CurrentSnapshot does not print the all-table lines the script parses"
+    run_fn 'runner_command helper:snapshot-all; printf "%s " "${RUN_CMD[@]}"'
+    expect_has 'the snapshot-all vector' "$OUT" 'php /var/www/html/harness/rehearse.php snapshot-all'
+    command -v php >/dev/null 2>&1 || return 0
+    php_tables="$(php -r "require '$f'; echo implode(\"\\n\", \\Tests\\Support\\CurrentSnapshot::TABLES);")"
+    [[ "$php_tables" == "$script_tables" ]] || bad "CurrentSnapshot::TABLES is not the script's 34 tables"
+    php_transient="$(php -r "require '$f'; echo implode(\"\\n\", \\Tests\\Support\\CurrentSnapshot::TRANSIENT);" | LC_ALL=C sort)"
+    [[ "$php_transient" == "$(printf '%s\n' "${TRANSIENT[@]}" | LC_ALL=C sort)" ]] || bad "CurrentSnapshot::TRANSIENT is not the script's seven transient tables"
+    # One digest of a table's rows, whichever of the two harness readers made it, and the digest of none is the one the script calls EMPTY_DIGEST.
+    [[ "$(php -r "require '$SRC/php/rehearse.php'; require '$f';
+        foreach ([[], [['a' => 3, 'b' => null]], [['a' => '3', 'b' => null]], [['id' => 'x', 'v' => 1.5], ['id' => 'y', 'v' => true]], [['a' => ['k' => 1]]]] as \$rows) { echo rowsDigest(\$rows) === \\Tests\\Support\\CurrentSnapshot::digest(\$rows) ? 'same ' : 'DIFFERENT '; }")" == 'same same same same same ' ]] || bad 'CurrentSnapshot::digest and rehearse.php rowsDigest do not give one digest'
+    [[ "$(php -r "require '$f'; echo \\Tests\\Support\\CurrentSnapshot::digest([]);")" == "$EMPTY_DIGEST" ]] || bad "the digest of no rows is not the script's EMPTY_DIGEST"
+    # The lines the support class prints are the lines the script parses, for all 34 tables.
+    php -r "require '$f'; \$m = []; foreach (\\Tests\\Support\\CurrentSnapshot::TABLES as \$i => \$t) { \$m[\$t] = ['rows' => \$i, 'digest' => hash('sha256', \$t)]; } echo \\Tests\\Support\\CurrentSnapshot::lines(\$m);" >"$T/all-lines.txt"
+    run_fn "all_table_lines \"\$(<'$T/all-lines.txt')\""
+    expect_rc 'the support class lines parse as the script reads them' 0
+    [[ "$(grep -c . <<<"$OUT")" == 34 ]] || bad 'the script did not read 34 lines from the support class output'
+    # The attested support classes are what the helper loads (the older test compares the union with SUPPORT_FILES; here the new two are named).
+    grep -q "'CurrentSnapshot', 'CurrentSnapshotRefusal'" "$SRC/php/rehearse.php" || bad 'rehearse.php does not load CurrentSnapshot and CurrentSnapshotRefusal from the prepared source'
+    php -l "$SRC/php/rehearse.php" >/dev/null 2>&1 || bad 'rehearse.php does not parse'
 }
 
 HARNESS_FILES_EXPECTED=(db-ping.php probe.php rehearse.php files.php)
@@ -7888,6 +9032,81 @@ declare -A GUARD_TESTS=(
     [G22-aside-result]='t_g22_aside_refusals'
     [G22-cleanup-dispatch]='t_g22_cleanup_removes_the_files_objects_and_only_those'
     [G22-selfcheck-files]='t_g22_self_check_verifies_the_files_volume'
+    [G25-all-complete]='t_g25_paired_the_measurement_is_validated'
+    [G25-all-line-shape]='t_g25_paired_the_measurement_is_validated'
+    [G25-assets-two-readers]='t_g25_paired_the_measurement_is_validated'
+    [G25-commit-no-clobber]='t_g25_paired_failures_leave_nothing_that_looks_like_a_backup'
+    [G25-dump-complete]='t_g25_current_dump_contract'
+    [G25-dump-create-last]='t_g25_current_dump_contract'
+    [G25-dump-create-commas]='t_g25_current_dump_contract'
+    [G25-dump-create-reference]='t_g25_current_dump_contract'
+    [G25-dump-create-order]='t_g25_current_dump_contract'
+    [G25-dump-nul]='t_g25_current_dump_contract'
+    [G25-dump-unlock-context]='t_g25_current_dump_contract'
+    [G25-dump-lock-known]='t_g25_current_dump_contract'
+    [G25-dump-lock-transient]='t_g25_current_dump_contract'
+    [G25-dump-lock-context]='t_g25_current_dump_contract'
+    [G25-dump-keys-known]='t_g25_current_dump_contract'
+    [G25-dump-keys-context]='t_g25_current_dump_contract'
+    [G25-dump-insert-context]='t_g25_current_dump_contract'
+    [G25-dump-locked-only]='t_g25_current_dump_contract'
+    [G25-dump-create-body]='t_g25_current_dump_contract'
+    [G25-dump-creates]='t_g25_current_dump_contract'
+    [G25-dump-drops]='t_g25_current_dump_contract'
+    [G25-dump-row-form]='t_g25_current_dump_contract'
+    [G25-dump-rows]='t_g25_current_dump_contract'
+    [G25-dump-transient-empty]='t_g25_current_dump_contract'
+    [G25-dump-unknown-table]='t_g25_current_dump_contract'
+    [G25-dump-unrecognised]='t_g25_current_dump_contract'
+    [G25-dump-mode-pin]='t_g25_current_dump_contract'
+    [G25-dump-mode-restore]='t_g25_current_dump_contract'
+    [G25-dump-insert-mode]='t_g25_current_dump_contract'
+    [G25-dump-insert-charset]='t_g25_current_dump_contract'
+    [G25-dump-cs-table-save]='t_g25_current_dump_contract'
+    [G25-dump-cs-table-restore]='t_g25_current_dump_contract'
+    [G25-dump-cs-restore]='t_g25_current_dump_contract'
+    [G25-dump-set-balanced]='t_g25_current_dump_contract'
+    [G25-ledger-evidence]='t_g25_paired_the_measurement_is_validated'
+    [G25-paired-agree]='t_g25_paired_preconditions'
+    [G25-paired-archive-nonempty]='t_g25_paired_failures_leave_nothing_that_looks_like_a_backup'
+    [G25-paired-archive-verified]='t_g25_paired_failures_leave_nothing_that_looks_like_a_backup'
+    [G25-paired-assets]='t_g25_paired_preconditions'
+    [G25-paired-check-reported]='t_g25_paired_preconditions'
+    [G25-paired-dump-checked]='t_g25_paired_the_dump_is_checked t_g25_paired_failures_leave_nothing_that_looks_like_a_backup'
+    [G25-paired-files-manifest-checked]='t_g25_paired_failures_leave_nothing_that_looks_like_a_backup'
+    [G25-paired-inventory]='t_g25_paired_preconditions'
+    [G25-paired-no-overwrite]='t_g25_paired_preconditions'
+    [G25-paired-quiescent]='t_g25_paired_a_change_during_the_backup_is_refused'
+    [G25-paired-state]='t_g25_paired_preconditions'
+    [G25-paired-unit-checked]='t_g25_paired_failures_leave_nothing_that_looks_like_a_backup'
+    [G25-rm-archive]='t_g25_recovery_unit_artifacts_are_verified'
+    [G25-rm-archive-bound]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-assets]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-class]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-database]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-dump-bytes]='t_g25_recovery_unit_manifest_is_verified t_g25_recovery_unit_artifacts_are_verified'
+    [G25-rm-dump-content]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-dump-name]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-dump-sha]='t_g25_recovery_unit_manifest_is_verified t_g25_recovery_unit_artifacts_are_verified'
+    [G25-rm-exact]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-files-manifest]='t_g25_recovery_unit_artifacts_are_verified'
+    [G25-rm-files-manifest-bound]='t_g25_recovery_unit_manifest_is_verified t_g25_recovery_unit_artifacts_are_verified'
+    [G25-rm-files-present]='t_g25_recovery_unit_artifacts_are_verified'
+    [G25-rm-inventory]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-keyring]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-keyring-live]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-lists]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-migrations]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-release]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-release-version]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-run]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-structure]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-tables]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-taken]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-rm-taken-same]='t_g25_recovery_unit_artifacts_are_verified'
+    [G25-rm-version]='t_g25_recovery_unit_manifest_is_verified'
+    [G25-snapshot-all-reported]='t_g25_paired_the_measurement_is_validated'
+    [G25-unit-required]='t_g25_recovery_unit_artifacts_are_verified'
 )
 
 # registry_differences MARKERS REGISTERED (one ID per line each): `unregistered ID` for a marker no GUARD_TESTS entry covers, `unmarked ID` for an entry
