@@ -305,6 +305,10 @@ case "$1 ${2:-}" in
                     if [[ -f "$W/runs" ]]; then cp "$W/runs" "$W/runs_at_insert"; else : >"$W/runs_at_insert"; fi
                     [[ ! -f "$W/insert_fail" ]] || { echo 'ERROR 1062 (23000): the fake insert failed' >&2; exit 1; }
                     if [[ -f "$W/on_insert" ]]; then bash "$W/on_insert"; fi ;;
+                *'DROP TABLE IF EXISTS'*) # loading a dump (BEFORE the stub: the 34-table dump creates that table too): logged whole, and the world may change as it would
+                    printf '%s' "$sql" >"$W/import.sql"; printf 'IMPORT args=[%s]\n' "${*:10}" >>"$W/appsql.log"
+                    [[ ! -f "$W/import_fail" ]] || { echo 'ERROR 1050 (42S01): the fake load failed' >&2; exit 1; }
+                    if [[ -f "$W/on_import" ]]; then bash "$W/on_import"; fi ;;
                 *'CREATE TABLE `person_relationship_field_values`'*) # slice 2.2C-1: the stub. Logged whole; the helpers that had run by now are recorded; the world may change as it would
                     printf '%s' "$sql" >"$W/stub.sql"; printf 'STUB args=[%s]\n' "${*:10}" >>"$W/appsql.log"
                     if [[ -f "$W/runs" ]]; then cp "$W/runs" "$W/runs_at_stub"; else : >"$W/runs_at_stub"; fi
@@ -321,10 +325,6 @@ case "$1 ${2:-}" in
                 *'referenced_table_name IS NOT NULL'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/schema_4" 2>/dev/null; echo ;;
                 *'information_schema.referential_constraints'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/schema_5" 2>/dev/null; echo ;;
                 *"type = 'role.revoked'"*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; if [[ -f "$W/revoke_counts" ]]; then cat "$W/revoke_counts"; else printf '12\t8\t1\t0\t0\n'; fi ;;
-                *'DROP TABLE IF EXISTS'*) # loading a dump: logged whole, and the world may change as it would
-                    printf '%s' "$sql" >"$W/import.sql"; printf 'IMPORT args=[%s]\n' "${*:10}" >>"$W/appsql.log"
-                    [[ ! -f "$W/import_fail" ]] || { echo 'ERROR 1050 (42S01): the fake load failed' >&2; exit 1; }
-                    if [[ -f "$W/on_import" ]]; then bash "$W/on_import"; fi ;;
                 *"table_type <> 'BASE TABLE'"*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/nonbase" 2>/dev/null || echo 0 ;;
                 *'information_schema.triggers'*) printf 'APPSQL args=[%s] %s\n' "${*:10}" "$sql" >>"$W/appsql.log"; cat "$W/other_objects" 2>/dev/null || printf '0\t0\t0\n' ;;
                 *'DROP TABLE `'*) # slice 2.2B: clearing the schema. Logged whole; the helpers that had run by now are recorded; the world may change as it would
@@ -467,6 +467,7 @@ case "$1 ${2:-}" in
             *'harness/files.php verify-archive'*) key=files_verify_archive ;;
             *'harness/files.php aside'*) key=files_aside ;;
             *'harness/files.php inspect-aside'*) key=files_inspect_aside ;; # slice 2.2C-3 (WU3): the read-only look at the aside directory
+            *'harness/files.php drift'*) key=files_drift ;; # slice 2.2C-3 (WU5): the one fixed change of the Resource files after a backup
             *'harness/files.php restore'*) key=files_restore ;;
             *' migrate --force'*) key="migrate_${wd##*/}" ;;
         esac
@@ -4387,7 +4388,7 @@ STATE_LISTING=''
 snapshot_state() { STATE_LISTING="$(cd "$T/root" && find . -type f ! -name run.lock -exec sha256sum {} + | LC_ALL=C sort)"; }
 world_changed() { # prints what changed, if anything
     local k out='' now
-    for k in fixture_load migrate_historical migrate_current mark half_migrate revoke files_seed files_aside files_restore; do
+    for k in fixture_load migrate_historical migrate_current mark half_migrate revoke files_seed files_aside files_restore files_drift; do
         if [[ -f "$W/runs" ]] && grep -q "^$k\$" "$W/runs"; then out+="$k ran; "; fi
     done
     for k in stub.sql clear.sql import.sql assets_insert.sql; do [[ ! -e "$W/$k" ]] || out+="$k was run; "; done
@@ -7541,7 +7542,8 @@ t_g22_static_the_files_slice_is_what_the_contract_says() {
     # No caller chooses a directory, an archive or a statement: the helper takes only the action and its list or stamp, and the root is a constant.
     if grep -nE '\$argv\[[2-9]\]|getenv|\$_ENV|\$_SERVER\[.(argv|PATH)' "$helper" | grep -v '^[0-9]*:[[:space:]]*//' | grep -q .; then bad 'the helper reads an argument beyond the action and its one value, or the environment'; fi
     if grep -nE '\b(curl_|fsockopen|stream_socket_client|socket_create|gethostbyname|file_get_contents\(.https?:|mysqli|new PDO|shell_exec|passthru|system\(|exec\(|popen|proc_open|unlink\()' "$helper" | grep -v '^[0-9]*:[[:space:]]*//' | grep -v "@unlink(\$archive)" | grep -q .; then bad 'the helper has a network, database, shell or delete call'; fi
-    if grep -nE '\b(unlink|rmdir|rename|exec|shell_exec|system|passthru|popen)\(' "$support" | grep -v '^[0-9]*:[[:space:]]*\*' | grep -v '@unlink(\$temporary)' | grep -v 'rename(\$from' | grep -q .; then bad 'the support class deletes, renames or runs something other than its one temporary file, its one rename and its tar'; fi
+    if grep -nE '\b(unlink|rmdir|rename|exec|shell_exec|system|passthru|popen)\(' "$support" | grep -v '^[0-9]*:[[:space:]]*\*' | grep -v '@unlink(\$temporary)' | grep -v 'rename(\$from' | grep -v 'unlink(\$removed)' | grep -q .; then bad 'the support class deletes, renames or runs something other than its one temporary file, its one rename, its tar and (WU5) the one file `drift` removes'; fi
+    [[ "$(grep -c 'unlink(\$removed)' "$support")" == 1 ]] || bad 'the support class does not delete the one file `drift` removes exactly once'
     # What the script reads from the helper is what the helper prints (the lesson of N1: a script and a helper that agree only because each was written to
     # match the other's description). Every protocol line the script greps for or parses is a literal the helper prints.
     local token
@@ -9340,6 +9342,640 @@ t_g26_surface() {
 }
 
 
+# --- slice 2.2C-3, WU5: the change after the backup, the paired restoration and the verification of what it restored ----------------------------------------------------------------
+#
+# The same fake daemon and the same worlds as WU3 and WU4. The helpers print what they are told to print; a stage that changes the world changes it through the fake's hooks
+# (after_files_drift, on_insert, on_clear, on_import, after_files_aside, after_files_restore), so a chain of stages sees what the stage before it would have left. What the
+# PHP side does with a real directory is ResourceFileArchiveTest's, and what it does with a real database is the live rehearsal's (WU6): nothing here ran against Docker.
+
+CKEYS=("${FKEYS[0]}" "${FKEYS[2]}" "${FKEYS[3]}" 01jcf000000000000000000005) # the changed state's files: the backup's four, without the second, with the fifth
+CBYTES=(64 9000 33333 2500)
+DSHA=dc75fda9b15011c786c30df24d92fadb4329fe1c61f5283ba0e9a7fcbb0e5341
+csha() { case "$1" in 1) fsha 1 ;; 2) fsha 3 ;; 3) fsha 4 ;; *) printf '%s' "$DSHA" ;; esac; }
+cfout() { # [LINE...]: what the files helper prints for the four files of the changed state
+    local i line
+    printf 'files:state=present\nfiles:count=4\n'
+    for i in 1 2 3 4; do printf 'file %s %s %s\n' "${CKEYS[i - 1]}" "${CBYTES[i - 1]}" "$(csha "$i")"; done
+    for line; do printf '%s\n' "$line"; done
+}
+cfrows() { local i; for i in 1 2 3 4; do printf '%s\t%s\t%s\n' "${CKEYS[i - 1]}" "${CBYTES[i - 1]}" "$(csha "$i")"; done; }
+cspec() { local i out=''; for i in 1 2 3 4; do out+="${out:+,}${CKEYS[i - 1]}:${CBYTES[i - 1]}:$(csha "$i")"; done; printf '%s' "$out"; }
+drift_out() { { cfout | sed 's/^/after:/'; fout present 4 | sed 's/^/before:/'; printf 'drift:removed=%s\ndrift:added=%s\ndrift:complete=ok\n' "${FKEYS[1]}" "${CKEYS[3]}"; }; }
+changed_aside_out() { { cfout | sed 's/^/before:/'; cfout | sed 's/^/after:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:complete=ok\n'; }; }
+changed_inspect_out() { { cfout | sed 's/^/aside:/'; fout present 4 | sed 's/^/active:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:inspected=ok\n'; }; }
+snapshot_changed_output() { snapshot_all_output one | sed "s/^all-table resource_assets [0-9]* [0-9a-f]*\$/all-table resource_assets 4 $(fake_digest changed-assets)/"; }
+snapshot_restored_output() { snapshot_all_output one | sed -e "s/^all-table password_reset_tokens .*/all-table password_reset_tokens 0 $EMPTY_DIGEST/" -e "s/^all-table sessions .*/all-table sessions 0 $EMPTY_DIGEST/"; }
+PRUNE_CLEAN='Resources file store: 4 file(s) found (dry run: nothing is removed).
+  referenced by an asset, kept: 4
+  unreferenced but younger than 24 hour(s), left alone: 0
+  not a Resources storage key, left alone: 0
+  orphaned, would be removed: 0
+  orphaned, could NOT be removed (tried again next run): 0
+Asset rows whose file is missing from the store (asset_unavailable): 0'
+expected_changed_record() { # MANIFEST_SHA: written out here, not by the script's own function
+    local i
+    printf 'changed-v1\ntaken_at=2023-11-14T22:13:20Z\nrun_token_fingerprint=%s\nrecovery_manifest_sha256=%s\nremoved_key=%s\nadded_key=%s\nresource_assets=4 %s\nresource_files=4\ninventory_sha256=%s\n' \
+        "$FP_RUN" "$1" "${FKEYS[1]}" "${CKEYS[3]}" "$(fake_digest changed-assets)" "$(cspec | tr -d '\n' | sha256sum | cut -c1-64)"
+    for i in 1 2 3 4; do printf 'file %s %s %s\n' "${CKEYS[i - 1]}" "${CBYTES[i - 1]}" "$(csha "$i")"; done
+    printf 'change:complete\n'
+}
+
+# unit_world: the cached paired recovery unit in the state directory and the world of the backup's own state: four files, four asset rows, the files volume established.
+# It builds nothing of its own to cache, so a test may call it after the ensure_* functions.
+unit_world() {
+    paired_world
+    install_paired
+    established_files_volume
+}
+# change_world: unit_world, and what the change-after-backup stage's helpers report and do to the world: the files helper's `drift`, after which the directory is the changed one,
+# and the asset-row transaction, after which the rows and the application's snapshot are the changed state's.
+change_world() {
+    unit_world
+    drift_out >"$W/out_files_drift"
+    cfout files:check=ok >"$W/changed_check"
+    cfrows >"$W/changed_rows"
+    snapshot_changed_output >"$W/changed_snapshot"
+    printf 'cp "%s/changed_check" "%s/out_files_check"\n' "$W" "$W" >"$W/after_files_drift"
+    printf 'cp "%s/changed_rows" "%s/asset_rows"; cp "%s/changed_snapshot" "%s/out_snapshot_all"\n' "$W" "$W" "$W" "$W" >"$W/on_insert"
+}
+# ensure_change_cache: one change-after-backup by the UNMUTATED script, kept (changed.record) for the tests of everything that comes after it. File-based, like the other caches.
+ensure_change_cache() {
+    local sut="$SUT"
+    [[ ! -s "$T/chcache/changed.record" ]] || return 0
+    ensure_paired_cache
+    SUT="$SRC"
+    change_world
+    run_script -- change-after-backup
+    SUT="$sut"
+    [[ "$RC" == 0 ]] || bad "preparing the cached change after the backup: exit $RC: ${ERR:0:300}"
+    rm -rf "${T:?}/chcache"
+    mkdir -p "$T/chcache"
+    cp -p "$T/root/changed.record" "$T/chcache/"
+}
+# changed_state_world: the unit, the record of the change, and a world whose helpers report the changed state (rows, files and snapshot).
+changed_state_world() {
+    unit_world
+    cp -p "$T/chcache/changed.record" "$T/root/"
+    cfout files:check=ok >"$W/out_files_check"
+    cfrows >"$W/asset_rows"
+    snapshot_changed_output >"$W/out_snapshot_all"
+}
+# ensure_changed_preserve_cache: one preserve-failed-state of the CHANGED state, by the unmutated script.
+ensure_changed_preserve_cache() {
+    local sut="$SUT" f
+    [[ ! -s "$T/cprcache/preserve.record" || ! -s "$T/cprcache/failed-state.dump.sql" ]] || return 0
+    ensure_change_cache
+    SUT="$SRC"
+    changed_state_world
+    run_script -- preserve-failed-state
+    SUT="$sut"
+    [[ "$RC" == 0 ]] || bad "preparing the cached preservation of the changed state: exit $RC: ${ERR:0:300}"
+    rm -rf "${T:?}/cprcache"
+    mkdir -p "$T/cprcache"
+    for f in "${PRESERVE_FILES[@]}"; do cp -p "$T/root/$f" "$T/cprcache/"; done
+}
+install_changed_preserve() { local f; for f in "${PRESERVE_FILES[@]}"; do cp -p "$T/cprcache/$f" "$T/root/"; done; }
+# ensure_changed_aside_cache: one aside-files of the changed Resources directory, with the changed state's preservation in place, by the unmutated script (aside.record).
+ensure_changed_aside_cache() {
+    local sut="$SUT"
+    [[ ! -s "$T/cacache/aside.record" ]] || return 0
+    ensure_changed_preserve_cache
+    SUT="$SRC"
+    changed_state_world
+    install_changed_preserve
+    changed_aside_out >"$W/out_files_aside"
+    fout absent 0 files:check=ok >"$W/out_files_check"
+    run_script -- aside-files
+    SUT="$sut"
+    [[ "$RC" == 0 ]] || bad "preparing the cached aside of the changed state: exit $RC: ${ERR:0:300}"
+    rm -rf "${T:?}/cacache"
+    mkdir -p "$T/cacache"
+    cp -p "$T/root/aside.record" "$T/cacache/"
+}
+# restore_ready_world: everything restore-paired requires, and what the fake does to the world when the schema is cleared and the dump is loaded: the 34 tables come back, the snapshot is
+# the restored one (the backup's durable tables, the transient ones empty) and the asset rows are the backup's.
+restore_ready_world() {
+    changed_state_world
+    install_changed_preserve
+    up_names >"$W/up.inv"
+    snapshot_restored_output >"$W/restored_snapshot"
+    frows 4 >"$W/backup_rows"
+    printf 'cp "%s/up.inv" "%s/inventory"; cp "%s/restored_snapshot" "%s/out_snapshot_all"; cp "%s/backup_rows" "%s/asset_rows"\n' "$W" "$W" "$W" "$W" "$W" "$W" >"$W/on_import"
+}
+# final_world: the state verify-recovery-unit judges: the unit, the record of the change, the preservation of the changed state, the aside record, the restored database and the
+# restored files, and a files helper that reports the aside as it is.
+final_world() {
+    changed_state_world
+    install_changed_preserve
+    cp -p "$T/cacache/aside.record" "$T/root/"
+    snapshot_restored_output >"$W/out_snapshot_all"
+    frows 4 >"$W/asset_rows"
+    fout present 4 files:check=ok >"$W/out_files_check"
+    changed_inspect_out >"$W/out_files_inspect_aside"
+    printf '%s\n' "$PRUNE_CLEAN" >"$W/out_prune"
+}
+ensure_final_caches() { ensure_changed_aside_cache; ensure_changed_preserve_cache; ensure_change_cache; }
+no_mutating_helper() { # DESC: no helper that writes ran, and nothing was cleared, loaded or changed
+    local k
+    for k in files_drift files_aside files_restore files_seed; do
+        [[ ! -f "$W/runs" ]] || ! grep -q "^$k\$" "$W/runs" || bad "$1: $k ran"
+    done
+    [[ ! -e "$W/clear.sql" && ! -e "$W/import.sql" && ! -e "$W/assets_insert.sql" ]] || bad "$1: the schema was cleared, a dump was loaded or the asset rows were changed"
+}
+
+# --- change-after-backup ---
+
+t_g27_change_after_backup() {
+    local creates sql i
+    ensure_paired_cache
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        change_world
+        snapshot_state
+        run_script -- change-after-backup
+        expect_rc change-after-backup 0
+        expect_has 'what was changed' "$OUT" "the file ${FKEYS[1]} removed and ${CKEYS[3]} written, every other file untouched"
+        expect_has 'the claim' "$OUT" 'differ from the paired backup in the files and in resource_assets and in nothing else'
+        expect_has 'not a restoration' "$OUT" 'Changed after the backup. Nothing was restored.'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all files_drift files_check snapshot_all ' ]] || bad "the helpers did not run as check, snapshot, drift, check, snapshot: $(tr '\n' ' ' <"$W/runs")"
+        [[ "$(<"$W/runs_at_insert")" == $'files_check\nsnapshot_all\nfiles_drift' ]] || bad "the asset rows were changed before the files: $(tr '\n' ' ' <"$W/runs_at_insert")"
+        creates="$(files_creates)"
+        [[ "$(grep -c . <<<"$creates")" == 3 ]] || bad "expected three files containers (check, drift, check), got: $creates"
+        expect_has 'the change is fixed, with no argument' "$(sed -n 2p <<<"$creates")" ' php /rehearsal/src/harness/files.php drift'
+        expect_lacks 'the change takes no argument' "$(sed -n 2p <<<"$creates")" 'files.php drift '
+        expect_has 'the change writes the volume' "$(sed -n 2p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html --tmpfs"
+        expect_has 'the first check is read-only' "$(sed -n 1p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+        expect_has 'the last check is read-only' "$(sed -n 3p <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+        sql="START TRANSACTION;
+DELETE FROM resource_assets WHERE storage_key = '${FKEYS[1]}';
+INSERT INTO resource_assets (id, storage_key, original_filename, media_type, byte_size, sha256, uploaded_by_person_id, created_at) VALUES ('${CKEYS[3]}','${CKEYS[3]}','synthetic-drift.bin','application/octet-stream',2500,'$DSHA','01jbp000000000000000000001','2026-01-01 00:00:00');
+COMMIT;"
+        [[ "$(<"$W/assets_insert.sql")" == "$sql" ]] || bad "the transaction is not the fixed one: $(<"$W/assets_insert.sql")"
+        [[ "$(grep -c 'INSERT args=' "$W/appsql.log")" == 1 ]] || bad 'the changing transaction was not sent once, as the application account'
+        if [[ -f "$W/sql.log" ]] && grep -qE 'CREATE|DROP|INSERT|DELETE|ALTER|UPDATE|TRUNCATE|GRANT' "$W/sql.log"; then bad 'a root statement changed data or schema'; fi
+        [[ ! -e "$W/clear.sql" && ! -e "$W/import.sql" ]] || bad 'the change cleared the schema or loaded a dump'
+        [[ -f "$T/root/changed.record" && ! -L "$T/root/changed.record" && "$("$REAL_STAT" -c %a "$T/root/changed.record")" == 600 ]] || bad 'changed.record is not a private regular file'
+        [[ "$(<"$T/root/changed.record")" == "$(expected_changed_record "$(sha256sum <"$T/root/recovery.manifest.json" | cut -c1-64)")" ]] || bad "changed.record is not the one written out in this test: $(<"$T/root/changed.record")"
+        if compgen -G "$T/root/.changed.record.*" >/dev/null; then bad 'a temporary file was left in the state directory'; fi
+        only_database_left change-after-backup
+        no_secret_anywhere change-after-backup
+        run_script -- change-after-backup
+        expect_refused 'a second change' 'changed.record is already in the state directory'
+        run_script -- change-after-backup extra
+        expect_rc 'an argument' 64
+    fi
+    if want_case G27-change-no-repeat; then
+        change_world; printf 'changed-v1\n' >"$T/root/changed.record"; chmod 600 "$T/root/changed.record"
+        run_script -- change-after-backup
+        expect_refused 'a change already made' 'changed.record is already in the state directory'
+        no_mutating_helper 'a repeated change'
+        [[ ! -e "$W/runs" ]] || bad "a helper ran for a repeated change: $(tr '\n' ' ' <"$W/runs")"
+    fi
+    start_case() { # GUARD DESC NEEDLE: the stage starts from a state that is not the backup's, and changes nothing
+        want_case "$1" || return 0
+        run_script -- change-after-backup
+        expect_refused "$2" 'not the state the paired backup recorded'
+        expect_has "$2: what differs" "$ERR" "$3"
+        no_mutating_helper "$2"
+    }
+    change_world; snapshot_all_output one | sed "s/^all-table security_events \([0-9]*\) [0-9a-f]*\$/all-table security_events \1 $(fake_digest altered)/" >"$W/out_snapshot_all"
+    start_case G27-change-start 'a durable table altered since the backup' security_events
+    change_world; snapshot_all_output one | sed "s/^all-table security_events \([0-9]*\) [0-9a-f]*\$/all-table security_events \1 $(fake_digest altered)/" >"$W/out_snapshot_all"
+    start_case G27-state-durable 'a durable table altered since the backup' security_events
+    change_world; snapshot_all_output one | sed "s/^structure resource_cards .*\$/structure resource_cards $(fake_digest altered-structure)/" >"$W/out_snapshot_all"
+    start_case G27-state-structure 'a structure altered since the backup' resource_cards
+    change_world; snapshot_all_output one "$(fake_digest other-ledger)" >"$W/out_snapshot_all"
+    start_case G27-state-ledger 'another ledger' ledger
+    change_world; cfout files:check=ok >"$W/out_files_check"; cfrows >"$W/asset_rows"
+    start_case G27-state-files 'a directory and rows that are already the changed ones' resource-files
+    if want_case G27-change-reported; then
+        change_world; drift_out | grep -v 'drift:complete=ok' >"$W/out_files_drift"
+        run_script -- change-after-backup
+        expect_refused 'a helper that did not say it changed' 'did not report the change it was asked for'
+        expect_has 'the files may be changed' "$ERR" 'may have been changed'
+        [[ ! -e "$W/assets_insert.sql" && ! -e "$T/root/changed.record" ]] || bad 'rows were changed or a record written after a helper that did not report'
+        change_world; drift_out | sed "s/^drift:added=.*/drift:added=${CKEYS[2]}/" >"$W/out_files_drift"
+        run_script -- change-after-backup
+        expect_refused 'a helper that reports another key' 'did not report the change it was asked for'
+    fi
+    if want_case G27-change-before; then
+        change_world; { cfout | sed 's/^/after:/'; fout present 3 | sed 's/^/before:/'; printf 'drift:removed=%s\ndrift:added=%s\ndrift:complete=ok\n' "${FKEYS[1]}" "${CKEYS[3]}"; } >"$W/out_files_drift"
+        run_script -- change-after-backup
+        expect_refused 'a helper that changed another directory than the backup' "what the files helper changed was not the backup's files"
+        [[ ! -e "$W/assets_insert.sql" ]] || bad 'rows were changed after a helper that changed another directory'
+    fi
+    if want_case G27-change-after; then
+        change_world; { fout present 4 | sed 's/^/after:/'; fout present 4 | sed 's/^/before:/'; printf 'drift:removed=%s\ndrift:added=%s\ndrift:complete=ok\n' "${FKEYS[1]}" "${CKEYS[3]}"; } >"$W/out_files_drift"
+        run_script -- change-after-backup
+        expect_refused 'a helper that changed nothing' 'is not the backup'"'"'s files without one and with the fixed one'
+        [[ ! -e "$W/assets_insert.sql" ]] || bad 'rows were changed after a helper that changed nothing'
+    fi
+    if want_case G27-change-rows; then
+        change_world; rm -f "$W/on_insert"
+        run_script -- change-after-backup
+        expect_refused 'asset rows that were not changed' 'are not the files the change left, or do not agree'
+        expect_has 'the files and rows were changed' "$ERR" 'The files and the rows were changed; no record was written'
+        [[ ! -e "$T/root/changed.record" ]] || bad 'a record was written for a state whose rows and files do not agree'
+    fi
+    if want_case G27-change-differs; then
+        change_world; { snapshot_changed_output | sed "s/^all-table security_events \([0-9]*\) [0-9a-f]*\$/all-table security_events \1 $(fake_digest altered)/"; } >"$W/changed_snapshot"
+        run_script -- change-after-backup
+        expect_refused 'another table changed too' 'does not differ from the backup in exactly the files and resource_assets'
+        expect_has 'which table' "$ERR" 'security_events'
+        [[ ! -e "$T/root/changed.record" ]] || bad 'a record was written for a state that changed more than the files and the rows'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        change_world; printf '5\n' >"$W/fail_files_drift"
+        run_script -- change-after-backup
+        expect_rc 'a failing change of the files' 5
+        expect_has 'what may be changed' "$ERR" 'may have been changed (one file removed, one written) and the asset rows were not'
+        expect_has 'no record' "$ERR" 'changed.record was not written'
+        [[ ! -e "$W/assets_insert.sql" && ! -e "$T/root/changed.record" ]] || bad 'rows were changed or a record written after a failed change of the files'
+        change_world; touch "$W/insert_fail"
+        run_script -- change-after-backup
+        expect_rc 'a failing transaction' 1
+        expect_has 'what may be changed' "$ERR" 'the rows may or may not have changed'
+        [[ ! -e "$T/root/changed.record" ]] || bad 'a record was written after a failed transaction'
+    fi
+}
+
+# --- the record of the change, and the preflight that holds the changed state to it ---
+
+# pre_refused DESC NEEDLE [CMD]: the command (check-recovery-unit by default) refuses before anything is cleared, loaded or changed.
+pre_refused() {
+    run_script -- "${3:-check-recovery-unit}"
+    expect_refused "$1" "$2"
+    no_mutating_helper "$1"
+}
+t_g27_changed_record() {
+    ensure_changed_preserve_cache
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        restore_ready_world; snapshot_state
+        run_script -- check-recovery-unit
+        expect_rc check-recovery-unit 0
+        expect_has 'the unit' "$OUT" "the recovery unit is complete, intact, this run's and this source's"
+        expect_has 'the changed state' "$OUT" 'the changed state changed.record records, which differs from the backup'
+        expect_has 'the preservation' "$OUT" 'the failed state is preserved (preserve.record)'
+        expect_has 'nothing changed' "$OUT" 'Ready for restore-paired. Nothing was changed.'
+        [[ -z "$(world_changed)" ]] || bad "check-recovery-unit changed the world: $(world_changed)"
+        no_mutating_helper 'check-recovery-unit'
+        run_script -- check-recovery-unit extra
+        expect_rc 'an argument' 64
+    fi
+    if want_case G27-changed-required; then
+        restore_ready_world; rm -f "$T/root/changed.record"
+        pre_refused 'no record of the change' 'no record of the change after the backup'
+    fi
+    ch_case() { # GUARD DESC NEEDLE SED_EXPRESSION: the cached record with one edit
+        want_case "$1" || return 0
+        restore_ready_world; sed -i "$4" "$T/root/changed.record"
+        pre_refused "$2" "$3"
+        expect_has "$2: the record is named" "$ERR" 'the record of the change after the backup cannot be relied on'
+    }
+    ch_case G27-changed-intact 'a line that this script does not write' 'cannot be relied on: line' '2i\hand-written=1'
+    ch_case G27-ch-run 'a record of another run' "it is not this run's" 's/^run_token_fingerprint=.*/run_token_fingerprint=0000000000000000/'
+    ch_case G27-ch-unit 'a record made after another recovery unit' 'after another recovery unit' 's/^recovery_manifest_sha256=.*/recovery_manifest_sha256=0000000000000000000000000000000000000000000000000000000000000000/'
+    ch_case G27-ch-files 'a count that is not the files listed' 'not the backup'"'"'s files without the one removed and with the one added' 's/^resource_files=4$/resource_files=3/'
+    ch_case G27-ch-files 'a file that is not the fixed one' 'not the backup'"'"'s files without the one removed and with the one added' "s/^file ${CKEYS[3]} 2500 .*/file ${CKEYS[3]} 2501 $DSHA/"
+    ch_case G27-ch-differs 'a change that changed nothing in resource_assets' 'a change that changed nothing' "s/^resource_assets=4 .*/resource_assets=4 $(fake_digest resource_assetsone)/"
+    ch_case G27-ch-exact 'a repeated line' 'not exactly what this script writes' 's/^change:complete$/taken_at=2023-11-14T22:13:20Z\nchange:complete/'
+    mp_case() { # GUARD DESC NEEDLE WORLD_SETUP...: the record is intact and the world is not the changed state
+        local guard="$1" desc="$2" needle="$3"
+        want_case "$guard" || return 0
+        restore_ready_world
+        shift 3
+        "$@"
+        pre_refused "$desc" "$needle"
+    }
+    # shellcheck disable=SC2329 # called through mp_case, which runs its arguments
+    set_snapshot() { snapshot_changed_output | sed "$1" >"$W/out_snapshot_all"; }
+    mp_case G27-changed-matches 'a durable table altered since the change' 'not the state change-after-backup made' set_snapshot "s/^all-table people \([0-9]*\) [0-9a-f]*\$/all-table people \1 $(fake_digest altered)/"
+    mp_case G27-state-assets 'resource_assets altered since the change' 'not the state change-after-backup made' set_snapshot "s/^all-table resource_assets \([0-9]*\) [0-9a-f]*\$/all-table resource_assets \1 $(fake_digest again)/"
+    if want_case G27-state-assets; then expect_has 'resource_assets is named, by this stage and not by the preservation gate' "$ERR" 'change-after-backup made (differs: resource_assets'; fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        restore_ready_world; sed -i 's/^taken_at=.*/taken_at=nonsense/' "$T/root/changed.record"
+        pre_refused 'a taken_at that is not a time' 'cannot be relied on'
+        restore_ready_world; rm -f "$T/root/preserve.record"
+        pre_refused 'no preservation of the changed state' 'no complete failed-state preservation'
+        restore_ready_world; cfout files:check=ok | sed "s/ $(csha 1)\$/ $(fsha 9)/" >"$W/out_files_check"
+        pre_refused 'a file that changed after the change' 'do not agree on every key, size and SHA-256'
+        restore_ready_world; printf 'x' >>"$T/root/current.dump.sql"
+        pre_refused 'a recovery unit that is not intact' 'the recovery unit cannot be relied on'
+        restore_ready_world; printf 'x' >>"$T/root/failed-state.dump.sql"
+        pre_refused 'an export that is not the one the preservation binds' 'cannot be relied on'
+        restore_ready_world; snapshot_changed_output | sed "s/^all-table accounts \([0-9]*\) [0-9a-f]*\$/all-table accounts \1 $(fake_digest altered)/" >"$W/out_snapshot_all"
+        pre_refused 'a table that changed after the preservation and the change record' 'not the state change-after-backup made' restore-paired
+    fi
+    if want_case G27-schema-inventory; then
+        restore_ready_world; sorted_up | grep -v '^people$' >"$W/inventory"
+        pre_refused 'a table missing' 'not exactly the 34 tables of the current schema' restore-paired
+        restore_ready_world; { sorted_up; echo extra_table; } >"$W/inventory"
+        pre_refused 'a table too many' 'not exactly the 34 tables of the current schema' restore-paired
+    fi
+    if want_case G27-schema-object-types; then
+        restore_ready_world; printf '1\n' >"$W/nonbase"
+        pre_refused 'a view among the tables' 'that are not plain tables' restore-paired
+    fi
+    if want_case G27-schema-no-other-objects; then
+        restore_ready_world; printf '1\t0\t0\n' >"$W/other_objects"
+        pre_refused 'a trigger' 'holds a trigger, a routine or an event' restore-paired
+    fi
+}
+
+# --- restore-paired ---
+
+rp_refused() { # DESC NEEDLE: refused before anything is cleared or loaded
+    run_script -- restore-paired
+    expect_refused "$1" "$2"
+    no_clear_or_import "$1"
+}
+t_g27_restore_paired() {
+    local names t sums
+    ensure_changed_preserve_cache
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        restore_ready_world
+        sums="$(cd "$T/root" && sha256sum preserve.record failed-state.dump.sql recovery.manifest.json current.dump.sql resources.archive.tar.gz changed.record)"
+        run_script -- restore-paired
+        expect_rc restore-paired 0
+        expect_has 'what was cleared' "$OUT" 'Clearing the application schema (DROP TABLE for exactly the 34 tables, nothing else)'
+        expect_has 'the load' "$OUT" 'Loading the verified dump of the recovery unit'
+        expect_has 'the content claim' "$OUT" "the 27 durable tables have the backup's row counts and content digests; the 7 transient tables are present and empty"
+        expect_has 'not complete' "$OUT" 'The paired recovery is NOT complete: the Resource files are not restored.'
+        expect_lacks 'no claim of success' "$OUT" 'Paired recovery verified'
+        names=''
+        for t in $(sorted_up); do names+="${names:+, }\`$t\`"; done
+        [[ "$(<"$W/clear.sql")" == $'SET FOREIGN_KEY_CHECKS=0;\nDROP TABLE '"$names"$';\nSET FOREIGN_KEY_CHECKS=1;' ]] || bad "the clearing statement is not the 34 tables and nothing else: $(<"$W/clear.sql")"
+        [[ "$(<"$W/import.sql")" == "$(<"$T/root/current.dump.sql")" ]] || bad 'what was loaded is not the recovery unit'"'"'s dump'
+        [[ "$(<"$W/runs_at_clear")" == $'files_check\nsnapshot_all\nfiles_check\nfiles_check\nsnapshot_all' ]] || bad "what was measured before the clear: $(tr '\n' ' ' <"$W/runs_at_clear")"
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all files_check files_check snapshot_all snapshot_all ' ]] || bad "the helpers did not run as the preflight's measurements, then the clear, the load and one snapshot: $(tr '\n' ' ' <"$W/runs")"
+        [[ "$(grep -c '^CLEAR ' "$W/appsql.log")" == 1 && "$(grep -c '^IMPORT ' "$W/appsql.log")" == 1 ]] || bad 'the schema was not cleared once and the dump loaded once, as the application account'
+        if [[ -f "$W/sql.log" ]] && grep -qE 'CREATE|DROP|INSERT|DELETE|ALTER|UPDATE|TRUNCATE|GRANT' "$W/sql.log"; then bad 'a root statement changed data or schema'; fi
+        if grep -qiE 'DROP DATABASE|IF EXISTS' "$W/clear.sql"; then bad 'the clearing statement drops a database or hides a mismatch with IF EXISTS'; fi
+        [[ "$(cd "$T/root" && sha256sum preserve.record failed-state.dump.sql recovery.manifest.json current.dump.sql resources.archive.tar.gz changed.record)" == "$sums" ]] || bad 'the evidence or the recovery unit changed'
+        [[ ! -e "$W/runs" ]] || ! grep -qE '^files_(drift|aside|restore)' "$W/runs" || bad 'a Resource file was moved or restored by the database restoration'
+        only_database_left restore-paired
+        no_secret_anywhere restore-paired
+        run_script -- restore-paired
+        expect_refused 'a second restoration' 'do not agree on every key, size and SHA-256'
+        run_script -- restore-paired extra
+        expect_rc 'an argument' 64
+    fi
+    if want_case G27-cleared; then
+        restore_ready_world; printf 'true\n' >"$W/on_clear"
+        run_script -- restore-paired
+        expect_rc 'a clear that left tables' 3
+        expect_has 'the clear was sent' "$ERR" 'not exactly empty: the intended tables are all gone'
+        expect_has 'what may be changed' "$ERR" 'may hold none, some or all of the 34 tables'
+        expect_has 'not complete' "$ERR" 'The restoration is NOT complete and the paired recovery has NOT succeeded'
+        [[ ! -e "$W/import.sql" ]] || bad 'a dump was loaded after a clear that left tables'
+    fi
+    if want_case G27-import-verified-unit; then
+        restore_ready_world; printf ': >"%s/inventory"; printf x >>"%s/current.dump.sql"\n' "$W" "$T/root" >"$W/on_clear"
+        run_script -- restore-paired
+        expect_refused 'a dump altered after the clear' 'the recovery unit is not the one that was verified'
+        expect_has 'what may be changed' "$ERR" 'the dump was not loaded (or not verified), so the database is empty'
+        [[ ! -e "$W/import.sql" ]] || bad 'a dump that is not the unit'"'"'s was loaded'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        restore_ready_world; touch "$W/clear_fail"
+        run_script -- restore-paired
+        expect_rc 'a clear that failed' 1
+        expect_has 'the clear may have changed things' "$ERR" 'may hold none, some or all of the 34 tables'
+        [[ ! -e "$W/import.sql" ]] || bad 'a dump was loaded after a failed clear'
+        restore_ready_world; touch "$W/import_fail"
+        run_script -- restore-paired
+        expect_rc 'a load that failed' 1
+        expect_has 'the load was partial' "$ERR" 'may hold some of its tables and rows, and is not known to be the backup'
+        expect_has 'not complete' "$ERR" 'NOT complete and the paired recovery has NOT succeeded'
+        expect_has 'nothing was rolled back' "$ERR" 'nothing was rolled back, retried, repaired or cleaned up'
+        expect_lacks 'no success' "$OUT$ERR" 'Database restored and verified'
+    fi
+    rd_case() { # GUARD DESC NEEDLE SED_EXPRESSION: the restored snapshot with one edit
+        want_case "$1" || return 0
+        restore_ready_world; snapshot_restored_output | sed "$4" >"$W/restored_snapshot"
+        run_script -- restore-paired
+        expect_refused "$2" "$3"
+        expect_has "$2: not complete" "$ERR" 'The restoration is NOT complete and the paired recovery has NOT succeeded'
+        expect_has "$2: what may be changed" "$ERR" 'the database was not verified to be what the backup recorded'
+        expect_lacks "$2: no success" "$OUT" 'Database restored and verified'
+    }
+    rd_case G27-restored-data 'the same number of rows with other values' 'is not what the backup recorded' "s/^all-table people \([0-9]*\) [0-9a-f]*\$/all-table people \1 $(fake_digest altered)/"
+    if want_case G27-restored-data; then
+        expect_has 'the table is named' "$ERR" 'people'
+        rd_case G27-restored-data 'a transient table that is not empty' 'is not what the backup recorded' "s/^all-table sessions .*/all-table sessions 3 $(fake_digest sessionsone)/"
+        expect_has 'the table is named' "$ERR" 'sessions'
+        rd_case G27-restored-data 'a durable table with a row less' 'is not what the backup recorded' 's/^all-table security_events 8 /all-table security_events 7 /'
+    fi
+    rd_case G27-restored-structure 'a table whose structure is not the backup'"'"'s' 'the structure of the restored tables is not the backup' "s/^structure accounts .*\$/structure accounts $(fake_digest altered-structure)/"
+    if want_case G27-restored-ledger; then
+        restore_ready_world; snapshot_restored_output | sed "s/^ledger:digest=.*/ledger:digest=$(fake_digest other-ledger)/" >"$W/restored_snapshot"
+        run_script -- restore-paired
+        expect_refused 'another ledger' 'the migration ledger is not the backup'
+    fi
+    if want_case G27-restored-rows; then
+        restore_ready_world; frows 4 | sed "2s/\\t$(fsha 2)\$/\\t$(fsha 9)/" >"$W/backup_rows"
+        run_script -- restore-paired
+        expect_refused 'asset rows with the same count and another content digest' 'asset rows (key, size and SHA-256) are not the backup'
+        restore_ready_world; frows 3 >"$W/backup_rows"
+        run_script -- restore-paired
+        expect_refused 'a row less' 'asset rows (key, size and SHA-256) are not the backup'
+    fi
+}
+
+# --- verify-recovery-unit ---
+
+vr_refused() { # DESC NEEDLE: the world as the caller made it is not changed by the refused stage
+    snapshot_state
+    run_script -- verify-recovery-unit
+    expect_refused "$1" "$2"
+    [[ -z "$(world_changed)" ]] || bad "$1: verify-recovery-unit changed the world: $(world_changed)"
+}
+t_g27_verify_recovery_unit() {
+    local creates
+    ensure_files_cache
+    ensure_final_caches
+    ensure_preserve_cache
+    ensure_aside_cache 4
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        final_world; snapshot_state
+        run_script -- verify-recovery-unit
+        expect_rc verify-recovery-unit 0
+        expect_has 'the database claim' "$OUT" "the 27 durable tables have the backup's row counts and content digests; the 7 transient tables are empty"
+        expect_has 'the files claim' "$OUT" "the active Resources directory holds the 4 file(s) the backup holds, equal to the asset rows and to the archive"
+        expect_has 'the aside' "$OUT" 'is a sibling of the active Resources directory (outside the application'"'"'s Resources disk) and holds the 4 file(s) of the changed state'
+        expect_has 'the application' "$OUT" "the application's own view agrees (resources:assets:prune --dry-run, read-only)"
+        expect_has 'the only success' "$OUT" 'Paired recovery verified'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'snapshot_all files_check files_verify_archive files_inspect_aside prune ' ]] || bad "the helpers did not run as snapshot, check, archive, aside, prune: $(tr '\n' ' ' <"$W/runs")"
+        [[ -z "$(world_changed)" ]] || bad "verify-recovery-unit changed the world: $(world_changed)"
+        creates="$(files_creates)"
+        [[ "$(grep -c . <<<"$creates")" == 3 ]] || bad "expected three files containers, got: $creates"
+        [[ "$(grep -vc 'readonly' <<<"$creates" || true)" == 0 ]] || bad "a files container of the final verification can write the volume: $creates"
+        expect_has 'the prune is the exact dry-run' "$(<"$W/calls")" ' sh /rehearsal/files php artisan resources:assets:prune --dry-run' # (the runner's setup text has newlines: the log has more than one line for the create)
+        expect_has 'the prune runner has the files volume read-only' "$(<"$W/calls")" "--mount type=volume,source=$NAME_FV,target=/rehearsal/files,readonly"
+        only_database_left verify-recovery-unit
+        no_secret_anywhere verify-recovery-unit
+        run_script -- verify-recovery-unit extra
+        expect_rc 'an argument' 64
+        # The same number of records with other values is not the backup, and says which table.
+        final_world; snapshot_restored_output | sed "s/^all-table people \([0-9]*\) [0-9a-f]*\$/all-table people \1 $(fake_digest altered)/" >"$W/out_snapshot_all"
+        vr_refused 'a durable table with the same row count and other values' 'is not what the backup recorded'
+        expect_has 'the table is named' "$ERR" 'people'
+        # Before the Resource files are restored (the directory is still the changed one), or after a database restoration that is not complete: not a recovery.
+        final_world; cfout files:check=ok >"$W/out_files_check"
+        vr_refused 'the changed directory still in place' 'the active Resource files are not the backup'"'"'s'
+        final_world; snapshot_changed_output >"$W/out_snapshot_all"
+        vr_refused 'the changed database still in place' 'is not what the backup recorded'
+    fi
+    if want_case G27-final-files; then
+        final_world; fout present 4 files:check=ok | sed "s/ $(fsha 2)\$/ $(fsha 9)/" >"$W/out_files_check"
+        vr_refused 'a restored file with another content' 'the active Resource files are not the backup'"'"'s'
+        final_world; fout absent 0 files:check=ok >"$W/out_files_check"
+        vr_refused 'no active directory' 'the active Resource files are not the backup'"'"'s'
+        final_world; fout present 3 files:check=ok >"$W/out_files_check"
+        vr_refused 'a file missing' 'the active Resource files are not the backup'"'"'s'
+    fi
+    if want_case G27-final-archive; then
+        final_world; printf 'archive:entries=4\narchive:verified=ok\n' >"$W/out_files_verify_archive"
+        vr_refused 'an archive with another number of entries' 'does not hold exactly the files the backup records'
+        final_world; printf '3\n' >"$W/fail_files_verify_archive"
+        run_script -- verify-recovery-unit
+        expect_rc 'an archive the helper refused' 3
+        expect_lacks 'no success' "$OUT" 'Paired recovery verified'
+    fi
+    if want_case G27-aside-active-restored; then
+        final_world; { cfout | sed 's/^/aside:/'; cfout | sed 's/^/active:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:inspected=ok\n'; } >"$W/out_files_inspect_aside"
+        vr_refused 'an active directory that is the changed one' 'is not the backup'"'"'s restored files'
+        final_world; { cfout | sed 's/^/aside:/'; fout absent 0 | sed 's/^/active:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:inspected=ok\n'; } >"$W/out_files_inspect_aside"
+        vr_refused 'no active directory beside the aside' 'is not the backup'"'"'s restored files'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        final_world; { fout present 4 | sed 's/^/aside:/'; fout present 4 | sed 's/^/active:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:inspected=ok\n'; } >"$W/out_files_inspect_aside"
+        vr_refused 'an aside that is not the changed state' 'not what aside.record says'
+    fi
+    if want_case G27-final-changed-required; then
+        final_world; rm -f "$T/root/changed.record"
+        vr_refused 'no record of the change' 'no record of the change after the backup'
+    fi
+    if want_case G27-final-changed-intact; then
+        final_world; sed -i '2i\hand-written=1' "$T/root/changed.record"
+        vr_refused 'a record that is not intact' 'the record of the change after the backup cannot be relied on'
+    fi
+    if want_case G27-preserved-is-changed; then
+        # A preservation, and an aside record bound to it, of the BACKUP's state: both intact, and neither the changed state's.
+        final_world; cp -p "$T/prcache/preserve.record" "$T/prcache/failed-state.dump.sql" "$T/root/"; cp -p "$T/ascache/4/aside.record" "$T/root/"
+        { fout present 4 | sed 's/^/aside:/'; fout present 4 | sed 's/^/active:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:inspected=ok\n'; } >"$W/out_files_inspect_aside"
+        vr_refused 'a preservation of the backup'"'"'s own state' 'is not of the state change-after-backup made'
+    fi
+    if want_case G27-preserved-others; then
+        # The changed state's preservation with one other durable table's digest edited, and the aside record re-bound to it: intact, and not the backup's other tables.
+        final_world; sed -i "s/^table people \([0-9]*\) [0-9a-f]*/table people \1 $(fake_digest altered)/" "$T/root/preserve.record"
+        sed -i "s/^preserve_record_sha256=.*/preserve_record_sha256=$(sha256sum <"$T/root/preserve.record" | cut -c1-64)/" "$T/root/aside.record"
+        vr_refused 'a preservation with another durable table' 'a durable table other than resource_assets that is not the backup'"'"'s'
+    fi
+    if want_case G27-prune-clean; then
+        final_world; printf '%s\n' "$PRUNE_CLEAN" | sed 's/would be removed: 0/would be removed: 1/' >"$W/out_prune"
+        vr_refused 'an orphan' "the application's prune dry-run reports something other than the clean state"
+        final_world; printf '%s\n' "$PRUNE_CLEAN" | sed 's/kept: 4/kept: 3/' >"$W/out_prune"
+        vr_refused 'a file the application does not see as referenced' "the application's prune dry-run reports something other than the clean state"
+        final_world; printf '%s\n' "$PRUNE_CLEAN" | sed 's/(asset_unavailable): 0/(asset_unavailable): 1/' >"$W/out_prune"
+        vr_refused 'an asset row whose file is missing' "the application's prune dry-run reports something other than the clean state"
+        final_world; printf '%s\n%s\n' "$PRUNE_CLEAN" '    01jcf000000000000000000009' >"$W/out_prune"
+        vr_refused 'a line more' "the application's prune dry-run reports something other than the clean state"
+    fi
+    if want_case G27-prune-shape; then
+        final_world; printf '%s\n' "$PRUNE_CLEAN" | head -n 5 >"$W/out_prune"
+        vr_refused 'a report cut short' 'did not report exactly the 7 lines of the clean state'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        final_world; printf '3\n' >"$W/fail_prune"
+        run_script -- verify-recovery-unit
+        expect_rc 'a prune that failed' 3
+        expect_lacks 'no success' "$OUT" 'Paired recovery verified'
+        final_world; printf 'tampered' >>"$T/root/resources.archive.tar.gz"
+        vr_refused 'an archive that is not the unit'"'"'s' 'the recovery unit cannot be relied on'
+    fi
+    if want_case G27-aside-nonempty-backup; then
+        verify_aside_world
+        run_fn "ROOT='$T/root'; verify_aside_state restored"
+        expect_refused 'a zero-file backup whose aside is verified as a nonempty restoration' 'zero-file one'
+    fi
+}
+
+# --- the whole chain ---
+
+# The six stages of the paired recovery, one after the other in one world, each told by the fake daemon's hooks what the stage before it would have left behind. A stage that
+# needs what an earlier one makes (the changed record, the preservation, the aside record) finds it there because the earlier stage wrote it.
+t_g27_lifecycle() {
+    local before_sums
+    ensure_paired_cache
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        change_world
+        # The changed state is also what the preserve, aside and restore stages are told.
+        run_script -- change-after-backup
+        expect_rc 'change-after-backup' 0
+        : >"$W/runs"
+        run_script -- preserve-failed-state
+        expect_rc 'preserve-failed-state' 0
+        : >"$W/runs"
+        up_names >"$W/up.inv"
+        snapshot_restored_output >"$W/restored_snapshot"
+        frows 4 >"$W/backup_rows"
+        printf 'cp "%s/up.inv" "%s/inventory"; cp "%s/restored_snapshot" "%s/out_snapshot_all"; cp "%s/backup_rows" "%s/asset_rows"\n' "$W" "$W" "$W" "$W" "$W" "$W" >"$W/on_import"
+        run_script -- check-recovery-unit
+        expect_rc 'check-recovery-unit' 0
+        run_script -- restore-paired
+        expect_rc 'restore-paired' 0
+        expect_has 'the database half only' "$OUT" 'The paired recovery is NOT complete'
+        run_script -- verify-recovery-unit
+        expect_refused 'the final verification before the Resource files are restored' 'the active Resource files are not the backup'"'"'s'
+        changed_aside_out >"$W/out_files_aside"
+        fout absent 0 files:check=ok >"$W/after_aside_check"
+        printf 'cp "%s/after_aside_check" "%s/out_files_check"\n' "$W" "$W" >"$W/after_files_aside"
+        printf '1700000000' >"$T/fixed-epoch"
+        run_script -- aside-files
+        expect_rc 'aside-files' 0
+        expect_has 'the aside record' "$OUT" 'aside.record records the measured aside: 4 file(s)'
+        fout present 4 files:check=ok >"$W/restored_check"
+        printf 'cp "%s/restored_check" "%s/out_files_check"\n' "$W" "$W" >"$W/after_files_restore"
+        fout present 4 restore:extracted=ok >"$W/out_files_restore"
+        printf 'archive:entries=5\narchive:verified=ok\n' >"$W/out_files_verify_archive"
+        run_script -- restore-files
+        expect_rc 'restore-files' 0
+        changed_inspect_out >"$W/out_files_inspect_aside"
+        printf '%s\n' "$PRUNE_CLEAN" >"$W/out_prune"
+        before_sums="$(cd "$T/root" && sha256sum -- *.record *.sql *.json *.gz | LC_ALL=C sort)"
+        run_script -- verify-recovery-unit
+        expect_rc 'verify-recovery-unit' 0
+        expect_has 'the only success' "$OUT" 'Paired recovery verified'
+        [[ "$(cd "$T/root" && sha256sum -- *.record *.sql *.json *.gz | LC_ALL=C sort)" == "$before_sums" ]] || bad 'the final verification changed the evidence'
+        # The aside is bound to the preservation that preceded it, and the record of the change to the unit.
+        [[ "$(sed -n 's/^preserve_record_sha256=//p' "$T/root/aside.record")" == "$(sha256sum <"$T/root/preserve.record" | cut -c1-64)" ]] || bad 'the aside record does not name the preservation'
+    fi
+}
+
+t_g27_surface() {
+    local cmd php_bytes php_sha
+    for cmd in change-after-backup check-recovery-unit restore-paired verify-recovery-unit; do
+        run_script -- "$cmd" extra
+        expect_rc "$cmd takes no argument" 64
+        run_script -- help
+        expect_has "$cmd is in the usage" "$OUT$ERR" "$cmd"
+    done
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'printf "%s\n" "${STATE_FILES[@]}" | grep -cx "changed.record"'
+    [[ "$OUT" == 1 ]] || bad "cleanup does not know changed.record (it removes by name only): $OUT"
+    # The constants of the change are the PHP side's: one key removed, one key and one content written, byte for byte.
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'printf "%s %s %s %s\n" "$DRIFT_REMOVED_KEY" "$DRIFT_ADDED_KEY" "$DRIFT_ADDED_BYTES" "$DRIFT_ADDED_SHA256"'
+    if command -v php >/dev/null 2>&1; then
+        php_bytes="$(php -r "require '$ROOT/apps/platform/tests/Support/ResourceFileRefusal.php'; require '$ROOT/apps/platform/tests/Support/ResourceFileArchive.php'; \$d = \\Tests\\Support\\ResourceFileArchive::driftFile(); echo \\Tests\\Support\\ResourceFileArchive::DRIFT_REMOVED, ' ', \\Tests\\Support\\ResourceFileArchive::DRIFT_ADDED, ' ', \$d['bytes'], ' ', \$d['sha256'];")"
+        [[ "$OUT" == "$php_bytes" ]] || bad "the script's constants of the change are not ResourceFileArchive's: '$OUT' and '$php_bytes'"
+        php_sha="$(php -r "require '$ROOT/apps/platform/tests/Support/ResourceFileRefusal.php'; require '$ROOT/apps/platform/tests/Support/ResourceFileArchive.php'; echo array_key_exists(\\Tests\\Support\\ResourceFileArchive::DRIFT_REMOVED, \\Tests\\Support\\ResourceFileArchive::fixture()) ? 'in-fixture' : 'not-in-fixture';")"
+        [[ "$php_sha" == in-fixture ]] || bad 'the file the change removes is not one of the fixture files'
+    fi
+    grep -q "'drift' => 0" "$SRC/php/files.php" || bad 'files.php has no drift action that takes no argument'
+}
+
+
 declare -A GUARD_TESTS=(
     [G1-context]='t_g1_context t_g1_applies_to_every_command'
     [G1-context-env]='t_g1_context_env'
@@ -9790,6 +10426,45 @@ declare -A GUARD_TESTS=(
     [G26-zero-inventory]='t_g26_zero_resources'
     [G26-zero-rows]='t_g26_zero_resources'
     [G26-zero-volume]='t_g26_zero_resources'
+    [G27-aside-active-restored]='t_g27_verify_recovery_unit'
+    [G27-aside-nonempty-backup]='t_g27_verify_recovery_unit'
+    [G27-ch-differs]='t_g27_changed_record'
+    [G27-ch-exact]='t_g27_changed_record'
+    [G27-ch-files]='t_g27_changed_record'
+    [G27-ch-run]='t_g27_changed_record'
+    [G27-ch-unit]='t_g27_changed_record'
+    [G27-change-after]='t_g27_change_after_backup'
+    [G27-change-before]='t_g27_change_after_backup'
+    [G27-change-differs]='t_g27_change_after_backup'
+    [G27-change-no-repeat]='t_g27_change_after_backup'
+    [G27-change-reported]='t_g27_change_after_backup'
+    [G27-change-rows]='t_g27_change_after_backup'
+    [G27-change-start]='t_g27_change_after_backup'
+    [G27-changed-intact]='t_g27_changed_record'
+    [G27-changed-matches]='t_g27_changed_record'
+    [G27-changed-required]='t_g27_changed_record'
+    [G27-cleared]='t_g27_restore_paired'
+    [G27-final-archive]='t_g27_verify_recovery_unit'
+    [G27-final-changed-intact]='t_g27_verify_recovery_unit'
+    [G27-final-changed-required]='t_g27_verify_recovery_unit'
+    [G27-final-files]='t_g27_verify_recovery_unit'
+    [G27-import-verified-unit]='t_g27_restore_paired'
+    [G27-preserved-is-changed]='t_g27_verify_recovery_unit'
+    [G27-preserved-others]='t_g27_verify_recovery_unit'
+    [G27-prune-clean]='t_g27_verify_recovery_unit'
+    [G27-prune-shape]='t_g27_verify_recovery_unit'
+    [G27-restored-data]='t_g27_restore_paired'
+    [G27-restored-ledger]='t_g27_restore_paired'
+    [G27-restored-rows]='t_g27_restore_paired'
+    [G27-restored-structure]='t_g27_restore_paired'
+    [G27-schema-inventory]='t_g27_changed_record'
+    [G27-schema-no-other-objects]='t_g27_changed_record'
+    [G27-schema-object-types]='t_g27_changed_record'
+    [G27-state-assets]='t_g27_changed_record'
+    [G27-state-durable]='t_g27_change_after_backup'
+    [G27-state-files]='t_g27_change_after_backup'
+    [G27-state-ledger]='t_g27_change_after_backup'
+    [G27-state-structure]='t_g27_change_after_backup'
 )
 
 # registry_differences MARKERS REGISTERED (one ID per line each): `unregistered ID` for a marker no GUARD_TESTS entry covers, `unmarked ID` for an entry

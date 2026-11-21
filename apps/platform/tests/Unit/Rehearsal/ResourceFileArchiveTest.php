@@ -403,6 +403,35 @@ it('inspects an aside directory read-only: a sibling of the active directory, ou
         ->and($again['active'])->toBe(['state' => 'present', 'files' => []]);
 });
 
+it('makes the one fixed change after a backup: removes the second fixture file, writes one other fixed file, and is never repeated', function (): void {
+    $root = s22c2_seeded();
+    $seeded = Files::inventory($root);
+    $drift = Files::driftFile();
+
+    $changed = Files::drift($root);
+
+    expect($changed['before'])->toBe($seeded)
+        ->and($changed['removed'])->toBe(Files::DRIFT_REMOVED)
+        ->and($changed['added'])->toBe(Files::DRIFT_ADDED)
+        ->and(array_keys($seeded['files']))->toContain(Files::DRIFT_REMOVED)
+        ->and(array_keys($seeded['files']))->not->toContain(Files::DRIFT_ADDED)
+        ->and($changed['after']['files'])->toHaveCount(Files::FIXTURE_FILES)
+        ->and($changed['after']['files'])->not->toHaveKey(Files::DRIFT_REMOVED)
+        ->and($changed['after']['files'][Files::DRIFT_ADDED])->toBe(['bytes' => $drift['bytes'], 'sha256' => $drift['sha256']])
+        ->and(Files::inventory($root))->toBe($changed['after'])
+        ->and(file_get_contents($root.'/resources/'.Files::DRIFT_ADDED))->toBe($drift['content']);
+    // The files that stayed are byte for byte the ones that were there, and the change is a different state from the backup in the files.
+    foreach (array_diff_key($seeded['files'], [Files::DRIFT_REMOVED => 1]) as $key => $facts) {
+        expect($changed['after']['files'][$key])->toBe($facts);
+    }
+    expect($changed['after']['files'])->not->toBe($seeded['files']);
+
+    // Repeated, or from any other state, it refuses and changes nothing.
+    $after = Files::inventory($root);
+    expect(s22c2_outcome(fn () => Files::drift($root)))->toBeInstanceOf(ResourceFileRefusal::class)
+        ->and(Files::inventory($root))->toBe($after);
+});
+
 it('leaves a moved directory exactly where it is when its check fails after the rename, and renames nothing back', function (): void {
     $root = s22c2_seeded();
     $key = array_key_first(Files::fixture());
@@ -761,6 +790,16 @@ function s22c2_scenarios(): array
             $root = s22c2_seeded();
             symlink($root.'/resources', $root.'/resources.before-restore-20261116T120000Z'); // a symbolic link in the aside's place is refused, and so is no directory at all
             $c::inspectAside($root, '20261116T120000Z');
+        }],
+        'F-drift-start' => ['not exactly the four seeded files', function (string $c): void {
+            $root = s22c2_seeded();
+            file_put_contents($root.'/resources/'.s22c2_key(9, '01jcf'), 'extra'); // a valid key that is not the fixture's: a stranger among the four
+            $c::drift($root);
+        }],
+        'F-drift-result' => ['not the fixture without one file and with the one new file', function (string $c): void {
+            $c::drift(s22c2_seeded(), function (string $store): void {
+                file_put_contents($store.'/'.Files::DRIFT_ADDED, 'tampered after the write');
+            });
         }],
         'F-seed-root' => ['files root is not a directory', fn (string $c) => $c::seed('/nonexistent/flc-s22c2')],
         'F-seed-target-absent' => ['seeding never writes into one', fn (string $c) => $c::seed(s22c2_seeded())],

@@ -20,6 +20,8 @@ use Tests\Support\ResourceFileRefusal;
 //                          same (keys, sizes, SHA-256). Prints both inventories (`before:` and `after:` lines). Nothing is deleted.
 //   inspect-aside <stamp>  (WU3) reads `resources.before-restore-<stamp>` (a sibling of `resources`) and the active `resources` beside it. Read-only; prints
 //                          the aside's inventory (`aside:` lines) and the active one (`active:` lines).
+//   drift                  (WU5) from a directory that holds exactly the seeded fixture: removes the fixture's second file and writes one other fixed file. Prints
+//                          the inventory before and after (`before:` and `after:` lines) and the two keys. It never overwrites; every key and byte is a constant.
 //   restore <rows>         the archive on standard input, verified first, extracted into a root with no `resources`; the result held to <rows>.
 //
 // <rows> is `none` (no resource_assets table), `empty`, or `key:bytes:sha256[,...]`. The root is a constant here: it is not an argument, and it
@@ -113,9 +115,9 @@ function run(array $args): void
     loadSupport();
     $action = $args[0] ?? '';
     $argument = $args[1] ?? '';
-    $needs = ['check' => 1, 'seed' => 0, 'archive' => 1, 'verify-archive' => 1, 'aside' => 1, 'inspect-aside' => 1, 'restore' => 1];
+    $needs = ['check' => 1, 'seed' => 0, 'archive' => 1, 'verify-archive' => 1, 'aside' => 1, 'inspect-aside' => 1, 'drift' => 0, 'restore' => 1];
     if (! isset($needs[$action]) || count($args) !== $needs[$action] + 1) {
-        fwrite(STDERR, "usage: files.php check <rows> | seed | archive <rows> | verify-archive <rows> | aside <stamp> | inspect-aside <stamp> | restore <rows>\n");
+        fwrite(STDERR, "usage: files.php check <rows> | seed | archive <rows> | verify-archive <rows> | aside <stamp> | inspect-aside <stamp> | drift | restore <rows>\n");
         exit(64);
     }
     // The archive is only verified here, so it needs no volume; every other action needs the mount.
@@ -164,6 +166,14 @@ function run(array $args): void
             printInventory($inspected['active'], 'active:'); // what the active Resources directory beside it holds (absent after the aside of the historical restore)
             echo 'aside:name='.$inspected['name']."\n";
             echo "aside:inspected=ok\n";
+            break;
+        case 'drift':
+            $drifted = ResourceFileArchive::drift(FILES_ROOT);
+            printInventory($drifted['before'], 'before:');
+            printInventory($drifted['after'], 'after:');
+            echo 'drift:removed='.$drifted['removed']."\n";
+            echo 'drift:added='.$drifted['added']."\n";
+            echo "drift:complete=ok\n";
             break;
         case 'restore':
             ResourceFileArchive::extract(archiveFromStdin(), FILES_ROOT, archiveRows($argument));
