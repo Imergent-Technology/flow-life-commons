@@ -23,8 +23,10 @@ namespace Tests\Support;
  *  - `setAside`    renames `resources` to `resources.before-restore-<stamp>`. A rename: nothing is deleted, merged or overwritten.
  *  - `inspectAside` reads the aside directory `resources.before-restore-<stamp>` and the active `resources` beside it, and changes nothing.
  *  - `seed`        writes the fixed synthetic fixture into a directory that does not exist.
+ *  - `drift`       (WU5) the one fixed change `change-after-backup` makes to the files: removes the fixture's second file and writes one other fixed file, in a directory
+ *                  that holds exactly the fixture. No key, content or path comes from a caller.
  *
- * Nothing here deletes a file, follows a link, takes a path from a caller beyond the one root it is given, or repairs a state. The real
+ * Nothing here deletes a file (but the one fixed fixture file `drift` removes), follows a link, takes a path from a caller beyond the one root it is given, or repairs a state. The real
  * `resources:assets:prune` is never involved. A refusal is a {@see ResourceFileRefusal}; its message names keys and counts, never content.
  *
  * Every safeguard is one `self::must(...)` line ending in `// guard:<ID>`. ResourceFileArchiveTest removes each, in a copy of this file,
@@ -59,6 +61,14 @@ final class ResourceFileArchive
 
     public const int FIXTURE_FILES = 4;
 
+    /** The fixture file `drift` removes: the second of the four (see fixture()). */
+    public const string DRIFT_REMOVED = '01jcf000000000000000000002';
+
+    /** The one other file `drift` writes: a fifth, with a key and content of its own. */
+    public const string DRIFT_ADDED = '01jcf000000000000000000005';
+
+    public const int DRIFT_ADDED_BYTES = 2500;
+
     private const int TYPE_MASK = 0170000;
 
     private const int TYPE_FILE = 0100000;
@@ -87,6 +97,22 @@ final class ResourceFileArchive
         }
 
         return $files;
+    }
+
+    /**
+     * The file `drift` writes: deterministic, like the fixture, and not one of its four.
+     *
+     * @return array{bytes: int, sha256: string, content: string}
+     */
+    public static function driftFile(): array
+    {
+        $content = '';
+        for ($block = 0; strlen($content) < self::DRIFT_ADDED_BYTES; $block++) {
+            $content .= hash('sha256', "flc-wu5-drift-$block", true);
+        }
+        $content = substr($content, 0, self::DRIFT_ADDED_BYTES);
+
+        return ['bytes' => self::DRIFT_ADDED_BYTES, 'sha256' => hash('sha256', $content), 'content' => $content];
     }
 
     /**
@@ -441,6 +467,46 @@ final class ResourceFileArchive
         self::agree($inventory, $rows);
 
         return $inventory;
+    }
+
+    /**
+     * The one change `change-after-backup` makes to the files, after a backup: from a Resources directory that holds exactly the fixture (the four seeded files, every
+     * key, size and SHA-256), the second file is removed and one other fixed file is written, so that the directory is a different, internally consistent state. It
+     * refuses any other starting state, before it changes anything, and it never overwrites: the new file is created exclusively. The result is read back and held to
+     * exactly the fixture without the second file, with the one new file. No key, content or path comes from a caller.
+     *
+     * @param  (callable(string): void)|null  $afterChange  a seam for tests only: called with the Resources directory's path once the change is made
+     * @return array{before: Inventory, after: Inventory, removed: string, added: string}
+     */
+    public static function drift(string $root, ?callable $afterChange = null): array
+    {
+        $before = self::inventory($root); // refuses a root that is not a directory, a link and every state the contract does not allow
+        $fixture = [];
+        foreach (self::fixture() as $key => $file) {
+            $fixture[$key] = ['bytes' => $file['bytes'], 'sha256' => $file['sha256']];
+        }
+        self::must($before['state'] === 'present' && $before['files'] === $fixture, 'the Resources directory is not exactly the four seeded files, so there is nothing to change after a backup'); // guard:F-drift-start
+        $store = $root.'/'.self::STORE;
+        $removed = $store.'/'.self::DRIFT_REMOVED;
+        self::must(is_file($removed) && ! is_link($removed) && unlink($removed), 'the file to remove could not be removed (key '.self::DRIFT_REMOVED.')');
+        $drift = self::driftFile();
+        $path = $store.'/'.self::DRIFT_ADDED;
+        $handle = fopen($path, 'xb');
+        self::must($handle !== false, 'the new file cannot be created (key '.self::DRIFT_ADDED.')');
+        $written = fwrite($handle, $drift['content']);
+        fclose($handle);
+        self::must($written === $drift['bytes'] && chmod($path, 0600) && touch($path, self::FIXTURE_MTIME), 'the new file was not written whole');
+        if ($afterChange !== null) {
+            $afterChange($store);
+        }
+        $expected = $fixture;
+        unset($expected[self::DRIFT_REMOVED]);
+        $expected[self::DRIFT_ADDED] = ['bytes' => $drift['bytes'], 'sha256' => $drift['sha256']];
+        ksort($expected);
+        $after = self::inventory($root);
+        self::must($after['state'] === 'present' && $after['files'] === $expected, 'the directory after the change is not the fixture without one file and with the one new file'); // guard:F-drift-result
+
+        return ['before' => $before, 'after' => $after, 'removed' => self::DRIFT_REMOVED, 'added' => self::DRIFT_ADDED];
     }
 
     // --- internals ---------------------------------------------------------------------------------------------------------------------

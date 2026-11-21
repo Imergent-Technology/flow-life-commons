@@ -46,6 +46,16 @@
 #                                     active Resources directory, which is absent; nothing is moved back
 #   restore-rehearsal.sh verify-zero-resources
 #                                     (2.2C-3, WU3) read-only: no resource_assets row and no active Resources directory (the historical zero-file state)
+#   restore-rehearsal.sh change-after-backup
+#                                     (2.2C-3, WU5) after a paired backup: one Resource file and its asset row removed, one fixed file and row added (the files container's
+#                                     `drift` and one transaction), verified, and recorded in changed.record
+#   restore-rehearsal.sh check-recovery-unit
+#                                     (WU5) read-only: what restore-paired requires before it clears anything
+#   restore-rehearsal.sh restore-paired
+#                                     (WU5) clear exactly the 34 tables, load the recovery unit's dump, and verify the database against what the backup recorded; the
+#                                     Resource files are aside-files and restore-files
+#   restore-rehearsal.sh verify-recovery-unit
+#                                     (WU5) read-only, the final verification: the only stage that may say the paired recovery succeeded
 #
 # WHAT THIS IS. A rehearsal environment for proving, with synthetic data on a local machine, that the organization can recover
 # v0.3.0 after an unsuccessful upgrade (docs/audits/g6/README.md, WP3c). Slice 1 is the isolated database server and the checks that
@@ -58,7 +68,7 @@
 # `reproduce-wp3-01` (which exists to show a defect and is not a restoration), and, in `restore-historical`, the DROP TABLE of exactly the 34
 # tables (or, from the one half-failed state `half-fail-upgrade` makes, exactly the 32) this script names followed by the loading of that same dump.
 # Slice 2.2C-1 adds two more, each a fixed statement or helper: the one stub CREATE TABLE of `half-fail-upgrade` and the one role assignment and
-# event of `revoke-after-backup`. Slice 2.2C-2 adds one: the INSERT of the four asset rows of `seed-files`, from values it has validated twice. `restore-historical` takes no argument, no file and no database, works only on the allowlisted rehearsal
+# event of `revoke-after-backup`. Slice 2.2C-2 adds one: the INSERT of the four asset rows of `seed-files`, from values it has validated twice. Slice 2.2C-3 (WU5) adds three, each fixed: the DELETE and INSERT of `change-after-backup` (one transaction, every value a constant), and, in `restore-paired`, the DROP TABLE of exactly the 34 tables followed by the loading of the one dump of the verified recovery unit. `restore-historical` takes no argument, no file and no database, works only on the allowlisted rehearsal
 # database, and is not a restore tool for anything else.
 # It has no production connectivity, reads no application .env, holds no host credentials and uses no production data.
 #
@@ -220,6 +230,12 @@ readonly PRESERVE_RECORD_FILE='preserve.record'               # (WU3) the commit
 readonly PRESERVE_RECORD_VERSION='preserve-v1'
 readonly ASIDE_RECORD_FILE='aside.record'                     # (WU3) what aside-files measured when it renamed the Resources directory
 readonly ASIDE_RECORD_VERSION='aside-v1'
+readonly CHANGED_RECORD_FILE='changed.record'                  # slice 2.2C-3 (WU5): what change-after-backup made: the changed state, before it is restored from
+readonly CHANGED_RECORD_VERSION='changed-v1'
+readonly DRIFT_REMOVED_KEY='01jcf000000000000000000002'        # the fixture file the change removes and the one it writes: ResourceFileArchive::DRIFT_REMOVED, DRIFT_ADDED and driftFile() (a test holds them equal)
+readonly DRIFT_ADDED_KEY='01jcf000000000000000000005'
+readonly DRIFT_ADDED_BYTES=2500
+readonly DRIFT_ADDED_SHA256='dc75fda9b15011c786c30df24d92fadb4329fe1c61f5283ba0e9a7fcbb0e5341'
 readonly CURRENT_RELEASE_VERSION='unreleased'                 # the tree under test is a commit, not a tag: `release.json` is made by `./flow release build` and is not in a `git archive`
 readonly CURRENT_LEDGER_COUNT=29                              # the migrations of the current schema: v0.3.0's 15 and the 14 after; scripts/tests/rehearsal.sh pins both against the repository
 readonly CURRENT_LAST_MIGRATION='2026_10_11_000001_add_provenance_to_contact_methods'
@@ -296,7 +312,7 @@ readonly REVOKE_AFTER=$'11\t9\t0\t1\t1'
 EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
 readonly EMPTY_DIGEST
 # Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
-readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER" "$CURRENT_DUMP_FILE" "$RECOVERY_MANIFEST_FILE" "$PRESERVE_DUMP_FILE" "$PRESERVE_RECORD_FILE" "$ASIDE_RECORD_FILE")
+readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER" "$CURRENT_DUMP_FILE" "$RECOVERY_MANIFEST_FILE" "$PRESERVE_DUMP_FILE" "$PRESERVE_RECORD_FILE" "$ASIDE_RECORD_FILE" "$CHANGED_RECORD_FILE")
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_|FILES_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
@@ -388,6 +404,19 @@ Usage: restore-rehearsal.sh <command>
   verify-zero-resources
                 Read-only. The restored historical state has no resource_assets row and no active Resources directory; the application's prune is not run.
                 (WU3.)
+  change-after-backup
+                After a paired backup, from the state it recorded: remove one Resource file and its asset row and add one other, fixed, so the
+                state is different from the backup and still consistent. Writes changed.record last. Takes no argument. (Slice 2.2C-3, WU5.)
+  check-recovery-unit
+                Read-only. Everything restore-paired requires before it clears anything: the recovery unit intact, the changed state, the failed
+                state preserved. Changes nothing. (WU5.)
+  restore-paired
+                The database half of the paired recovery: after the same checks, clear exactly the 34 tables and load the recovery unit's dump, then
+                verify the database against what the backup recorded. It does not restore the Resource files and does not say the recovery
+                succeeded. (WU5.)
+  verify-recovery-unit
+                Read-only, the final check, after aside-files and restore-files: the restored database and Resource files are the backed-up state,
+                by recorded content; the changed state's aside is intact and tied to its preservation; the application's prune dry-run is clean. (WU5.)
   cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
                 labelled is kept or cannot be removed, cleanup says what remains, keeps its state file and exits 1; run
                 it again once the cause is gone. --stale is needed only when the private state file is gone (the run
@@ -2937,7 +2966,7 @@ files_action_policy() {
     FILES_RW='' FILES_STDIN=0
     case "$1" in
         check | archive | verify-archive | inspect-aside) FILES_RW=false ;;
-        seed | aside | restore) FILES_RW=true ;;
+        seed | aside | restore | drift) FILES_RW=true ;;
         *) ;;
     esac
     case "$1" in
@@ -3936,31 +3965,44 @@ aside_record_problem() {
 # "Recoverable", precisely: the preserved Resource files (the aside directory) and the saved database evidence (the preservation record's asset rows and the export) are a
 # CONSISTENT PAIR of the failed state, read from the disk now: every key, size and SHA-256 of the aside is the aside record's, the preservation's file inventory and its asset rows;
 # no file is missing, extra or changed. It does not say that anything was restored, and nothing here puts the files back: that is a later, separate decision.
-cmd_verify_aside() {
-    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
-    preflight
-    require_prepared_source
-    local inspected want aside_state aside_spec aside_count active_state
+verify_aside_state() { # ACTIVE: `absent` (the historical zero-file restoration: nothing was extracted) or `restored` (the nonempty paired restoration: the active directory is the backup's files)
+    local active="$1" inspected want aside_state aside_spec active_state active_spec
     require_preserve_record
     state_file_ok "$ASIDE_RECORD_FILE" || refuse "there is no aside record in the state directory (aside-files has not finished), or it is not a private file of this script's. Nothing was changed." # guard:G26-aside-record-required
     aside_record_problem "$ROOT/$ASIDE_RECORD_FILE" || refuse "the aside record cannot be relied on: $AR_WHY. Nothing was changed." # guard:G26-aside-record-intact
     [[ "$AR_PRESERVE" == "$(sha256sum <"$ROOT/$PRESERVE_RECORD_FILE" | cut -c1-64)" ]] || refuse "the aside record was made against another preservation record (or against none) than the one in the state directory. Nothing was changed." # guard:G26-verify-binds-preserve
     files_backup_required
-    [[ "$FILES_MANIFEST_STATE" == absent ]] || refuse "the Resource-files backup holds files, so a restore extracts them again and the active Resources directory is not absent: this verification is of the historical zero-file restoration. Nothing was changed." # guard:G26-verify-zero-file
+    if [[ "$active" == absent ]]; then
+        [[ "$FILES_MANIFEST_STATE" == absent ]] || refuse "the Resource-files backup holds files, so a restore extracts them again and the active Resources directory is not absent: this verification is of the historical zero-file restoration. Nothing was changed." # guard:G26-verify-zero-file
+    else
+        [[ "$FILES_MANIFEST_STATE" == present ]] || refuse "the Resource-files backup is a zero-file one, which extracts nothing: its aside is verified by verify-aside. Nothing was changed." # guard:G27-aside-nonempty-backup
+    fi
     capture inspected 'reading the aside directory' run_files inspect-aside "$AR_STAMP"
     want="$FILES_STORE_DIR.before-restore-$AR_STAMP"
     { [[ "$(grep -c '^aside:name=' <<<"$inspected" || true)" == 1 ]] && grep -Fxq "aside:name=$want" <<<"$inspected" && grep -Fxq 'aside:inspected=ok' <<<"$inspected"; } || refuse "the files helper did not report reading $want. Nothing was changed." # guard:G26-verify-reported
     files_report "$inspected" aside:
-    aside_state="$FILES_STATE" aside_spec="$FILES_SPEC" aside_count="$FILES_COUNT"
+    aside_state="$FILES_STATE" aside_spec="$FILES_SPEC" VA_COUNT="$FILES_COUNT"
     files_report "$inspected" active:
-    active_state="$FILES_STATE"
+    active_state="$FILES_STATE" active_spec="$FILES_SPEC"
     [[ "$aside_state" == present ]] || refuse "the aside directory $want is not there. Nothing was changed." # guard:G26-verify-aside-present
-    [[ "$active_state" == absent ]] || refuse "the active Resources directory exists. In the historical zero-file restoration it must be absent; it is not touched here. Nothing was changed." # guard:G26-verify-active-absent
+    if [[ "$active" == absent ]]; then
+        [[ "$active_state" == absent ]] || refuse "the active Resources directory exists. In the historical zero-file restoration it must be absent; it is not touched here. Nothing was changed." # guard:G26-verify-active-absent
+    else
+        [[ "$active_state" == present && "$active_spec" == "$MANIFEST_SPEC" ]] || refuse "the active Resources directory is not the backup's restored files (it is absent, or a file is missing, extra, changed, or another size). Nothing was changed." # guard:G27-aside-active-restored
+    fi
     [[ "$aside_spec" == "$AR_SPEC" ]] || refuse "the aside directory is not what aside.record says it is (a file is missing, extra, changed, or another size). Nothing was changed." # guard:G26-verify-aside-record
     [[ "$aside_spec" == "$PR_FILES_SPEC" && "$aside_spec" == "$PR_ROWS_SPEC" ]] || refuse "the aside directory is not the failed state's preserved Resource files and asset rows (a file is missing, extra, changed, or another size). Nothing was changed." # guard:G26-verify-aside-preserved
-    say "ok   $want is a sibling of the active Resources directory (outside the application's Resources disk), the active Resources directory is absent, and nothing was moved or changed"
-    say "ok   the aside holds $aside_count file(s): every key, size and SHA-256 is the one aside.record holds, the one the failed-state preservation holds for the Resource files, and the one it holds for the asset rows"
-    say_inventory 'the preserved Resource files, as read now' "$aside_spec"
+    VA_NAME="$want" VA_SPEC="$aside_spec"
+}
+
+cmd_verify_aside() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    verify_aside_state absent
+    say "ok   $VA_NAME is a sibling of the active Resources directory (outside the application's Resources disk), the active Resources directory is absent, and nothing was moved or changed"
+    say "ok   the aside holds $VA_COUNT file(s): every key, size and SHA-256 is the one aside.record holds, the one the failed-state preservation holds for the Resource files, and the one it holds for the asset rows"
+    say_inventory 'the preserved Resource files, as read now' "$VA_SPEC"
     say "Recoverable: the preserved Resource files and the saved database evidence ($PRESERVE_RECORD_FILE, $PRESERVE_DUMP_FILE) are a consistent pair of the failed state. Nothing was restored and nothing is put back by this stage."
 }
 
@@ -3984,6 +4026,374 @@ cmd_verify_zero_resources() {
     say "ok   no resource_assets row ($([[ "$DB_ROWS_SPEC" == none ]] && echo 'there is no resource_assets table' || echo 'the table is empty')) and no active Resources directory"
 }
 
+
+# --- the paired restoration and the verification of what it restored (slice 2.2C-3, WU5) ------------------------------------------------------------------------------------
+
+# What this adds. After a paired backup (WU4) `change-after-backup` makes one fixed, internally consistent change to the database and the Resource files; `preserve-failed-state`
+# (WU3) keeps evidence of that state; `restore-paired` clears exactly the 34 tables and loads the recovery unit's dump; `aside-files` and `restore-files` (L3b, WU3) move the
+# changed Resources directory aside and extract the archive; and `verify-recovery-unit` is the only stage that may say the paired recovery succeeded. Three kinds of claim are kept
+# apart: the recovery unit is INTACT and consistent (require_recovery_unit, WU4); the state about to be replaced is PRESERVED (require_failed_state_preserved, WU3); and the restored
+# state EQUALS the backed-up one (verify_restored_database and verify-recovery-unit: every durable table's rows and content digest, every structure, the ledger, the asset rows and the
+# files, each compared with what the backup RECORDED, not with each other). One does not stand in for another.
+
+# recovery_unit_load: after require_recovery_unit has accepted the unit, the values a restoration compares with, set in THIS shell (the verifier runs in a command substitution,
+# so what it parses does not reach the caller). RM_TABLES is `<table> <rows> <row digest> <structure digest>` for the 34 tables as the backup measured them, RM_MIG_SHA the ledger's
+# digest, RM_MANIFEST_SHA the recovery manifest's own SHA-256, and MANIFEST_SPEC and MANIFEST_LINES the Resource files the backup holds (key, size, SHA-256).
+recovery_unit_load() {
+    local m="$ROOT/$RECOVERY_MANIFEST_FILE" line lines=''
+    while IFS= read -r line; do
+        [[ "$line" =~ $RM_TABLE_RE ]] || continue
+        lines+="${BASH_REMATCH[1]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[5]}"$'\n'
+    done <"$m"
+    RM_TABLES="${lines%$'\n'}"
+    RM_MIG_SHA="$(manifest_value "$m" migrations_sha256)" RM_MANIFEST_SHA="$(sha256sum <"$m" | cut -c1-64)"
+    files_manifest_entries "$ROOT/$FILES_MANIFEST_FILE"
+    [[ "$(cut -d' ' -f1 <<<"$RM_TABLES")" == "$(upgraded_inventory)" && "$RM_MIG_SHA" =~ ^[0-9a-f]{64}$ && "$MANIFEST_LINES" -ge 1 ]] || refuse "the recovery unit was accepted but its tables, ledger or files could not be read back from it. Nothing was changed."
+}
+
+# require_plain_current_schema: the database is exactly the 34 tables of the current schema, each a plain base table, with no trigger, routine or event: the restoration names the
+# tables it drops and is never widened to anything else (the same facts require_restore_start holds the historical restore to).
+require_plain_current_schema() {
+    local kinds objects
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the current schema (the paired restoration starts from that schema and ends in it, and in nothing else)' # guard:G27-schema-inventory
+    capture kinds 'reading the table types' app_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$APP_DB' AND table_type <> 'BASE TABLE';"
+    [[ "$kinds" == 0 ]] || refuse "the rehearsal database holds $kinds object(s) that are not plain tables (a view, a sequence or a system-versioned table). The restoration clears only what it can name, and does not widen that to them. Nothing was changed." # guard:G27-schema-object-types
+    capture objects 'reading the triggers, routines and events' app_query "SELECT (SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema = '$APP_DB'), (SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema = '$APP_DB'), (SELECT COUNT(*) FROM information_schema.events WHERE event_schema = '$APP_DB');"
+    [[ "$objects" == $'0\t0\t0' ]] || refuse "the rehearsal database holds a trigger, a routine or an event (triggers, routines, events: ${objects//$'\t'/, }). The restoration clears tables only. Nothing was changed." # guard:G27-schema-no-other-objects
+}
+
+# --- the change after the backup ----
+
+# changed_expected_spec: the Resource files the change leaves, from the files the backup holds (MANIFEST_SPEC): without the one file the change removes and with the one fixed file it
+# writes, in key order. A backup that does not hold the removed file, or already holds the added one, is not one the change applies to: the failure is the status.
+changed_expected_spec() {
+    local entry entries=() key bytes sha lines='' found=0
+    IFS=',' read -ra entries <<<"$MANIFEST_SPEC"
+    for entry in "${entries[@]}"; do
+        IFS=: read -r key bytes sha <<<"$entry"
+        if [[ "$key" == "$DRIFT_REMOVED_KEY" ]]; then
+            found=1
+            continue
+        fi
+        [[ "$key" != "$DRIFT_ADDED_KEY" ]] || return 1
+        lines+="$entry"$'\n'
+    done
+    ((found == 1)) || return 1
+    lines+="$DRIFT_ADDED_KEY:$DRIFT_ADDED_BYTES:$DRIFT_ADDED_SHA256"
+    printf '%s' "$(LC_ALL=C sort <<<"$lines" | tr '\n' ',' | sed 's/,$//')"
+}
+
+# change_sql: the one transaction that follows the files' change: the removed file's asset row is deleted and the added file's row is inserted, every value a constant of this script
+# (the same synthetic provenance the four seeded rows have). Nothing comes from a caller, and the key and the two facts are checked again here because they are interpolated.
+change_sql() {
+    [[ "$DRIFT_REMOVED_KEY" =~ $KEY_RE && "$DRIFT_ADDED_KEY" =~ $KEY_RE && "$DRIFT_ADDED_BYTES" =~ ^[1-9][0-9]{0,11}$ && "$DRIFT_ADDED_SHA256" =~ ^[0-9a-f]{64}$ ]] || refuse "the constants of the change are not a key, a size and a SHA-256; nothing was changed."
+    printf "START TRANSACTION;\nDELETE FROM resource_assets WHERE storage_key = '%s';\nINSERT INTO resource_assets (id, storage_key, original_filename, media_type, byte_size, sha256, uploaded_by_person_id, created_at) VALUES ('%s','%s','synthetic-drift.bin','application/octet-stream',%s,'%s','%s','2026-01-01 00:00:00');\nCOMMIT;\n" \
+        "$DRIFT_REMOVED_KEY" "$DRIFT_ADDED_KEY" "$DRIFT_ADDED_KEY" "$DRIFT_ADDED_BYTES" "$DRIFT_ADDED_SHA256" "$FILES_SEED_PERSON"
+}
+
+# changed_record_text: the whole record, from the CH_* values (CH_TAKEN, CH_FP, CH_MANIFEST_SHA, CH_ASSETS `<rows> <digest>` of resource_assets after the change, CH_COUNT, CH_INV_SHA, CH_SPEC):
+# the least that identifies the changed state before it is restored from: which recovery unit it was made after, the two fixed keys, resource_assets as measured, and the files.
+# Every other table is the backup's by definition of the change, and is compared with the recovery manifest, not recorded again. One fact to a line.
+changed_record_text() {
+    local entry entries=() key bytes sha
+    printf '%s\n' "$CHANGED_RECORD_VERSION"
+    printf 'taken_at=%s\nrun_token_fingerprint=%s\nrecovery_manifest_sha256=%s\nremoved_key=%s\nadded_key=%s\n' "$CH_TAKEN" "$CH_FP" "$CH_MANIFEST_SHA" "$DRIFT_REMOVED_KEY" "$DRIFT_ADDED_KEY"
+    printf 'resource_assets=%s\nresource_files=%s\ninventory_sha256=%s\n' "$CH_ASSETS" "$CH_COUNT" "$CH_INV_SHA"
+    IFS=',' read -ra entries <<<"$CH_SPEC"
+    for entry in "${entries[@]}"; do IFS=: read -r key bytes sha <<<"$entry"; printf 'file %s %s %s\n' "$key" "$bytes" "$sha"; done
+    printf 'change:complete\n'
+}
+
+# changed_record_problem RECORD: the record is this run's, is of THIS recovery unit (its manifest's SHA-256), names the two fixed keys, lists exactly the backup's files without the
+# one removed and with the one added, and is exactly the text this script writes; the reason in CH_WHY, and the CH_* values set (called in the caller's shell). Needs recovery_unit_load.
+# It says what the changed state is meant to be, not that the database and the directory are that now: unit_state_differences measures that.
+changed_record_problem() {
+    local file="$1" line n=0 first='' key bytes sha extra spec='' files_n=0 want rows_now digest_now
+    local -A seen=()
+    CH_WHY='' CH_TAKEN='' CH_FP='' CH_MANIFEST_SHA='' CH_REMOVED='' CH_ADDED='' CH_ASSETS='' CH_COUNT='' CH_INV_SHA='' CH_SPEC=''
+    while IFS= read -r line; do
+        n=$((n + 1))
+        case "$line" in
+            changed-v1) first="$line" ;;
+            taken_at=*) CH_TAKEN="${line#taken_at=}" ;;
+            run_token_fingerprint=*) CH_FP="${line#run_token_fingerprint=}" ;;
+            recovery_manifest_sha256=*) CH_MANIFEST_SHA="${line#recovery_manifest_sha256=}" ;;
+            removed_key=*) CH_REMOVED="${line#removed_key=}" ;;
+            added_key=*) CH_ADDED="${line#added_key=}" ;;
+            resource_assets=*) CH_ASSETS="${line#resource_assets=}" ;;
+            resource_files=*) CH_COUNT="${line#resource_files=}" ;;
+            inventory_sha256=*) CH_INV_SHA="${line#inventory_sha256=}" ;;
+            'file '*)
+                IFS=' ' read -r _ key bytes sha extra <<<"$line"
+                [[ -z "$extra" && "$key" =~ $KEY_RE && "$bytes" =~ ^(0|[1-9][0-9]{0,11})$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || { CH_WHY="a file line is not a Resources storage key, a size and a SHA-256"; return 1; }
+                [[ -z "${seen[$key]:-}" ]] || { CH_WHY="a file is listed twice"; return 1; }
+                seen[$key]=1 files_n=$((files_n + 1)) spec+="${spec:+,}$key:$bytes:$sha"
+                ;;
+            change:complete) ;;
+            *) CH_WHY="line $n is not one this script writes"; return 1 ;;
+        esac
+    done <"$file"
+    CH_SPEC="$spec"
+    [[ "$first" == "$CHANGED_RECORD_VERSION" && "$(head -n 1 "$file")" == "$CHANGED_RECORD_VERSION" ]] || { CH_WHY="its version is not $CHANGED_RECORD_VERSION"; return 1; }
+    [[ "$CH_FP" == "$(token_fingerprint "$(state_token "$ROOT")")" ]] || { CH_WHY="it is not this run's (its run token fingerprint differs)"; return 1; } # guard:G27-ch-run
+    [[ "$CH_TAKEN" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { CH_WHY="its taken_at is not a UTC time"; return 1; }
+    [[ "$CH_MANIFEST_SHA" == "$RM_MANIFEST_SHA" ]] || { CH_WHY="it was made after another recovery unit than the one in the state directory"; return 1; } # guard:G27-ch-unit
+    [[ "$CH_REMOVED" == "$DRIFT_REMOVED_KEY" && "$CH_ADDED" == "$DRIFT_ADDED_KEY" ]] || { CH_WHY="its two keys are not the change's fixed ones"; return 1; }
+    want="$(changed_expected_spec)" || { CH_WHY="the backup's files are not ones the change applies to"; return 1; }
+    [[ "$CH_SPEC" == "$want" && "$CH_COUNT" == "$files_n" && "$CH_INV_SHA" == "$(printf '%s' "$CH_SPEC" | sha256sum | cut -c1-64)" ]] || { CH_WHY="its files are not the backup's files without the one removed and with the one added"; return 1; } # guard:G27-ch-files
+    [[ "$CH_ASSETS" =~ ^(0|[1-9][0-9]{0,11})\ ([0-9a-f]{64})$ ]] || { CH_WHY="its resource_assets measurement is not a count and a digest"; return 1; }
+    rows_now="${BASH_REMATCH[1]}" digest_now="${BASH_REMATCH[2]}"
+    [[ "$rows_now" == "$files_n" && "$digest_now" != "$(awk '$1 == "resource_assets" { print $3 }' <<<"$RM_TABLES")" ]] || { CH_WHY="its resource_assets rows are not the files it lists, or are the backup's own (a change that changed nothing)"; return 1; } # guard:G27-ch-differs
+    [[ "$(<"$file")" == "$(changed_record_text)" ]] || { CH_WHY="it is not exactly what this script writes (an extra, missing or reordered line)"; return 1; } # guard:G27-ch-exact
+    return 0
+}
+
+# unit_state_differences MODE: the database and the Resource files as state_measure just measured them (MEAS_TABLES, MEAS_STRUCT, MEAS_LEDGER, DB_ROWS_SPEC, FILES_STATE, FILES_SPEC) compared with
+# what the recovery unit RECORDED, as the names of what differs. MODE `backup`: the backed-up state itself (every durable table, resource_assets included, the files the backup holds).
+# MODE `changed`: the state change-after-backup makes (every durable table but resource_assets as the backup recorded it; resource_assets, and the files, as the changed record says).
+# The seven transient tables are not compared: a session or a cache entry changes them without changing anything that matters, and the backup keeps none of their rows. Needs
+# recovery_unit_load, state_measure and, for `changed`, changed_record_problem.
+unit_state_differences() {
+    local mode="$1" out='' want_spec="$MANIFEST_SPEC" skip='^$'
+    if [[ "$mode" == changed ]]; then want_spec="$CH_SPEC" skip='^resource_assets '; fi
+    out+="$(digest_differences "$(durable_lines "$RM_TABLES" | { grep -v -e "$skip" || true; })" "$(durable_lines "$MEAS_TABLES" | { grep -v -e "$skip" || true; })")"$'\n' # guard:G27-state-durable
+    [[ "$mode" == backup || "$(awk '$1 == "resource_assets" { print $2 " " $3 }' <<<"$MEAS_TABLES")" == "$CH_ASSETS" ]] || out+="resource_assets"$'\n' # guard:G27-state-assets
+    out+="$(digest_differences "$(awk '{ print $1 " " $4 }' <<<"$RM_TABLES")" "$MEAS_STRUCT")"$'\n' # guard:G27-state-structure
+    [[ "$MEAS_LEDGER" == "$CURRENT_LEDGER_COUNT $CURRENT_LAST_MIGRATION $RM_MIG_SHA" ]] || out+="ledger"$'\n' # guard:G27-state-ledger
+    [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$want_spec" && "$DB_ROWS_SPEC" == "$want_spec" ]] || out+="resource-files"$'\n' # guard:G27-state-files
+    printf '%s' "$out" | grep -v '^$' | LC_ALL=C sort -u || true
+}
+
+CHANGE_PHASE=''
+on_change_exit() {
+    local status=$?
+    if ((status != 0)); then
+        stage_trailer 'The rehearsal files and database'
+        case "$CHANGE_PHASE" in
+            files) warn "The Resources directory may have been changed (one file removed, one written) and the asset rows were not: the files and the rows may disagree. $CHANGED_RECORD_FILE was not written, so no later stage accepts this state." ;;
+            rows) warn "The Resources directory was changed and the asset-row transaction was sent: the rows may or may not have changed. $CHANGED_RECORD_FILE was not written, so no later stage accepts this state." ;;
+            *) ;;
+        esac
+    fi
+    stage_record_remove
+}
+
+# change-after-backup: after a paired backup, from the exact state the backup recorded, the one fixed change: the fixture's second file is removed and one other fixed file is written
+# (the files container's `drift`, the only writer), then the second asset row is deleted and the new one inserted in one transaction. It then measures the result and refuses unless the
+# database and the directory agree with each other, differ from the backup in the files and in resource_assets and in nothing else, and are what the constants say. The record of what
+# the changed state is (changed.record) is written last, never over a file. It takes no argument, SQL, path or file name, and is refused a second time.
+cmd_change_after_backup() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local out differs rec sql
+    [[ ! -e "$ROOT/$CHANGED_RECORD_FILE" && ! -L "$ROOT/$CHANGED_RECORD_FILE" ]] || refuse "$CHANGED_RECORD_FILE is already in the state directory: the change is made once, and evidence is never overwritten. Run cleanup and start again. Nothing was changed." # guard:G27-change-no-repeat
+    require_recovery_unit
+    recovery_unit_load
+    require_plain_current_schema
+    state_measure
+    differs="$(unit_state_differences backup)"
+    [[ -z "$differs" ]] || refuse "the database and the Resource files are not the state the paired backup recorded (differs: $(tr '\n' ' ' <<<"$differs")), so there is nothing for this change to be made after. Nothing was changed." # guard:G27-change-start
+    CH_SPEC="$(changed_expected_spec)" || refuse "the backup's files are not ones the change applies to. Nothing was changed."
+    arm_stage change-after-backup on_change_exit
+    say "Changing the Resources directory after the backup: one file removed, one fixed file written ..."
+    CHANGE_PHASE=files
+    capture out 'changing the Resources directory' run_files drift
+    { grep -Fxq 'drift:complete=ok' <<<"$out" && [[ "$(sed -n 's/^drift:removed=//p' <<<"$out")" == "$DRIFT_REMOVED_KEY" && "$(sed -n 's/^drift:added=//p' <<<"$out")" == "$DRIFT_ADDED_KEY" ]]; } || refuse "the files helper did not report the change it was asked for (drift:complete=ok and the two fixed keys). The Resources directory may have been changed; the asset rows were not." # guard:G27-change-reported
+    files_report "$out" before:
+    [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$MANIFEST_SPEC" ]] || refuse "what the files helper changed was not the backup's files. The Resources directory may have been changed; the asset rows were not." # guard:G27-change-before
+    files_report "$out" after:
+    [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$CH_SPEC" ]] || refuse "what the files helper left is not the backup's files without one and with the fixed one. The Resources directory may have been changed; the asset rows were not." # guard:G27-change-after
+    say "ok   the Resources directory: the file $DRIFT_REMOVED_KEY removed and $DRIFT_ADDED_KEY written, every other file untouched"
+    CHANGE_PHASE=rows
+    sql="$(change_sql)" || exit "$?"
+    printf '%s' "$sql" | guarded_app_sql "$ROOT" "$APP_DB" >/dev/null || fail "the asset rows could not be changed"
+    say "ok   the asset row of the removed file deleted and the row of the new file inserted, in one transaction"
+    files_db_rows
+    capture out 'reading the changed Resources directory' run_files check "$DB_ROWS_SPEC"
+    grep -Fxq 'files:check=ok' <<<"$out" || refuse "the files helper did not report files:check=ok for the changed directory. The files and the rows were changed; no record was written."
+    files_report "$out"
+    measure_database
+    CHANGE_PHASE=''
+    [[ "$DB_ROWS_SPEC" == "$CH_SPEC" && "$FILES_STATE" == present && "$FILES_SPEC" == "$CH_SPEC" ]] || refuse "the asset rows and the Resources directory read back are not the files the change left, or do not agree. The files and the rows were changed; no record was written." # guard:G27-change-rows
+    differs="$(unit_state_differences backup)"
+    [[ "$differs" == $'resource-files\nresource_assets' ]] || refuse "the changed state does not differ from the backup in exactly the files and resource_assets (differs: $(tr '\n' ' ' <<<"$differs")). The files and the rows were changed; no record was written." # guard:G27-change-differs
+    CH_TAKEN="$(date -u +%Y-%m-%dT%H:%M:%SZ)" CH_FP="$(token_fingerprint "$(state_token "$ROOT")")" CH_MANIFEST_SHA="$RM_MANIFEST_SHA"
+    CH_ASSETS="$(awk '$1 == "resource_assets" { print $2 " " $3 }' <<<"$MEAS_TABLES")" CH_COUNT="$MANIFEST_LINES" CH_INV_SHA="$(printf '%s' "$CH_SPEC" | sha256sum | cut -c1-64)"
+    write_state_file_once "$CHANGED_RECORD_FILE" "$(changed_record_text)"
+    changed_record_problem "$ROOT/$CHANGED_RECORD_FILE" || refuse "the record just written is not consistent: $CH_WHY."
+    differs="$(unit_state_differences changed)"
+    [[ -z "$differs" ]] || refuse "the changed state is not the one the record says (differs: $(tr '\n' ' ' <<<"$differs"))."
+    rec="$(sha256sum <"$ROOT/$CHANGED_RECORD_FILE" | cut -c1-16)"
+    say "ok   the database and the directory agree ($MANIFEST_LINES file(s), $MANIFEST_LINES asset row(s)), and differ from the paired backup in the files and in resource_assets and in nothing else"
+    say "ok   $CHANGED_RECORD_FILE (sha256 $rec...) records which backup this follows, the two fixed keys, resource_assets as measured and the files"
+    say_inventory 'the changed Resource files' "$CH_SPEC"
+    say "Changed after the backup. Nothing was restored. Next: restore-rehearsal.sh preserve-failed-state"
+}
+
+# --- the preflight that comes before anything is destroyed ----
+
+# require_preservation_is_changed_state: the failed-state preservation (PR_*, from require_preserve_record) is of THE changed state: the Resource files and the asset rows it holds are
+# the changed record's, resource_assets is as the record measured it, and every other durable table is the backup's. A preservation of another state, however intact, is not one.
+require_preservation_is_changed_state() {
+    local other_rm other_pr
+    other_rm="$(durable_lines "$RM_TABLES" | { grep -v '^resource_assets ' || true; })"
+    other_pr="$(durable_lines "$PR_TABLES" | { grep -v '^resource_assets ' || true; })"
+    [[ "$PR_FILES_SPEC" == "$CH_SPEC" && "$PR_ROWS_SPEC" == "$CH_SPEC" && "$(awk '$1 == "resource_assets" { print $2 " " $3 }' <<<"$PR_TABLES")" == "$CH_ASSETS" ]] || refuse "the failed-state preservation is not of the state change-after-backup made (its Resource files, asset rows or resource_assets differ from $CHANGED_RECORD_FILE). Nothing was changed." # guard:G27-preserved-is-changed
+    [[ -z "$(digest_differences "$other_rm" "$other_pr")" ]] || refuse "the failed-state preservation holds a durable table other than resource_assets that is not the backup's, so it is not of the state change-after-backup made. Nothing was changed." # guard:G27-preserved-others
+}
+
+# restore_preflight: everything that must hold before a paired restoration destroys anything, read-only: the recovery unit is complete, intact, this run's and this source's, and the
+# keyring has every key it needs (require_recovery_unit); the database is the 34 plain tables and nothing else; the changed state is the one change-after-backup made and recorded
+# (the database and the files as measured now, against the record and the recovery manifest); and the failed-state preservation is intact and equals what is about to be cleared
+# (require_failed_state_preserved) and is of that changed state. It changes nothing, and it is what `restore-paired` runs first and `check-recovery-unit` runs alone.
+restore_preflight() {
+    local differs
+    require_recovery_unit
+    recovery_unit_load
+    require_plain_current_schema
+    state_file_ok "$CHANGED_RECORD_FILE" || refuse "there is no record of the change after the backup in the state directory ($CHANGED_RECORD_FILE, a private file of this script's). Run: restore-rehearsal.sh change-after-backup. Nothing was changed." # guard:G27-changed-required
+    changed_record_problem "$ROOT/$CHANGED_RECORD_FILE" || refuse "the record of the change after the backup cannot be relied on: $CH_WHY. Nothing was changed." # guard:G27-changed-intact
+    state_measure
+    differs="$(unit_state_differences changed)"
+    [[ -z "$differs" ]] || refuse "the database and the Resource files are not the state change-after-backup made (differs: $(tr '\n' ' ' <<<"$differs")). Nothing was changed." # guard:G27-changed-matches
+    require_failed_state_preserved
+    require_preservation_is_changed_state
+}
+
+cmd_check_recovery_unit() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    restore_preflight
+    say "ok   the recovery unit is complete, intact, this run's and this source's, and the keyring has every key it needs"
+    say "ok   the database is exactly the 34 plain tables, and it and the $FILES_COUNT Resource file(s) are the changed state $CHANGED_RECORD_FILE records, which differs from the backup"
+    say "ok   the failed state is preserved ($PRESERVE_RECORD_FILE): intact, this run's, equal to the database and the files as they are now, and of the changed state"
+    say "Ready for restore-paired. Nothing was changed."
+}
+
+# --- what the restored database must be ----
+
+# verify_restored_database: the database is what a restoration of the recovery unit must leave, judged against what the backup RECORDED (the recovery manifest's own rows, digests and
+# structure digests), measured by the application's `snapshot-all` and the SQL client: the 34 plain tables and nothing else; every one of the 27 durable tables with the backup's row count
+# AND its content digest (so the same number of rows with other values differs); every one of the seven transient tables present and EMPTY; every table's structure digest the backup's;
+# the migration ledger the backup's; and the Resource asset rows, key by key, size and SHA-256, the backup's. Needs require_recovery_unit and recovery_unit_load. Read-only.
+verify_restored_database() {
+    local diff
+    require_plain_current_schema
+    measure_database
+    files_db_rows
+    diff="$(restore_state_differences "$(awk '{ print $1 " " $2 " " $3 }' <<<"$RM_TABLES")" "$MEAS_TABLES")"
+    [[ -z "$diff" ]] || refuse "the database is not what the backup recorded (differs from the recovery manifest, by row count or content digest, or a transient table is not empty: $(tr '\n' ' ' <<<"$diff"))." # guard:G27-restored-data
+    diff="$(digest_differences "$(awk '{ print $1 " " $4 }' <<<"$RM_TABLES")" "$MEAS_STRUCT")"
+    [[ -z "$diff" ]] || refuse "the structure of the restored tables is not the backup's (differs: $(tr '\n' ' ' <<<"$diff"))." # guard:G27-restored-structure
+    [[ "$MEAS_LEDGER" == "$CURRENT_LEDGER_COUNT $CURRENT_LAST_MIGRATION $RM_MIG_SHA" ]] || refuse "the migration ledger is not the backup's $CURRENT_LEDGER_COUNT migrations (their digest or the last one differs)." # guard:G27-restored-ledger
+    [[ "$DB_ROWS_SPEC" == "$MANIFEST_SPEC" ]] || refuse "the Resource asset rows (key, size and SHA-256) are not the backup's." # guard:G27-restored-rows
+}
+
+RP_PHASE=''
+on_restore_paired_exit() {
+    local status=$?
+    if ((status != 0)); then
+        stage_trailer 'The rehearsal database'
+        case "$RP_PHASE" in
+            clearing) warn "The clearing statement was sent: the database may hold none, some or all of the 34 tables." ;;
+            cleared) warn "The 34 tables were dropped and checked to be gone: the dump was not loaded (or not verified), so the database is empty." ;;
+            loading) warn "The dump was being loaded: the database may hold some of its tables and rows, and is not known to be the backup." ;;
+            loaded) warn "The dump was loaded but the database was not verified to be what the backup recorded: it is not known to equal the backup." ;;
+            *) ;;
+        esac
+        warn "The restoration is NOT complete and the paired recovery has NOT succeeded. $PRESERVE_RECORD_FILE and $PRESERVE_DUMP_FILE (the failed state) and the recovery unit are untouched by this stage; nothing was rolled back, retried, repaired or cleaned up."
+    fi
+    stage_record_remove
+}
+
+# restore-paired: the database half of the paired recovery, and only that. After restore_preflight: clear exactly the 34 tables (DROP TABLE for those names, from this script's own list;
+# no IF EXISTS, no DROP DATABASE), re-verify the unit's identity and integrity immediately before loading, load the unit's current.dump.sql as the application account, and verify the
+# database against what the backup recorded. It does not roll back, retry or repair. It does not move or restore any Resource file, and it never says the recovery succeeded: only
+# `verify-recovery-unit`, after `aside-files` and `restore-files`, may.
+cmd_restore_paired() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local statement why
+    restore_preflight
+    capture statement 'building the clearing statement' clear_statement upgraded
+    say "ok   every precondition holds: the verified recovery unit and keyring, the changed state $CHANGED_RECORD_FILE records, the failed state preserved, and a schema of exactly the 34 plain tables"
+    arm_stage restore-paired on_restore_paired_exit
+    say "Clearing the application schema (DROP TABLE for exactly the 34 tables, nothing else) ..."
+    RP_PHASE=clearing
+    guarded_app_sql "$ROOT" "$APP_DB" <<<"$statement" >/dev/null || fail "the application schema could not be cleared" # (a here-string, not a pipe: a refusal inside a pipe would end only the pipe's subshell)
+    require_inventory '' 'empty: the intended tables are all gone' # guard:G27-cleared
+    RP_PHASE=cleared
+    say "ok   the rehearsal database holds no table"
+    why="$(recovery_unit_problem "$ROOT/$RECOVERY_MANIFEST_FILE" "$ROOT/$CURRENT_DUMP_FILE" "$ROOT/$FILES_MANIFEST_FILE" "$ROOT/$FILES_ARCHIVE_FILE")" || refuse "the recovery unit is not the one that was verified ($why); the dump is not loaded." # guard:G27-import-verified-unit
+    say "Loading the verified dump of the recovery unit ..."
+    RP_PHASE=loading
+    guarded_app_sql "$ROOT" "$APP_DB" <"$ROOT/$CURRENT_DUMP_FILE" >/dev/null || fail "the dump could not be loaded"
+    RP_PHASE=loaded
+    verify_restored_database
+    RP_PHASE=''
+    say "ok   the 34 plain tables and nothing else; the 27 durable tables have the backup's row counts and content digests; the 7 transient tables are present and empty"
+    say "ok   every table's structure and the ledger of $CURRENT_LEDGER_COUNT migrations are the backup's, and the $MANIFEST_LINES asset row(s) are the backup's, key by key, size and SHA-256"
+    say "Database restored and verified against the recovery manifest. The paired recovery is NOT complete: the Resource files are not restored. Next: aside-files, restore-files, then verify-recovery-unit"
+}
+
+# --- the final verification ----
+
+# verify_prune_dry_run: the application's own view of the restored Resources store, from the one operation the PHP runner may give the files volume to: `resources:assets:prune --dry-run`
+# in the current tree, read-only. Its report must be, line for line, the clean one for the N files the backup holds: N found, N referenced by an asset and kept, none too recent, none
+# that are not storage keys, none orphaned (none would be removed, none that could not be), and no asset row whose file is missing. It is run against a volume that is established and
+# is never given a flag, a path or a different command; a dry run removes nothing, and no destructive prune is run.
+verify_prune_dry_run() {
+    local out line n=0 count="$MANIFEST_LINES" expected
+    runner_command resources:assets:prune
+    capture out 'the application'"'"'s Resources prune dry-run' run_in_runner "$ROOT" current "${RUN_CMD[@]}"
+    expected=("^Resources file store: $count file\(s\) found \(dry run: nothing is removed\)\.\$" "^  referenced by an asset, kept: $count\$" '^  unreferenced but younger than [0-9]+ hour\(s\), left alone: 0$'
+        '^  not a Resources storage key, left alone: 0$' '^  orphaned, would be removed: 0$' '^  orphaned, could NOT be removed \(tried again next run\): 0$'
+        '^Asset rows whose file is missing from the store \(asset_unavailable\): 0$')
+    while IFS= read -r line; do
+        n=$((n + 1))
+        { ((n <= ${#expected[@]})) && [[ "$line" =~ ${expected[n - 1]} ]]; } || refuse "the application's prune dry-run reports something other than the clean state of $count referenced files (line $n is not the expected one): its view of the Resources does not agree with the database and the files." # guard:G27-prune-clean
+    done <<<"$out"
+    ((n == ${#expected[@]})) || refuse "the application's prune dry-run did not report exactly the ${#expected[@]} lines of the clean state, so a missing or orphaned asset may be hidden in it." # guard:G27-prune-shape
+    say "ok   the application's own view agrees (resources:assets:prune --dry-run, read-only): $count file(s) referenced by an asset and kept, none orphaned, none too recent, none unrecognised, and no asset row whose file is missing"
+}
+
+# verify-recovery-unit: READ-ONLY, the final verification, and the only stage that may say the paired recovery succeeded. It needs the recovery unit (require_recovery_unit); then:
+#   THE DATABASE  verify_restored_database: the backup's recorded content (see there), not self-consistency;
+#   THE FILES     the active Resources directory read by the files container, held to the asset rows (it refuses a difference), equal to the files the backup holds, and the backup's archive
+#                 read back and equal to those same files, so that the directory, the rows and the archive are three readings of one inventory;
+#   THE ASIDE     the changed state's Resources directory, moved aside, is exactly what aside.record and the preservation say, a sibling of the active directory, and the preservation record
+#                 is of the changed state change-after-backup recorded (verify_aside_state restored, require_preservation_is_changed_state);
+#   THE APPLICATION  the prune dry-run's clean report (verify_prune_dry_run).
+# It moves nothing back, restores nothing, repairs nothing and deletes nothing.
+cmd_verify_recovery_unit() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local checked verified
+    require_recovery_unit
+    recovery_unit_load
+    say "ok   the recovery unit is complete, intact, this run's and this source's, and the keyring has every key it needs"
+    verify_restored_database
+    say "ok   the 34 plain tables and nothing else; the 27 durable tables have the backup's row counts and content digests; the 7 transient tables are empty; every structure and the ledger are the backup's"
+    capture checked 'reading the active Resources directory' run_files check "$DB_ROWS_SPEC"
+    grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok."
+    files_report "$checked"
+    [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$MANIFEST_SPEC" ]] || refuse "the active Resource files are not the backup's (a file is missing, extra, changed, or another size, or the directory is absent)." # guard:G27-final-files
+    capture verified 'reading the backup archive' run_files verify-archive "$MANIFEST_SPEC" <"$ROOT/$FILES_ARCHIVE_FILE"
+    files_verified_ok "$verified" "$MANIFEST_LINES" || refuse "the backup's archive does not hold exactly the files the backup records." # guard:G27-final-archive
+    say "ok   the active Resources directory holds the $FILES_COUNT file(s) the backup holds, equal to the asset rows and to the archive, by key, size and SHA-256"
+    verify_aside_state restored
+    state_file_ok "$CHANGED_RECORD_FILE" || refuse "there is no record of the change after the backup in the state directory, so the aside cannot be tied to it." # guard:G27-final-changed-required
+    changed_record_problem "$ROOT/$CHANGED_RECORD_FILE" || refuse "the record of the change after the backup cannot be relied on: $CH_WHY." # guard:G27-final-changed-intact
+    require_preservation_is_changed_state
+    say "ok   $VA_NAME is a sibling of the active Resources directory (outside the application's Resources disk) and holds the $VA_COUNT file(s) of the changed state: the aside record's, the preservation's and $CHANGED_RECORD_FILE's"
+    verify_prune_dry_run
+    say_inventory 'the restored Resource files' "$MANIFEST_SPEC"
+    say "Paired recovery verified: the restored database and Resource files are the backed-up state (recorded content, not only consistency), and the changed state is preserved and recoverable. Nothing was changed by this stage."
+}
 
 main() {
     local command="${1:-}"
@@ -4011,6 +4421,10 @@ main() {
         preserve-failed-state) shift; cmd_preserve_failed_state "$@" ;;
         verify-aside) shift; cmd_verify_aside "$@" ;;
         verify-zero-resources) shift; cmd_verify_zero_resources "$@" ;;
+        change-after-backup) shift; cmd_change_after_backup "$@" ;;
+        check-recovery-unit) shift; cmd_check_recovery_unit "$@" ;;
+        restore-paired) shift; cmd_restore_paired "$@" ;;
+        verify-recovery-unit) shift; cmd_verify_recovery_unit "$@" ;;
         help | -h | --help) usage ;;
         *) usage >&2; exit 64 ;;
     esac
