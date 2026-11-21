@@ -18,6 +18,8 @@ use Tests\Support\ResourceFileRefusal;
 //   verify-archive <rows>  the archive on standard input holds exactly these files, nothing else, and nothing outside `resources/`. Read-only.
 //   aside <stamp>          reads `resources`, renames it to `resources.before-restore-<stamp>`, reads the renamed directory and requires the two to be the
 //                          same (keys, sizes, SHA-256). Prints both inventories (`before:` and `after:` lines). Nothing is deleted.
+//   inspect-aside <stamp>  (WU3) reads `resources.before-restore-<stamp>` (a sibling of `resources`) and the active `resources` beside it. Read-only; prints
+//                          the aside's inventory (`aside:` lines) and the active one (`active:` lines).
 //   restore <rows>         the archive on standard input, verified first, extracted into a root with no `resources`; the result held to <rows>.
 //
 // <rows> is `none` (no resource_assets table), `empty`, or `key:bytes:sha256[,...]`. The root is a constant here: it is not an argument, and it
@@ -111,9 +113,9 @@ function run(array $args): void
     loadSupport();
     $action = $args[0] ?? '';
     $argument = $args[1] ?? '';
-    $needs = ['check' => 1, 'seed' => 0, 'archive' => 1, 'verify-archive' => 1, 'aside' => 1, 'restore' => 1];
+    $needs = ['check' => 1, 'seed' => 0, 'archive' => 1, 'verify-archive' => 1, 'aside' => 1, 'inspect-aside' => 1, 'restore' => 1];
     if (! isset($needs[$action]) || count($args) !== $needs[$action] + 1) {
-        fwrite(STDERR, "usage: files.php check <rows> | seed | archive <rows> | verify-archive <rows> | aside <stamp> | restore <rows>\n");
+        fwrite(STDERR, "usage: files.php check <rows> | seed | archive <rows> | verify-archive <rows> | aside <stamp> | inspect-aside <stamp> | restore <rows>\n");
         exit(64);
     }
     // The archive is only verified here, so it needs no volume; every other action needs the mount.
@@ -155,6 +157,13 @@ function run(array $args): void
             printInventory($aside['after'], 'after:'); // what the renamed directory holds
             echo 'aside:name='.$aside['name']."\n";
             echo "aside:complete=ok\n";
+            break;
+        case 'inspect-aside':
+            $inspected = ResourceFileArchive::inspectAside(FILES_ROOT, $argument);
+            printInventory($inspected['aside'], 'aside:'); // what the aside directory holds now
+            printInventory($inspected['active'], 'active:'); // what the active Resources directory beside it holds (absent after the aside of the historical restore)
+            echo 'aside:name='.$inspected['name']."\n";
+            echo "aside:inspected=ok\n";
             break;
         case 'restore':
             ResourceFileArchive::extract(archiveFromStdin(), FILES_ROOT, archiveRows($argument));

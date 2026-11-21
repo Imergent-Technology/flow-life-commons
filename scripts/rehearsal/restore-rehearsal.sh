@@ -38,6 +38,14 @@
 #                                     (slice 2.2C-3, WU4) from the UPGRADED database with its seeded Resource files: measure the 34 tables and the Resources
 #                                     directory, take the two-pass dump and the files archive, measure again, and bind both in recovery.manifest.json. Changes
 #                                     no database and no volume; its only writes are four files in the state directory, put in place last and never over a file
+#   restore-rehearsal.sh preserve-failed-state
+#                                     (2.2C-3, WU3) read-only on the database and the Resource files: measure, export the failed state (the fixed two-pass dump), measure
+#                                     again, and write failed-state.dump.sql then preserve.record into the state directory, never over a file. Evidence, not a rollback.
+#                                     restore-historical refuses to clear Resource records or files unless this record is intact and equals them (R-preserve)
+#   restore-rehearsal.sh verify-aside (2.2C-3, WU3) read-only: the directory aside-files moved aside is what aside.record and the preservation say, a sibling of the
+#                                     active Resources directory, which is absent; nothing is moved back
+#   restore-rehearsal.sh verify-zero-resources
+#                                     (2.2C-3, WU3) read-only: no resource_assets row and no active Resources directory (the historical zero-file state)
 #
 # WHAT THIS IS. A rehearsal environment for proving, with synthetic data on a local machine, that the organization can recover
 # v0.3.0 after an unsuccessful upgrade (docs/audits/g6/README.md, WP3c). Slice 1 is the isolated database server and the checks that
@@ -207,6 +215,11 @@ readonly HALF_FILE='halfmigrated.state'       # slice 2.2C-1: what `half-fail-up
 readonly CURRENT_DUMP_FILE='current.dump.sql'                # the two-pass dump of the 34-table database (the historical profile's is $DUMP_FILE)
 readonly RECOVERY_MANIFEST_FILE='recovery.manifest.json'      # the commit point of a paired backup: it exists only when the dump, the archive and both manifests were verified
 readonly RECOVERY_MANIFEST_VERSION=1
+readonly PRESERVE_DUMP_FILE='failed-state.dump.sql'           # slice 2.2C-3 (WU3): the export of the failed state: evidence, never a restore source
+readonly PRESERVE_RECORD_FILE='preserve.record'               # (WU3) the commit point of preserve-failed-state: what the failed state was, binding the export
+readonly PRESERVE_RECORD_VERSION='preserve-v1'
+readonly ASIDE_RECORD_FILE='aside.record'                     # (WU3) what aside-files measured when it renamed the Resources directory
+readonly ASIDE_RECORD_VERSION='aside-v1'
 readonly CURRENT_RELEASE_VERSION='unreleased'                 # the tree under test is a commit, not a tag: `release.json` is made by `./flow release build` and is not in a `git archive`
 readonly CURRENT_LEDGER_COUNT=29                              # the migrations of the current schema: v0.3.0's 15 and the 14 after; scripts/tests/rehearsal.sh pins both against the repository
 readonly CURRENT_LAST_MIGRATION='2026_10_11_000001_add_provenance_to_contact_methods'
@@ -283,7 +296,7 @@ readonly REVOKE_AFTER=$'11\t9\t0\t1\t1'
 EMPTY_DIGEST="$(printf '[]' | sha256sum | cut -c1-64)"
 readonly EMPTY_DIGEST
 # Every file this script writes into the state directory, and so every file `cleanup` may remove from it. Nothing else is ever removed.
-readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER" "$CURRENT_DUMP_FILE" "$RECOVERY_MANIFEST_FILE")
+readonly STATE_FILES=(compose.env run.lock "$ROOT_MARKER_NAME" "$PREPARED_FILE" "$SNAPSHOT_FILE" "$DUMP_FILE" "$MANIFEST_FILE" "$UPGRADED_FILE" "$HALF_FILE" "$FILES_ARCHIVE_FILE" "$FILES_MANIFEST_FILE" "$FILES_VOLUME_MARKER" "$CURRENT_DUMP_FILE" "$RECOVERY_MANIFEST_FILE" "$PRESERVE_DUMP_FILE" "$PRESERVE_RECORD_FILE" "$ASIDE_RECORD_FILE")
 readonly REFUSED_ENV_RE='^(COMPOSE_|DB_|MYSQL_|MARIADB_|PG|POSTGRES_|APP_|REHEARSAL_|FILES_)|^DATABASE_URL$'
 
 # The inspect templates. Every expression in them is one the scripts/tests/rehearsal.sh fake daemon understands (it refuses any other),
@@ -366,6 +379,15 @@ Usage: restore-rehearsal.sh <command>
   backup-paired From the upgraded database with its seeded Resource files only: measure the 34 tables and the Resources directory, take the
                 two-pass dump and the Resource-files archive, measure again, and bind the four files in one recovery.manifest.json. Nothing
                 is put in place unless every check passes, and nothing is overwritten. (Slice 2.2C-3, WU4.)
+  preserve-failed-state
+                From the 34-table database and its Resource files, read-only: measure them, export the failed state with the fixed two-pass dump, measure
+                again, and write failed-state.dump.sql and then preserve.record (the commit point) into the state directory, never over a file. Evidence only:
+                it is not a rollback and not a restore. restore-historical refuses to clear Resource records or files without it. (Slice 2.2C-3, WU3.)
+  verify-aside  Read-only. Hold the directory aside-files moved aside to aside.record and to the preservation: the same keys, sizes and SHA-256 values, a
+                sibling of the active Resources directory, which is absent. Nothing is moved back. (WU3.)
+  verify-zero-resources
+                Read-only. The restored historical state has no resource_assets row and no active Resources directory; the application's prune is not run.
+                (WU3.)
   cleanup       Remove exactly the objects this script created. --dry-run lists them and removes nothing. If anything
                 labelled is kept or cannot be removed, cleanup says what remains, keeps its state file and exits 1; run
                 it again once the cause is gone. --stale is needed only when the private state file is gone (the run
@@ -2742,6 +2764,7 @@ cmd_restore_historical() {
     local observed statement count revoked=0
     require_restore_start
     why="$(dump_matches_manifest "$ROOT/$DUMP_FILE" "$ROOT/$MANIFEST_FILE")" || refuse "the dump is not the one the manifest describes ($why). Nothing was changed." # guard:G17-dump-verified
+    require_failed_state_preserved # R-preserve (WU3): Resource records or files are cleared only after a failed-state preservation that equals them
     if [[ "$RESTORE_FROM" == partial ]]; then
         say "ok   every precondition holds: this run's sentinel and account, the verified backup and keyring, and the 32 plain tables, the 25 migrations, the stub and the recorded schema and security tables of a half-failed upgrade"
     else
@@ -2913,7 +2936,7 @@ cmd_revoke_after_backup() {
 files_action_policy() {
     FILES_RW='' FILES_STDIN=0
     case "$1" in
-        check | archive | verify-archive) FILES_RW=false ;;
+        check | archive | verify-archive | inspect-aside) FILES_RW=false ;;
         seed | aside | restore) FILES_RW=true ;;
         *) ;;
     esac
@@ -3290,6 +3313,7 @@ cmd_aside_files() {
     require_prepared_source
     local stamp out checked want reported=0 before_state before_spec after_state after_spec moved
     files_backup_required # guard:G22-aside-backup-required
+    [[ ! -e "$ROOT/$ASIDE_RECORD_FILE" && ! -L "$ROOT/$ASIDE_RECORD_FILE" ]] || refuse "$ASIDE_RECORD_FILE is already in the state directory, and evidence is never overwritten. Nothing was moved. Run cleanup and start again." # guard:G26-aside-record-no-overwrite
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
     [[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || refuse "the time of day did not come out as a UTC stamp ('${stamp:0:30}')." # guard:G22-aside-stamp
     arm_stage aside-files on_files_exit
@@ -3308,6 +3332,12 @@ cmd_aside_files() {
     say "ok   $FILES_STORE_DIR moved to $want (renamed; nothing deleted): $moved file(s), read before the rename and again after it, identical in every key, size and SHA-256; the Resources directory is now absent"
     say_inventory 'read immediately before the rename' "$before_spec"
     say_inventory 'read in the renamed directory' "$after_spec"
+    AR_TAKEN="$(date -u +%Y-%m-%dT%H:%M:%SZ)" AR_FP="$(token_fingerprint "$(state_token "$ROOT")")" AR_STAMP="$stamp" AR_NAME="$want" AR_PRESERVE=none AR_COUNT="$moved" AR_SPEC="$after_spec"
+    AR_INV_SHA="$(printf '%s' "$after_spec" | sha256sum | cut -c1-64)"
+    ! state_file_ok "$PRESERVE_RECORD_FILE" || AR_PRESERVE="$(sha256sum <"$ROOT/$PRESERVE_RECORD_FILE" | cut -c1-64)" # the preservation this aside belongs to, if one was made
+    write_state_file_once "$ASIDE_RECORD_FILE" "$(aside_record_text)"
+    aside_record_problem "$ROOT/$ASIDE_RECORD_FILE" || refuse "the aside record just written is not consistent: $AR_WHY. The moved directory $want was left exactly where it is; nothing was renamed back, removed or repaired." # guard:G26-aside-record-checked
+    say "ok   $ASIDE_RECORD_FILE records the measured aside: $moved file(s) by key, size and SHA-256, the stamp $stamp, and the preservation record it belongs to ($([[ "$AR_PRESERVE" == none ]] && echo none || echo "sha256 ${AR_PRESERVE:0:16}..."))"
 }
 
 # files_backup_required: the Resource-files backup an earlier stage took is present, this run's, consistent, and its archive (if it has one) is the one the
@@ -3367,13 +3397,22 @@ cmd_restore_files() {
 # MEAS_LEDGER (`<count> <last> <digest>`), DB_ROWS_SPEC and DB_ROWS_COUNT (files_db_rows), FILES_STATE, FILES_COUNT and FILES_SPEC (files_report). Every part must be
 # there and agree with the others, or it is a refusal: the two readers of the asset rows (the SQL client and the application's snapshot) must give one number.
 paired_measure() {
-    local checked out ledger_count ledger_last ledger_digest why assets
+    local checked assets
     files_db_rows
     [[ "$DB_ROWS_SPEC" != none && "$DB_ROWS_SPEC" != empty && "$DB_ROWS_COUNT" == "$FILES_SEED_COUNT" ]] || refuse "resource_assets does not hold the $FILES_SEED_COUNT synthetic asset rows seed-files writes, so there are no Resource-file records for a paired backup to bind. Nothing was changed." # guard:G25-paired-assets
     capture checked 'checking the Resources directory' run_files check "$DB_ROWS_SPEC"
     grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok." # guard:G25-paired-check-reported
     files_report "$checked"
     [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$DB_ROWS_SPEC" ]] || refuse "the Resources directory and the asset rows the database holds do not agree on every key, size and SHA-256. Nothing was changed." # guard:G25-paired-agree
+    measure_database
+    assets="$(awk '$1 == "resource_assets" { print $2 }' <<<"$MEAS_TABLES")"
+    [[ "$assets" == "$DB_ROWS_COUNT" ]] || refuse "the application's snapshot counts $assets resource_assets rows and the query for the asset rows $DB_ROWS_COUNT." # guard:G25-assets-two-readers
+}
+
+# measure_database: the application's own `snapshot-all` (WU4), validated: sets MEAS_TABLES (`<table> <rows> <digest>`), MEAS_STRUCT (`<table> <digest>`) and MEAS_LEDGER
+# (`<count> <last> <digest>`) for the 34 tables, and refuses an output that is incomplete, that names other keys than this run's, or whose ledger is not the current schema's.
+measure_database() {
+    local out ledger_count ledger_last ledger_digest why
     run_helper current helper:snapshot-all out
     grep -Fxq 'snapshot-all:complete=ok' <<<"$out" || refuse "the snapshot helper did not report snapshot-all:complete=ok: its output is incomplete, and an incomplete snapshot is refused, never read as smaller." # guard:G25-snapshot-all-reported
     capture MEAS_TABLES 'validating the current snapshot' all_table_lines "$out"
@@ -3384,8 +3423,6 @@ paired_measure() {
     [[ "$ledger_count" == "$CURRENT_LEDGER_COUNT" && "$ledger_last" == "$CURRENT_LAST_MIGRATION" && "$ledger_digest" =~ ^[0-9a-f]{64}$ ]] || refuse "the snapshot's migration ledger is not the $CURRENT_LEDGER_COUNT migrations of the current schema, ending at $CURRENT_LAST_MIGRATION." # guard:G25-ledger-evidence
     MEAS_LEDGER="$ledger_count $ledger_last $ledger_digest"
     why="$(keys_problem "$out")" || refuse "$why."
-    assets="$(awk '$1 == "resource_assets" { print $2 }' <<<"$MEAS_TABLES")"
-    [[ "$assets" == "$DB_ROWS_COUNT" ]] || refuse "the application's snapshot counts $assets resource_assets rows and the query for the asset rows $DB_ROWS_COUNT." # guard:G25-assets-two-readers
 }
 
 PAIRED_TMPS=()
@@ -3535,6 +3572,419 @@ cmd_backup_paired() {
 }
 
 
+# --- failed-state preservation, the aside record and their verification (slice 2.2C-3, WU3) --------------------------------------------------------------------------------
+
+# What this adds, and what it is not. `preserve-failed-state` keeps EVIDENCE of the database and the Resource files as they are before a restore: a full export of the 34 tables
+# (structure of all of them, rows of the 27 durable ones: the two-pass dump's contract), the application's own `snapshot-all` measurements, the asset rows and the Resources
+# directory's inventory, bound to this run. It reads the database and the files and changes neither; it is not a rollback, a restore or a backup. `restore-historical` then
+# refuses to clear a database that holds Resource asset rows or a Resources directory with files unless that record exists, is this run's, is intact, and equals what the
+# database and the directory are NOW (R-preserve). `aside-files` persists what it measured (aside.record), and `verify-aside` reads the aside back, read-only, and holds it
+# to that record and to the preservation record. Nothing here moves, deletes, restores or repairs a file or a row.
+
+# durable_lines TEXT: the lines of TEXT (whose first field is a table name) for the durable tables only; a transient table is measured with its rows but is not preserved.
+durable_lines() {
+    local line name
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        name="${line%% *}"
+        ! in_array "$name" "${TRANSIENT_TABLES[@]}" || continue
+        printf '%s\n' "$line"
+    done <<<"$1"
+}
+
+# state_measure: ONE measurement of the database and the Resource files as they are now, whatever the asset rows are (a restore may find none, or several): the rows the
+# database holds, the Resources directory held to them by the files container, and `snapshot-all`. Sets MEAS_TABLES, MEAS_STRUCT, MEAS_LEDGER (measure_database), DB_ROWS_SPEC,
+# DB_ROWS_COUNT, FILES_STATE, FILES_COUNT and FILES_SPEC. The rows and the files must agree on every key, size and SHA-256, or it is a refusal: a state in which they do not is
+# not one that can be preserved or compared. Needs the files volume (a files action has run) and the 34 tables.
+state_measure() {
+    local checked assets agrees=0
+    files_db_rows
+    capture checked 'checking the Resources directory' run_files check "$DB_ROWS_SPEC"
+    grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok." # guard:G26-measure-check-reported
+    files_report "$checked"
+    if [[ "$DB_ROWS_SPEC" == none || "$DB_ROWS_SPEC" == empty ]]; then
+        [[ "$FILES_COUNT" == 0 ]] && agrees=1
+    else
+        [[ "$FILES_STATE" == present && "$FILES_SPEC" == "$DB_ROWS_SPEC" ]] && agrees=1
+    fi
+    [[ $agrees == 1 ]] || refuse "the Resources directory and the asset rows the database holds do not agree on every key, size and SHA-256, so the state cannot be preserved or compared. Nothing was changed." # guard:G26-measure-agree
+    measure_database
+    assets="$(awk '$1 == "resource_assets" { print $2 }' <<<"$MEAS_TABLES")"
+    [[ "$assets" == "${DB_ROWS_COUNT:-0}" ]] || refuse "the application's snapshot counts $assets resource_assets rows and the query for the asset rows ${DB_ROWS_COUNT:-0}." # guard:G26-measure-two-readers
+}
+
+# --- the preservation record ----
+
+# preserve_record_text: the whole record, from the PR_* values: PR_TAKEN, PR_FP, PR_COMMIT, PR_SERVER, PR_CURRENT_FP, PR_PREVIOUS_FP, PR_RING_FP, PR_DUMP_SHA, PR_DUMP_BYTES, PR_LEDGER,
+# PR_STRUCT, PR_FILES_STATE, PR_FILES_COUNT, PR_ROWS_COUNT, PR_INV_SHA, PR_TABLES (`<table> <rows> <row digest> <structure digest>`), PR_FILES_SPEC and PR_ROWS_SPEC
+# (`key:bytes:sha256,...` or `empty`). One fact to a line, so that a changed, missing, repeated or reordered line is found. No key, password, token or row: fingerprints,
+# names, counts, sizes and digests. It is read back by preserve_record_problem, which requires the file to be exactly this text.
+preserve_record_text() {
+    local name rows row_sha struct_sha entry entries=() key bytes sha
+    printf '%s\n' "$PRESERVE_RECORD_VERSION"
+    printf 'taken_at=%s\nrun_token_fingerprint=%s\ncommit=%s\nserver_version=%s\n' "$PR_TAKEN" "$PR_FP" "$PR_COMMIT" "$PR_SERVER"
+    printf 'key_current=%s\nkey_previous=%s\nkeyring=%s\n' "$PR_CURRENT_FP" "$PR_PREVIOUS_FP" "$PR_RING_FP"
+    printf 'export_file=%s\nexport_sha256=%s\nexport_bytes=%s\n' "$PRESERVE_DUMP_FILE" "$PR_DUMP_SHA" "$PR_DUMP_BYTES"
+    printf 'ledger=%s\nstructure_sha256=%s\n' "$PR_LEDGER" "$PR_STRUCT"
+    printf 'resources_directory=%s\nresource_files=%s\nasset_rows=%s\ninventory_sha256=%s\n' "$PR_FILES_STATE" "$PR_FILES_COUNT" "$PR_ROWS_COUNT" "$PR_INV_SHA"
+    while read -r name rows row_sha struct_sha; do
+        [[ -n "$name" ]] || continue
+        printf 'table %s %s %s %s\n' "$name" "$rows" "$row_sha" "$struct_sha"
+    done <<<"$PR_TABLES"
+    if [[ "$PR_FILES_SPEC" != empty ]]; then
+        IFS=',' read -ra entries <<<"$PR_FILES_SPEC"
+        for entry in "${entries[@]}"; do IFS=: read -r key bytes sha <<<"$entry"; printf 'file %s %s %s\n' "$key" "$bytes" "$sha"; done
+    fi
+    if [[ "$PR_ROWS_SPEC" != empty ]]; then
+        IFS=',' read -ra entries <<<"$PR_ROWS_SPEC"
+        for entry in "${entries[@]}"; do IFS=: read -r key bytes sha <<<"$entry"; printf 'row %s %s %s\n' "$key" "$bytes" "$sha"; done
+    fi
+    printf 'preserve:complete\n'
+}
+
+# preserve_record_problem RECORD EXPORT: the record is this run's and intact, and the export it names is the file it says, or the reason it is not, in PR_WHY (this runs in the
+# caller's shell and sets the PR_* values, so it is not called inside a command substitution). What it establishes, and what it does not:
+#   ARTIFACT INTEGRITY: the export is the file the record names, by SHA-256 and size; the record is this run's (the run token's fingerprint), for the commit the source volume was
+#     prepared from and for the keys this run generated, and is exactly the text this script writes.
+#   STRUCTURAL CONSISTENCY: the export is made only of the line forms current_dump_problem accepts, creates and drops exactly the 34 tables, and holds as many row lines for each
+#     durable table as the record says the database held; the record's own facts agree with each other (the 34 tables, the structure aggregate, the ledger, the files and the asset rows).
+#   NOT ESTABLISHED: that the export's rows are the rows the recorded digests were taken of (no digest is derived from the export), or that the record is the database's NOW: the
+#     second is what preserve_state_differences measures, when a destructive restore asks.
+preserve_record_problem() {
+    local file="$1" dumpfile="$2" line n=0 first='' name rows row_sha struct_sha key bytes sha extra previous='' table_text='' files_spec='' rows_spec='' files_n=0 rows_n=0 value
+    local -A seen=()
+    PR_WHY='' PR_TAKEN='' PR_FP='' PR_COMMIT='' PR_SERVER='' PR_CURRENT_FP='' PR_PREVIOUS_FP='' PR_RING_FP='' PR_DUMP_SHA='' PR_DUMP_BYTES='' PR_LEDGER='' PR_STRUCT=''
+    PR_FILES_STATE='' PR_FILES_COUNT='' PR_ROWS_COUNT='' PR_INV_SHA='' PR_TABLES='' PR_FILES_SPEC='' PR_ROWS_SPEC=''
+    while IFS= read -r line; do
+        n=$((n + 1))
+        case "$line" in
+            preserve-v1) first="$line" ;;
+            taken_at=*) PR_TAKEN="${line#taken_at=}" ;;
+            run_token_fingerprint=*) PR_FP="${line#run_token_fingerprint=}" ;;
+            commit=*) PR_COMMIT="${line#commit=}" ;;
+            server_version=*) PR_SERVER="${line#server_version=}" ;;
+            key_current=*) PR_CURRENT_FP="${line#key_current=}" ;;
+            key_previous=*) PR_PREVIOUS_FP="${line#key_previous=}" ;;
+            keyring=*) PR_RING_FP="${line#keyring=}" ;;
+            export_sha256=*) PR_DUMP_SHA="${line#export_sha256=}" ;;
+            export_bytes=*) PR_DUMP_BYTES="${line#export_bytes=}" ;;
+            ledger=*) PR_LEDGER="${line#ledger=}" ;;
+            structure_sha256=*) PR_STRUCT="${line#structure_sha256=}" ;;
+            resources_directory=*) PR_FILES_STATE="${line#resources_directory=}" ;;
+            resource_files=*) PR_FILES_COUNT="${line#resource_files=}" ;;
+            asset_rows=*) PR_ROWS_COUNT="${line#asset_rows=}" ;;
+            inventory_sha256=*) PR_INV_SHA="${line#inventory_sha256=}" ;;
+            'table '*)
+                IFS=' ' read -r _ name rows row_sha struct_sha extra <<<"$line"
+                [[ -z "$extra" && "$name" =~ ^[a-z0-9_]+$ && "$rows" =~ ^(0|[1-9][0-9]{0,11})$ && "$row_sha" =~ ^[0-9a-f]{64}$ && "$struct_sha" =~ ^[0-9a-f]{64}$ ]] || { PR_WHY="a table line is malformed"; return 1; }
+                table_text+="$name $rows $row_sha $struct_sha"$'\n'
+                ;;
+            'file '* | 'row '*)
+                IFS=' ' read -r value key bytes sha extra <<<"$line"
+                [[ -z "$extra" && "$key" =~ $KEY_RE && "$bytes" =~ ^(0|[1-9][0-9]{0,11})$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || { PR_WHY="a $value line is not a Resources storage key, a size and a SHA-256"; return 1; }
+                if [[ "$value" == file ]]; then
+                    [[ -z "${seen[f$key]:-}" ]] || { PR_WHY="a file is listed twice"; return 1; }
+                    seen[f$key]=1 files_n=$((files_n + 1)) files_spec+="${files_spec:+,}$key:$bytes:$sha"
+                else
+                    [[ -z "${seen[r$key]:-}" ]] || { PR_WHY="an asset row is listed twice"; return 1; }
+                    seen[r$key]=1 rows_n=$((rows_n + 1)) rows_spec+="${rows_spec:+,}$key:$bytes:$sha"
+                fi
+                ;;
+            export_file=* | preserve:complete) ;;
+            *) PR_WHY="line $n is not one this script writes"; return 1 ;;
+        esac
+    done <"$file"
+    PR_TABLES="${table_text%$'\n'}" PR_FILES_SPEC="${files_spec:-empty}" PR_ROWS_SPEC="${rows_spec:-empty}"
+    [[ "$first" == "$PRESERVE_RECORD_VERSION" && "$(head -n 1 "$file")" == "$PRESERVE_RECORD_VERSION" ]] || { PR_WHY="its version is not $PRESERVE_RECORD_VERSION"; return 1; }
+    [[ "$PR_FP" == "$(token_fingerprint "$(state_token "$ROOT")")" ]] || { PR_WHY="it is not this run's (its run token fingerprint differs)"; return 1; } # guard:G26-pr-run
+    [[ "$PR_TAKEN" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { PR_WHY="its taken_at is not a UTC time"; return 1; } # guard:G26-pr-taken
+    [[ "$PR_COMMIT" =~ ^[0-9a-f]{40}$ && "$PR_COMMIT" == "$(sed -n 's/^current=//p' "$ROOT/$PREPARED_FILE")" ]] || { PR_WHY="it is not for the current commit the source volume was prepared from"; return 1; } # guard:G26-pr-source
+    [[ "$PR_SERVER" =~ $SERVER_VERSION_RE ]] || { PR_WHY="its server is not the rehearsal's MariaDB 10.11.18"; return 1; } # guard:G26-pr-server
+    [[ "$PR_CURRENT_FP" == "$CURRENT_FP" && "$PR_PREVIOUS_FP" == "$PREVIOUS_FP" && "$PR_RING_FP" == "$RING_FP" ]] || { PR_WHY="its keyring is not the keys this run generated (the fingerprints differ)"; return 1; } # guard:G26-pr-keyring
+    [[ "$(sed -n 's/^export_file=//p' "$file")" == "$PRESERVE_DUMP_FILE" ]] || { PR_WHY="its export is not $PRESERVE_DUMP_FILE"; return 1; }
+    [[ "$PR_DUMP_SHA" =~ ^[0-9a-f]{64}$ && "$PR_DUMP_BYTES" =~ ^[1-9][0-9]{0,11}$ ]] || { PR_WHY="its export checksum or size is malformed"; return 1; }
+    [[ "$(sha256sum <"$dumpfile" | cut -c1-64)" == "$PR_DUMP_SHA" ]] || { PR_WHY="the export's SHA-256 is not the record's"; return 1; } # guard:G26-pr-export-sha
+    [[ "$(wc -c <"$dumpfile" | tr -d ' ')" == "$PR_DUMP_BYTES" ]] || { PR_WHY="the export's size is not the record's"; return 1; } # guard:G26-pr-export-bytes
+    [[ "$(cut -d' ' -f1 <<<"$PR_TABLES")" == "$(upgraded_inventory)" ]] || { PR_WHY="its table list is not exactly the 34 tables of the current schema, in order"; return 1; } # guard:G26-pr-tables
+    [[ "$PR_STRUCT" == "$(structure_aggregate "$PR_TABLES")" ]] || { PR_WHY="its structure digest is not that of the structure digests it lists"; return 1; } # guard:G26-pr-structure
+    [[ "$PR_LEDGER" =~ ^"$CURRENT_LEDGER_COUNT"\ "$CURRENT_LAST_MIGRATION"\ [0-9a-f]{64}$ ]] || { PR_WHY="its migration ledger is not the current schema's $CURRENT_LEDGER_COUNT migrations ending at $CURRENT_LAST_MIGRATION"; return 1; } # guard:G26-pr-ledger
+    [[ "$PR_FILES_STATE" == present || ( "$PR_FILES_STATE" == absent && "$files_n" == 0 ) ]] || { PR_WHY="its Resources directory is neither present nor absent, or is absent and lists files"; return 1; } # guard:G26-pr-files-state
+    [[ "$PR_FILES_SPEC" == "$PR_ROWS_SPEC" && "$PR_FILES_COUNT" == "$files_n" && "$PR_ROWS_COUNT" == "$rows_n" ]] || { PR_WHY="its Resource files, its asset rows and their counts do not agree with one another"; return 1; } # guard:G26-pr-files-agree
+    [[ "$PR_INV_SHA" == "$(printf '%s' "$PR_FILES_SPEC" | sha256sum | cut -c1-64)" ]] || { PR_WHY="its inventory digest is not that of the files it lists"; return 1; } # guard:G26-pr-inventory
+    [[ "$(awk '$1 == "resource_assets" { print $2 }' <<<"$PR_TABLES")" == "$rows_n" ]] || { PR_WHY="the asset rows it lists are not the number of resource_assets rows it records"; return 1; } # guard:G26-pr-assets-table
+    value="$(current_dump_problem "$dumpfile" "$(awk '{ print $1 " " $2 " " $3 }' <<<"$PR_TABLES")")" || { PR_WHY="the export is not consistent with the record (its statement forms, table inventory or row counts): $value"; return 1; } # guard:G26-pr-export-content
+    [[ "$(<"$file")" == "$(preserve_record_text)" ]] || { PR_WHY="it is not exactly what this script writes (an extra, missing or reordered line)"; return 1; } # guard:G26-pr-exact
+    return 0
+}
+
+# require_preserve_record: the failed-state preservation an earlier stage made is present, complete, this run's and intact (preserve_record_problem), or nothing may rely on it.
+# The record is the commit point: an export without it is not a preservation, whatever it holds. Sets the PR_* values.
+require_preserve_record() {
+    load_keyring
+    { state_file_ok "$PRESERVE_RECORD_FILE" && state_file_ok "$PRESERVE_DUMP_FILE"; } || refuse "there is no complete failed-state preservation in the state directory ($PRESERVE_RECORD_FILE and $PRESERVE_DUMP_FILE, private files of this script's). Run: restore-rehearsal.sh preserve-failed-state. Nothing was changed." # guard:G26-preserve-required
+    preserve_record_problem "$ROOT/$PRESERVE_RECORD_FILE" "$ROOT/$PRESERVE_DUMP_FILE" || refuse "the failed-state preservation record cannot be relied on: $PR_WHY. Nothing was changed." # guard:G26-preserve-intact
+}
+
+# preserve_state_differences: what the database and the Resource files are NOW (state_measure's values) compared with what the record holds, as the names of what differs: the
+# durable tables' rows and digests, every table's structure, the ledger, the Resources directory's inventory and the asset rows. Transient tables are not compared: their rows are
+# not preserved (the export holds their structure only) and a session or a cache entry changes them without any change to what matters. Needs require_preserve_record and state_measure.
+preserve_state_differences() {
+    local out=''
+    out+="$(digest_differences "$(durable_lines "$PR_TABLES")" "$(durable_lines "$MEAS_TABLES")")"$'\n' # guard:G26-differ-durable
+    out+="$(digest_differences "$(awk '{ print $1 " " $4 }' <<<"$PR_TABLES")" "$MEAS_STRUCT")"$'\n' # guard:G26-differ-structure
+    [[ "$PR_LEDGER" == "$MEAS_LEDGER" ]] || out+="ledger"$'\n' # guard:G26-differ-ledger
+    [[ "$PR_FILES_STATE" == "$FILES_STATE" && "$PR_FILES_SPEC" == "$FILES_SPEC" ]] || out+="resource-files"$'\n' # guard:G26-differ-files
+    [[ "$PR_ROWS_SPEC" == "${DB_ROWS_SPEC}" ]] || out+="resource-asset-rows"$'\n' # guard:G26-differ-rows
+    printf '%s' "$out" | grep -v '^$' | LC_ALL=C sort -u || true
+}
+
+# --- preserve-failed-state ----
+
+# preserve_partial_note: what is true of the state directory when the stage stops, told from the files themselves: a name is this stage's own only if it is the very file the
+# stage linked from its temporary one (the same inode), so a file that appeared under the name by another hand is never counted, and a signal between a link and the next line does not
+# hide a file the stage did put in place. The record is last. Nothing is removed, renamed back or repaired.
+PRESERVE_DUMP_TMP='' PRESERVE_RECORD_TMP=''
+preserve_partial_note() {
+    local dump=no record=no other=''
+    [[ -z "$PRESERVE_DUMP_TMP" || ! "$ROOT/$PRESERVE_DUMP_FILE" -ef "$PRESERVE_DUMP_TMP" ]] || dump=yes
+    [[ -z "$PRESERVE_RECORD_TMP" || ! "$ROOT/$PRESERVE_RECORD_FILE" -ef "$PRESERVE_RECORD_TMP" ]] || record=yes
+    if [[ "$record" == no && ( -e "$ROOT/$PRESERVE_RECORD_FILE" || -L "$ROOT/$PRESERVE_RECORD_FILE" ) ]]; then other=" A file named $PRESERVE_RECORD_FILE is in the state directory that this stage did not write, and it is not part of this preservation."; fi
+    if [[ "$record" == yes ]]; then
+        printf '%s and %s were put in place (%s last) and the stage failed after that. They may be a preservation and may not: only require_preserve_record accepting them makes them one, and nothing may rely on them until it does. Nothing was removed or repaired.' "$PRESERVE_DUMP_FILE" "$PRESERVE_RECORD_FILE" "$PRESERVE_RECORD_FILE"
+    elif [[ "$dump" == yes ]]; then
+        printf '%s was put in place and %s was not written, so it is NOT a failed-state preservation, whatever it holds. Nothing was removed or repaired.%s' "$PRESERVE_DUMP_FILE" "$PRESERVE_RECORD_FILE" "$other"
+    else
+        printf 'Nothing of the failed-state preservation was put in place.%s' "$other"
+    fi
+}
+on_preserve_exit() {
+    local status=$? tmp note=''
+    if ((status != 0)); then note="$(preserve_partial_note)"; fi # before the temporary files go: it compares them with the names that were linked from them
+    for tmp in ${PAIRED_TMPS[@]+"${PAIRED_TMPS[@]}"}; do rm -f -- "$tmp"; done
+    if ((status != 0)); then
+        stage_trailer 'The rehearsal files'
+        warn "$note"
+    fi
+    stage_record_remove
+}
+
+# preserve-failed-state: from the database as it is (34 tables) and its Resource files, measure, export, measure again, and put the evidence in the state directory: the export
+# first, the record last (the commit point), neither over a file that is there. It reads the database and the files and changes neither: the export is the existing guarded
+# two-pass dump (take_dump, as the application account, fixed options), judged by current_dump_problem against the first measurement, so a failed or incomplete export is a
+# refusal; the measurements are `snapshot-all` and the files container's read-only `check`. It is evidence, not a rollback, and nothing reads the export back as a restore source.
+cmd_preserve_failed_state() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local name dump_tmp rec_tmp verified changed m1_tables m1_struct m1_ledger m1_spec m1_rows_spec m1_state m1_count m1_rows
+    for name in "$PRESERVE_DUMP_FILE" "$PRESERVE_RECORD_FILE"; do
+        [[ ! -e "$ROOT/$name" && ! -L "$ROOT/$name" ]] || refuse "'$name' is already in the state directory, and evidence of the failed state is never overwritten. The rehearsal is disposable: run cleanup, then start again." # guard:G26-preserve-no-overwrite
+    done
+    require_inventory "$(upgraded_inventory)" 'the 34 tables of the current schema (a failed state is preserved from the 34-table database)' # guard:G26-preserve-inventory
+    load_keyring
+    arm_stage preserve-failed-state on_preserve_exit
+    say "Measuring the database and the Resources directory, before anything is taken ..."
+    state_measure
+    m1_tables="$MEAS_TABLES" m1_struct="$MEAS_STRUCT" m1_ledger="$MEAS_LEDGER" m1_spec="$FILES_SPEC" m1_rows_spec="$DB_ROWS_SPEC" m1_state="$FILES_STATE" m1_count="$FILES_COUNT" m1_rows="${DB_ROWS_COUNT:-0}"
+    say "ok   34 tables, $m1_count Resource file(s) held to $m1_rows asset row(s), and a ledger of $CURRENT_LEDGER_COUNT migrations: measured"
+
+    say "Exporting the failed state as the application account (the two-pass dump of the 34 tables) ..."
+    paired_temp dump_tmp
+    PRESERVE_DUMP_TMP="$dump_tmp"
+    take_dump "$dump_tmp" || exit 1
+    verified="$(current_dump_problem "$dump_tmp" "$(awk '{ print $1 " " $2 " " $3 }' <<<"$m1_tables")")" || refuse "the export is not what the dump contract requires: $verified. It was removed." # guard:G26-preserve-export-checked
+    capture PR_SERVER 'reading the server version' server_version_text "$CID"
+    [[ "$PR_SERVER" =~ $SERVER_VERSION_RE ]] || refuse "the server reports version '$PR_SERVER', not 10.11.18."
+    PR_DUMP_SHA="$(sha256sum <"$dump_tmp" | cut -c1-64)" PR_DUMP_BYTES="$(wc -c <"$dump_tmp" | tr -d ' ')"
+
+    say "Measuring again, now that the export is taken ..."
+    state_measure
+    changed="$(digest_differences "$m1_tables" "$MEAS_TABLES")"
+    [[ "$m1_struct" == "$MEAS_STRUCT" ]] || changed+=" structure"
+    [[ "$m1_ledger" == "$MEAS_LEDGER" ]] || changed+=" ledger"
+    [[ "$m1_spec" == "$FILES_SPEC" && "$m1_rows_spec" == "$DB_ROWS_SPEC" && "$m1_state" == "$FILES_STATE" ]] || changed+=" resource-files"
+    [[ -z "${changed// /}" ]] || refuse "the database or the Resources directory changed while the failed state was being exported (changed: $(tr '\n' ' ' <<<"$changed")). Nothing was put in place; the export is removed, and what was exported is not the state it was measured as." # guard:G26-preserve-quiescent
+    say "ok   measured again afterwards: every table's rows and structure, the ledger, every Resource file and every asset row are exactly as before"
+
+    PR_TAKEN="$(date -u +%Y-%m-%dT%H:%M:%SZ)" PR_FP="$(token_fingerprint "$(state_token "$ROOT")")" PR_COMMIT="$(sed -n 's/^current=//p' "$ROOT/$PREPARED_FILE")"
+    PR_CURRENT_FP="$CURRENT_FP" PR_PREVIOUS_FP="$PREVIOUS_FP" PR_RING_FP="$RING_FP"
+    PR_LEDGER="$m1_ledger" PR_TABLES="$(join_tables "$m1_tables" "$m1_struct")"
+    PR_STRUCT="$(structure_aggregate "$PR_TABLES")" PR_FILES_STATE="$m1_state" PR_FILES_COUNT="$m1_count" PR_ROWS_COUNT="$m1_rows" PR_FILES_SPEC="$m1_spec" PR_ROWS_SPEC="$m1_rows_spec"
+    PR_INV_SHA="$(printf '%s' "$m1_spec" | sha256sum | cut -c1-64)"
+    paired_temp rec_tmp
+    PRESERVE_RECORD_TMP="$rec_tmp"
+    printf '%s\n' "$(preserve_record_text)" >"$rec_tmp"
+    preserve_record_problem "$rec_tmp" "$dump_tmp" || refuse "the record just made is not consistent: $PR_WHY. Nothing was put in place." # guard:G26-preserve-record-checked
+
+    preserve_commit "$dump_tmp" "$PRESERVE_DUMP_FILE"
+    preserve_commit "$rec_tmp" "$PRESERVE_RECORD_FILE" # the commit point
+    require_preserve_record
+    say "ok   the export has the 34 tables' structure and the 27 durable tables' rows: $PR_DUMP_BYTES bytes, sha256 ${PR_DUMP_SHA:0:16}..., the line forms and counts checked as a backup's dump is"
+    say "ok   $PRESERVE_RECORD_FILE binds the export by SHA-256 and size, and records the 34 tables' rows and structure, the ledger, the $m1_count Resource file(s) and $m1_rows asset row(s) (key, size, SHA-256), and this run's token fingerprint, commit and keyring fingerprints"
+    say_inventory 'the Resource files preserved' "$m1_spec"
+    say "Failed state preserved (evidence only: not a rollback and not a restore). Nothing in the database or the Resources directory was changed. Next: restore-rehearsal.sh restore-historical"
+}
+
+# preserve_commit TEMP NAME: the finished temporary file under its final name, by a hard link that fails if the name is taken, so that evidence is never put over a file.
+preserve_commit() {
+    ln -- "$1" "$ROOT/$2" 2>/dev/null || refuse "$2 is in the state directory already, and evidence is never put over a file. $(preserve_partial_note)" # guard:G26-preserve-commit-no-clobber
+}
+
+# --- R-preserve: the gate in front of the destructive restore ----
+
+# require_failed_state_preserved: called by restore-historical BEFORE it clears anything. It is decided by what is OBSERVED, never by a flag: if the database has resource_assets
+# rows, or the files volume holds a Resources directory with files, the clear is refused unless a preservation record exists, is intact (require_preserve_record) and equals the
+# database and the files as they are now (preserve_state_differences). With no asset row and no file (every earlier scenario) nothing is required and no record is made.
+require_failed_state_preserved() {
+    local checked differs needed volume_listing
+    files_db_rows
+    FILES_COUNT=0
+    if [[ -e "$ROOT/$FILES_VOLUME_MARKER" || -L "$ROOT/$FILES_VOLUME_MARKER" ]]; then
+        capture checked 'reading the Resources directory' run_files check "$DB_ROWS_SPEC"
+        grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok. Nothing was changed." # guard:G26-gate-check-reported
+        files_report "$checked"
+    else # no record of the volume is "nothing was ever made" only if the daemon agrees: a volume of the rehearsal's name that exists without its record is never assumed empty
+        capture volume_listing 'looking for the files volume' dkr volume ls --filter "name=$FILES_VOLUME_NAME" --format '{{.Name}}'
+        ! in_list "$FILES_VOLUME_NAME" "$volume_listing" || refuse "the files volume $FILES_VOLUME_NAME exists, but the state directory has no record that this run established it, so whether it holds Resource files cannot be told. Nothing was changed. Run cleanup and start again." # guard:G26-gate-volume-unrecorded
+    fi
+    needed=yes
+    { [[ "$DB_ROWS_SPEC" == none || "$DB_ROWS_SPEC" == empty ]] && ((FILES_COUNT == 0)); } && needed=no # guard:G26-gate-needed
+    if [[ "$needed" == no ]]; then
+        say "ok   no resource_assets row and no Resource file: there is nothing of the Resources to preserve before the clear"
+        return 0
+    fi
+    say "The database holds Resource records or the Resources directory holds files: the failed state must be preserved first ..."
+    require_preserve_record
+    state_measure
+    differs="$(preserve_state_differences)"
+    [[ -z "$differs" ]] || refuse "the failed-state preservation record does not describe the state that is about to be cleared (differs: $(tr '\n' ' ' <<<"$differs")). The database and the Resource files changed after they were preserved, so the preservation is stale. Run cleanup and start again; nothing was changed." # guard:G26-gate-matches
+    say "ok   a failed-state preservation record exists, is this run's and intact, and equals the database (every durable table's rows and digest, every structure, the ledger) and the $FILES_COUNT Resource file(s) and asset row(s) as they are now"
+}
+
+# --- the aside record, verify-aside, and the zero-state check ----
+
+# write_state_file_once NAME CONTENT: a private file that was not there, put in place by a hard link that fails if the name is taken: evidence is never written over a file.
+write_state_file_once() {
+    local name="$1" content="$2" tmp
+    mutation_begins
+    tmp="$(umask 077 && mktemp -- "$ROOT/.${name}.XXXXXX")"
+    (
+        umask 077
+        printf '%s\n' "$content" >"$tmp"
+    )
+    chmod 600 -- "$tmp"
+    ln -- "$tmp" "$ROOT/$name" 2>/dev/null || { rm -f -- "$tmp"; refuse "$name is in the state directory already, and evidence is never written over a file."; } # guard:G26-evidence-no-clobber
+    rm -f -- "$tmp"
+}
+
+# aside_record_text: the record `aside-files` persists, from the AR_* values (AR_TAKEN, AR_FP, AR_STAMP, AR_NAME, AR_PRESERVE, AR_COUNT, AR_INV_SHA, AR_SPEC): what the helper
+# measured when it renamed the Resources directory (the keys, sizes and SHA-256 values of the renamed directory, identical to those read just before the rename), under which
+# validated stamp and name, and the SHA-256 of the preservation record that was in the state directory at the time (`none` if there was none). One fact to a line.
+aside_record_text() {
+    local entry entries=() key bytes sha
+    printf '%s\n' "$ASIDE_RECORD_VERSION"
+    printf 'taken_at=%s\nrun_token_fingerprint=%s\nstamp=%s\naside_name=%s\npreserve_record_sha256=%s\naside_files=%s\ninventory_sha256=%s\n' "$AR_TAKEN" "$AR_FP" "$AR_STAMP" "$AR_NAME" "$AR_PRESERVE" "$AR_COUNT" "$AR_INV_SHA"
+    if [[ "$AR_SPEC" != empty ]]; then
+        IFS=',' read -ra entries <<<"$AR_SPEC"
+        for entry in "${entries[@]}"; do IFS=: read -r key bytes sha <<<"$entry"; printf 'file %s %s %s\n' "$key" "$bytes" "$sha"; done
+    fi
+    printf 'aside:complete\n'
+}
+
+# aside_record_problem RECORD: the record is this run's, names the fixed aside (the prefix and a validated stamp, a sibling of the Resources directory: no path, no slash), and is
+# internally consistent; the reason in AR_WHY, and the AR_* values set (called in the caller's shell). It establishes nothing about the directory: verify-aside measures that.
+aside_record_problem() {
+    local file="$1" line n=0 first='' key bytes sha extra spec='' files_n=0 previous=''
+    AR_WHY='' AR_TAKEN='' AR_FP='' AR_STAMP='' AR_NAME='' AR_PRESERVE='' AR_COUNT='' AR_INV_SHA='' AR_SPEC=''
+    while IFS= read -r line; do
+        n=$((n + 1))
+        case "$line" in
+            aside-v1) first="$line" ;;
+            taken_at=*) AR_TAKEN="${line#taken_at=}" ;;
+            run_token_fingerprint=*) AR_FP="${line#run_token_fingerprint=}" ;;
+            stamp=*) AR_STAMP="${line#stamp=}" ;;
+            aside_name=*) AR_NAME="${line#aside_name=}" ;;
+            preserve_record_sha256=*) AR_PRESERVE="${line#preserve_record_sha256=}" ;;
+            aside_files=*) AR_COUNT="${line#aside_files=}" ;;
+            inventory_sha256=*) AR_INV_SHA="${line#inventory_sha256=}" ;;
+            'file '*)
+                IFS=' ' read -r _ key bytes sha extra <<<"$line"
+                [[ -z "$extra" && "$key" =~ $KEY_RE && "$bytes" =~ ^(0|[1-9][0-9]{0,11})$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || { AR_WHY="a file line is not a Resources storage key, a size and a SHA-256"; return 1; }
+                [[ -z "$previous" || "$key" > "$previous" ]] || { AR_WHY="a key is out of order or listed twice"; return 1; }
+                previous="$key" files_n=$((files_n + 1)) spec+="${spec:+,}$key:$bytes:$sha"
+                ;;
+            aside:complete) ;;
+            *) AR_WHY="line $n is not one this script writes"; return 1 ;;
+        esac
+    done <"$file"
+    AR_SPEC="${spec:-empty}"
+    [[ "$first" == "$ASIDE_RECORD_VERSION" && "$(head -n 1 "$file")" == "$ASIDE_RECORD_VERSION" ]] || { AR_WHY="its version is not $ASIDE_RECORD_VERSION"; return 1; }
+    [[ "$AR_FP" == "$(token_fingerprint "$(state_token "$ROOT")")" ]] || { AR_WHY="it is not this run's (its run token fingerprint differs)"; return 1; } # guard:G26-ar-run
+    [[ "$AR_TAKEN" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { AR_WHY="its taken_at is not a UTC time"; return 1; }
+    [[ "$AR_STAMP" =~ ^[0-9]{8}T[0-9]{6}Z$ && "$AR_NAME" == "$FILES_STORE_DIR.before-restore-$AR_STAMP" ]] || { AR_WHY="its aside is not the fixed name (resources.before-restore- and a UTC stamp, a sibling of the Resources directory)"; return 1; } # guard:G26-ar-name
+    [[ "$AR_PRESERVE" == none || "$AR_PRESERVE" =~ ^[0-9a-f]{64}$ ]] || { AR_WHY="its preservation identity is neither a SHA-256 nor none"; return 1; } # guard:G26-ar-preserve
+    [[ "$AR_COUNT" == "$files_n" && "$AR_INV_SHA" == "$(printf '%s' "$AR_SPEC" | sha256sum | cut -c1-64)" ]] || { AR_WHY="its count or inventory digest is not that of the files it lists"; return 1; } # guard:G26-ar-inventory
+    [[ "$(<"$file")" == "$(aside_record_text)" ]] || { AR_WHY="it is not exactly what this script writes (an extra, missing or reordered line)"; return 1; } # guard:G26-ar-exact
+    return 0
+}
+
+# verify-aside: READ-ONLY. The Resources directory that `aside-files` moved aside is where the record says, is exactly what the record and the failed-state preservation say it is,
+# and the active Resources directory is absent (the historical zero-file restoration extracted nothing). It reads the preservation record, the aside record and the Resource-files
+# backup's manifest, and the aside through the files container's `inspect-aside` (read-only mount; the name is built from the validated stamp, a sibling of `resources`, so it is
+# outside the application's Resources disk and its prune cannot see it); it changes nothing and moves nothing back.
+#
+# "Recoverable", precisely: the preserved Resource files (the aside directory) and the saved database evidence (the preservation record's asset rows and the export) are a
+# CONSISTENT PAIR of the failed state, read from the disk now: every key, size and SHA-256 of the aside is the aside record's, the preservation's file inventory and its asset rows;
+# no file is missing, extra or changed. It does not say that anything was restored, and nothing here puts the files back: that is a later, separate decision.
+cmd_verify_aside() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local inspected want aside_state aside_spec aside_count active_state
+    require_preserve_record
+    state_file_ok "$ASIDE_RECORD_FILE" || refuse "there is no aside record in the state directory (aside-files has not finished), or it is not a private file of this script's. Nothing was changed." # guard:G26-aside-record-required
+    aside_record_problem "$ROOT/$ASIDE_RECORD_FILE" || refuse "the aside record cannot be relied on: $AR_WHY. Nothing was changed." # guard:G26-aside-record-intact
+    [[ "$AR_PRESERVE" == "$(sha256sum <"$ROOT/$PRESERVE_RECORD_FILE" | cut -c1-64)" ]] || refuse "the aside record was made against another preservation record (or against none) than the one in the state directory. Nothing was changed." # guard:G26-verify-binds-preserve
+    files_backup_required
+    [[ "$FILES_MANIFEST_STATE" == absent ]] || refuse "the Resource-files backup holds files, so a restore extracts them again and the active Resources directory is not absent: this verification is of the historical zero-file restoration. Nothing was changed." # guard:G26-verify-zero-file
+    capture inspected 'reading the aside directory' run_files inspect-aside "$AR_STAMP"
+    want="$FILES_STORE_DIR.before-restore-$AR_STAMP"
+    { [[ "$(grep -c '^aside:name=' <<<"$inspected" || true)" == 1 ]] && grep -Fxq "aside:name=$want" <<<"$inspected" && grep -Fxq 'aside:inspected=ok' <<<"$inspected"; } || refuse "the files helper did not report reading $want. Nothing was changed." # guard:G26-verify-reported
+    files_report "$inspected" aside:
+    aside_state="$FILES_STATE" aside_spec="$FILES_SPEC" aside_count="$FILES_COUNT"
+    files_report "$inspected" active:
+    active_state="$FILES_STATE"
+    [[ "$aside_state" == present ]] || refuse "the aside directory $want is not there. Nothing was changed." # guard:G26-verify-aside-present
+    [[ "$active_state" == absent ]] || refuse "the active Resources directory exists. In the historical zero-file restoration it must be absent; it is not touched here. Nothing was changed." # guard:G26-verify-active-absent
+    [[ "$aside_spec" == "$AR_SPEC" ]] || refuse "the aside directory is not what aside.record says it is (a file is missing, extra, changed, or another size). Nothing was changed." # guard:G26-verify-aside-record
+    [[ "$aside_spec" == "$PR_FILES_SPEC" && "$aside_spec" == "$PR_ROWS_SPEC" ]] || refuse "the aside directory is not the failed state's preserved Resource files and asset rows (a file is missing, extra, changed, or another size). Nothing was changed." # guard:G26-verify-aside-preserved
+    say "ok   $want is a sibling of the active Resources directory (outside the application's Resources disk), the active Resources directory is absent, and nothing was moved or changed"
+    say "ok   the aside holds $aside_count file(s): every key, size and SHA-256 is the one aside.record holds, the one the failed-state preservation holds for the Resource files, and the one it holds for the asset rows"
+    say_inventory 'the preserved Resource files, as read now' "$aside_spec"
+    say "Recoverable: the preserved Resource files and the saved database evidence ($PRESERVE_RECORD_FILE, $PRESERVE_DUMP_FILE) are a consistent pair of the failed state. Nothing was restored and nothing is put back by this stage."
+}
+
+# verify-zero-resources: READ-ONLY. The restored historical state has no Resource asset row (no resource_assets table at v0.3.0, or an empty one) and no active Resources directory.
+# The files container's own `check empty` (an absent directory, or one with no file no row refers to) and the fixed row count are the whole of it: the application's prune is never
+# run against a directory that is not there. The nonempty restored paired backup is another slice's verification.
+cmd_verify_zero_resources() {
+    [[ $# -eq 0 ]] || { usage >&2; exit 64; }
+    preflight
+    require_prepared_source
+    local inventory_now checked
+    capture inventory_now 'reading the table inventory' db_inventory
+    [[ "$inventory_now" == "$(historical_inventory)" || "$inventory_now" == "$(upgraded_inventory)" ]] || refuse "the database is neither the 16 tables of v0.3.0 nor the 34 of the upgraded schema. Nothing was changed." # guard:G26-zero-inventory
+    files_db_rows
+    [[ "$DB_ROWS_SPEC" == none || "$DB_ROWS_SPEC" == empty ]] || refuse "resource_assets holds ${DB_ROWS_COUNT} row(s): this is not a state without Resource records. Nothing was changed." # guard:G26-zero-rows
+    [[ -e "$ROOT/$FILES_VOLUME_MARKER" ]] || refuse "no files action has run in this rehearsal, so there is no files volume to read the Resources directory of. Nothing was changed." # guard:G26-zero-volume
+    capture checked 'checking the Resources directory' run_files check empty
+    grep -Fxq 'files:check=ok' <<<"$checked" || refuse "the files helper did not report files:check=ok." # guard:G26-zero-check-reported
+    files_report "$checked"
+    [[ "$FILES_STATE" == absent && "$FILES_COUNT" == 0 ]] || refuse "the active Resources directory exists. Nothing was changed." # guard:G26-zero-files
+    say "ok   no resource_assets row ($([[ "$DB_ROWS_SPEC" == none ]] && echo 'there is no resource_assets table' || echo 'the table is empty')) and no active Resources directory"
+}
+
+
 main() {
     local command="${1:-}"
     case "$command" in
@@ -3558,6 +4008,9 @@ main() {
         aside-files) shift; cmd_aside_files "$@" ;;
         restore-files) shift; cmd_restore_files "$@" ;;
         backup-paired) shift; cmd_backup_paired "$@" ;;
+        preserve-failed-state) shift; cmd_preserve_failed_state "$@" ;;
+        verify-aside) shift; cmd_verify_aside "$@" ;;
+        verify-zero-resources) shift; cmd_verify_zero_resources "$@" ;;
         help | -h | --help) usage ;;
         *) usage >&2; exit 64 ;;
     esac
