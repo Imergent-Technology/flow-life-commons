@@ -376,6 +376,33 @@ it('measures what was moved aside against what was there, with real bytes, and r
     }
 });
 
+it('inspects an aside directory read-only: a sibling of the active directory, outside the Resources disk, whose own inventory is untouched', function (): void {
+    $root = s22c2_seeded();
+    $seeded = Files::inventory($root);
+    $stamp = '20261116T120000Z';
+    $aside = Files::setAside($root, $stamp);
+    $before = s22c2_inventory_of($root.'/'.$aside['name']);
+
+    $inspected = Files::inspectAside($root, $stamp);
+
+    expect($inspected['name'])->toBe('resources.before-restore-'.$stamp)
+        ->and($inspected['aside'])->toBe($seeded)
+        ->and($inspected['aside'])->toBe($aside['after'])
+        ->and($inspected['active'])->toBe(['state' => 'absent', 'files' => []])
+        ->and(dirname($root.'/'.$inspected['name']))->toBe(dirname($root.'/'.Files::STORE))
+        ->and(str_starts_with($root.'/'.$inspected['name'], $root.'/'.Files::STORE.'/'))->toBeFalse()
+        // Reading the aside changed nothing, and the application's disk (`resources`) is still absent: the aside is not seen from it.
+        ->and(s22c2_inventory_of($root.'/'.$aside['name']))->toBe($before)
+        ->and(is_dir($root.'/'.Files::STORE))->toBeFalse();
+
+    // A file added to the aside is seen as it is, not as the record says; and an active directory, when there is one, is reported too.
+    file_put_contents($root.'/'.$inspected['name'].'/'.s22c2_key(9), 'extra');
+    mkdir($root.'/'.Files::STORE);
+    $again = Files::inspectAside($root, $stamp);
+    expect(array_keys($again['aside']['files']))->toContain(s22c2_key(9))
+        ->and($again['active'])->toBe(['state' => 'present', 'files' => []]);
+});
+
 it('leaves a moved directory exactly where it is when its check fails after the rename, and renames nothing back', function (): void {
     $root = s22c2_seeded();
     $key = array_key_first(Files::fixture());
@@ -727,6 +754,13 @@ function s22c2_scenarios(): array
             $root = s22c2_seeded();
             mkdir($root.'/resources.before-restore-20261116T120000Z');
             $c::setAside($root, '20261116T120000Z');
+        }],
+        'F-inspect-stamp' => ['not a UTC time', fn (string $c) => $c::inspectAside(s22c2_seeded(), '../resources')],
+        'F-inspect-root' => ['files root is not a directory', fn (string $c) => $c::inspectAside('/nonexistent/flc-s22c2', '20261116T120000Z')],
+        'F-inspect-aside' => ['no aside directory of that name', function (string $c): void {
+            $root = s22c2_seeded();
+            symlink($root.'/resources', $root.'/resources.before-restore-20261116T120000Z'); // a symbolic link in the aside's place is refused, and so is no directory at all
+            $c::inspectAside($root, '20261116T120000Z');
         }],
         'F-seed-root' => ['files root is not a directory', fn (string $c) => $c::seed('/nonexistent/flc-s22c2')],
         'F-seed-target-absent' => ['seeding never writes into one', fn (string $c) => $c::seed(s22c2_seeded())],

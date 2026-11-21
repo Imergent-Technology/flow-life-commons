@@ -466,6 +466,7 @@ case "$1 ${2:-}" in
             *'harness/files.php archive'*) key=files_archive ;;
             *'harness/files.php verify-archive'*) key=files_verify_archive ;;
             *'harness/files.php aside'*) key=files_aside ;;
+            *'harness/files.php inspect-aside'*) key=files_inspect_aside ;; # slice 2.2C-3 (WU3): the read-only look at the aside directory
             *'harness/files.php restore'*) key=files_restore ;;
             *' migrate --force'*) key="migrate_${wd##*/}" ;;
         esac
@@ -8715,6 +8716,621 @@ t_static_wu4_lists_agree() {
 
 HARNESS_FILES_EXPECTED=(db-ping.php probe.php rehearse.php files.php)
 
+# --- slice 2.2C-3, WU3: failed-state preservation, R-preserve, the aside record and its verification ----------------------------------------------------------------
+
+PRESERVE_FILES=(failed-state.dump.sql preserve.record)
+expected_preserve_record() { # DUMP_SHA DUMP_BYTES: written out here, not by the script's own function
+    local t rows rsha structure='' i
+    printf 'preserve-v1\ntaken_at=2023-11-14T22:13:20Z\nrun_token_fingerprint=%s\ncommit=%s\nserver_version=10.11.18-MariaDB-ubu2204\nkey_current=%s\nkey_previous=%s\nkeyring=%s\nexport_file=failed-state.dump.sql\nexport_sha256=%s\nexport_bytes=%s\n' \
+        "$FP_RUN" "$HEAD_SHA" "$FP_CUR" "$FP_PREV" "$RING_CUR_PREV" "$1" "$2"
+    for t in $(sorted_up); do structure+="$t $(fake_digest "struct-$t-up")"$'\n'; done
+    printf 'ledger=29 %s %s\nstructure_sha256=%s\nresources_directory=present\nresource_files=4\nasset_rows=4\ninventory_sha256=%s\n' "$LEDGER_LAST" "$(fake_digest ledger)" \
+        "$(printf '%s' "$structure" | sha256sum | cut -c1-64)" "$(fspec 4 | tr -d '\n' | sha256sum | cut -c1-64)"
+    for t in $(sorted_up); do
+        rows="$(crows_of "$t")"
+        if [[ "$rows" == 0 ]]; then rsha="$EMPTY_DIGEST"; else rsha="$(fake_digest "${t}one")"; fi
+        printf 'table %s %s %s %s\n' "$t" "$rows" "$rsha" "$(fake_digest "struct-$t-up")"
+    done
+    for i in 1 2 3 4; do printf 'file %s %s %s\n' "${FKEYS[i - 1]}" "${FBYTES[i - 1]}" "$(fsha "$i")"; done
+    for i in 1 2 3 4; do printf 'row %s %s %s\n' "${FKEYS[i - 1]}" "${FBYTES[i - 1]}" "$(fsha "$i")"; done
+    printf 'preserve:complete\n'
+}
+# ensure_preserve_cache: one preservation, made by the UNMUTATED script (SUT=$SRC), kept for the tests of the record, the gate and the aside. File-based, so that it survives the
+# subshell each mutant's tests run in. It builds a world of its own, so a test calls it BEFORE its own world.
+ensure_preserve_cache() {
+    local sut="$SUT" f
+    [[ ! -s "$T/prcache/preserve.record" || ! -s "$T/prcache/failed-state.dump.sql" ]] || return 0
+    SUT="$SRC"
+    paired_world
+    run_script -- preserve-failed-state
+    SUT="$sut"
+    [[ "$RC" == 0 ]] || bad "preparing the cached preservation: exit $RC: ${ERR:0:300}"
+    rm -rf "${T:?}/prcache"
+    mkdir -p "$T/prcache"
+    for f in "${PRESERVE_FILES[@]}"; do cp -p "$T/root/$f" "$T/prcache/"; done
+}
+install_preserve() { local f; for f in "${PRESERVE_FILES[@]}"; do cp -p "$T/prcache/$f" "$T/root/"; done; }
+preserve_nothing_in_place() { # DESC: no part of the preservation, and no temporary file, is in the state directory
+    local f
+    for f in "${PRESERVE_FILES[@]}"; do [[ ! -e "$T/root/$f" ]] || bad "$1: $f was put in place"; done
+    if compgen -G "$T/root/.paired.*" >/dev/null; then bad "$1: a temporary file was left in the state directory"; fi
+}
+preserve_refused() { # DESC NEEDLE: refused, nothing put in place, no historical or paired file made
+    run_script -- preserve-failed-state
+    expect_refused "$1" "$2"
+    preserve_nothing_in_place "$1"
+    only_database_left "$1"
+}
+
+t_g26_preserve_happy_path() {
+    local f dump creates i
+    paired_world
+    run_script -- preserve-failed-state
+    expect_rc preserve-failed-state 0
+    expect_has 'the summary' "$OUT" 'Failed state preserved (evidence only: not a rollback and not a restore)'
+    expect_has 'nothing changed' "$OUT" 'Nothing in the database or the Resources directory was changed'
+    expect_has 'measured twice' "$OUT" 'measured again afterwards'
+    expect_has 'the files are listed' "$OUT" "${FKEYS[0]}"
+    [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all files_check snapshot_all ' ]] || bad "the helpers did not run as check, snapshot, check, snapshot: $(tr '\n' ' ' <"$W/runs")"
+    for f in "${PRESERVE_FILES[@]}"; do
+        [[ -f "$T/root/$f" && ! -L "$T/root/$f" && "$("$REAL_STAT" -c %a "$T/root/$f")" == 600 ]] || bad "$f is not a private regular file in the state directory"
+    done
+    if compgen -G "$T/root/.paired.*" >/dev/null; then bad 'a temporary file was left in the state directory'; fi
+    dump="$T/root/failed-state.dump.sql"
+    [[ "$(cat "$W/dump_pass1" "$W/dump_pass2")" == "$(<"$dump")" ]] || bad 'the export is not the two-pass dump (pass 1 followed by pass 2)'
+    [[ "$(grep -c . "$W/dumpcalls")" == 2 && "$(sed -n 1p "$W/dumpcalls")" == 'DUMP args=[--no-data --no-tablespaces flc_rehearsal_app]' ]] || bad "the export was not made by the two fixed dump passes: $(tr '\n' '|' <"$W/dumpcalls")"
+    [[ "$(<"$T/root/preserve.record")" == "$(expected_preserve_record "$(sha256sum <"$dump" | cut -c1-64)" "$(wc -c <"$dump" | tr -d ' ')")" ]] || bad "the record is not the one written out independently in this test: $(<"$T/root/preserve.record")"
+    # What it reads, and that it reads only: every files container has the volume read-only, nothing was created, and the application account ran no statement but a read.
+    creates="$(grep -E "^create .*--name $NAME_F " "$W/calls")"
+    [[ "$(grep -c . <<<"$creates")" == 2 ]] || bad "expected two files containers, got: $creates"
+    for i in 1 2; do expect_has "files container $i reads the volume read-only" "$(sed -n "${i}p" <<<"$creates")" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"; done
+    [[ "$(grep -c '^volume create ' "$W/calls" || true)" == 0 ]] || bad 'the preservation created a volume'
+    [[ "$(grep -cE 'DROP|ALTER|DELETE|UPDATE|TRUNCATE|INSERT|CREATE' "$W/appsql.log" || true)" == 0 ]] || bad 'the application account ran a statement other than a read'
+    for f in recovery.manifest.json current.dump.sql resources.archive.tar.gz historical.dump.sql; do [[ ! -e "$T/root/$f" ]] || bad "$f appeared: a preservation is not a backup"; done
+    for f in "$KEY_CUR" "$KEY_PREV" "${KEY_CUR#base64:}" "${KEY_PREV#base64:}" "$APP_PW" "$ROOT_PW" "$TOKEN"; do expect_lacks 'the preservation record' "$(<"$T/root/preserve.record")" "$f"; done
+    only_database_left preserve-failed-state
+    no_secret_anywhere preserve-failed-state
+    # And the record is one a restore may rely on.
+    run_fn "ROOT='$T/root'; require_preserve_record"
+    expect_rc 'the preservation as put in place' 0
+}
+
+t_g26_preserve_preconditions() {
+    local f
+    if want_case G26-preserve-no-overwrite; then
+        for f in "${PRESERVE_FILES[@]}"; do
+            paired_world; printf planted >"$T/root/$f"; chmod 600 "$T/root/$f"
+            run_script -- preserve-failed-state
+            expect_refused "$f already there" 'is never overwritten'
+            [[ "$(<"$T/root/$f")" == planted ]] || bad "$f was overwritten"
+            no_files_container "$f already there"; no_snapshot_all_ran "$f already there"
+        done
+    fi
+    if want_case G26-preserve-inventory; then
+        paired_world; hist_names >"$W/inventory"
+        run_script -- preserve-failed-state
+        expect_refused 'the 16-table database' 'the 34 tables of the current schema'
+        preserve_nothing_in_place 'the 16-table database'; no_files_container 'the 16-table database'; no_snapshot_all_ran 'the 16-table database'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        paired_world; rm -rf "${W:?}/v/$NAME_FV"
+        run_script -- preserve-failed-state
+        expect_refused 'no files volume' 'there is no files volume'
+        preserve_nothing_in_place 'no files volume'
+        paired_world; run_script -- preserve-failed-state extra
+        expect_rc 'an argument' 64
+        preserve_nothing_in_place 'an argument'
+    fi
+}
+
+t_g26_preserve_measurement_is_validated() {
+    if want_case G26-measure-check-reported; then
+        paired_world; printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
+        preserve_refused 'a files helper that did not say it checked' 'did not report files:check=ok'
+    fi
+    if want_case G26-measure-agree; then
+        paired_world; frows 3 >"$W/asset_rows"
+        preserve_refused 'three asset rows and four files' 'do not agree on every key, size and SHA-256'
+        paired_world; frows 4 | sed "2s/\\t$(fsha 2)\$/\\t$(fsha 9)/" >"$W/asset_rows"
+        preserve_refused 'a file that is not the content its row records' 'do not agree on every key, size and SHA-256'
+        paired_world; : >"$W/asset_rows"
+        preserve_refused 'files and no asset row' 'do not agree on every key, size and SHA-256'
+    fi
+    if want_case G26-measure-two-readers; then
+        paired_world; snapshot_all_output one | sed 's/^all-table resource_assets 4 /all-table resource_assets 3 /' >"$W/out_snapshot_all"
+        preserve_refused 'two readers of the asset rows that disagree' 'counts 3 resource_assets rows'
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        paired_world; printf '3\n' >"$W/fail_snapshot_all"
+        preserve_refused 'a snapshot the application refused' 'snapshot'
+        paired_world; printf '3\n' >"$W/fail_files_check"
+        preserve_refused 'a files check that failed' 'files'
+    fi
+}
+
+t_g26_preserve_export_and_changes() {
+    local f
+    if want_case G26-preserve-export-checked; then
+        paired_world; printf 'INSERT INTO \x60sessions\x60 VALUES\n(1);\n' >>"$W/dump_pass2"
+        preserve_refused 'an export with rows of a transient table' 'the export is not what the dump contract requires'
+        expect_has 'the reason' "$ERR" 'rows for the transient table sessions'
+        paired_world; printf 'USE other_db;\n' >>"$W/dump_pass2"
+        preserve_refused 'an export that names a database' 'does not recognise'
+        paired_world; head -n 120 "$W/dump_pass2" >"$W/dump_short"; mv "$W/dump_short" "$W/dump_pass2"
+        preserve_refused 'an export cut short' 'the export is not what the dump contract requires'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all ' ]] || bad "a second measurement was taken after the export was refused: $(tr '\n' ' ' <"$W/runs")"
+    fi
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        paired_world; touch "$W/dump_fail"
+        run_script -- preserve-failed-state
+        expect_rc 'an export that failed' 1
+        preserve_nothing_in_place 'an export that failed'
+        expect_has 'nothing was put in place' "$ERR" 'Nothing of the failed-state preservation was put in place'
+        expect_has 'the trailer' "$ERR" 'preserve-failed-state did not finish'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check snapshot_all ' ]] || bad "the second measurement ran after the export failed: $(tr '\n' ' ' <"$W/runs")"
+    fi
+    if want_case G26-preserve-quiescent; then
+        change() { # DESC NEEDLE
+            preserve_refused "$1" 'changed while the failed state was being exported'
+            expect_has "$1: what changed" "$ERR" "$2"
+            expect_has "$1: nothing in place" "$ERR" 'Nothing was put in place'
+        }
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output two >"$W/out_snapshot_all.2"
+        change 'every durable table with rows changed' 'people'
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output one | sed "s/^structure people .*\$/structure people $(fake_digest altered-structure)/" >"$W/out_snapshot_all.2"
+        change 'a table whose structure changed' 'structure'
+        paired_world; snapshot_all_output one >"$W/out_snapshot_all.1"; snapshot_all_output one "$(fake_digest other-ledger)" >"$W/out_snapshot_all.2"
+        change 'the ledger changed' 'ledger'
+        paired_world
+        frows 4 | sed "2s/\\t$(fsha 2)\$/\\t$(fsha 9)/" >"$W/rows_changed"
+        # shellcheck disable=SC2016 # the code is run by the fake daemon's bash
+        printf 'if [[ "$(grep -c "^files_check\$" "%s/runs")" == 1 ]]; then cp "%s/rows_changed" "%s/asset_rows"; fi\n' "$W" "$W" "$W" >"$W/after_files_check"
+        fout present 4 files:check=ok >"$W/out_files_check.1"
+        fout present 4 files:check=ok | sed "s/ $(fsha 2)\$/ $(fsha 9)/" >"$W/out_files_check.2"
+        change 'a Resource file and its row changed' 'resource-files'
+    fi
+    if want_case G26-preserve-record-checked; then
+        paired_world; printf 'not a time' >"$T/date-raw"
+        preserve_refused 'a record that is not consistent' 'the record just made is not consistent: its taken_at is not a UTC time'
+    fi
+    if want_case G26-preserve-commit-no-clobber; then
+        paired_world
+        # shellcheck disable=SC2016 # the code is run by the fake daemon's bash
+        printf 'if [[ "$(grep -c "^snapshot_all\$" "%s/runs")" == 2 ]]; then printf theirs >"%s/root/preserve.record"; chmod 600 "%s/root/preserve.record"; fi\n' "$W" "$T" "$T" >"$W/after_snapshot_all"
+        run_script -- preserve-failed-state
+        expect_refused 'a record that appeared under the name' 'preserve.record is in the state directory already, and evidence is never put over a file'
+        expect_has 'the export was put in place' "$ERR" 'failed-state.dump.sql was put in place and preserve.record was not written, so it is NOT a failed-state preservation'
+        expect_has 'the file there is not this stage' "$ERR" 'A file named preserve.record is in the state directory that this stage did not write'
+        [[ "$(<"$T/root/preserve.record")" == theirs ]] || bad 'the file that was there was overwritten'
+        [[ -s "$T/root/failed-state.dump.sql" ]] || bad 'the export that was put in place was removed'
+        if compgen -G "$T/root/.paired.*" >/dev/null; then bad 'a temporary file was left'; fi
+        # A forced failure after both files are in place: the note says they may or may not be a preservation, and nothing is removed.
+        paired_world
+        run_fn 'require_preserve_record() { refuse "the final verification, forced to fail for the test"; }; main preserve-failed-state'
+        expect_rc 'a forced failure of the final verification' 3
+        expect_has 'both files are named' "$ERR" 'failed-state.dump.sql and preserve.record were put in place (preserve.record last) and the stage failed after that'
+        expect_has 'no reliance' "$ERR" 'nothing may rely on them until it does'
+        for f in "${PRESERVE_FILES[@]}"; do [[ -s "$T/root/$f" ]] || bad "$f was removed"; done
+    fi
+}
+
+pr_case() { # GUARD DESC NEEDLE SED_EXPRESSION: the cached preservation with one edit made to preserve.record
+    want_case "$1" || return 0
+    paired_world; install_preserve
+    sed -i "$4" "$T/root/preserve.record"
+    run_fn "ROOT='$T/root'; require_preserve_record"
+    expect_refused "$2" "$3"
+}
+t_g26_preserve_record_is_verified() {
+    local dump sha bytes
+    ensure_preserve_cache
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        paired_world; install_preserve
+        run_fn "ROOT='$T/root'; require_preserve_record; echo accepted"
+        expect_rc 'the preservation as the stage made it' 0
+    fi
+    if want_case G26-preserve-required; then
+        paired_world; install_preserve; rm -f "$T/root/preserve.record"
+        run_fn "ROOT='$T/root'; require_preserve_record"
+        expect_refused 'an export without its record' 'no complete failed-state preservation'
+        paired_world; install_preserve; rm -f "$T/root/failed-state.dump.sql"
+        run_fn "ROOT='$T/root'; require_preserve_record"
+        expect_refused 'a record without its export' 'no complete failed-state preservation'
+        paired_world; install_preserve; chmod 644 "$T/root/preserve.record"
+        run_fn "ROOT='$T/root'; require_preserve_record"
+        expect_refused 'a record that is not private' 'no complete failed-state preservation'
+    fi
+    pr_case G26-preserve-intact 'a line that this script does not write' 'cannot be relied on: line' '2i\hand-written=1'
+    pr_case G26-pr-run 'a record of another run' "it is not this run's" 's/^run_token_fingerprint=.*/run_token_fingerprint=0000000000000000/'
+    pr_case G26-pr-taken 'a time that is not a UTC time' 'taken_at is not a UTC time' 's/^taken_at=.*/taken_at=yesterday/'
+    pr_case G26-pr-source 'another commit than the source was prepared from' 'not for the current commit' "s/^commit=.*/commit=$(printf '9%.0s' {1..40})/"
+    pr_case G26-pr-server 'another server' 'not the rehearsal'"'"'s MariaDB 10.11.18' 's/^server_version=.*/server_version=11.4.2-MariaDB/'
+    pr_case G26-pr-keyring 'another keyring' "not the keys this run generated" 's/^key_current=.*/key_current=0000000000000000/'
+    pr_case G26-pr-export-sha 'an export of another checksum' "export's SHA-256 is not the record's" "s/^export_sha256=.*/export_sha256=$(zeros)/"
+    pr_case G26-pr-export-bytes 'an export of another size' "export's size is not the record's" 's/^export_bytes=.*/export_bytes=1/'
+    pr_case G26-pr-tables 'a table missing from the list' 'not exactly the 34 tables' '/^table sessions /d'
+    pr_case G26-pr-structure 'a structure digest that is not the aggregate' 'structure digest is not that of the structure digests it lists' "s/^\\(table people [0-9]* [0-9a-f]\\{64\\}\\) [0-9a-f]\\{64\\}\$/\\1 $(zeros)/"
+    pr_case G26-pr-ledger 'another ledger' 'migration ledger is not the current schema' 's/^ledger=29 /ledger=28 /'
+    pr_case G26-pr-files-state 'a Resources directory that is neither' 'neither present nor absent' 's/^resources_directory=.*/resources_directory=gone/'
+    pr_case G26-pr-files-agree 'asset rows that are not the files' 'do not agree with one another' "0,/^row ${FKEYS[1]} /s/^row ${FKEYS[1]} \\([0-9]*\\) [0-9a-f]*\$/row ${FKEYS[1]} \\1 $(fsha 9)/"
+    pr_case G26-pr-inventory 'an inventory digest that is not the files' 'inventory digest is not that of the files it lists' "s/^inventory_sha256=.*/inventory_sha256=$(zeros)/"
+    pr_case G26-pr-assets-table 'a resource_assets row count that is not the asset rows' 'not the number of resource_assets rows it records' 's/^table resource_assets 4 /table resource_assets 3 /'
+    pr_case G26-pr-exact 'a repeated line' 'not exactly what this script writes' 's/^preserve:complete$/taken_at=2023-11-14T22:13:20Z\npreserve:complete/'
+    if want_case G26-pr-export-content; then
+        paired_world; install_preserve
+        printf 'DROP DATABASE flc_rehearsal_app;\n' >>"$T/root/failed-state.dump.sql"
+        dump="$T/root/failed-state.dump.sql"; sha="$(sha256sum <"$dump" | cut -c1-64)"; bytes="$(wc -c <"$dump" | tr -d ' ')"
+        sed -i "s/^export_sha256=.*/export_sha256=$sha/; s/^export_bytes=.*/export_bytes=$bytes/" "$T/root/preserve.record"
+        run_fn "ROOT='$T/root'; require_preserve_record"
+        expect_refused 'an export with a statement, its checksum re-recorded' 'the export is not consistent with the record'
+    fi
+}
+
+# --- R-preserve ---
+
+# preserved_restore_world: the world of restore-historical, with the files volume established, four asset rows that agree with four files, and the cached preservation of exactly this state.
+preserved_restore_world() {
+    ensure_cache
+    ensure_preserve_cache
+    restore_world
+    add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data
+    established_files_volume
+    printf '1\n' >"$W/assets_table"
+    frows 4 >"$W/asset_rows"
+    fout present 4 files:check=ok >"$W/out_files_check"
+    snapshot_all_output one >"$W/out_snapshot_all"
+    install_preserve
+}
+preserve_gate_refused() { restore_refused "$1" "$2"; } # DESC NEEDLE: the restore refuses before it clears anything or loads anything
+
+t_g26_restore_requires_preservation() {
+    local f
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        preserved_restore_world
+        run_script -- restore-historical
+        expect_rc 'a restore after the failed state was preserved' 0
+        expect_has 'the gate' "$OUT" 'a failed-state preservation record exists, is this run'"'"'s and intact, and equals the database'
+        [[ "$(<"$W/runs_at_clear")" == $'files_check\nfiles_check\nsnapshot_all' ]] || bad "the files and the database were not measured, in that order, before the clear: $(tr '\n' ' ' <"$W/runs_at_clear")"
+        # A session or a cache entry changes a transient table without changing what matters: the preservation still describes the state.
+        preserved_restore_world
+        snapshot_all_output one | sed "s/^all-table sessions \([0-9]*\) [0-9a-f]*\$/all-table sessions 4 $(fake_digest session)/" >"$W/out_snapshot_all"
+        run_script -- restore-historical
+        expect_rc 'a transient table that changed' 0
+    fi
+    if want_case G26-preserve-required; then
+        preserved_restore_world; rm -f "$T/root/preserve.record" "$T/root/failed-state.dump.sql"
+        preserve_gate_refused 'Resource rows and files with no preservation' 'no complete failed-state preservation'
+        no_snapshot_all_ran 'no preservation'
+        preserved_restore_world; rm -f "$T/root/preserve.record"
+        preserve_gate_refused 'an export without its record' 'no complete failed-state preservation'
+        preserved_restore_world; rm -f "$T/root/failed-state.dump.sql"
+        preserve_gate_refused 'a record without its export' 'no complete failed-state preservation'
+    fi
+    if want_case G26-preserve-intact; then
+        preserved_restore_world; printf 'x' >>"$T/root/failed-state.dump.sql"
+        preserve_gate_refused 'an export that is not the one the record binds' 'cannot be relied on'
+        preserved_restore_world; sed -i 's/^run_token_fingerprint=.*/run_token_fingerprint=0000000000000000/' "$T/root/preserve.record"
+        preserve_gate_refused 'a record of another run' 'cannot be relied on'
+    fi
+    if want_case G26-gate-needed; then
+        # Earlier scenarios: no asset row and no file, whether or not a files volume was ever made, needs no record and makes none.
+        ensure_cache; restore_world
+        run_script -- restore-historical
+        expect_rc 'a restore with no files volume' 0
+        expect_has 'nothing to preserve' "$OUT" 'nothing of the Resources to preserve before the clear'
+        for f in "${PRESERVE_FILES[@]}"; do [[ ! -e "$T/root/$f" ]] || bad "$f was made by a restore that needed none"; done
+        ensure_cache; restore_world; add_volume "$NAME_FV" "name=$NAME_FV" l_role=files-data; established_files_volume
+        fout absent 0 files:check=ok >"$W/out_files_check"
+        run_script -- restore-historical
+        expect_rc 'a restore with a files volume that holds nothing' 0
+        expect_has 'nothing to preserve' "$OUT" 'nothing of the Resources to preserve before the clear'
+        [[ "$(<"$W/runs_at_clear")" == files_check ]] || bad "only the files check should have run before the clear: $(tr '\n' ' ' <"$W/runs_at_clear")"
+        for f in "${PRESERVE_FILES[@]}"; do [[ ! -e "$T/root/$f" ]] || bad "$f was made by a restore that needed none"; done
+        # Files in the directory and no asset row: the observed state needs the preservation, whatever the table says.
+        preserved_restore_world; : >"$W/asset_rows"; rm -f "$T/root/preserve.record" "$T/root/failed-state.dump.sql"
+        preserve_gate_refused 'files with no asset row, and no preservation' 'no complete failed-state preservation'
+        # Asset rows and no files, and no preservation.
+        preserved_restore_world; fout absent 0 files:check=ok >"$W/out_files_check"; rm -f "$T/root/preserve.record" "$T/root/failed-state.dump.sql"
+        preserve_gate_refused 'asset rows with no files, and no preservation' 'no complete failed-state preservation'
+        # No volume was ever made, and a row is there all the same.
+        preserved_restore_world; rm -f "$T/root/files.volume" "$T/root/preserve.record" "$T/root/failed-state.dump.sql"
+        preserve_gate_refused 'a row and no files volume' 'no complete failed-state preservation'
+    fi
+    if want_case G26-gate-check-reported; then
+        preserved_restore_world; printf 'files:state=present\nfiles:count=4\n' >"$W/out_files_check"
+        preserve_gate_refused 'a files helper that did not say it checked' 'did not report files:check=ok'
+    fi
+    if want_case G26-measure-agree; then
+        preserved_restore_world; frows 3 >"$W/asset_rows"
+        preserve_gate_refused 'three rows and four files at the gate' 'do not agree on every key, size and SHA-256'
+    fi
+    if want_case G26-gate-matches; then
+        preserved_restore_world; snapshot_all_output one | sed "s/^all-table security_events \([0-9]*\) [0-9a-f]*\$/all-table security_events \1 $(fake_digest altered)/" >"$W/out_snapshot_all"
+        preserve_gate_refused 'a durable table changed in content after the preservation' 'does not describe the state that is about to be cleared'
+        expect_has 'which table' "$ERR" 'security_events'
+        preserved_restore_world; snapshot_all_output one | sed 's/^all-table people 14 /all-table people 15 /' >"$W/out_snapshot_all"
+        preserve_gate_refused 'a Person added after the preservation' 'does not describe the state'
+        expect_has 'which table' "$ERR" 'people'
+    fi
+    if want_case G26-differ-durable; then
+        preserved_restore_world; snapshot_all_output one | sed "s/^all-table accounts \([0-9]*\) [0-9a-f]*\$/all-table accounts \1 $(fake_digest altered)/" >"$W/out_snapshot_all"
+        preserve_gate_refused 'a durable table changed' 'does not describe the state'
+        expect_has 'which table' "$ERR" 'accounts'
+    fi
+    if want_case G26-differ-structure; then
+        preserved_restore_world; snapshot_all_output one | sed "s/^structure resource_assets .*\$/structure resource_assets $(fake_digest altered-structure)/" >"$W/out_snapshot_all"
+        preserve_gate_refused 'a table whose structure changed' 'does not describe the state'
+        expect_has 'which table' "$ERR" 'resource_assets'
+    fi
+    if want_case G26-differ-ledger; then
+        preserved_restore_world; snapshot_all_output one "$(fake_digest other-ledger)" >"$W/out_snapshot_all"
+        preserve_gate_refused 'the ledger changed' 'does not describe the state'
+        expect_has 'the ledger' "$ERR" 'ledger'
+    fi
+    if want_case G26-differ-files || want_case G26-differ-rows; then
+        # A file and its asset row both changed after the preservation: they agree with each other, and not with what was preserved.
+        preserved_restore_world
+        frows 4 | sed "2s/\\t$(fsha 2)\$/\\t$(fsha 9)/" >"$W/asset_rows"
+        fout present 4 files:check=ok | sed "s/ $(fsha 2)\$/ $(fsha 9)/" >"$W/out_files_check"
+        preserve_gate_refused 'a Resource file and its row changed after the preservation' 'does not describe the state'
+        expect_has 'the files' "$ERR" 'resource-files'
+        expect_has 'the rows' "$ERR" 'resource-asset-rows'
+    fi
+}
+
+# --- the aside record and verify-aside ---
+
+expected_aside_record() { # PRESERVE_SHA N: written out here, not by the script's own function
+    local i
+    printf 'aside-v1\ntaken_at=2023-11-14T22:13:20Z\nrun_token_fingerprint=%s\nstamp=20231114T221320Z\naside_name=resources.before-restore-20231114T221320Z\npreserve_record_sha256=%s\naside_files=%s\ninventory_sha256=%s\n' \
+        "$FP_RUN" "$1" "$2" "$(fspec "$2" | tr -d '\n' | sha256sum | cut -c1-64)"
+    for ((i = 1; i <= $2; i++)); do printf 'file %s %s %s\n' "${FKEYS[i - 1]}" "${FBYTES[i - 1]}" "$(fsha "$i")"; done
+    printf 'aside:complete\n'
+}
+# ensure_aside_cache N: the aside record of an aside of N files (made by the UNMUTATED script, with the cached preservation in the state directory), kept for verify-aside.
+ensure_aside_cache() {
+    local n="${1:-4}" sut="$SUT"
+    [[ ! -s "$T/ascache/$n/aside.record" ]] || return 0
+    SUT="$SRC"
+    aside_world; install_preserve
+    aside_out "$n" "$n" >"$W/out_files_aside"
+    run_script -- aside-files
+    SUT="$sut"
+    [[ "$RC" == 0 ]] || bad "preparing the cached aside record of $n files: exit $RC: ${ERR:0:300}"
+    mkdir -p "$T/ascache/$n"
+    cp -p "$T/root/aside.record" "$T/ascache/$n/"
+}
+
+t_g26_aside_record() {
+    local sha
+    ensure_preserve_cache
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        aside_world
+        run_script -- aside-files
+        expect_rc aside-files 0
+        expect_has 'the record is named' "$OUT" 'aside.record records the measured aside: 4 file(s)'
+        [[ -f "$T/root/aside.record" && ! -L "$T/root/aside.record" && "$("$REAL_STAT" -c %a "$T/root/aside.record")" == 600 ]] || bad 'aside.record is not a private regular file'
+        [[ "$(<"$T/root/aside.record")" == "$(expected_aside_record none 4)" ]] || bad "aside.record, with no preservation, is not the one written out in this test: $(<"$T/root/aside.record")"
+        if compgen -G "$T/root/.aside.record.*" >/dev/null; then bad 'a temporary file was left'; fi
+        # With a preservation in the state directory, the record names it by its SHA-256.
+        aside_world; install_preserve
+        run_script -- aside-files
+        expect_rc 'aside-files with a preservation' 0
+        sha="$(sha256sum <"$T/root/preserve.record" | cut -c1-64)"
+        [[ "$(<"$T/root/aside.record")" == "$(expected_aside_record "$sha" 4)" ]] || bad "aside.record, with a preservation, is not the one written out in this test: $(<"$T/root/aside.record")"
+        # The rename itself is what it was: one aside action, then the check that the directory is gone.
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_aside files_check ' ]] || bad "the helper did not run as aside then check: $(tr '\n' ' ' <"$W/runs")"
+        # A zero-file directory is recorded too.
+        aside_world; aside_out 0 0 >"$W/out_files_aside"
+        run_script -- aside-files
+        expect_rc 'an empty directory' 0
+        [[ "$(<"$T/root/aside.record")" == "$(expected_aside_record none 0)" ]] || bad "the record of an empty aside is not the one written out in this test: $(<"$T/root/aside.record")"
+    fi
+    if want_case G26-aside-record-no-overwrite; then
+        aside_world; printf planted >"$T/root/aside.record"; chmod 600 "$T/root/aside.record"
+        run_script -- aside-files
+        expect_refused 'an aside record already there' 'is already in the state directory, and evidence is never overwritten'
+        [[ "$(<"$T/root/aside.record")" == planted ]] || bad 'the aside record was overwritten'
+        no_files_container 'an aside record already there'
+        [[ ! -e "$W/runs" ]] || ! grep -q '^files_aside$' "$W/runs" || bad 'the directory was moved although the record could not be written'
+    fi
+    if want_case G26-evidence-no-clobber; then
+        # A record that appears under the name after the rename: the moved directory stays where it is, nothing is renamed back, and the file that is there is not touched.
+        aside_world
+        # shellcheck disable=SC2016 # the code is run by the fake daemon's bash
+        printf 'printf theirs >"%s/root/aside.record"; chmod 600 "%s/root/aside.record"\n' "$T" "$T" >"$W/after_files_aside"
+        run_script -- aside-files
+        expect_refused 'a record that appeared after the rename' 'aside.record is in the state directory already, and evidence is never written over a file'
+        [[ "$(<"$T/root/aside.record")" == theirs ]] || bad 'the file that was there was overwritten'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_aside files_check ' ]] || bad "something other than the aside and its check ran: $(tr '\n' ' ' <"$W/runs")"
+        trailer_cautious 'a record that appeared after the rename'
+        if compgen -G "$T/root/.aside.record.*" >/dev/null; then bad 'a temporary file was left'; fi
+    fi
+    if want_case G26-aside-record-checked; then
+        aside_world; printf '20231114T221320Z\n' >"$T/date-raw"
+        run_script -- aside-files
+        expect_refused 'a record that is not consistent' 'the aside record just written is not consistent: its taken_at is not a UTC time'
+        expect_has 'the moved directory is left' "$ERR" 'was left exactly where it is; nothing was renamed back, removed or repaired'
+    fi
+}
+
+inspect_out() { # N_ASIDE ACTIVE_STATE N_ACTIVE [NAME]: what the files helper prints for `inspect-aside`
+    fout present "$1" | sed 's/^/aside:/'
+    fout "$2" "$3" | sed 's/^/active:/'
+    printf 'aside:name=%s\naside:inspected=ok\n' "${4:-resources.before-restore-20231114T221320Z}"
+}
+# verify_aside_world: the zero-file Resource-files backup, the cached preservation and the cached aside record in the state directory, and a files helper that reports the aside
+# as the record says and no active Resources directory.
+verify_aside_world() {
+    ensure_files_cache
+    restore_files_world zero
+    established_files_volume
+    install_preserve
+    cp -p "$T/ascache/4/aside.record" "$T/root/"
+    inspect_out 4 absent 0 >"$W/out_files_inspect_aside"
+}
+verify_refused() { # DESC NEEDLE
+    run_script -- verify-aside
+    expect_refused "$1" "$2"
+}
+t_g26_verify_aside() {
+    local creates sha
+    ensure_files_cache
+    ensure_preserve_cache
+    ensure_aside_cache 4
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        verify_aside_world; snapshot_state
+        run_script -- verify-aside
+        expect_rc verify-aside 0
+        expect_has 'a sibling, absent active directory' "$OUT" 'is a sibling of the active Resources directory (outside the application'"'"'s Resources disk), the active Resources directory is absent'
+        expect_has 'the pair' "$OUT" 'Recoverable: the preserved Resource files and the saved database evidence (preserve.record, failed-state.dump.sql) are a consistent pair of the failed state'
+        expect_has 'nothing restored' "$OUT" 'Nothing was restored and nothing is put back by this stage'
+        expect_has 'the files are listed' "$OUT" "${FKEYS[0]}"
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_inspect_aside ' ]] || bad "the only helper run should be inspect-aside: $(tr '\n' ' ' <"$W/runs")"
+        creates="$(files_creates)"
+        [[ "$(grep -c . <<<"$creates")" == 1 ]] || bad "expected one files container, got: $creates"
+        expect_has 'the action is fixed and the stamp is the record'"'"'s' "$creates" ' php /rehearsal/src/harness/files.php inspect-aside 20231114T221320Z'
+        expect_has 'the volume is read-only' "$creates" "--mount type=volume,source=$NAME_FV,target=/var/www/html,readonly"
+        [[ -z "$(world_changed)" ]] || bad "verify-aside changed the world: $(world_changed)"
+        no_secret_anywhere verify-aside
+        run_script -- verify-aside extra
+        expect_rc 'an argument' 64
+    fi
+    if want_case G26-aside-record-required; then
+        verify_aside_world; rm -f "$T/root/aside.record"
+        verify_refused 'no aside record' 'no aside record in the state directory'
+        no_files_container 'no aside record'
+    fi
+    if want_case G26-preserve-required; then
+        verify_aside_world; rm -f "$T/root/preserve.record"
+        verify_refused 'no preservation' 'no complete failed-state preservation'
+        no_files_container 'no preservation'
+    fi
+    ar_case() { # GUARD DESC NEEDLE SED_EXPRESSION: the cached aside record with one edit
+        want_case "$1" || return 0
+        verify_aside_world; sed -i "$4" "$T/root/aside.record"
+        verify_refused "$2" "$3"
+        no_files_container "$2"
+    }
+    ar_case G26-aside-record-intact 'a line that this script does not write' 'cannot be relied on: line' '2i\hand-written=1'
+    ar_case G26-ar-run 'a record of another run' "it is not this run's" 's/^run_token_fingerprint=.*/run_token_fingerprint=0000000000000000/'
+    ar_case G26-ar-name 'an aside that is not the fixed name' 'not the fixed name' 's/^aside_name=.*/aside_name=resources\/x/'
+    ar_case G26-ar-name 'a stamp that is not a UTC time' 'not the fixed name' 's/^stamp=.*/stamp=..\/resources/'
+    ar_case G26-ar-preserve 'a preservation identity that is neither' 'neither a SHA-256 nor none' 's/^preserve_record_sha256=.*/preserve_record_sha256=nonsense/'
+    ar_case G26-ar-inventory 'a count that is not the files listed' 'count or inventory digest is not that of the files it lists' 's/^aside_files=4$/aside_files=3/'
+    ar_case G26-ar-exact 'a repeated line' 'not exactly what this script writes' 's/^aside:complete$/taken_at=2023-11-14T22:13:20Z\naside:complete/'
+    ar_case G26-verify-binds-preserve 'a record made against another preservation' 'another preservation record' "s/^preserve_record_sha256=.*/preserve_record_sha256=$(zeros)/"
+    if want_case G26-verify-zero-file; then
+        verify_aside_world; cp -p "$T/fcache/resources.manifest.json" "$T/fcache/resources.archive.tar.gz" "$T/root/"
+        verify_refused 'a Resource-files backup that holds files' 'this verification is of the historical zero-file restoration'
+        no_files_container 'a Resource-files backup that holds files'
+    fi
+    if want_case G26-verify-reported; then
+        verify_aside_world; inspect_out 4 absent 0 resources.before-restore-20231114T221321Z >"$W/out_files_inspect_aside"
+        verify_refused 'another stamp than the record'"'"'s (a stale or substituted aside)' 'did not report reading resources.before-restore-20231114T221320Z'
+        verify_aside_world; inspect_out 4 absent 0 'resources/before-restore-20231114T221320Z' >"$W/out_files_inspect_aside"
+        verify_refused 'a path inside the Resources directory' 'did not report reading'
+        verify_aside_world; inspect_out 4 absent 0 '../resources.before-restore-20231114T221320Z' >"$W/out_files_inspect_aside"
+        verify_refused 'a path that leaves the volume' 'did not report reading'
+        verify_aside_world; inspect_out 4 absent 0 | grep -v 'inspected=ok' >"$W/out_files_inspect_aside"
+        verify_refused 'a helper that did not say it finished' 'did not report reading'
+        verify_aside_world; { inspect_out 4 absent 0; printf 'aside:name=resources.before-restore-20231114T221320Z\n'; } >"$W/out_files_inspect_aside"
+        verify_refused 'a helper that named two asides' 'did not report reading'
+    fi
+    if want_case G26-verify-aside-present; then
+        verify_aside_world; { fout absent 0 | sed 's/^/aside:/'; fout absent 0 | sed 's/^/active:/'; printf 'aside:name=resources.before-restore-20231114T221320Z\naside:inspected=ok\n'; } >"$W/out_files_inspect_aside"
+        verify_refused 'an aside that is not there' 'is not there'
+    fi
+    if want_case G26-verify-active-absent; then
+        verify_aside_world; inspect_out 4 present 4 >"$W/out_files_inspect_aside"
+        verify_refused 'an active Resources directory that exists' 'the active Resources directory exists'
+        verify_aside_world; inspect_out 4 present 0 >"$W/out_files_inspect_aside"
+        verify_refused 'an active Resources directory that exists and is empty' 'the active Resources directory exists'
+    fi
+    if want_case G26-verify-aside-record; then
+        verify_aside_world; inspect_out 3 absent 0 >"$W/out_files_inspect_aside"
+        verify_refused 'a file missing from the aside' 'not what aside.record says it is'
+        verify_aside_world; inspect_out 4 absent 0 | sed "s/ $(fsha 2)\$/ $(fsha 9)/" >"$W/out_files_inspect_aside"
+        verify_refused 'a file of other content' 'not what aside.record says it is'
+        verify_aside_world; inspect_out 4 absent 0 | sed "s/^aside:file ${FKEYS[2]} ${FBYTES[2]} /aside:file ${FKEYS[2]} 1 /" >"$W/out_files_inspect_aside"
+        verify_refused 'a file of another size' 'not what aside.record says it is'
+    fi
+    if want_case G26-verify-aside-preserved; then
+        # An aside record that is itself consistent, of three files, made against the cached preservation of four: the aside agrees with its own record and not with what was preserved.
+        ensure_aside_cache 3
+        verify_aside_world; cp -p "$T/ascache/3/aside.record" "$T/root/aside.record"; inspect_out 3 absent 0 >"$W/out_files_inspect_aside"
+        verify_refused 'an aside that is not what was preserved' 'not the failed state'"'"'s preserved Resource files and asset rows'
+    fi
+}
+
+zero_world() { # [hist]: a restored (or reupgraded) database with no asset row, and a files volume that has been established
+    restore_files_world zero
+    established_files_volume
+    : >"$W/asset_rows"
+    if [[ "${1:-}" == hist ]]; then hist_names >"$W/inventory"; printf '0\n' >"$W/assets_table"; fi
+}
+t_g26_zero_resources() {
+    if [[ -z "$CURRENT_GUARD" ]]; then
+        zero_world hist
+        run_script -- verify-zero-resources
+        expect_rc 'the restored v0.3.0 database' 0
+        expect_has 'no table' "$OUT" 'there is no resource_assets table) and no active Resources directory'
+        [[ "$(tr '\n' ' ' <"$W/runs")" == 'files_check ' ]] || bad "the only helper run should be the files check: $(tr '\n' ' ' <"$W/runs")"
+        zero_world
+        run_script -- verify-zero-resources
+        expect_rc 'the reupgraded database with an empty table' 0
+        expect_has 'an empty table' "$OUT" 'the table is empty) and no active Resources directory'
+        expect_lacks 'the application prune is never run' "$(cat "$W/runs")" prune
+        run_script -- verify-zero-resources extra
+        expect_rc 'an argument' 64
+    fi
+    if want_case G26-zero-inventory; then
+        zero_world; printf 'people\n' >"$W/inventory"
+        run_script -- verify-zero-resources
+        expect_refused 'a database that is neither' 'neither the 16 tables of v0.3.0 nor the 34'
+        no_files_container 'a database that is neither'
+    fi
+    if want_case G26-zero-rows; then
+        zero_world; frows 4 >"$W/asset_rows"
+        run_script -- verify-zero-resources
+        expect_refused 'asset rows' 'resource_assets holds 4 row(s)'
+        no_files_container 'asset rows'
+    fi
+    if want_case G26-zero-volume; then
+        zero_world; rm -f "$T/root/files.volume"
+        run_script -- verify-zero-resources
+        expect_refused 'no files action ever ran' 'no files action has run'
+        no_files_container 'no files action ever ran'
+    fi
+    if want_case G26-zero-check-reported; then
+        zero_world; printf 'files:state=absent\nfiles:count=0\n' >"$W/out_files_check"
+        run_script -- verify-zero-resources
+        expect_refused 'a files helper that did not say it checked' 'did not report files:check=ok'
+    fi
+    if want_case G26-zero-files; then
+        zero_world; fout present 4 files:check=ok >"$W/out_files_check"
+        run_script -- verify-zero-resources
+        expect_refused 'files in the active directory' 'the active Resources directory exists'
+        zero_world; fout present 0 files:check=ok >"$W/out_files_check"
+        run_script -- verify-zero-resources
+        expect_refused 'an empty active directory' 'the active Resources directory exists'
+    fi
+}
+
+t_g26_surface() {
+    local cmd
+    for cmd in preserve-failed-state verify-aside verify-zero-resources; do
+        run_script -- "$cmd" extra
+        expect_rc "$cmd takes no argument" 64
+        run_script -- help
+        expect_has "$cmd is in the usage" "$OUT$ERR" "$cmd"
+    done
+    # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
+    run_fn 'printf "%s\n" "${STATE_FILES[@]}" | grep -cxE "failed-state.dump.sql|preserve.record|aside.record"'
+    [[ "$OUT" == 3 ]] || bad "cleanup does not know all three evidence files (it removes by name only): $OUT"
+}
+
+
 declare -A GUARD_TESTS=(
     [G1-context]='t_g1_context t_g1_applies_to_every_command'
     [G1-context-env]='t_g1_context_env'
@@ -9107,6 +9723,63 @@ declare -A GUARD_TESTS=(
     [G25-rm-version]='t_g25_recovery_unit_manifest_is_verified'
     [G25-snapshot-all-reported]='t_g25_paired_the_measurement_is_validated'
     [G25-unit-required]='t_g25_recovery_unit_artifacts_are_verified'
+    [G26-ar-exact]='t_g26_verify_aside'
+    [G26-ar-inventory]='t_g26_verify_aside'
+    [G26-ar-name]='t_g26_verify_aside'
+    [G26-ar-preserve]='t_g26_verify_aside'
+    [G26-ar-run]='t_g26_verify_aside'
+    [G26-aside-record-checked]='t_g26_aside_record'
+    [G26-aside-record-intact]='t_g26_verify_aside'
+    [G26-aside-record-no-overwrite]='t_g26_aside_record'
+    [G26-aside-record-required]='t_g26_verify_aside'
+    [G26-differ-durable]='t_g26_restore_requires_preservation'
+    [G26-differ-files]='t_g26_restore_requires_preservation'
+    [G26-differ-ledger]='t_g26_restore_requires_preservation'
+    [G26-differ-rows]='t_g26_restore_requires_preservation'
+    [G26-differ-structure]='t_g26_restore_requires_preservation'
+    [G26-evidence-no-clobber]='t_g26_aside_record'
+    [G26-gate-check-reported]='t_g26_restore_requires_preservation'
+    [G26-gate-matches]='t_g26_restore_requires_preservation'
+    [G26-gate-needed]='t_g26_restore_requires_preservation'
+    [G26-measure-agree]='t_g26_preserve_measurement_is_validated'
+    [G26-measure-check-reported]='t_g26_preserve_measurement_is_validated'
+    [G26-measure-two-readers]='t_g26_preserve_measurement_is_validated'
+    [G26-pr-assets-table]='t_g26_preserve_record_is_verified'
+    [G26-pr-exact]='t_g26_preserve_record_is_verified'
+    [G26-pr-export-bytes]='t_g26_preserve_record_is_verified'
+    [G26-pr-export-content]='t_g26_preserve_record_is_verified'
+    [G26-pr-export-sha]='t_g26_preserve_record_is_verified'
+    [G26-pr-files-agree]='t_g26_preserve_record_is_verified'
+    [G26-pr-files-state]='t_g26_preserve_record_is_verified'
+    [G26-pr-inventory]='t_g26_preserve_record_is_verified'
+    [G26-pr-keyring]='t_g26_preserve_record_is_verified'
+    [G26-pr-ledger]='t_g26_preserve_record_is_verified'
+    [G26-pr-run]='t_g26_preserve_record_is_verified'
+    [G26-pr-server]='t_g26_preserve_record_is_verified'
+    [G26-pr-source]='t_g26_preserve_record_is_verified'
+    [G26-pr-structure]='t_g26_preserve_record_is_verified'
+    [G26-pr-tables]='t_g26_preserve_record_is_verified'
+    [G26-pr-taken]='t_g26_preserve_record_is_verified'
+    [G26-preserve-commit-no-clobber]='t_g26_preserve_export_and_changes'
+    [G26-preserve-export-checked]='t_g26_preserve_export_and_changes'
+    [G26-preserve-intact]='t_g26_preserve_record_is_verified'
+    [G26-preserve-inventory]='t_g26_preserve_preconditions'
+    [G26-preserve-no-overwrite]='t_g26_preserve_preconditions'
+    [G26-preserve-quiescent]='t_g26_preserve_export_and_changes'
+    [G26-preserve-record-checked]='t_g26_preserve_export_and_changes'
+    [G26-preserve-required]='t_g26_preserve_record_is_verified'
+    [G26-verify-active-absent]='t_g26_verify_aside'
+    [G26-verify-aside-present]='t_g26_verify_aside'
+    [G26-verify-aside-preserved]='t_g26_verify_aside'
+    [G26-verify-aside-record]='t_g26_verify_aside'
+    [G26-verify-binds-preserve]='t_g26_verify_aside'
+    [G26-verify-reported]='t_g26_verify_aside'
+    [G26-verify-zero-file]='t_g26_verify_aside'
+    [G26-zero-check-reported]='t_g26_zero_resources'
+    [G26-zero-files]='t_g26_zero_resources'
+    [G26-zero-inventory]='t_g26_zero_resources'
+    [G26-zero-rows]='t_g26_zero_resources'
+    [G26-zero-volume]='t_g26_zero_resources'
 )
 
 # registry_differences MARKERS REGISTERED (one ID per line each): `unregistered ID` for a marker no GUARD_TESTS entry covers, `unmarked ID` for an entry
