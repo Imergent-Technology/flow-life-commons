@@ -21,6 +21,7 @@ namespace Tests\Support;
  *  - `extract`     verifies the archive and the target BEFORE it writes anything, refuses unless `<root>/resources` does not exist, and
  *                  extracts with `tar --keep-old-files`; it then holds the result to the archive's own inventory.
  *  - `setAside`    renames `resources` to `resources.before-restore-<stamp>`. A rename: nothing is deleted, merged or overwritten.
+ *  - `inspectAside` reads the aside directory `resources.before-restore-<stamp>` and the active `resources` beside it, and changes nothing.
  *  - `seed`        writes the fixed synthetic fixture into a directory that does not exist.
  *
  * Nothing here deletes a file, follows a link, takes a path from a caller beyond the one root it is given, or repairs a state. The real
@@ -372,6 +373,26 @@ final class ResourceFileArchive
         self::verifyPreserved($before, $after); // guard:F-aside-verifies
 
         return ['name' => $name, 'before' => $before, 'after' => $after];
+    }
+
+    /**
+     * What an aside directory holds now, and what the active Resources directory beside it holds, read-only. The aside is `<root>/resources.before-restore-<stamp>`:
+     * the name is built here from the validated stamp (no path comes from the caller) and is a SIBLING of `<root>/resources`, so it is outside the application's
+     * Resources disk, whose root is `<root>/resources`, and the application's prune cannot see it. The aside is read by the one set of rules inventory() applies
+     * to `resources`, so what is checked there is no weaker; a symbolic link in its place is refused, and so is a missing directory.
+     *
+     * @return array{name: string, aside: Inventory, active: Inventory}
+     */
+    public static function inspectAside(string $root, string $stamp): array
+    {
+        self::must(preg_match(self::STAMP_PATTERN, $stamp) === 1, 'the stamp is not a UTC time of the form YYYYMMDDTHHMMSSZ'); // guard:F-inspect-stamp
+        self::must(is_dir($root) && ! is_link($root), 'the files root is not a directory'); // guard:F-inspect-root
+        $name = self::ASIDE_PREFIX.$stamp;
+        $path = $root.'/'.$name;
+        clearstatcache(true);
+        self::must(is_dir($path) && ! is_link($path), 'there is no aside directory of that name (or it is a symbolic link)'); // guard:F-inspect-aside
+
+        return ['name' => $name, 'aside' => self::readStore($path), 'active' => self::inventory($root)];
     }
 
     /**
