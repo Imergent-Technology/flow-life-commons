@@ -217,17 +217,12 @@ readonly BS=$'\\' # a backslash, which a comment of the dump may not hold
 # They are NOT a SQL parser and they do not prove an arbitrary dump safe: they decide whether the dump is made only of the statement forms the fixed two-pass contract
 # writes. What they were composed from, and what has not been seen from a real 34-table dump, is the development note's "WU4" section.
 readonly DUMP_COMMENT_RE=$'^--( [ -~\t]*)?$'                    # `--` alone, or `-- ` and printable ASCII or tabs (a backslash is refused beside it: current_dump_problem)
-readonly DUMP_SANDBOX_RE='^/\*M!999999\\- enable the sandbox mode \*/$'
-# A conditional `SET`, matched against the line in lower case: only the variables mariadb-dump sets, to the kinds of value it sets them to, and nothing else between
-# `/*!NNNNN` and `*/;`, so that a statement cannot hide in a comment the server would run. Two variables change how the rest of the file is READ, and so are held to the
-# values the real dump gives them: sql_mode (a dump could otherwise switch on NO_BACKSLASH_ESCAPES, which turns the backslash in a string into data and a quote that
-# the row check treated as escaped into the end of the string) and the character sets (a multi-byte set can swallow a backslash). A user variable may only be given a system variable.
-readonly DUMP_SET_USER="@[a-z0-9_]+ *= *@@[a-z0-9_]+"
-readonly DUMP_SET_CHARSET="(character_set_client|character_set_results|collation_connection) *= *(@[a-z0-9_]+|@@[a-z0-9_]+|utf8(mb[34])?|utf8mb4_[a-z0-9_]+|binary)"
-readonly DUMP_SET_SYSTEM="(unique_checks|foreign_key_checks|sql_notes|note_verbosity|time_zone) *= *(@[a-z0-9_]+|@@[a-z0-9_]+|[a-z0-9_]+|'[a-z0-9_,+:-]*')"
-readonly DUMP_SET_MODE="sql_mode *= *(@old_sql_mode|'no_auto_value_on_zero')"
-readonly DUMP_SET_ASSIGN="(${DUMP_SET_USER}|${DUMP_SET_CHARSET}|${DUMP_SET_SYSTEM}|${DUMP_SET_MODE})"
-readonly DUMP_SET_RE="^/\\*(m!|!)[0-9]{5,6} set (names (utf8(mb[34])?)|${DUMP_SET_ASSIGN}(, ${DUMP_SET_ASSIGN})*) \\*/;\$"
+readonly DUMP_SANDBOX_RE='^/\*M!999999\\- enable the sandbox mode \*/ ?$' # mariadb-dump 10.19 of MariaDB 10.11.18 writes ONE space after `*/` (live diagnostic, 2026-11-20): none or one, and nothing else
+# A conditional `SET` is one of the lines in dump_set_kind, byte for byte, and no other: the pairs mariadb-dump 10.19 of MariaDB 10.11.18 writes, as a live two-pass dump of the
+# 34 tables showed them (2026-11-20). Nothing is matched by pattern, so a user variable cannot be given another system variable than its own, a value cannot be another, and a
+# statement cannot hide in a comment the server would run. Two settings change how the rest of the file is READ, and current_dump_problem follows them: sql_mode (a dump could
+# otherwise switch on NO_BACKSLASH_ESCAPES, which turns the backslash in a string into data) and the client character set (a multi-byte set can swallow a backslash). Rows are
+# accepted only while the pinned SQL mode and `utf8mb4` are in effect, and the pin, the per-table save and the closing restores must come in the order the tool writes them.
 readonly DUMP_KEYS_RE="^/\\*!40000 ALTER TABLE ${BT}([a-z0-9_]+)${BT} (DISABLE|ENABLE) KEYS \\*/;\$"
 readonly DUMP_DROP_RE="^DROP TABLE IF EXISTS ${BT}([a-z0-9_]+)${BT};\$"
 readonly DUMP_CREATE_RE="^CREATE TABLE ${BT}([a-z0-9_]+)${BT} \\(\$"
@@ -2096,6 +2091,27 @@ snapshot_value() {
     printf '%s' "$found"
 }
 
+# dump_set_kind LINE: the kind of one conditional `SET` line of the dump, or a failure for any other line. Exact text, case included; the table is the whole list.
+dump_set_kind() {
+    case "$1" in
+        '/*!40101 SET NAMES utf8mb4 */;') echo names ;;
+        "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;") echo mode-pin ;;
+        '/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;') echo mode-restore ;;
+        '/*!40101 SET @saved_cs_client     = @@character_set_client */;') echo cs-table-save ;;
+        '/*!40101 SET character_set_client = utf8mb4 */;') echo cs-table-set ;;
+        '/*!40101 SET character_set_client = @saved_cs_client */;') echo cs-table-restore ;;
+        '/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;') echo cs-restore-client ;;
+        '/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;' | '/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;' \
+            | '/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;' | '/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;' \
+            | '/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;' \
+            | '/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;' | "/*!40103 SET TIME_ZONE='+00:00' */;" | '/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;' \
+            | '/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;' | '/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;' \
+            | '/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;' | '/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;' \
+            | '/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;' | '/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;') echo plain ;;
+        *) return 1 ;;
+    esac
+}
+
 # current_dump_problem FILE TABLE_LINES: what the backup contract requires of the dump of the CURRENT schema, judged against what the database held when it was
 # taken (TABLE_LINES: `<table> <rows> <digest>` for each of the 34). Unlike dump_problem, which reads a v0.3.0 dump for table names alone, every line of the dump
 # must be one of the forms named by the DUMP_*_RE patterns, and a line of any other form is a refusal, never skipped:
@@ -2108,11 +2124,12 @@ snapshot_value() {
 # many row lines as the database held rows (so a durable table with no rows has none, and is not "missing"); and no table outside the 34 has anything.
 # What this is not: a SQL parser, and not a proof that arbitrary SQL is safe. It decides whether a file is made only of the line forms the two-pass dump writes, with the
 # rows' values held to the literal forms of a row; the row COUNT is checked against the measurement, a row's CONTENT is not (nothing here reads a row's values: that is
-# what the restored database's own digests are for, in WU5). A row that mariadb-dump wrote over several lines is refused, not miscounted. NOT established against a live
-# 34-table dump (docs, "WU4"): a form this list lacks would refuse a good dump, which is the safe way to be wrong.
+# what the restored database's own digests are for, in WU5). A row that mariadb-dump wrote over several lines is refused, not miscounted. The forms were checked against ONE live
+# two-pass dump of the 34 tables (docs, "WU4"); a form that dump did not show, and this list lacks, would refuse a good dump, which is the safe way to be wrong.
 current_dump_problem() {
-    local file="$1" measured="$2" line lower state=top table='' lineno=0 name rows creates='' drops='' inventory op want new ref ok seq=0
+    local file="$1" measured="$2" line state=top table='' lineno=0 name rows creates='' drops='' inventory op want new ref ok seq=0 kind
     local locked='' keys=off body=0 comma=no
+    local modestate=none csclient=orig tsaved=no # the SQL mode and the client character set, as the dump's own SET lines have left them (see dump_set_kind)
     local -A rowcount=() dropidx=() createidx=() lockdone=() known=()
     local LC_ALL=C
     [[ -f "$file" && ! -L "$file" ]] || { echo "it is not a regular file"; return 1; }
@@ -2174,12 +2191,35 @@ current_dump_problem() {
             [[ -n "${known[$table]:-}" ]] || { echo "it carries rows for a table that is not one of the 34"; return 1; } # guard:G25-dump-unknown-table
             ! in_array "$table" "${TRANSIENT_TABLES[@]}" || { echo "it carries rows for the transient table $table"; return 1; } # guard:G25-dump-transient-empty
             [[ "$locked" == "$table" && "$keys" != enabled ]] || { echo "an INSERT of the dump is not for the table that is locked (line $lineno)"; return 1; } # guard:G25-dump-insert-context
+            [[ "$modestate" == pinned ]] || { echo "an INSERT of the dump comes where the SQL mode is not the one the dump pins (line $lineno)"; return 1; } # guard:G25-dump-insert-mode
+            [[ "$csclient" == safe ]] || { echo "an INSERT of the dump comes where the client character set is not the one the dump sets (line $lineno)"; return 1; } # guard:G25-dump-insert-charset
             state=insert
             continue
         fi
         [[ -z "$locked" ]] || { echo "a statement between a LOCK TABLES and its UNLOCK is not one of the table's own (line $lineno)"; return 1; } # guard:G25-dump-locked-only
-        lower="${line,,}"
-        if [[ "$lower" =~ $DUMP_SET_RE || "$line" =~ $DUMP_SANDBOX_RE ]]; then continue; fi
+        if [[ "$line" =~ $DUMP_SANDBOX_RE ]]; then continue; fi
+        if kind="$(dump_set_kind "$line")"; then
+            case "$kind" in
+                names) csclient=safe ;;
+                cs-table-set) csclient=safe ;;
+                cs-table-save)
+                    [[ "$csclient" == safe ]] || { echo "the dump saves the client character set while it is not the one the dump sets (line $lineno)"; return 1; } # guard:G25-dump-cs-table-save
+                    tsaved=yes ;;
+                cs-table-restore)
+                    [[ "$tsaved" == yes ]] || { echo "the dump restores a client character set it did not save (line $lineno)"; return 1; } # guard:G25-dump-cs-table-restore
+                    tsaved=no ;;
+                cs-restore-client)
+                    [[ "$csclient" == safe && "$tsaved" == no ]] || { echo "the dump restores the client character set that it did not set, or in the middle of a table (line $lineno)"; return 1; } # guard:G25-dump-cs-restore
+                    csclient=orig ;;
+                mode-pin)
+                    [[ "$modestate" == none ]] || { echo "the dump pins the SQL mode while it is pinned already (line $lineno)"; return 1; } # guard:G25-dump-mode-pin
+                    modestate=pinned ;;
+                mode-restore)
+                    [[ "$modestate" == pinned ]] || { echo "the dump restores an SQL mode it did not pin (line $lineno)"; return 1; } # guard:G25-dump-mode-restore
+                    modestate=none ;;
+            esac
+            continue
+        fi
         if [[ "$line" =~ $DUMP_DROP_RE ]]; then
             drops+="${BASH_REMATCH[1]}"$'\n'
             seq=$((seq + 1))
@@ -2196,6 +2236,7 @@ current_dump_problem() {
         echo "it has a statement this check does not recognise (line $lineno, begins '${line%% *}')"; return 1 # guard:G25-dump-unrecognised
     done <"$file"
     [[ "$state" == top && -z "$locked" ]] || { echo "it ends inside a statement"; return 1; } # guard:G25-dump-complete
+    [[ "$modestate" == none && "$csclient" == orig && "$tsaved" == no ]] || { echo "it ends with the SQL mode or the client character set still changed: its closing restore lines are missing"; return 1; } # guard:G25-dump-set-balanced
     [[ "$(printf '%s' "$creates" | LC_ALL=C sort)" == "$inventory" ]] || { echo "it does not create exactly the 34 tables of the current schema, once each"; return 1; } # guard:G25-dump-creates
     [[ "$(printf '%s' "$drops" | LC_ALL=C sort)" == "$inventory" ]] || { echo "it does not drop exactly the 34 tables it creates, once each"; return 1; } # guard:G25-dump-drops
     while read -r name; do
@@ -3349,6 +3390,7 @@ paired_measure() {
 
 PAIRED_TMPS=()
 PAIRED_COMMITTED=()
+PAIRED_PENDING='' PAIRED_PENDING_TMP='' # the name commit_state_file is placing, and the temporary file it is linked from
 PAIRED_VERIFIED=no # set when require_recovery_unit has accepted the files this stage put in place
 # paired_temp VAR: a private temporary file in the state directory for an artifact that is not yet a part of the backup, removed when the stage ends (on_paired_exit).
 paired_temp() {
@@ -3360,8 +3402,10 @@ paired_temp() {
 }
 # commit_state_file TEMP NAME: the finished temporary file under its final name, by a hard link that fails if the name is taken, so that nothing is ever put over a file that is there.
 commit_state_file() {
+    PAIRED_PENDING="$2" PAIRED_PENDING_TMP="$1" # what the link below is about to place, so that an interruption between the link and the next line does not hide it from the note
     ln -- "$1" "$ROOT/$2" 2>/dev/null || refuse "$2 is in the state directory already, and a backup is never put over a file. $(paired_partial_note)" # guard:G25-commit-no-clobber
     PAIRED_COMMITTED+=("$2")
+    PAIRED_PENDING=''
 }
 # paired_partial_note: what is true of the state directory, in words, when the stage stops. Three phases are told apart by what the stage itself did (PAIRED_COMMITTED, the
 # names it put in place, and PAIRED_VERIFIED, set only once require_recovery_unit accepted them), never by assumption: (1) nothing was put in place; (2) some files were, and
@@ -3369,6 +3413,9 @@ commit_state_file() {
 # may exist and may be a recovery unit, and nothing here says which: only require_recovery_unit accepting them makes them one. Nothing is removed, renamed or repaired.
 paired_partial_note() {
     local part wrote=no placed=() other=''
+    # A signal can arrive after the link made a name and before PAIRED_COMMITTED learned of it. The name then is, and only then, the very file this stage was linking (same inode as
+    # its temporary file, which is still there at this point): it counts as placed. A name that is another file's (the link failed because it was taken) is never counted.
+    if [[ -n "$PAIRED_PENDING" && "$ROOT/$PAIRED_PENDING" -ef "$PAIRED_PENDING_TMP" ]] && ! in_array "$PAIRED_PENDING" ${PAIRED_COMMITTED[@]+"${PAIRED_COMMITTED[@]}"}; then PAIRED_COMMITTED+=("$PAIRED_PENDING"); fi
     for part in ${PAIRED_COMMITTED[@]+"${PAIRED_COMMITTED[@]}"}; do
         if [[ "$part" == "$RECOVERY_MANIFEST_FILE" ]]; then wrote=yes; else placed+=("$part"); fi
     done
@@ -3386,11 +3433,12 @@ paired_partial_note() {
     fi
 }
 on_paired_exit() {
-    local status=$? tmp
+    local status=$? tmp note=''
+    if ((status != 0)); then note="$(paired_partial_note)"; fi # before the temporary files go: it compares them with the names that were linked from them
     for tmp in ${PAIRED_TMPS[@]+"${PAIRED_TMPS[@]}"}; do rm -f -- "$tmp"; done
     if ((status != 0)); then
         stage_trailer 'The rehearsal files and database'
-        warn "$(paired_partial_note)"
+        warn "$note"
     fi
     stage_record_remove
 }

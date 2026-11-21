@@ -129,7 +129,7 @@ it('does not depend on the order the rows were written in', function (): void {
  * schema uses, and scripts/tests/rehearsal.sh runs it over the fixture below. The fixture is what the migrated schema's own SHOW CREATE TABLE says, and mariadb-dump writes the
  * same text for the structure of a table, so the check is held to the real column, key and foreign-key forms. This test is what keeps the fixture honest: a migration that
  * changes a table makes it fail, and the remedy is to regenerate the fixture (the statements with AUTO_INCREMENT counters removed, each ending in `;`, in table order) and to
- * widen the check only if it then refuses the new form. It is NOT a probe of mariadb-dump, whose complete output has not been read (docs, "WU4").
+ * widen the check only if it then refuses the new form. It is not a probe of mariadb-dump: the dump's own line forms were read from one live two-pass dump (docs, "WU4"), and this test only keeps the CREATE text honest.
  */
 it('has the CREATE TABLE statements of the migrated schema in the fixture the dump check is tested against', function (): void {
     $text = '';

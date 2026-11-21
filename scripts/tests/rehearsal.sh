@@ -7600,27 +7600,44 @@ snapshot_all_output() { # SEED [LEDGER_DIGEST]: what `snapshot-all` prints
     structure_block up
     printf 'ledger:count=29\nledger:last=%s\nledger:digest=%s\nsnapshot-all:complete=ok\n' "$LEDGER_LAST" "${2:-$(fake_digest ledger)}"
 }
-# The two passes of the 34-table dump in the form mariadb-dump 10.19 of MariaDB 10.11.18 writes them (rows on the lines after VALUES; a durable table with no rows has only its
-# LOCK and KEYS lines; a transient table is ignored by the second pass and has structure only). Composed from the tool's documented output and the one observed live (L2):
-# NOT taken from a live 34-table dump, which is the evidence gap the development note names.
+# The two passes of the 34-table dump in the form mariadb-dump 10.19 of MariaDB 10.11.18 writes them: the header, the per-table lines, the footer, the sandbox line WITH ITS
+# TRAILING SPACE and the SET pairs are the bytes a live diagnostic of the real two-pass dump of the 34 tables showed (2026-11-20); the CREATE bodies and the rows are minimal
+# (the real structures are in the fixture the Pest test holds to the schema, and a row's text is not read). Rows are on the lines after VALUES; a durable table with no rows has only
+# its LOCK and KEYS lines; a transient table is ignored by the second pass and has structure only.
+real_dump_header() { # PASS (1 or 2): the second pass has no UNIQUE_CHECKS lines
+    printf '/*M!999999\\- enable the sandbox mode */ \n-- MariaDB dump 10.19  Distrib 10.11.18-MariaDB, for debian-linux-gnu (x86_64)\n--\n-- Host: 127.0.0.1    Database: flc_rehearsal_app\n-- ------------------------------------------------------\n-- Server version\t10.11.18-MariaDB-ubu2204\n\n'
+    printf '/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\n/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;\n/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;\n/*!40101 SET NAMES utf8mb4 */;\n'
+    printf '/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;\n/*!40103 SET TIME_ZONE='"'"'+00:00'"'"' */;\n'
+    [[ "$1" == 2 ]] || printf '/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;\n'
+    printf '/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\n/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='"'"'NO_AUTO_VALUE_ON_ZERO'"'"' */;\n/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;\n\n'
+}
+real_dump_footer() { # PASS
+    printf '/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;\n\n/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;\n/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n'
+    [[ "$1" == 2 ]] || printf '/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;\n'
+    printf '/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;\n/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;\n/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;\n/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;\n\n-- Dump completed on 2026-11-20 12:00:00\n'
+}
 put_current_dumps() {
-    local t n i
-    {
-        printf '/*M!999999\\- enable the sandbox mode */\n-- MariaDB dump 10.19  Distrib 10.11.18-MariaDB, for debian-linux-gnu (x86_64)\n--\n-- Host: 127.0.0.1    Database: flc_rehearsal_app\n-- ------------------------------------------------------\n\n'
-        printf '/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\n/*!50503 SET NAMES utf8mb4 */;\n/*M!100616 SET @OLD_NOTE_VERBOSITY=@@NOTE_VERBOSITY, NOTE_VERBOSITY=0 */;\n\n'
-    } | tee "$W/dump_pass1" >"$W/dump_pass2"
+    local t n i first1=yes first2=yes
+    real_dump_header 1 >"$W/dump_pass1"
+    real_dump_header 2 >"$W/dump_pass2"
     for t in $(sorted_up); do
-        printf -- '--\n-- Table structure for table \x60%s\x60\n--\n\nDROP TABLE IF EXISTS \x60%s\x60;\n/*!40101 SET @saved_cs_client     = @@character_set_client */;\n/*!40101 SET character_set_client = utf8 */;\nCREATE TABLE \x60%s\x60 (\n  \x60id\x60 int(11) NOT NULL,\n  PRIMARY KEY (\x60id\x60)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\n/*!40101 SET character_set_client = @saved_cs_client */;\n\n' "$t" "$t" "$t" >>"$W/dump_pass1"
+        # a blank line separates one table from the next, and the footer follows the last table directly
+        [[ "$first1" == yes ]] || printf '\n' >>"$W/dump_pass1"
+        first1=no
+        printf -- '--\n-- Table structure for table \x60%s\x60\n--\n\nDROP TABLE IF EXISTS \x60%s\x60;\n/*!40101 SET @saved_cs_client     = @@character_set_client */;\n/*!40101 SET character_set_client = utf8mb4 */;\nCREATE TABLE \x60%s\x60 (\n  \x60id\x60 int(11) NOT NULL,\n  PRIMARY KEY (\x60id\x60)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\n/*!40101 SET character_set_client = @saved_cs_client */;\n' "$t" "$t" "$t" >>"$W/dump_pass1"
         [[ " ${TRANSIENT[*]} " != *" $t "* ]] || continue
+        [[ "$first2" == yes ]] || printf '\n' >>"$W/dump_pass2"
+        first2=no
         n="$(crows_of "$t")"
         printf -- '--\n-- Dumping data for table \x60%s\x60\n--\n\nLOCK TABLES \x60%s\x60 WRITE;\n/*!40000 ALTER TABLE \x60%s\x60 DISABLE KEYS */;\n' "$t" "$t" "$t" >>"$W/dump_pass2"
         if ((n > 0)); then
             printf 'INSERT INTO \x60%s\x60 VALUES\n' "$t" >>"$W/dump_pass2"
             for ((i = 1; i <= n; i++)); do printf '(%d)%s\n' "$i" "$( ((i < n)) && echo , || echo ';')" >>"$W/dump_pass2"; done
         fi
-        printf '/*!40000 ALTER TABLE \x60%s\x60 ENABLE KEYS */;\nUNLOCK TABLES;\n\n' "$t" >>"$W/dump_pass2"
+        printf '/*!40000 ALTER TABLE \x60%s\x60 ENABLE KEYS */;\nUNLOCK TABLES;\n' "$t" >>"$W/dump_pass2"
     done
-    printf '/*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;\n-- Dump completed on 2026-11-20 12:00:00\n' | tee -a "$W/dump_pass1" >>"$W/dump_pass2"
+    real_dump_footer 1 >>"$W/dump_pass1"
+    real_dump_footer 2 >>"$W/dump_pass2"
 }
 
 # The upgraded database (34 tables, the post-upgrade state), the four seeded Resource files and their asset rows, the files volume, the prepared source, and what each helper
@@ -7956,6 +7973,19 @@ dump_before() { # LINE TEXT: TEXT before the first line of the dump that is exac
 dump_replace() { # LINE TEXT: the first line of the dump that is exactly LINE, replaced by TEXT (no text: removed)
     DUMP_TEXT="$(printf '%b' "$2")" awk -v key="$(printf '%b' "$1")" '!done && $0 == key { if (ENVIRON["DUMP_TEXT"] != "") print ENVIRON["DUMP_TEXT"]; done = 1; next } { print }' "$T/dump.sql" >"$T/dump.new" && mv "$T/dump.new" "$T/dump.sql"
 }
+dump_drop_last() { # LINE: the LAST line of the dump that is exactly LINE, removed
+    local n
+    n="$(grep -n -x -F -- "$(printf '%b' "$1")" "$T/dump.sql" | tail -1 | cut -d: -f1)"
+    [[ -n "$n" ]] || { bad "the line '$1' is not in the dump"; return 1; }
+    sed -i "${n}d" "$T/dump.sql"
+}
+# The conditional SET lines the cases move, as the real dump writes them.
+PIN="/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;"
+MODE_RESTORE='/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;'
+NAMES='/*!40101 SET NAMES utf8mb4 */;'
+CS_SAVE='/*!40101 SET @saved_cs_client     = @@character_set_client */;'
+CS_RESTORE='/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;'
+FIRST_DATA='-- Dumping data for table \x60account_invitations\x60'
 CREATE_JOBS='CREATE TABLE \x60jobs\x60 ('
 DISABLE_PEOPLE='/*!40000 ALTER TABLE \x60people\x60 DISABLE KEYS */;'
 ENABLE_PEOPLE='/*!40000 ALTER TABLE \x60people\x60 ENABLE KEYS */;'
@@ -7993,15 +8023,24 @@ t_g25_current_dump_contract() {
         [[ "$(grep -c '^CREATE TABLE' "$T/dump.sql")" == 34 && "$(grep -c 'FOREIGN KEY' "$T/dump.sql")" -ge 20 ]] || bad 'the real structures were not put in the dump'
         fresh_dump; dump_replace ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;' ') ENGINE=InnoDB AUTO_INCREMENT=30 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;'
         dump_check 'a closing line with an AUTO_INCREMENT counter' ''
-        for line in "/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;" "/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;" "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;" \
-            "/*!40103 SET TIME_ZONE='+00:00' */;" "/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;" "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;" \
-            "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;" "/*M!100001 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;" "/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;" \
-            "/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;" "/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;" "/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;" \
-            "/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;" "/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;" "/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;" \
-            "/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;" "-- Server version	10.11.18-MariaDB" "-- Dump completed on 2026-11-20 12:00:00"; do
+        # The conditional SETs that change nothing the check follows, each as the real dump writes it (the ones that move the SQL mode or the client character set are in the cases
+        # of their own guards below), the comment lines of a real dump, and the sandbox line with its one trailing space and without.
+        for line in "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;" "/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;" "/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;" \
+            "/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;" "/*!40103 SET TIME_ZONE='+00:00' */;" "/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;" \
+            "/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;" "/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;" \
+            "/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;" "/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;" "/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;" \
+            "/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;" "/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;" "/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;" \
+            "-- Server version	10.11.18-MariaDB-ubu2204" "-- Dump completed on 2026-11-20 12:00:00" '/*M!999999\- enable the sandbox mode */' '/*M!999999\- enable the sandbox mode */ '; do
             fresh_dump; dump_append "$line"
             dump_check "the line '$line'" ''
         done
+        # The real bytes: the first line of a real dump is the sandbox directive and ONE space; the same line without the space is accepted too.
+        fresh_dump; [[ "$(head -n 1 "$T/dump.sql" | tail -c 4 | od -An -tx1 | tr -d ' \n')" == 2a2f200a ]] || bad 'the test dump does not begin with the sandbox directive and its one trailing space'
+        fresh_dump; sed -i '1s/ $//' "$T/dump.sql"; dump_check 'the sandbox directive without its trailing space' ''
+        [[ "$(grep -c '^/\*M!999999' "$T/dump.sql")" == 2 ]] || bad 'the test dump does not have the sandbox directive at the start of each pass'
+        # What the two passes do with the SQL mode and the client character set: save and pin, restore, and again for the second pass; accepted as one dump.
+        fresh_dump; [[ "$(grep -c -F -x -- "$PIN" "$T/dump.sql")" == 2 && "$(grep -c -F -x -- "$MODE_RESTORE" "$T/dump.sql")" == 2 && "$(grep -c -F -x -- "$NAMES" "$T/dump.sql")" == 2 ]] \
+            || bad 'the test dump does not pin and restore the SQL mode once in each pass'
         fresh_dump; dump_replace '(1),' "(1,'O\\\\'Brien; DROP TABLE people; -- (x)',NULL,-3.5,1e-7,0x41424344,_binary 'a\\\\0b\\\\nc','',''),"
         dump_check 'a row of every literal form, with SQL inside its strings' ''
     fi
@@ -8013,7 +8052,18 @@ t_g25_current_dump_contract() {
             $'DROP TABLE IF EXISTS \x60people\x60;\r' '/* DROP DATABASE y */;' '/*M!999999\- enable the sandbox mode */ DROP DATABASE y;' $'/*!40000 ALTER TABLE \x60people\x60 DISABLE KEYS */; DROP DATABASE y;' \
             $'/*!40101 SET @a=1 */ DROP TABLE people /* */;' '/*!40101 SET GLOBAL max_connections=1 */;' "/*!40101 SET sql_mode='NO_BACKSLASH_ESCAPES' */;" '/*!40101 SET @m=@@sql_mode, sql_mode=@m */;' \
             "/*!40101 SET @x='NO_BACKSLASH_ESCAPES' */;" '/*!40101 SET character_set_client = gbk */;' '/*!40101 SET NAMES big5 */;' '/*!40101 SET @a=1, DROP DATABASE y */;' \
-            $'-- a comment with a vertical tab \v'; do
+            $'-- a comment with a vertical tab \v' \
+            '/*M!999999\- enable the sandbox mode */  ' $'/*M!999999\\- enable the sandbox mode */\t' '/*M!999999\- enable the sandbox mode */ x' '/*M!999999\- enable the sandbox mode */ ;' $'/*M!999999\\- enable the sandbox mode */ \r' \
+            ' /*M!999999\- enable the sandbox mode */' '/*M!999999\- enable the sandbox mode */ /*M!999999\- enable the sandbox mode */' '/*M!999999\- enable the sandbox mode*/' '/*M!999999\- disable the sandbox mode */' \
+            '/*!40101 SET @OLD_SQL_MODE=@@CHARACTER_SET_CLIENT, SQL_MODE='"'"'NO_AUTO_VALUE_ON_ZERO'"'"' */;' '/*!40101 SET SQL_MODE=@OLD_CHARACTER_SET_CLIENT */;' '/*!40014 SET @OLD_UNIQUE_CHECKS=@@SQL_MODE, UNIQUE_CHECKS=0 */;' \
+            '/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_SQL_MODE */;' '/*!40103 SET TIME_ZONE=@OLD_SQL_MODE */;' '/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE */;' \
+            "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO,NO_BACKSLASH_ESCAPES' */;" "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='' */;" \
+            "/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO', @x=1 */;" '/*!40101 SET SQL_MODE=@OLD_SQL_MODE, SQL_MODE=@@GLOBAL.SQL_MODE */;' \
+            "/*!40101 SET SQL_MODE=CONCAT(@@SQL_MODE, ',NO_BACKSLASH_ESCAPES') */;" '/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@SQL_MODE */;' '/*!40101 SET @saved_cs_client = @@sql_mode */;' \
+            '/*!40101 SET character_set_client = @OLD_SQL_MODE */;' '/*!40101 SET @saved_cs_client = @@character_set_client */;' '/*!40101 set sql_mode=@old_sql_mode */;' \
+            '/*!40101 SET  NAMES utf8mb4 */;' '/*!40101 SET NAMES utf8 */;' '/*!40101 SET NAMES utf8mb3 */;' '/*!50503 SET NAMES utf8mb4 */;' '/*M!100001 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;' \
+            '/*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;' '/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_RESULTS */;' '/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT, SQL_MODE=@OLD_SQL_MODE */;' \
+            "/*!40103 SET TIME_ZONE='+01:00' */;" "/*!40103 SET TIME_ZONE='SYSTEM' */;" '/*!40014 SET UNIQUE_CHECKS=1 */;'; do
             fresh_dump; dump_append "$stmt"
             dump_check "the statement '$stmt'" 'does not recognise'
         done
@@ -8150,6 +8200,50 @@ t_g25_current_dump_contract() {
         dump_check 'a SET inside a LOCK TABLES' 'between a LOCK TABLES and its UNLOCK'
         fresh_dump; dump_after "$DISABLE_PEOPLE" 'DELETE FROM people;'
         dump_check 'a DELETE inside a LOCK TABLES' 'between a LOCK TABLES and its UNLOCK'
+    fi
+    # The SQL mode and the client character set, followed through both passes. The real dump saves the mode and pins it, restores it, and does the same again for the second pass; rows
+    # are accepted only between a pin and its restore, and only while the client character set is the one the dump set.
+    if want_case G25-dump-mode-pin; then
+        fresh_dump; dump_after "$PIN" "$PIN"
+        dump_check 'the SQL mode pinned a second time, so that the saved mode is the pinned one' 'pins the SQL mode while it is pinned already'
+    fi
+    if want_case G25-dump-mode-restore; then
+        fresh_dump; dump_before "$PIN" "$MODE_RESTORE"
+        dump_check 'an SQL mode restored before it was pinned' 'restores an SQL mode it did not pin'
+        fresh_dump; dump_after "$MODE_RESTORE" "$MODE_RESTORE"
+        dump_check 'an SQL mode restored twice' 'restores an SQL mode it did not pin'
+    fi
+    if want_case G25-dump-insert-mode; then
+        fresh_dump; dump_before "$FIRST_DATA" "$MODE_RESTORE"
+        dump_check 'the SQL mode restored (to whatever the loading session had) before the rows' 'INSERT of the dump comes where the SQL mode is not the one the dump pins'
+        fresh_dump; sed -i '/^\/\*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE=/d; /^\/\*!40101 SET SQL_MODE=@OLD_SQL_MODE \*\/;$/d' "$T/dump.sql"
+        dump_check 'rows in a dump that never pins the SQL mode' 'INSERT of the dump comes where the SQL mode is not the one the dump pins'
+    fi
+    if want_case G25-dump-insert-charset; then
+        fresh_dump; dump_before "$FIRST_DATA" "$CS_RESTORE"
+        dump_check 'the client character set restored (to whatever the loading session had) before the rows' 'INSERT of the dump comes where the client character set is not the one the dump sets'
+        fresh_dump; sed -i '/^\/\*!40101 SET NAMES utf8mb4 \*\/;$/d; /saved_cs_client/d; /^\/\*!40101 SET character_set_client = utf8mb4 \*\/;$/d; /^\/\*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT \*\/;$/d' "$T/dump.sql"
+        dump_check 'rows in a dump that never sets the client character set' 'INSERT of the dump comes where the client character set is not the one the dump sets'
+    fi
+    if want_case G25-dump-cs-table-save; then
+        fresh_dump; dump_replace "$NAMES" ''
+        dump_check 'a client character set saved before the dump has set it' 'saves the client character set while it is not the one the dump sets'
+    fi
+    if want_case G25-dump-cs-table-restore; then
+        fresh_dump; dump_replace "$CS_SAVE" ''
+        dump_check 'a client character set restored that was never saved' 'restores a client character set it did not save'
+    fi
+    if want_case G25-dump-cs-restore; then
+        fresh_dump; dump_before "$NAMES" "$CS_RESTORE"
+        dump_check 'the client character set restored before the dump set it' 'restores the client character set that it did not set, or in the middle of a table'
+        fresh_dump; dump_after "$CS_SAVE" "$CS_RESTORE"
+        dump_check 'the client character set restored in the middle of a table' 'restores the client character set that it did not set, or in the middle of a table'
+    fi
+    if want_case G25-dump-set-balanced; then
+        fresh_dump; dump_drop_last "$MODE_RESTORE"
+        dump_check 'a dump that ends with the SQL mode still pinned' 'its closing restore lines are missing'
+        fresh_dump; dump_drop_last "$CS_RESTORE"
+        dump_check 'a dump that ends with the client character set still set' 'its closing restore lines are missing'
     fi
     if want_case G25-dump-rows; then
         fresh_dump; sed -i 's/^people 14 /people 15 /' "$T/measured.txt"
@@ -8527,6 +8621,18 @@ t_g25_paired_failure_phases_are_told_apart() {
     expect_has 'phase 3, later: accepted, then failed' "$ERR" 'recovery.manifest.json was put in place last, with current.dump.sql resources.archive.tar.gz resources.manifest.json, and require_recovery_unit accepted them; the stage failed after that'
     expect_has 'phase 3, later: it is still the verifier that decides' "$ERR" 'Whether they may be relied on is for require_recovery_unit to say again'
     [[ "$ERR" != *'NOT a recovery unit'* ]] || bad "phase 3, later: the note says the files are not a unit: ${ERR:0:400}"
+    # A signal can arrive after the hard link made a name and before the stage wrote that name down. The note still tells it: the name is the stage's own file when it is the same
+    # file as the temporary one it was linked from. A name that is another file's (the link failed because the name was taken) is never counted, and the stage's own record is not doubled.
+    local d="$T/pending"
+    mkdir -p "$d"; printf mine >"$d/.paired.tmp"; ln "$d/.paired.tmp" "$d/current.dump.sql"
+    run_fn "ROOT='$d'; PAIRED_PENDING=current.dump.sql PAIRED_PENDING_TMP='$d/.paired.tmp'; paired_partial_note"
+    [[ "$OUT" == 'These parts of the backup were already in place: current.dump.sql. recovery.manifest.json was not written, so they are NOT a recovery unit, whatever they hold.' ]] \
+        || bad "a file linked just before the stage was interrupted is not in the note: $OUT"
+    printf theirs >"$d/resources.manifest.json"
+    run_fn "ROOT='$d'; PAIRED_PENDING=resources.manifest.json PAIRED_PENDING_TMP='$d/.paired.tmp'; paired_partial_note"
+    [[ "$OUT" != *resources.manifest.json* ]] || bad "a name that is another file's was counted as put in place: $OUT"
+    run_fn "ROOT='$d'; PAIRED_COMMITTED=(current.dump.sql); PAIRED_PENDING=current.dump.sql PAIRED_PENDING_TMP='$d/.paired.tmp'; paired_partial_note"
+    [[ "$OUT" != *'current.dump.sql current.dump.sql'* ]] || bad "a file that was already written down was told twice: $OUT"
 }
 
 # shellcheck disable=SC2016 # the code in single quotes is run by the inner bash, which expands it
@@ -8952,6 +9058,14 @@ declare -A GUARD_TESTS=(
     [G25-dump-transient-empty]='t_g25_current_dump_contract'
     [G25-dump-unknown-table]='t_g25_current_dump_contract'
     [G25-dump-unrecognised]='t_g25_current_dump_contract'
+    [G25-dump-mode-pin]='t_g25_current_dump_contract'
+    [G25-dump-mode-restore]='t_g25_current_dump_contract'
+    [G25-dump-insert-mode]='t_g25_current_dump_contract'
+    [G25-dump-insert-charset]='t_g25_current_dump_contract'
+    [G25-dump-cs-table-save]='t_g25_current_dump_contract'
+    [G25-dump-cs-table-restore]='t_g25_current_dump_contract'
+    [G25-dump-cs-restore]='t_g25_current_dump_contract'
+    [G25-dump-set-balanced]='t_g25_current_dump_contract'
     [G25-ledger-evidence]='t_g25_paired_the_measurement_is_validated'
     [G25-paired-agree]='t_g25_paired_preconditions'
     [G25-paired-archive-nonempty]='t_g25_paired_failures_leave_nothing_that_looks_like_a_backup'
