@@ -774,7 +774,7 @@ The live run's evidence is kept privately, outside the repository (`~/.local/sha
 
 ## WP3c closeout: the local recovery rehearsal and its documentation
 
-**Status.** WP3c's implementation and local acceptance evidence are complete, **subject to the review and integration of the documentation closeout that adds this section**. This section does not record owner acceptance of WP3c; that is the owner's to give. It adds to the sections above and changes none of them. Everything ran on a local Docker daemon against synthetic data; no production or staging system, development database or application `.env` was accessed, and nothing was deployed. **Local rehearsal success is not production recovery readiness and not a deployment authorization** ([contract §9](README.md#9-release-track-outside-g6)).
+**Status.** WP3c's implementation and local acceptance evidence are complete. The owner has accepted WP3c for closure (2026-11-22), **effective when the documentation closeout that adds this section is integrated** (see [Owner rulings](#owner-rulings-2026-11-22)). It adds to the sections above and changes none of them. Everything ran on a local Docker daemon against synthetic data; no production or staging system, development database or application `.env` was accessed, and nothing was deployed. **Local rehearsal success is not production recovery readiness and not a deployment authorization** ([contract §9](README.md#9-release-track-outside-g6)).
 
 ### Where each requirement is met
 
@@ -806,6 +806,15 @@ The evidence of the WU6 run (each stage's command, times, exit status and saniti
 ### L3c, and a cleared schema instead of a "fresh database"
 
 "L3c" was a planning label for the live run after slice 2.2C-3, not a contract requirement; WU6 is that run, and no separate execution is needed ([how it was settled](../../development/restore-rehearsal.md#l3c-what-the-label-meant-and-how-wu6-settled-it)). The contract's step list says "restore into a fresh database"; the triage ruling WP3-01 is more specific and governs: the target is returned to an empty application-schema state before the load, and "a fresh-database restore alone is not sufficient evidence". The rehearsal restores into its own isolated database that way, and no run restored into a separately created database. The contract's wording is left as written ([clarified in place](README.md#wp3--data-integrity-upgrade-and-restore-safety)).
+
+### Owner rulings (2026-11-22)
+
+Made after the independent review of the closeout PR (approved, with one wording correction to the decision table's scenario A, applied):
+
+1. **L3c** is substantively satisfied by WU6; no separate run is required.
+2. **The cleared-schema restoration** satisfies WP3-01's local rehearsal requirement.
+3. **[G6-D23](debt-register.md) and [G6-D24](debt-register.md)** are accepted as LOW-severity deferrals, with their revisit triggers.
+4. **WP3c is accepted for closure** once this closeout is integrated. Production recovery readiness, the host-rehearsal decision and the release authorization remain separate release-track decisions.
 
 ### What stays outside WP3c
 
