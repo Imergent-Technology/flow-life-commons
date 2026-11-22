@@ -185,7 +185,7 @@ Same audit model as WP1. The audit answers:
     1. Build v0.3.0 state from a v0.3.0 worktree.
     2. Back it up by the documented procedure.
     3. Upgrade to `main`.
-    4. Restore into a fresh database.
+    4. Restore into a fresh database. *(Clarified 2026-11-22, the original wording kept: the owner's triage ruling [WP3-01](wp3-triage.md#wp3-01-medium--in-place-restoration-retains-newer-tables) governs this step. The rehearsal clears the application schema of its own isolated database before loading the dump, and "a fresh-database restore alone is not sufficient evidence". No run restored into a separately created database. See the [WP3c closeout](wp3-record.md#wp3c-closeout-the-local-recovery-rehearsal-and-its-documentation).)*
     5. Check the keyring fingerprints.
     6. Compare per-table checksums with the pre-upgrade snapshot.
     7. Run v0.3.0 code against the restored database (sign-in, `/me`).

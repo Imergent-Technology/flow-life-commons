@@ -1,6 +1,6 @@
 # G6 WP3 — remediation record
 
-- **Package:** WP3 Data integrity, upgrade and restore safety. Remediation of the [independent audit](wp3-audit.md) as ruled in the [owner's triage](wp3-triage.md). The triage authorizes the three work units separately: **WP3a** and **WP3b** are recorded below. **WP3c is planned and only its slice 1 (the isolation foundation of the local recovery rehearsal) has been done**; that slice is recorded in its own section at the end, and the rest of WP3c is not yet authorized.
+- **Package:** WP3 Data integrity, upgrade and restore safety. Remediation of the [independent audit](wp3-audit.md) as ruled in the [owner's triage](wp3-triage.md). The triage authorizes the three work units separately: **WP3a** and **WP3b** are recorded below. **WP3c** (the local recovery rehearsal and the recovery documentation) was authorized in slices, each recorded in its own section at the end; its implementation and local acceptance evidence are complete, subject to the review and integration of its documentation closeout ([closeout](#wp3c-closeout-the-local-recovery-rehearsal-and-its-documentation)).
 - **Audit and triage files:** the audit is committed as `wp3-audit.md` from its heading (`# G6 WP3 — Data integrity…`) to its closing verdict line, unedited. The one-line "Written for:" hand-over note that preceded it was addressed to the owner, so it is not in the file (as for [WP2](wp2-record.md)). The owner's rulings are `wp3-triage.md`, verbatim in content. Its three header lines first ended in two spaces (Markdown hard line breaks), which `git diff --check` reports as trailing whitespace. At the owner's direction they now end in a backslash, CommonMark's other hard line break. The rendered text is the same and no word changed. (`wp2-triage.md`, already on `main`, keeps its two-space form.)
 
 ## WP3a — Migration freeze and immutability
@@ -595,7 +595,9 @@ The final independent Opus 5.5 verification of `ebc15e8` verified the L3 correct
 
 **Attribution corrected.** §14.2 said the verification of §14.1 returned SAFE FOR PR PREPARATION. That verdict is the one on `3bb7bc4`; the verification of `95dfcf4`, the commit that records §14.1, returned SAFE AFTER BOUNDED REMEDIATION. §14.2 now says so, and §14.1 now credits the `direct` bypass to a re-verification of §14, not to the focused review that returned SAFE FOR PR PREPARATION. §14.2's findings and the owner's deferrals are unchanged.
 
-## WP3c — remaining work: slices 1, 2.1, 2.2 (A and B), 2.2C-1 and 2.2C-2 are integrated; WP3c stays open
+## WP3c — remaining work as it stood after slice 2.2C-2 (superseded by the [closeout](#wp3c-closeout-the-local-recovery-rehearsal-and-its-documentation) at the end of this record)
+
+*Update (2026-11-22): this section is kept as written when slice 2.2C-2 was integrated. Slice 2.2C-3 (WU0 to WU6), the runbook corrections and the WP3-11 decision table have since been completed; the closeout says where each item is met and what stays outside WP3c.*
 
 Planned by the triage. Its slice 1, the isolation foundation, is done and recorded in [the section below](#wp3c-slice-1--isolation-foundation-closeout). Slices 2.1 (the PHP substrate) and 2.2A and 2.2B (the historical recovery cycle: backup, upgrade, the WP3-01 defect reproduced, the corrected restore, a sign-in with TOTP, the re-upgrade) are done and recorded in [the section after it](#wp3c-slices-21-and-22-a-and-b--recovery-rehearsal-closeout); their live run passed on synthetic data. Slice 2.2C-1 (a half-failed upgrade restored from, and a security change made after the backup reversed by the restore) passed its live run (L3a, 2026-11-16) and is recorded in [the last section](#wp3c-slice-22c-1--half-failed-upgrade-and-security-reversal-closeout). Slice 2.2C-2 (the Resource files: an isolated files volume and container, an archive and its manifest, the measured move-aside and the restoration) passed its live run (L3b, 2026-11-17, two lifecycles) and is recorded in [the last section](#wp3c-slice-22c-2--resource-files-closeout). **Still open and not yet authorized:** slice 2.2C-3 (the complete database-and-files cycle: one consistent backup, the application's own prune check, and what the runbook says), the reconciliation of invitations and other security-sensitive changes after a restore, the production pre-flight, and the runbook and release documentation. The list below is the triage's, as it stood when this section was written, with one dated update on WP3-01. What WP3a and WP3b leave to it:
 
@@ -768,3 +770,54 @@ On MariaDB 10.11.18 (Docker 29.9.3), at `43b772a`, from the scrubbed environment
 - **WP3c stays open.** The earlier audit findings, triage rulings and verdicts in this record are unchanged; this section adds to them.
 
 The live run's evidence is kept privately, outside the repository (`~/.local/share/flowlife-l3b-evidence/20261117T060304Z`), and is not committed; it contains no credential, key, dump or database content.
+
+
+## WP3c closeout: the local recovery rehearsal and its documentation
+
+**Status.** WP3c's implementation and local acceptance evidence are complete. The owner has accepted WP3c for closure (2026-11-22), **effective when the documentation closeout that adds this section is integrated** (see [Owner rulings](#owner-rulings-2026-11-22)). It adds to the sections above and changes none of them. Everything ran on a local Docker daemon against synthetic data; no production or staging system, development database or application `.env` was accessed, and nothing was deployed. **Local rehearsal success is not production recovery readiness and not a deployment authorization** ([contract §9](README.md#9-release-track-outside-g6)).
+
+### Where each requirement is met
+
+| Requirement | Source | Where it is met | Evidence |
+|---|---|---|---|
+| The WP3-01 defect reproduced, then the corrected procedure: a verified backup and keyring, the application schema cleared, the dump loaded, no post-upgrade table left, a later upgrade that succeeds | Triage WP3-01; contract 3c steps 1 to 6 | L2 ([record](../../development/restore-rehearsal.md#l2-the-live-recovery-rehearsal-passed-2026-11-14)), repeated in WU6 Lifecycle A | Live |
+| Per-table checksums equal to the pre-upgrade snapshot; keyring fingerprints checked; the v0.3.0 application signs in with a second factor under a previous key | Contract 3c steps 5 to 7 | L2, L3a, WU6 Lifecycle A | Live (the sign-in is in-process and rolled back) |
+| A half-failed migration: the schema and ledger left behind recorded, then restored from; the MariaDB/PostgreSQL difference in transactional schema changes written down | Contract 3c, §8; triage WP3-11 | L3a ([record](../../development/restore-rehearsal.md#l3a-the-live-half-failed-upgrade-rehearsal-passed-2026-11-16)); the difference and the decision table are in the [backup and restore runbook](../../runbooks/backup-and-restore.md#when-migrate-stops-part-way-which-state-is-this) | Live; documentation |
+| The Resource files: the zero-file backup, the archive and its manifest, extraction, newer files moved aside, the full agreement check including the prune dry-run | Triage WP3-04, WP3-05 | L3b ([record](../../development/restore-rehearsal.md#l3b-the-live-resource-files-rehearsal-passed-2026-11-17)); WU2, WU5, WU6 | Live; real-directory and fake-daemon tests |
+| The failed state preserved before the destructive restore; the aside kept intact and tied to it | Triage workflow and WP3-07 | WU3, then WU6 (refusals of a missing and an altered record, a real export, independent volume listings) | Live, in the rehearsal's own variant of the runbook's export |
+| The dump and the files restore together: a second cycle after the upgrade, a change made after the backup, the restored database compared with the backup's **recorded** row counts and content digests, the restored files equal to the backup's, the application's own prune dry-run clean | Contract 3c "second cycle" | WU4, WU5, WU6 Lifecycle B ([record](../../development/restore-rehearsal.md#slice-22c-3-wu6-the-integrated-live-rehearsal-passed-2026-11-21)) | Live |
+| Table lists, manifest example and restore-together table corrected; the keyring fingerprint algorithm with a tested example; `relationships:check` and one point in time for relationships and sourced grants | Contract 3c; triage WP3-06, WP3-08 | [Backup and restore](../../runbooks/backup-and-restore.md), [deployment](../../runbooks/deployment.md#the-manifest) (corrected 2026-11-15; rehearsal-status text refreshed 2026-11-22) | Documentation |
+| A restore can reverse security changes made after the backup; the manual reconciliation contract | Triage WP3-07, WP3-13 | L3a demonstrated the reversal; the contract is in the runbook and stays manual | Live (the reversal); documentation (the contract) |
+| The read-only production pre-flight, written and tested, not run on the host | Triage WP3-10, WP3-12 | [Release readiness](../../runbooks/g10-release-readiness.md#pre-flight-read-only-queries-against-the-v030-database); `PreflightQueriesTest` | Real database (synthetic fixture) |
+| The operator decision table for a `migrate` that stops part-way | Triage WP3-11 | The runbook section above, added by this closeout | Documentation, resting on L3a and WP3b §9 |
+| A rehearsal record with commands, timings, fingerprints and checksums | Contract 3c acceptance | The L2, L3a, L3b and WU6 sections of the [development note](../../development/restore-rehearsal.md). The WU6 section carries commands, timings and checksums; its keyring fingerprints are in the private evidence, and the L2 and L3a sections carry theirs | Documentation |
+
+### Slice 2.2C-3 and what it added
+
+| Unit | Integrated |
+|---|---|
+| WU0 matrix sharding; WU1 isolation hardening and attestation; WU2 the runner reads the Resources volume for the prune dry-run | PR #23 `126b839`; PR #24 `d16d694`; PR #25 `79c01d8` |
+| CI-1 tiered verification; CI-2 parallel rehearsal tests | PR #26 `c5b4605`; PR #27 `c41581d` |
+| WU4 the current-schema profile and the paired backup; WU3 failed-state preservation and the aside record; WU5 the change after backup, the paired restoration and the restored-content verification | PR #28 `3405c92`; PR #29 `450d01f`; PR #30 `26e9741` |
+| WU6 the integrated live rehearsal of both lifecycles (2026-11-21, `main` at `26e9741`, no code change); its record | PR #31 `fff4b43` |
+
+The evidence of the WU6 run (each stage's command, times, exit status and sanitised output, the Docker inventories before and after, the state-directory hashes around refused and writing stages, and independent read-only listings of the files volume) is kept privately, outside the repository, at `~/.local/share/flowlife-wu6-evidence/20261121T201948Z`, and is not committed; it holds no credential, key, dump or database content.
+
+### L3c, and a cleared schema instead of a "fresh database"
+
+"L3c" was a planning label for the live run after slice 2.2C-3, not a contract requirement; WU6 is that run, and no separate execution is needed ([how it was settled](../../development/restore-rehearsal.md#l3c-what-the-label-meant-and-how-wu6-settled-it)). The contract's step list says "restore into a fresh database"; the triage ruling WP3-01 is more specific and governs: the target is returned to an empty application-schema state before the load, and "a fresh-database restore alone is not sufficient evidence". The rehearsal restores into its own isolated database that way, and no run restored into a separately created database. The contract's wording is left as written ([clarified in place](README.md#wp3--data-integrity-upgrade-and-restore-safety)).
+
+### Owner rulings (2026-11-22)
+
+Made after the independent review of the closeout PR (approved, with one wording correction to the decision table's scenario A, applied):
+
+1. **L3c** is substantively satisfied by WU6; no separate run is required.
+2. **The cleared-schema restoration** satisfies WP3-01's local rehearsal requirement.
+3. **[G6-D23](debt-register.md) and [G6-D24](debt-register.md)** are accepted as LOW-severity deferrals, with their revisit triggers.
+4. **WP3c is accepted for closure** once this closeout is integrated. Production recovery readiness, the host-rehearsal decision and the release authorization remain separate release-track decisions.
+
+### What stays outside WP3c
+
+- **The release track** ([contract §9](README.md#9-release-track-outside-g6), [release readiness](../../runbooks/g10-release-readiness.md)): the owner's choice between a rehearsal on the host and explicit risk acceptance, running the pre-flight on the host, the host's backup coverage of `shared/`, a gzipped load, the real database's table inventory, and the release authorization. WP3-01's "blocking until corrected and rehearsed" is a prerequisite of the release, and stands.
+- **Security reconciliation after a restore** stays a manual operator requirement (WP3-07). No automatic replay or repair is authorized.
+- **What the rehearsal did not show**, registered proportionately as [G6-D23](debt-register.md) (the limits of the rehearsal's evidence) and [G6-D24](debt-register.md) (the limits of the decision table).
