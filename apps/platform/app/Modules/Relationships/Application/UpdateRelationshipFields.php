@@ -60,7 +60,7 @@ final readonly class UpdateRelationshipFields
                 throw new InvalidRelationshipQuery('fields', 'fields must be an object.');
             }
 
-            $parsed = FieldValues::parse($definition, $fields, RelationshipTime::now());
+            $parsed = FieldValues::parse($definition->fields, $fields, RelationshipTime::now());
             $next = $current->fields;
             $written = [];
             $cleared = [];
@@ -81,7 +81,7 @@ final readonly class UpdateRelationshipFields
                 }
                 $next[$key] = $value;
             }
-            $missing = FieldValues::missingRequired($definition, $next);
+            $missing = FieldValues::missingRequired($definition->fields, $next);
             if ($missing !== null) {
                 throw new InvalidRelationshipField($missing);
             }

@@ -8,7 +8,6 @@ use App\Modules\Access\Application\RoleGrantSource;
 use App\Modules\Access\Application\SourcedRoleGrantsOf;
 use App\Modules\Crm\Application\Delegated\ReadPersonBasics;
 use App\Modules\Identity\Application\FindPeople;
-use App\Modules\Relationships\Domain\RelationshipDefinition;
 use App\Modules\Relationships\Domain\RelationshipRecord;
 use App\Shared\Domain\PersonId;
 

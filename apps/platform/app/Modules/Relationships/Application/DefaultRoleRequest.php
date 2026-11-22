@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Relationships\Application;
 
-use App\Modules\Relationships\Domain\RelationshipDefinition;
-
 /** Shared reading of an optional `default_role` field (ADR 0038, K5, K7). */
 final class DefaultRoleRequest
 {

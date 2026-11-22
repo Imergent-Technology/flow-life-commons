@@ -16,17 +16,18 @@ use DateTimeZone;
 final class FieldValues
 {
     /**
+     * @param  array<string, RelationshipField>  $definitionFields  the type's field map, keyed by field key
      * @param  array<mixed, mixed>  $input  partial: only the keys sent; null clears
      * @return array<string, string|null> canonical text, or null to clear
      *
      * @throws UnknownRelationshipField
      * @throws InvalidRelationshipField
      */
-    public static function parse(RelationshipDefinition $definition, array $input, DateTimeImmutable $now): array
+    public static function parse(array $definitionFields, array $input, DateTimeImmutable $now): array
     {
         $parsed = [];
         foreach ($input as $key => $value) {
-            $field = is_string($key) ? $definition->field($key) : null;
+            $field = is_string($key) ? ($definitionFields[$key] ?? null) : null;
             if (! is_string($key) || $field === null) {
                 throw new UnknownRelationshipField(is_string($key) ? $key : '');
             }
@@ -40,11 +41,12 @@ final class FieldValues
      * A required field that the write does not leave with a value. Partial updates pass the
      * fields that remain after the change, not only the keys that were sent.
      *
+     * @param  array<string, RelationshipField>  $definitionFields  the type's field map, keyed by field key
      * @param  array<string, string|null>  $fields
      */
-    public static function missingRequired(RelationshipDefinition $definition, array $fields): ?string
+    public static function missingRequired(array $definitionFields, array $fields): ?string
     {
-        foreach ($definition->fields as $field) {
+        foreach ($definitionFields as $field) {
             if ($field->required && ($fields[$field->key] ?? null) === null) {
                 return $field->key;
             }

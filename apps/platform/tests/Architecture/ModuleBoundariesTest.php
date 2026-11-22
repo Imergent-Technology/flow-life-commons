@@ -51,6 +51,14 @@ foreach ($modules as $module) {
         });
     }
 
+    // WP4 (G6 decision D6): a Domain is the innermost layer. It may not name any other module's Application layer either
+    // (Access's enums included), so a Domain cannot acquire a cross-module dependency its own module's Application owns.
+    foreach ($otherModules as $other) {
+        arch("{$module} Domain does not use {$other} Application", function () use ($ns, $other) {
+            expect("{$ns}\\Domain")->not->toUse("App\\Modules\\{$other}\\Application");
+        });
+    }
+
     foreach ($otherModules as $other) {
         // Another module's internals are off limits; cross-module collaboration
         // goes through that module's Application layer (no direct model/table writes).

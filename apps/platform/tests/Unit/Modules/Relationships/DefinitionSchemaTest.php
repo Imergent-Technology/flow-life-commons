@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 use App\Modules\Access\Application\Capability;
 use App\Modules\Access\Application\ProvisionableRole;
+use App\Modules\Relationships\Application\DefinitionSchema;
 use App\Modules\Relationships\Application\DefinitionSource;
 use App\Modules\Relationships\Application\RelationshipCatalog;
-use App\Modules\Relationships\Domain\DefinitionSchema;
+use App\Modules\Relationships\Application\RelationshipDefinition;
 use App\Modules\Relationships\Domain\InvalidRelationshipDefinition;
 use App\Modules\Relationships\Infrastructure\DirectoryDefinitionSource;
 
@@ -415,3 +416,21 @@ it('refuses two documents that share a capability across types, whichever half, 
     'the view half of one type serves as the manage half of another' => [Capability::ViewGuardians, 'manage'],
     'the manage half of one type serves as the view half of another' => [Capability::ManageGuardians, 'view'],
 ]);
+
+function relationshipPropertyType(string $property): ReflectionNamedType
+{
+    $declared = (new ReflectionProperty(RelationshipDefinition::class, $property))->getType();
+    assert($declared instanceof ReflectionNamedType);
+
+    return $declared;
+}
+
+it('keeps the capability and role properties typed as Access enums, so a string can never stand in for either (WP4)', function () {
+    expect(relationshipPropertyType('viewCapability')->getName())->toBe(Capability::class)
+        ->and(relationshipPropertyType('viewCapability')->allowsNull())->toBeFalse()
+        ->and(relationshipPropertyType('manageCapability')->getName())->toBe(Capability::class)
+        ->and(relationshipPropertyType('manageCapability')->allowsNull())->toBeFalse()
+        ->and(relationshipPropertyType('defaultRole')->getName())->toBe(ProvisionableRole::class)
+        ->and(relationshipPropertyType('defaultRole')->allowsNull())->toBeTrue()
+        ->and(RelationshipDefinition::class)->toBe('App\\Modules\\Relationships\\Application\\RelationshipDefinition');
+});

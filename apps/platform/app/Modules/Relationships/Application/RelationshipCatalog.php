@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace App\Modules\Relationships\Application;
 
 use App\Modules\Access\Application\Capability;
-use App\Modules\Relationships\Domain\DefinitionSchema;
 use App\Modules\Relationships\Domain\InvalidRelationshipDefinition;
-use App\Modules\Relationships\Domain\RelationshipDefinition;
 use App\Modules\Relationships\Domain\RelationshipType;
 
 /**

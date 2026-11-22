@@ -39,10 +39,10 @@ Status: **Encoded** = a test, config or tool fails when broken; **Partial** = en
 
 | # | Rule | Status | Where |
 | --- | --- | --- | --- |
-| 1 | WordPress is an adapter, not an authority. | Documented | ADR 0004; the plugin skeleton contains no logic |
+| 1 | WordPress is an adapter, not an authority. | Partial | ADR 0004; the plugin skeleton contains no logic. `scripts/tests/wordpress-boundary.php`, run by `./flow check repo`, fails if the companion gains a Commons credential, a call to the Commons API, a WordPress user read to forward as identity, request signing, or a WordPress-to-Commons credential in the environment templates. That pins the Phase 1 fact (the companion is still the skeleton), not a permanent prohibition, so it is expected to be revised deliberately when ADR 0018's service clients arrive. The durable rule, that WordPress never asserts who a person is, has no executable check of its own |
 | 2 | Platform identity, authorization, organizational roles and business data belong to the platform. | Documented | ADR 0008 |
 | 3 | The application is a modular monolith. | Encoded | `tests/Architecture/ModuleBoundariesTest.php` |
-| 4 | Modules own their business rules and writes. | Partial | Modules cannot use each other's Domain/Infrastructure/Http (architecture test); "writes only via the owner" needs review discipline |
+| 4 | Modules own their business rules and writes. | Partial | Modules cannot use each other's Domain/Infrastructure/Http, and a Domain cannot use another module's Application either (architecture tests: `ModuleBoundariesTest`, and for Relationships' declarative `Definitions/` documents, which Pest cannot see, a source scan in `RelationshipsBoundariesTest`); "writes only via the owner" needs review discipline |
 | 5 | No cross-module direct model/table mutation. | Partial | As above |
 | 6 | Authorization happens server-side; UI visibility is never security. | Encoded | `Authorizer`, capability route middleware (`can:`) and tests. See [authorization model](../security/authorization-model.md) |
 | 7 | Authorization and approval/workflow are separate concepts. | Documented | ADR 0009 |
@@ -55,7 +55,7 @@ Status: **Encoded** = a test, config or tool fails when broken; **Partial** = en
 | 14 | Persisted timestamps are UTC. | Encoded | `config/app.php`, MariaDB and PostgreSQL connection time zones, dev MariaDB `--default-time-zone=+00:00`, config test |
 | 15 | Secrets are never committed. | Partial | `.gitignore` excludes `.env*` (except `*.example`); examples hold placeholders only. No secret scanner yet. See [secrets](../security/secrets.md) |
 | 16 | Sensitive actions require durable auditing. | Encoded | `RecordSecurityEvent`, written synchronously in the same transaction as the change. See [authorization model](../security/authorization-model.md) |
-| 17 | No speculative shared abstractions or frameworks before real consumers exist. | Documented | Review discipline; `Shared` is deliberately tiny (the ULID identifiers and `Actor`, each with real consumers on day one) and never depends on a module |
+| 17 | No speculative shared abstractions or frameworks before real consumers exist. | Documented | Review discipline; `Shared` is deliberately tiny (the ULID identifier base and the `PersonId` and `AccountId` identifiers, `Actor` and `AuthenticationMethod`, each with real consumers on day one) and never depends on a module |
 
 Other rules that *are* encoded: no `env()` outside config, no debug or dangerous functions, `declare(strict_types=1)` throughout `app/`, and Larastan at level `max`.
 

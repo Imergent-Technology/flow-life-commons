@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Modules\Relationships\Application;
 
-use App\Modules\Relationships\Domain\RelationshipDefinition;
 use App\Modules\Relationships\Domain\RelationshipField;
 
 /**

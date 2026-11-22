@@ -3,14 +3,14 @@
 Executable guardrails for `docs/architecture/` and the ADRs. They run with the
 rest of the suite (`./flow test backend`) and in CI.
 
-- `ModuleBoundariesTest.php`: layer direction, module isolation, no HTTP clients
+- `ModuleBoundariesTest.php`: layer direction (a Domain uses neither its own module's other layers nor any other module's Application), module isolation, no HTTP clients
   outside Infrastructure, no debug/dangerous functions, no `env()` outside config.
   Modules are discovered from `app/Modules`, so new modules are covered automatically.
 - `IdentityBoundariesTest.php`: rules the frozen Identity design makes concrete: persistence
   and the Laravel auth machinery stay out of Identity's Domain, Eloquent stays in
   Infrastructure, Application never depends on Infrastructure, and the persistence records
-  are internal to Identity. Scoped to Identity on purpose; the module map still permits
-  Eloquent in Domain elsewhere. Also the credential lifecycle's rules: Domain and Application never use
+  are internal to Identity. Scoped to Identity on purpose; the other modules each forbid
+  Eloquent in their own boundaries test. Also the credential lifecycle's rules: Domain and Application never use
   Laravel's validation, mail or password broker; the breached-password check is a port with its network
   implementation in Infrastructure, the HTTP client's only user inside Identity; the audit classes cannot
   see a password, an invitation token or a reset token; the password broker and mail are Infrastructure
