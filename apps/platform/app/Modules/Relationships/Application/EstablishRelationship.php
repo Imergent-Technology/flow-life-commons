@@ -102,7 +102,7 @@ final readonly class EstablishRelationship
         }
 
         $now = RelationshipTime::now();
-        $parsed = FieldValues::parse($definition, $fields, $now);
+        $parsed = FieldValues::parse($definition->fields, $fields, $now);
         $stored = [];
         foreach ($parsed as $key => $value) {
             if ($value === null) {
@@ -110,7 +110,7 @@ final readonly class EstablishRelationship
             }
             $stored[$key] = $value;
         }
-        $missing = FieldValues::missingRequired($definition, $stored);
+        $missing = FieldValues::missingRequired($definition->fields, $stored);
         if ($missing !== null) {
             throw new InvalidRelationshipField($missing);
         }

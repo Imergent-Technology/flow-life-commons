@@ -99,3 +99,82 @@ it('names no other module\'s table', function () {
 
     expect($offenders)->toBe([]);
 });
+
+/*
+ * `Definitions/*.php` are declarative PHP documents (ADR 0038, F3): no namespace and no class, so Pest's architecture
+ * expectations cannot see them and the rules above never reach them. This is the source scan that does (WP4, G6 decision D6).
+ * A document may name exactly Access's two public enums, because the format deliberately holds real `Capability` and
+ * `ProvisionableRole` cases (F3, F5). Any other namespaced name, written as an import, a group import or inline, is a
+ * dependency a data document must not have. Comments are not code (SourceScan::code), so a comment may name anything.
+ */
+const RELATIONSHIP_DEFINITION_ALLOWED_NAMES = [
+    'App\\Modules\\Access\\Application\\Capability',
+    'App\\Modules\\Access\\Application\\ProvisionableRole',
+];
+
+/**
+ * Every namespaced name the code of a definition document uses, normalised to no leading backslash, once each.
+ *
+ * @return list<string>
+ */
+function relationshipDefinitionNames(string $source): array
+{
+    // A backslash inside a string value is data, not a class reference, so string literals are set aside first.
+    $code = '';
+    foreach (PhpToken::tokenize(SourceScan::code($source)) as $token) {
+        if (! $token->is([T_CONSTANT_ENCAPSED_STRING, T_ENCAPSED_AND_WHITESPACE])) {
+            $code .= $token->text;
+        }
+    }
+    preg_match_all('/\\\\?[A-Za-z_]\w*(?:\\\\\w*)+/', $code, $matches);
+
+    return array_values(array_unique(array_map(static fn (string $name): string => ltrim($name, '\\'), $matches[0])));
+}
+
+/**
+ * The names a definition document uses that it is not allowed to.
+ *
+ * @return list<string>
+ */
+function relationshipDefinitionViolations(string $source): array
+{
+    return array_values(array_diff(relationshipDefinitionNames($source), RELATIONSHIP_DEFINITION_ALLOWED_NAMES));
+}
+
+it('catches a forbidden dependency in a definition document and passes the allowed ones (positive control)', function (string $source, array $violations) {
+    expect(relationshipDefinitionViolations("<?php\n{$source}\n"))->toBe($violations);
+})->with([
+    'the two permitted Access enums, imported' => ["use App\\Modules\\Access\\Application\\Capability;\nuse App\\Modules\\Access\\Application\\ProvisionableRole;\nreturn [];", []],
+    'an enum case used inline with a leading backslash' => ['return [\\App\\Modules\\Access\\Application\\Capability::ViewVolunteers];', []],
+    'a comment that names a forbidden class' => ["/* App\\Modules\\Access\\Application\\Role is never used here. */\n// use App\\Modules\\Relationships\\Domain\\RelationshipType;\nreturn [];", []],
+    'a document that uses no class at all' => ["return ['type' => 'x'];", []],
+    'a string value that contains a backslash is data, not a class' => ["return ['help' => 'The record\\'s own date', 'path' => 'App\\\\Modules\\\\Access\\\\Application\\\\Role'];", []],
+    'another Access Application class' => ["use App\\Modules\\Access\\Application\\Role;\nreturn [];", ['App\\Modules\\Access\\Application\\Role']],
+    'a Relationships Application class' => ["use App\\Modules\\Relationships\\Application\\DefinitionSchema;\nreturn [];", ['App\\Modules\\Relationships\\Application\\DefinitionSchema']],
+    'a Relationships Domain class' => ["use App\\Modules\\Relationships\\Domain\\RelationshipType;\nreturn [];", ['App\\Modules\\Relationships\\Domain\\RelationshipType']],
+    'a Relationships Infrastructure class' => ["use App\\Modules\\Relationships\\Infrastructure\\DirectoryDefinitionSource;\nreturn [];", ['App\\Modules\\Relationships\\Infrastructure\\DirectoryDefinitionSource']],
+    'a Relationships Http class' => ["use App\\Modules\\Relationships\\Http\\RelationshipsPresenter;\nreturn [];", ['App\\Modules\\Relationships\\Http\\RelationshipsPresenter']],
+    'another module\'s class used inline' => ['return [\\App\\Modules\\Identity\\Application\\FindPeople::class];', ['App\\Modules\\Identity\\Application\\FindPeople']],
+    'a framework class' => ["use Illuminate\\Support\\Facades\\DB;\nreturn [];", ['Illuminate\\Support\\Facades\\DB']],
+    'a group import hiding a forbidden class beside an allowed one' => ["use App\\Modules\\Access\\Application\\{Capability, Role};\nreturn [];", ['App\\Modules\\Access\\Application\\']],
+]);
+
+it('keeps Relationships definition documents to Access\'s two public enums', function () {
+    $paths = SourceScan::phpFiles(['app/Modules/Relationships/Definitions']);
+    $seen = [];
+    $violations = [];
+    foreach ($paths as $path) {
+        $source = SourceScan::read($path);
+        $seen = array_merge($seen, relationshipDefinitionNames($source));
+        foreach (relationshipDefinitionViolations($source) as $name) {
+            $violations[] = SourceScan::relative($path).' names '.$name;
+        }
+    }
+    sort($seen);
+
+    // A future type's document is covered by the same scan; the two production documents must at least be in it.
+    expect(array_map('basename', $paths))->toContain('guardian.php')
+        ->and(array_map('basename', $paths))->toContain('volunteer.php')
+        ->and(array_values(array_unique($seen)))->toBe(RELATIONSHIP_DEFINITION_ALLOWED_NAMES)
+        ->and($violations)->toBe([]);
+});

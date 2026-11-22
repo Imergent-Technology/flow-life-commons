@@ -2,10 +2,13 @@
 
 declare(strict_types=1);
 
-namespace App\Modules\Relationships\Domain;
+namespace App\Modules\Relationships\Application;
 
 use App\Modules\Access\Application\Capability;
 use App\Modules\Access\Application\ProvisionableRole;
+use App\Modules\Relationships\Domain\RelationshipField;
+use App\Modules\Relationships\Domain\RelationshipState;
+use App\Modules\Relationships\Domain\RelationshipType;
 
 /**
  * One validated relationship type (ADR 0038, F3). Immutable. Built only by `DefinitionSchema`,

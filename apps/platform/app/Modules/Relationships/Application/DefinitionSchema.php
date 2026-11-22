@@ -2,10 +2,14 @@
 
 declare(strict_types=1);
 
-namespace App\Modules\Relationships\Domain;
+namespace App\Modules\Relationships\Application;
 
 use App\Modules\Access\Application\Capability;
 use App\Modules\Access\Application\ProvisionableRole;
+use App\Modules\Relationships\Domain\InvalidRelationshipDefinition;
+use App\Modules\Relationships\Domain\RelationshipField;
+use App\Modules\Relationships\Domain\RelationshipState;
+use App\Modules\Relationships\Domain\RelationshipType;
 
 /**
  * Validates one relationship definition document (ADR 0038, F5). Definitions are data:
