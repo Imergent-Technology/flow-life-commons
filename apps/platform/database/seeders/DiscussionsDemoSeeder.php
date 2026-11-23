@@ -54,6 +54,14 @@ use RuntimeException;
  */
 final class DiscussionsDemoSeeder extends Seeder
 {
+    /**
+     * Set by `db:seed` and `call()` before `run()`. Laravel 13.40 began documenting it as nullable, which static analysis then asks
+     * about at every use; this restores the type it has whenever a seeder runs (G6-D26 dependency update). Nothing changes at run time.
+     *
+     * @var \Illuminate\Contracts\Container\Container
+     */
+    protected $container;
+
     /** A Person that Identity never held: the author of the one demo message whose author is unknown. */
     public const string DEPARTED_PERSON = '00000000000000000000depart';
 

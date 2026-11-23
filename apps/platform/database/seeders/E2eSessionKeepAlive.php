@@ -26,6 +26,17 @@ use RuntimeException;
  */
 final class E2eSessionKeepAlive extends Seeder
 {
+    /**
+     * Set by `db:seed` and `call()` before `run()`. Laravel 13.40 began documenting it as nullable, which static analysis then asks
+     * about at every use; this restores the type it has whenever a seeder runs (G6-D26 dependency update). Nothing changes at run time.
+     *
+     * @var \Illuminate\Contracts\Container\Container
+     */
+    protected $container;
+
+    /** @var \Illuminate\Console\Command Set by `db:seed`; see {@see self::$container}. */
+    protected $command;
+
     public function run(): void
     {
         $kept = $this->keep();

@@ -9,8 +9,11 @@ use App\Modules\Identity\Application\InviteAccount;
 use App\Modules\Identity\Infrastructure\Mail\InvitationMail;
 use App\Modules\Identity\Infrastructure\Mail\PasswordResetMail;
 use Illuminate\Http\Request;
+use Illuminate\Mail\Transport\ArrayTransport;
 use Illuminate\Support\Facades\Mail;
+use Symfony\Component\Mailer\SentMessage;
 use Symfony\Component\Mime\Email;
+use Symfony\Component\Mime\Header\HeaderInterface;
 
 /*
  * The two messages the application sends, and where their links point, pinned for G6-D26
@@ -23,12 +26,21 @@ use Symfony\Component\Mime\Email;
 function sentMessages(): array
 {
     $transport = Mail::mailer()->getSymfonyTransport();
-    assert($transport instanceof Symfony\Component\Mailer\Transport\TransportInterface);
+    if (! $transport instanceof ArrayTransport) {
+        throw new RuntimeException('These tests need the array mail transport that phpunit.xml sets.');
+    }
 
-    return array_map(
-        static fn ($sent) => $sent->getOriginalMessage(),
-        $transport instanceof Illuminate\Mail\Transport\ArrayTransport ? $transport->messages()->all() : [],
-    );
+    $messages = [];
+    foreach ($transport->messages() as $sent) {
+        /** @var SentMessage $sent */
+        $message = $sent->getOriginalMessage();
+        if (! $message instanceof Email) {
+            throw new RuntimeException('Expected an Email.');
+        }
+        $messages[] = $message;
+    }
+
+    return $messages;
 }
 
 it('builds an invitation link from the configured application URL, never from the request that triggered it', function () {
@@ -64,7 +76,11 @@ it('sends the invitation and the reset message as plain text with a fixed subjec
             ->and($message->getTextBody())->toBeString();
 
         // Only the headers the mailer itself writes: no Bcc, Cc, Reply-To, List-*, X-* or any header a value could have named.
-        $names = array_map(static fn ($header) => strtolower($header->getName()), iterator_to_array($message->getHeaders()->all(), false));
+        $names = [];
+        foreach ($message->getHeaders()->all() as $header) {
+            /** @var HeaderInterface $header */
+            $names[] = strtolower($header->getName());
+        }
         expect(array_diff($names, ['from', 'to', 'subject', 'date', 'message-id', 'mime-version']))->toBe([]);
     }
 
