@@ -27,6 +27,7 @@ use App\Shared\Domain\AccountId;
 use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
 use DateTimeImmutable;
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Contracts\Hashing\Hasher;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
@@ -47,7 +48,7 @@ final class E2eAccountSeeder extends Seeder
      * Set by `db:seed` and `call()` before `run()`. Laravel 13.40 began documenting it as nullable, which static analysis then asks
      * about at every use; this restores the type it has whenever a seeder runs (G6-D26 dependency update). Nothing changes at run time.
      *
-     * @var \Illuminate\Contracts\Container\Container
+     * @var Container
      */
     protected $container;
 

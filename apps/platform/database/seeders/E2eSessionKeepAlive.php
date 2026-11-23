@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use Illuminate\Console\Command;
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -30,11 +32,11 @@ final class E2eSessionKeepAlive extends Seeder
      * Set by `db:seed` and `call()` before `run()`. Laravel 13.40 began documenting it as nullable, which static analysis then asks
      * about at every use; this restores the type it has whenever a seeder runs (G6-D26 dependency update). Nothing changes at run time.
      *
-     * @var \Illuminate\Contracts\Container\Container
+     * @var Container
      */
     protected $container;
 
-    /** @var \Illuminate\Console\Command Set by `db:seed`; see {@see self::$container}. */
+    /** @var Command Set by `db:seed`; see {@see self::$container}. */
     protected $command;
 
     public function run(): void
