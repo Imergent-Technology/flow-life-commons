@@ -97,6 +97,10 @@ test.describe('discussions', () => {
     await guardian.getByRole('textbox', { name: 'Your reply' }).fill(second)
     await guardian.getByRole('button', { name: 'Post reply' }).click()
     await expect(body(guardian).getByText(second)).toBeVisible()
+    // The text alone proves nothing here: until the server answers, the reply box itself holds it (a textarea's value is its text).
+    // The thread is then re-read and its list replaced, and a re-read that lands under the open dialog detaches the button the dialog
+    // would give focus back to. The new message (3) is on the re-read list, so wait for that before using the list (G6-D01).
+    await expect(body(guardian).getByRole('article', { name: /Message 3/ })).toBeVisible()
 
     // Remove your own message: Escape is the safe path and gives focus back; then do it.
     const remove = guardian.getByRole('button', { name: 'Remove your message 2' })
