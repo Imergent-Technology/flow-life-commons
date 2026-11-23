@@ -3,6 +3,7 @@
 - **Package:** G6 WP5, the output named in the [G6 contract](README.md#wp5--g7-entry-conditions-documentation-only-nothing-built). Documentation only. The acceptance record is [wp5-record.md](wp5-record.md).
 - **Written against:** `main` at `8efce28` (G6 WP4 integrated, post-merge CI green). WP6 has not run, so G6-D01 and G6-D02 are still open and the roadmap's G6 statuses are not yet updated.
 - **What this is:** the list of decisions G7's design gate must address, explicitly, before any G7 implementation begins. **It makes none of them.** No authentication, authorization or publication policy is approved here, and nothing in it changes an ADR, a debt disposition or any code.
+- **Owner review:** PR #34 passed independent owner review with three rulings, recorded in [Owner rulings](#owner-rulings-pr-34-review) and applied to conditions 1, 4 and 10. They are design-gate requirements. They are not G7 implementation decisions.
 - **G7** is the WordPress companion foundation: "a secure, narrow Commons ↔ WordPress foundation, beginning with low-risk read-oriented surfaces" ([roadmap](../../roadmap.md), [WordPress integration](../../integrations/wordpress.md)). It is planned and not started. Its design gate "begins from G6's G7 entry conditions and debt register".
 
 **How to read each condition.** *Current fact* is verified against the repository on the base above, with the source named. *Risk* says why G7 cannot ignore it. *G7 design-gate decision* is phrased as questions to resolve, accept or defer; where it names options, they are the ones the existing record already contains, not recommendations. Anything inferred rather than read from a source is marked **(inference)**.
@@ -43,7 +44,7 @@ Conditions 1 to 3 and 6 to 7 are linked: delivering content to a client is not o
 1. Which is G7's first delivery: person-scoped, public, or neither (link out to Commons per ADR 0032)? State it, and defer the others explicitly.
 2. If person-scoped: it is ADR 0033's delegated authentication. The gate must take conditions 2, 3, 5, 6 and 7 as one decision set, since each applies to it.
 3. If public: is it a new audience in the catalog, a separate publication channel, or something else? Who may mark content public, and what does the current ability to publish immediately (condition 6) mean for it? This is not an extension of delegated authentication.
-4. If the first delivery is "announcements": the roadmap's G4 (*Announcements / Publishing*) has "ownership under review" and no implementation exists, so G7's scope depends on that unresolved question.
+4. Announcements is an **optional candidate surface, not a prerequisite** (owner ruling 2). G7 must not assume G4 (*Announcements / Publishing*) exists or that its ownership is settled: it has "ownership under review" and no implementation. If G7 depends on Announcements, G4's ownership decision must be resolved first.
 
 **Supporting references.** [ADR 0033](../../adr/0033-service-identity-and-delegated-human-authority-are-distinct.md); [ADR 0018](../../adr/0018-client-and-delegated-authentication.md); [ADR 0032](../../adr/0032-members-use-a-commons-hosted-surface.md); [ADR 0037](../../adr/0037-resources-are-audience-targeted-packs-of-cards.md); [ADR 0038, A6 and Part R](../../adr/0038-organizational-relationships-and-resource-viewing-authority.md); [WordPress integration](../../integrations/wordpress.md); [roadmap, G4 and G7](../../roadmap.md).
 
@@ -105,6 +106,8 @@ Conditions 1 to 3 and 6 to 7 are linked: delivering content to a client is not o
 - [WordPress integration](../../integrations/wordpress.md), rule 7: an external identity "is a link, not a merge", platform-owned data, and not currently needed. The account-claim flow for a Person with no Account is "still undesigned".
 
 **Risk.** The README's one-line statement of this condition is "revisit it before any WordPress identity is linked by CRM email" and does not say why. The reasoning below is **(inference from P8's own premise)**. P8 is acceptable *because* the primary CRM email carries no authority. If a WordPress user were linked to a Person by matching that email, the email would become an identity key, and an operator-editable, unverified, non-unique value would decide whose data a WordPress visitor sees. Editing it (which P8 allows a scoped manager to do, without step-up and with provenance but no security event) could then redirect or claim a link. The accepted consequence would stop being bounded by "no authority".
+
+**Owner ruling 1 (PR #34 review).** The reading above is accepted. A CRM email is not independent proof of WordPress-to-Commons identity ownership. If G7 introduces linking, the gate must determine how the link is proven. The ruling does not decide whether G7 links at all.
 
 **G7 design-gate decision.**
 1. Does G7 link any WordPress identity to a Person at all? ADR 0032 and the WordPress document say the current design avoids needing to.
@@ -245,12 +248,22 @@ I read all 24 rows of the [register](debt-register.md). **Eleven** have a record
 | **G6-D11** `authenticatedVia` read by no decision | Accept as a G7 entry condition (owner, WP1 triage) | Condition 3 | Where strength is carried and enforced for a caller without `console.access` | **Scope-dependent**: fires on any such caller |
 | **G6-D12** No tool removes an orphaned sourced grant | Accept (owner, WP2 triage) | "G7 external integration": an external consumer of eligibility or grants inherits the residual (a valid orphan is honoured and can confer only a provisionable role, today `console.access`) | Whether the integration relies on grants or eligibility such that the accepted residual is still acceptable, or a removal path is needed first | **Scope-dependent** |
 | **G6-D13** Resources changes reach readers at once | Defer (owner, WP2 triage; any step-up change is DP2) | Condition 6: "before G7 exposes additional Resources consumption or management interfaces" | The condition 6 questions; revisit event coverage | **Scope-dependent**: fires if G7 exposes more Resources consumption or management |
-| **G6-D14** Volunteer eligibility changes without step-up | Accept (owner, WP2 triage) | Trigger lists "G7": an external audience that includes Volunteer eligibility widens who a change reaches | Whether Volunteer-driven eligibility feeds anything external | **Scope-dependent** |
+| **G6-D14** Volunteer eligibility changes without step-up | Accept (owner, WP2 triage) | The register names "G7" as a revisit trigger, without a condition. An external audience that includes Volunteer eligibility would widen who a change reaches | Whether Volunteer-driven eligibility feeds anything external. The recorded outcome may be no additional action if G7's scope does not affect Volunteer eligibility (owner ruling 3) | **Unconditional at the gate** (the gate must consider it explicitly) |
 | **G6-D15** `crm.people.manage` can rename any Person | Accept (owner, WP2 triage) | Trigger: "G7 delegated callers". A delegated caller that reaches CRM edits widens who can rename. Also bears on condition 4 | Whether any delegated caller can reach CRM writes | **Scope-dependent** |
 | **G6-D17** Resources delivery two-step read (unproven) | Investigate if triggered; never speculative changes | Trigger: "before G7 widens Resources consumption" | Whether to reproduce it before widening; if reproduced, stop for owner triage as a possible disclosure | **Scope-dependent** |
 | **G6-D19** Dormant sourced grant becomes effective on Account creation | Accept (owner, WP2 triage) | Trigger: "G7 delegated invitation flows". Invitation authority is the effective authority over a dormant grant | Whether any G7 flow can invite or establish an Account | **Scope-dependent** |
 
 **Checked and not G7-triggered:** G6-D01 to D05 (WP6 and test reliability; D05 would matter only if G7 changed the session lifetime or keep-alive, which is not a G7 trigger as written), D09, D16, D18 and D20 to D24 name no G7 trigger. **(Inference:)** D18 (corrupt stored Resources values) concerns operational hardening and a restore, and would be affected only indirectly if G7 widened Resources consumption.
+
+---
+
+## Owner rulings (PR #34 review)
+
+The independent owner review accepted this document subject to the following. They sharpen what the design gate must address. None is a G7 implementation decision, and this document still makes none.
+
+1. **Condition 4.** The interpretation of ADR 0038 P8 is accepted: a CRM email is not independent proof of WordPress-to-Commons identity ownership. If G7 introduces identity linking, the gate must determine how the link is proven. See [condition 4](#4-adr-0038-p8-identity-matching).
+2. **Condition 1.** G7 must not assume G4 Announcements exists or that its ownership is settled. Announcements is an optional candidate surface, not a prerequisite. If G7 depends on it, G4's ownership decision comes first. See [condition 1](#1-person-scoped-resource-delivery-outside-commons).
+3. **Condition 10, G6-D14.** Corrected from scope-dependent to unconditional: the register names G7 as a revisit trigger without a condition, so the gate must consider it explicitly. The resulting disposition may be no additional action if G7's scope does not affect Volunteer eligibility. The unconditional rows are now G6-D06, D07, D08 and D14. See [condition 10](#10-g7-triggered-debt-register-items).
 
 ---
 

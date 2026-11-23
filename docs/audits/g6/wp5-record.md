@@ -1,7 +1,7 @@
 # G6 WP5: G7 entry conditions, acceptance record
 
 - **Package:** WP5 ([contract](README.md#wp5--g7-entry-conditions-documentation-only-nothing-built)). **Deliverable:** [`g7-entry-conditions.md`](g7-entry-conditions.md). Documentation only: no ADR, register disposition, code, migration, test or infrastructure changed.
-- **Base:** `main` at `8efce28` (G6 WP4, PR #33; post-merge CI green). **Branch:** `g6/wp5-g7-entry-conditions`. Status: **for owner acceptance**. The contract's acceptance is "the owner accepts it".
+- **Base:** `main` at `8efce28` (G6 WP4, PR #33; post-merge CI green). **Branch:** `g6/wp5-g7-entry-conditions`. Status: **owner-reviewed; accepted subject to the three rulings below, now applied**. The contract's acceptance is "the owner accepts it".
 - **Method:** source inspection of the facts each condition rests on, plus the G6 audit, triage and register records and ADRs 0007, 0018, 0024, 0032, 0033, 0034, 0037 and 0038. No new audit was run, and no test was run (documentation only).
 
 ## Contract coverage
@@ -17,7 +17,7 @@
 | 7 | Rendering on another origin | Yes | Yes | Yes | `DocumentProfile`, `ExternalUri`, ADR 0037 d24 to d31, `guardrails.test.ts`, CSP |
 | 8 | Minimal `/v1` policy | Yes | Yes | Yes | ADR 0007, ADR 0024, OpenAPI components |
 | 9 | Browser workflow | Yes | Yes | Yes | D7, G6-D06, `e2e.yml`, `gh run list` |
-| 10 | G7-triggered debt | Yes | Yes | Yes | all 24 register rows read; 11 are G7-triggered |
+| 10 | G7-triggered debt | Yes | Yes | Yes | all 24 register rows read; 11 are G7-triggered, 4 unconditional at the gate (G6-D06, D07, D08, D14) |
 
 ## Verification
 
@@ -28,10 +28,13 @@
 - **Inferences are marked** "(inference)" in the document. Facts were read from the named source.
 - **`git diff --check`** (on the staged diff) clean. **`./flow check repo`** exited 0 ("All checks passed"). No backend, browser, mutation or PostgreSQL run, as the contract provides for a documentation-only change.
 
-## Points for the owner
+## Owner rulings (PR #34 review)
 
-1. **Condition 4's rationale is inferred.** The contract says "ADR 0038 P8. Revisit it before any WordPress identity is linked by CRM email" and gives no reason. P8 itself says nothing about WordPress; it accepts that a Volunteer manager may edit a Person's primary CRM email because those fields "carry no authority". The document reads the condition as: email-based identity linking would give that email authority, defeating P8's premise. Please confirm that is the intended reading, or correct it.
-2. **Condition 1 depends on G4.** The roadmap's G7 scope names "announcements and resources", while G4 (*Announcements / Publishing*) has "ownership under review" and no implementation. G7's first delivery is therefore not only a design question.
+The owner review accepted WP5 subject to three rulings, applied in [`g7-entry-conditions.md`](g7-entry-conditions.md#owner-rulings-pr-34-review). They are design-gate requirements. WP5 still makes no G7 implementation decision.
+
+1. **Condition 4 (was an open point).** The reading of ADR 0038 P8 is accepted. A CRM email is not independent proof of WordPress-to-Commons identity ownership. If G7 introduces linking, the gate must determine how the link is proven.
+2. **Condition 1 (was an open point).** G7 must not assume G4 Announcements exists or that its ownership is settled. Announcements is an optional candidate surface, not a prerequisite. If G7 depends on it, G4's ownership decision must be resolved first.
+3. **G6-D14 reclassified.** From scope-dependent to unconditional: the register names G7 as an unconditional revisit trigger. The gate must consider it explicitly. The outcome may be no additional action if G7's scope does not affect Volunteer eligibility. The unconditional rows are G6-D06, D07, D08 and D14. The disposition (Accept) is unchanged.
 
 ## Discrepancies found in the existing documentation (nothing changed)
 
