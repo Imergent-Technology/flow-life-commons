@@ -26,6 +26,9 @@ async function guardianOn(
   return page
 }
 
+/** The largest page `/admin/accounts` allows. */
+const ACCOUNTS_PER_PAGE = 100
+
 const ALLOWED_RECORD_KEYS = new Set(['person', 'profile', 'contact_methods', 'tags'])
 
 /** Every key at any depth of a JSON value. */
@@ -397,10 +400,26 @@ test.describe('what the wire carries', () => {
     // Nothing about ANY Account (its login, its id) appears in any of it, though two of its authors ARE operators. The accounts
     // are listed by an administrator, so the check is against every real login and id rather than a pattern.
     const admin = await guardianOn(browser, baseURL, 'admin-read')
-    const accounts = (await apiFrom(admin, 'GET', '/api/v1/admin/accounts?per_page=100')).body as {
-      data: { id: string; email: string }[]
+    // Every page of the list, by the contract's own meta (a page holds at most 100, and a development database holds more).
+    const accounts: { id: string; email: string }[] = []
+    let lastPage = 1
+    for (let page = 1; page <= lastPage; page++) {
+      const listed = (
+        await apiFrom(
+          admin,
+          'GET',
+          `/api/v1/admin/accounts?per_page=${String(ACCOUNTS_PER_PAGE)}&page=${String(page)}`,
+        )
+      ).body as {
+        data: { id: string; email: string }[]
+        meta: { last_page: number; total: number }
+      }
+      accounts.push(...listed.data)
+      lastPage = listed.meta.last_page
+      if (page === lastPage)
+        expect(accounts.length, 'every Account was listed').toBe(listed.meta.total)
     }
-    expect(accounts.data.length).toBeGreaterThan(2)
+    expect(accounts.length).toBeGreaterThan(2)
     const everything = JSON.stringify([
       record.body,
       history.body,
@@ -408,7 +427,7 @@ test.describe('what the wire carries', () => {
       tags.body,
       own.body,
     ]).toLowerCase()
-    for (const account of accounts.data) {
+    for (const account of accounts) {
       expect(everything, `Account ${account.email}`).not.toContain(account.email.toLowerCase())
       expect(everything, 'an Account id').not.toContain(account.id.toLowerCase())
     }
