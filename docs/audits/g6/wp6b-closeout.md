@@ -18,7 +18,7 @@
 | 4 | The upgrade test is green on both engines, and the MariaDB rehearsal is recorded | The upgrade tests green on MariaDB and PostgreSQL; the rehearsal's record | `tests/Upgrade` passed on **both engines** in Gate A (below), and at WP3b on MariaDB 10.11.19 and PostgreSQL 16.15 (44 tests each, [WP3 record §11](wp3-record.md#11-results-and-gates)). The local MariaDB 10.11.18 rehearsal is recorded: [L2, L3a, L3b and WU6](../../development/restore-rehearsal.md), summarized in [WP3c closeout](wp3-record.md#wp3c-closeout-the-local-recovery-rehearsal-and-its-documentation) and accepted (owner, 2026-11-22). **Limits, recorded honestly:** it is local, synthetic, one machine, one run of each lifecycle ([G6-D23](debt-register.md)); the WU6 raw evidence is kept privately outside the repository; it is **not** production recovery readiness and does not replace the host-rehearsal decision (release checklist item 5) | **Satisfied** (as local evidence only) | None |
 | 5 | The G7 entry conditions are accepted | The conditions document and the owner's acceptance | [g7-entry-conditions.md](g7-entry-conditions.md), accepted with three rulings on PR #34 (squash `0b85ae2`), recorded in [wp5-record.md](wp5-record.md). The four unconditional design-gate reviews (G6-D06, D07, D08, D14) are confirmed in the register and unchanged. A WP6B addendum there records the two rows added since | **Satisfied** | None |
 | 6 | Every known item is in the register, with a disposition and a revisit trigger | A complete register | [The register](debt-register.md): **26 rows**, each with evidence, a severity (G6-D17 is *unclassified* for a stated reason: an unreproduced hypothesis), a disposition, a revisit trigger and a release impact ([reconciliation](#register-reconciliation)). WP6B added **G6-D26**, found at closeout | **Satisfied, subject to the owner's ruling on G6-D26's classification** | Rule on G6-D26 |
-| 7 | `./flow check all --pgsql` is green, and `./flow test e2e --workers=4` is green on the built-assets origin | Both gates at a recorded revision, with counts | **PENDING:** see [Gate results](#gate-results) | **Pending** | None beyond the results |
+| 7 | `./flow check all --pgsql` is green, and `./flow test e2e --workers=4` is green on the built-assets origin | Both gates at a recorded revision, with counts | Both gates passed at `9f3fbf8` on 2026-11-23: [Gate results](#gate-results) (`./flow check --pgsql --mutation` exit 0; `./flow test e2e --workers=4` 448 + 10 + 1 passed, 0 failed, on the built-assets origin). **The criterion names `./flow check all --pgsql`; the milestone gate used was `./flow check --pgsql --mutation`, which adds the full recovery mutation matrix to the same routine, dual-engine scope** ([testing](../../development/testing.md#verification-tiers)) | **Satisfied** | None beyond the results |
 | 8 | The roadmap, charter and module map are current | Each reviewed against the repository | **Roadmap** (status paragraph, milestone table and G6 package table) and the **charter's** milestone sentence updated in this package. The **module map** was reviewed: the 11 modules on disk match its tables, and its Domain-layer rule and Relationships note were updated by WP4 (`8efce28`); **no change was needed**. The G7 entry document's stale WP6 statements were corrected | **Satisfied** | None |
 | 9 | Nothing was deployed, and no production change was made | No deployment, production access or production change | None occurred in WP0 to WP6B: no release was built for deployment, no host or production data was accessed, and every rehearsal ran on a local Docker daemon with synthetic data (each package record says so). Production runs v0.3.0. The one read-only look at the `v0.3.0` tag was of the repository's tagged lockfile, not the host. This is a statement from the records and this session; it cannot be proved by a tool | **Satisfied** | None |
 
@@ -56,7 +56,42 @@ The weekly `Security audit` workflow has failed since 2026-11-02, and `./flow au
 
 ## Gate results
 
-**Tested revision and results: PENDING.** Gate A (`./flow check --pgsql --mutation`), Gate B (`./flow test e2e --workers=4`) and Gate C (documentation checks) are run after this record's substantive content is committed, and this section is then completed in a documentation-only commit.
+Both application gates ran **sequentially on an idle host** (load average under 1.5 at each start), with no competing workload, at one revision: **`9f3fbf8f34037648b8e8032f46c2e4f1893ce3a5`**, the head of this branch when the substantive closeout content was committed. Only this section and the matrix cells that cite it were edited afterwards (documentation; they do not touch what ran). No retry, quarantine, timeout change or assertion change was used.
+
+### Gate A: `./flow check --pgsql --mutation` (2026-11-23, 18:16 to 19:35 UTC, 1 h 19 min): **passed, exit 0**
+
+| Part | Result |
+| --- | --- |
+| Rehearsal summary (the machine-readable line) | `REHEARSAL_SUMMARY mode=full result=passed ordinary_run=326 ordinary_failed=0 registry=consistent guards_registered=488 mutants_executed=488 mutants_caught=488 matrix=run workers=4` |
+| The required equalities | `mode=full`; `result=passed`; `registry=consistent`; **`mutants_executed` (488) = `guards_registered` (488) = `mutants_caught` (488)** |
+| Repo checks | Compose configs, shellcheck, `./flow` CLI behaviour, production public surface (Apache/Caddy contract and under real Apache), release tooling, pre-flight SQL, the rehearsal's full run, actionlint, WordPress companion checks: all passed |
+| Backend | Pint and Larastan (level max) clean. **MariaDB: 3,726 passed (28,187 assertions). PostgreSQL: 3,681 passed, 45 skipped (27,890 assertions)**; the 45 are tests that declare themselves MariaDB-only with a stated reason (the rehearsal snapshot, the pre-flight SQL, the half-failed upgrade), and 3,681 + 45 = 3,726. The guards of criterion 3 and `tests/Upgrade` ran in both runs |
+| Frontend | Strict TypeScript, ESLint, Prettier, **Vitest 89 files, 2,276 tests passed**, production build, `verify:build` |
+| Said not to be included | Browser E2E, `./flow audit`, release checks, as the gate always states |
+
+The live WP3c Docker rehearsal was **not** repeated (its evidence is accepted), and the matrix was run once.
+
+### Gate B: `./flow test e2e --workers=4` on the built-assets origin (2026-11-23, 19:39 to 19:50 UTC, about 11 minutes): **passed, exit 0**
+
+| Pass | Result |
+| --- | --- |
+| Main (development and built projects, four workers) | **448 passed**, 0 failed, 0 flaky, 0 not run (9.3 min) |
+| Maintenance (serial) | 10 passed |
+| Leftovers | 1 passed |
+| `relationships:check` after the run | "Relationships are consistent with their definitions." |
+
+The two formerly intermittent journeys **passed** in this run: *discussions › a Guardian starts a discussion, replies, edits, resolves, reopens, removes their own message and finds it again* (G6-D01, corrected) and *responsive defaults › follow the width across both breakpoints and write nothing* (G6-D02). One passing run does not settle G6-D02, which stays an unresolved intermittent. The run was 448 + 10 + 1 = 459 passes; the development database grew again as G6-D04 expects, and nothing was deleted. The seeding steps ran as the gate does and touched only development data.
+
+### Gate C: documentation checks
+
+Run after Gates A and B, on the closeout content including the gate results above:
+
+| Check | Result |
+| --- | --- |
+| `./flow check repo` | **Passed, exit 0.** Its rehearsal line was the routine one (`mode=routine result=passed ordinary_run=326 ordinary_failed=0 registry=consistent guards_registered=488 mutants_executed=0 matrix=not-run`); the full matrix is Gate A's |
+| Relative links and anchors in every changed Markdown file (a script over the 8 files, GitHub heading slugs) | 368 links, **0 bad** |
+| `git diff --check` | Clean |
+| Changed-file scope | Eight files, all under `docs/`: `docs/roadmap.md`, `docs/architecture/charter.md`, `docs/runbooks/g10-release-readiness.md`, `docs/security/dependencies.md`, and under `docs/audits/g6/` the register, the G7 entry conditions, this record and the dependency advisory triage. **No code, test, dependency, workflow or configuration file changed**, so Gates A and B (run at `9f3fbf8`) remain valid for the final head, which differs from it only by documentation commits |
 
 ## Owner decisions needed
 
