@@ -39,6 +39,8 @@ In this order, and record the answer:
 
 ## Current findings
 
+**Audited 2026-11-23 (G6 WP6B), against the committed lockfiles: findings are open, and the table below is stale.** `./flow audit` reports **nine Composer advisories** (`laravel/framework` 13.32.0, `symfony/http-foundation` 7.4.19, `symfony/http-kernel` 7.4.19, `symfony/mime` 7.4.19, `symfony/routing` 7.4.18, and `symfony/yaml` 7.4.18, which is development-only), none on an abandoned package. `npm audit` reports none for the Console's runtime dependencies and 15 for development tooling. The weekly `Security audit` workflow has failed since 2026-11-02. They were assessed read-only, per the questions above, in [the G6 WP6B dependency advisory triage](../audits/g6/wp6b-dependency-advisories.md), and recorded as [G6-D26](../audits/g6/debt-register.md); **no dependency was changed**. In short: no advisory is shown to be reachable in production, patched same-major releases exist, and the update is its own package, authorized separately. This page's earlier "no advisories" results below are the 2026-10-04 audit, kept as it was written.
+
 Audited 2026-10-04, against the committed lockfiles after remediation:
 
 | Ecosystem | Result |

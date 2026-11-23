@@ -1,7 +1,7 @@
 # G7 entry conditions
 
 - **Package:** G6 WP5, the output named in the [G6 contract](README.md#wp5--g7-entry-conditions-documentation-only-nothing-built). Documentation only. The acceptance record is [wp5-record.md](wp5-record.md).
-- **Written against:** `main` at `8efce28` (G6 WP4 integrated, post-merge CI green). WP6 has not run, so G6-D01 and G6-D02 are still open and the roadmap's G6 statuses are not yet updated.
+- **Written against:** `main` at `8efce28` (G6 WP4 integrated, post-merge CI green). *WP6B update (2026-11-23):* WP6A has since run (G6-D01 is a corrected test defect and G6-D02 an unresolved intermittent, with the product gap behind D01 registered as G6-D25), and WP6B updated the roadmap. The conditions and the four unconditional gate reviews below (G6-D06, D07, D08, D14) are unchanged.
 - **What this is:** the list of decisions G7's design gate must address, explicitly, before any G7 implementation begins. **It makes none of them.** No authentication, authorization or publication policy is approved here, and nothing in it changes an ADR, a debt disposition or any code.
 - **Owner review:** PR #34 passed independent owner review with three rulings, recorded in [Owner rulings](#owner-rulings-pr-34-review) and applied to conditions 1, 4 and 10. They are design-gate requirements. They are not G7 implementation decisions.
 - **G7** is the WordPress companion foundation: "a secure, narrow Commons ↔ WordPress foundation, beginning with low-risk read-oriented surfaces" ([roadmap](../../roadmap.md), [WordPress integration](../../integrations/wordpress.md)). It is planned and not started. Its design gate "begins from G6's G7 entry conditions and debt register".
@@ -220,14 +220,14 @@ Conditions 1 to 3 and 6 to 7 are linked: delivering content to a client is not o
 - Owner ruling **D7** ([contract](README.md#owner-rulings-and-amendments)): keep the local, four-worker, built-assets browser gate (`./flow test e2e --workers=4`); do not make the whole suite mandatory on every pull request; do not declare browser testing permanently local-only; **"revisit an on-demand or scoped GitHub workflow before or during G7"**; quarantine nothing without authorization. G6-D06 records it (MEDIUM, accepted for G6).
 - `.github/workflows/e2e.yml` is manual (`workflow_dispatch`) with a 25-minute timeout; `gh run list --workflow e2e.yml` returns no runs (checked 2026-11-22). CI runs the routine `./flow check` on every push (a recent main run took 35m31s).
 - [testing](../../development/testing.md) lists browser E2E as an acceptance step for "changes to sign-in, sessions, MFA, authorization surfaces or the Console".
-- Two E2E intermittencies are open pending WP6 classification (G6-D01, G6-D02), so what a CI browser run would gate on is not yet settled.
+- Two E2E intermittencies were classified in WP6A: G6-D01 was a test defect, corrected (its product gap is G6-D25, accepted LOW); G6-D02 was **not reproduced** and stays open as an unresolved intermittent, with any recurrence in an acceptance run as its trigger. What a CI browser run would gate on is still G7's decision.
 
 **Risk.** G7 is the first milestone that changes the surface browsers meet (CORS, cookies, CSP, possibly a second origin) and the sign-in-adjacent code. The only evidence for browser behaviour is a local run by one operator, and the one workflow that could run elsewhere has never run, so it is unknown whether it even works.
 
 **G7 design-gate decision.** (Not implemented or required here.)
 1. Which of the choices, if any: first exercise the existing on-demand workflow once; a scoped subset (for example the sign-in, session, MFA and authorization journeys) on changes to named paths; a scheduled run; or keep local acceptance with recorded evidence. The owner's constraint is that the whole suite is not mandatory on every PR.
 2. Whether G7's own changes need a browser test that the local gate cannot give, for example behaviour across two origins.
-3. How the open G6-D01 and G6-D02 results (WP6) affect what may gate a PR.
+3. How the WP6A results (G6-D01 corrected; G6-D02 an unresolved intermittent; G6-D25 accepted) affect what may gate a PR: a journey with an unresolved intermittent is a poor candidate for a required check until it is understood.
 
 **Supporting references.** [README, D7](README.md#owner-rulings-and-amendments); G6-D06, G6-D01, G6-D02, G6-D05; `.github/workflows/e2e.yml`; [testing](../../development/testing.md).
 
@@ -254,6 +254,8 @@ I read all 24 rows of the [register](debt-register.md). **Eleven** have a record
 | **G6-D19** Dormant sourced grant becomes effective on Account creation | Accept (owner, WP2 triage) | Trigger: "G7 delegated invitation flows". Invitation authority is the effective authority over a dormant grant | Whether any G7 flow can invite or establish an Account | **Scope-dependent** |
 
 **Checked and not G7-triggered:** G6-D01 to D05 (WP6 and test reliability; D05 would matter only if G7 changed the session lifetime or keep-alive, which is not a G7 trigger as written), D09, D16, D18 and D20 to D24 name no G7 trigger. **(Inference:)** D18 (corrupt stored Resources values) concerns operational hardening and a restore, and would be affected only indirectly if G7 widened Resources consumption.
+
+**WP6B addendum (2026-11-23).** The register now has 26 rows; the 24 read above are unchanged. [G6-D25](debt-register.md) (dialog focus restoration, accepted LOW) names no G7 trigger. [G6-D26](debt-register.md) (Composer advisories on runtime packages, found at closeout) lists "before G7 exposes more of the HTTP surface" among its triggers, so G7's design gate must read it and confirm that the dependency update has been ruled on and the audit passes; it is a release-readiness item first ([release readiness](../../runbooks/g10-release-readiness.md)). It does not change the four unconditional reviews (G6-D06, D07, D08 and D14).
 
 ---
 

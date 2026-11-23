@@ -99,7 +99,8 @@ Each item is **Open** until its evidence is recorded here. Nothing in this runbo
     - Its commands used bare `php artisan`. The deployment runbook requires `/usr/local/bin/php <path>/artisan` and never a bare `php artisan` ([deployment §7](deployment.md#7-health-and-release-verification)). Host steps 2 and 3 now say so.
     - Host step 2 asked for a sign-in and `GET /api/v1/me` while the application is still in maintenance. No maintenance bypass exists ([ADR 0027](../adr/0027-release-and-deployment-model.md)), so that check can only follow `artisan up`. It now does.
 11. **Guardian and Volunteer adoption plan — Open.** Decide who adopts whom, in what order, and with which Initiate decisions, before release ([Guardian adoption](guardian-adoption.md); host step 5).
-12. **Separate authorization to deploy — Open.** Given by the owner for a named release, after the items above.
+12. **Dependency-audit gate — Open.** The release must pass its own dependency audit: `./flow audit` clean for the runtime Composer and npm packages, or each finding recorded as accepted by the owner. **It is not clean today:** nine Composer advisories on runtime packages (and one on a development package) were found on 2026-11-23, and the weekly `Security audit` workflow has failed since 2026-11-02. They are triaged, not fixed, in [G6-D26](../audits/g6/debt-register.md) and [the triage](../audits/g6/wp6b-dependency-advisories.md); production v0.3.0's tagged lock carries the same versions. A green `./flow check` does not satisfy this item, because it does not run the audit.
+13. **Separate authorization to deploy — Open.** Given by the owner for a named release, after the items above.
 
 **For reference, not decisions:**
 - **Configuration.** G10 adds no environment variable, no queue, no schedule and no external service. The relationship definitions are in code (`app/Modules/Relationships/Definitions`). `security:production-check` is unchanged and must pass as before.
