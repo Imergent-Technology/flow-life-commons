@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Database\Seeders;
 
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Cookie\CookieValuePrefix;
 use Illuminate\Database\Seeder;
@@ -36,6 +37,14 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class E2eSessionSeeder extends Seeder
 {
+    /**
+     * Set by `db:seed` and `call()` before `run()`. Laravel 13.40 began documenting it as nullable, which static analysis then asks
+     * about at every use; this restores the type it has whenever a seeder runs (G6-D26 dependency update). Nothing changes at run time.
+     *
+     * @var Container
+     */
+    protected $container;
+
     /** Where the cookies are written, relative to storage/. `./flow test e2e` hands the file to the browser suite. */
     public const string FILE = 'app/private/e2e-sessions.json';
 

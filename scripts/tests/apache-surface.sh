@@ -177,6 +177,27 @@ check "…as JSON" "content-type" "$CTYPE" "application/json"
 req /up
 check "/up reaches the front controller" "status" "$STATUS" "200"
 
+printf 'apache surface: /index.php path forms while up (G6-D26: a script name is not a path prefix; only the real script path reaches PHP)\n'
+# Measured on a real Apache with the production .htaccess. Only "/index.php" itself, or "/index.php/<path>" (PATH_INFO), reaches the
+# front controller; a longer segment that merely begins with "index.php" is not a file, so it falls to the Console shell and Laravel
+# never sees it. A path rule enforced in front of PHP therefore cannot be bypassed by "/index.phpadmin": it is the Console's shell.
+for path in /index.phpapi /index.phpapi/v1/health /index.phpadmin /index.php.bak //example.test/api/v1/health /API/v1/health; do
+    req "$path"
+    if [[ "$STATUS" == "200" ]] && grep -q 'CONSOLE-SHELL-MARKER' "$WORK/body"; then
+        pass "$path is the Console shell, not the front controller"
+    else
+        fail "$path was not the Console shell (status $STATUS)"
+    fi
+done
+for path in /index.php/api/v1/health //api/v1/health; do
+    req "$path"
+    if [[ "$STATUS" == "200" ]] && grep -q 'reached.:.front-controller' "$WORK/body"; then
+        pass "$path reaches the front controller (as /api/v1/health does)"
+    else
+        fail "$path did not reach the front controller (status $STATUS)"
+    fi
+done
+
 printf 'apache surface: the maintenance flag (H1 regression: [END] not [L] on the API/up rewrite)\n'
 touch "$WORK/commons/shared/storage/framework/down"
 
@@ -212,6 +233,18 @@ if grep -q 'Down for maintenance' "$WORK/body"; then pass "…and answered with 
 req /
 n="$(header_count X-Powered-By)"
 if [[ "$n" == "0" ]]; then pass "the maintenance responder (real PHP, unmodified) carries no X-Powered-By"; else fail "the maintenance responder leaked X-Powered-By ($n time(s)): $(header_value X-Powered-By)"; fi
+
+printf 'apache surface: /index.php path forms during maintenance (the responder answers; the front controller is not reachable through them)\n'
+for path in /index.php /index.php/api/v1/health /index.php/up /index.phpapi /index.phpadmin /index.php.bak //example.test/api/v1/health; do
+    req "$path"
+    if [[ "$STATUS" == "503" ]] && grep -q 'Down for maintenance' "$WORK/body"; then
+        pass "$path is answered by the maintenance responder"
+    else
+        fail "$path was not answered by the maintenance responder (status $STATUS)"
+    fi
+done
+req //api/v1/health
+check "//api/v1/health reaches the front controller during maintenance, exactly as /api/v1/health does" "status" "$STATUS" "200"
 
 rm "$WORK/commons/shared/storage/framework/down"
 

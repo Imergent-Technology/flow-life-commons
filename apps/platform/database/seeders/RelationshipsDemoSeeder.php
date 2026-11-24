@@ -31,6 +31,7 @@ use App\Shared\Domain\Actor;
 use App\Shared\Domain\PersonId;
 use Carbon\Carbon;
 use DateTimeImmutable;
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -80,6 +81,14 @@ use RuntimeException;
  */
 final class RelationshipsDemoSeeder extends Seeder
 {
+    /**
+     * Set by `db:seed` and `call()` before `run()`. Laravel 13.40 began documenting it as nullable, which static analysis then asks
+     * about at every use; this restores the type it has whenever a seeder runs (G6-D26 dependency update). Nothing changes at run time.
+     *
+     * @var Container
+     */
+    protected $container;
+
     public const string ACTIVE_NO_ROLE = 'Amara Okafor';
 
     public const string FORMER = 'Bernard Lindqvist';
